@@ -5,8 +5,10 @@
   "scripts": {
     "dev": "next dev --port 8080",
     "typecheck": "tsc --noEmit",
+    "typecheck:test": "tsc --noEmit -p tsconfig.test.json",
     "build": "next build",
-    "start": "next start --port 8080"
+    "start": "next start --port 8080",
+    "test:e2e": "playwright test --config ../../playwright.config.ts"
   },
   "dependencies": {
     "next": "^16.0.1",

@@ -1,3 +1,5 @@
+import Link from 'next/link';
+
 export default function Page() {
   return (
     <div className="app">
@@ -9,6 +11,9 @@ export default function Page() {
         <section className="status-panel">
           <h2>Workflow Runs</h2>
           <p>No active runs. Start a workflow from the CLI.</p>
+          <Link className="state-link" href="/slow" prefetch={false}>
+            Open slow dashboard route
+          </Link>
         </section>
       </main>
     </div>

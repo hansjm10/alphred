@@ -47,6 +47,14 @@ pnpm test
 pnpm dev:dashboard
 ```
 
+## Dashboard Fallback UX
+
+The dashboard uses App Router fallback states to keep route transitions and failures explicit:
+
+- **Loading state**: route-level loads display `Loading dashboard` with the message `Preparing workflow run data...`.
+- **Error state**: route failures display `Dashboard error` and provide a `Try again` button that calls the route error boundary `reset()` callback.
+- **Not found state**: unmatched routes display `Page not found` with a `Return to home` link back to `/`.
+
 ## How It Works
 
 1. **Workflows** define a sequence of phases, each with an agent provider, prompt, and transitions
