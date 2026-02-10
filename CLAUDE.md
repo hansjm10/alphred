@@ -30,6 +30,8 @@ pnpm dev:dashboard    # Start dashboard dev server on port 8080
 - Imports must include `.js` extension (NodeNext resolution)
 - Use `type` keyword for type-only imports/exports
 - Tests are co-located with source files (`*.test.ts`)
+- Next.js App Router tests are co-located in `app/` (`*.test.tsx`)
+- UI tests should verify behavior and accessibility semantics over styling details
 - Database uses Drizzle ORM with better-sqlite3
 - State machine transitions are validated - invalid transitions throw
 - Each agent phase gets a fresh session (no conversation carry-over)
