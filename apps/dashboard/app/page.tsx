@@ -1,4 +1,4 @@
-export function App() {
+export default function Page() {
   return (
     <div className="app">
       <header>
