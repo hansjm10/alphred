@@ -52,3 +52,38 @@ header p {
   font-size: 1.125rem;
   margin-bottom: 1rem;
 }
+
+.state-panel p {
+  color: #b6b6c6;
+  line-height: 1.5;
+}
+
+.state-action,
+.state-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-top: 1rem;
+  padding: 0.5rem 0.875rem;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: #121222;
+  color: var(--fg);
+  font-size: 0.875rem;
+  text-decoration: none;
+}
+
+.state-action {
+  cursor: pointer;
+}
+
+.state-action:hover,
+.state-link:hover {
+  border-color: var(--accent);
+}
+
+@media (max-width: 768px) {
+  .app {
+    padding: 1rem;
+  }
+}
