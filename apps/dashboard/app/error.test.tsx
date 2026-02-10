@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 
 import { render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
 import DashboardError from './error';
 
@@ -29,12 +30,13 @@ describe('DashboardError', () => {
     expect(consoleErrorSpy).toHaveBeenCalledWith('Dashboard route error:', error);
   });
 
-  it('invokes reset when the retry button is clicked', () => {
+  it('invokes reset when the retry button is clicked', async () => {
     const reset = vi.fn();
+    const user = userEvent.setup();
 
     render(<DashboardError error={new Error('boom')} reset={reset} />);
 
-    screen.getByRole('button', { name: 'Try again' }).click();
+    await user.click(screen.getByRole('button', { name: 'Try again' }));
     expect(reset).toHaveBeenCalledTimes(1);
   });
 });
