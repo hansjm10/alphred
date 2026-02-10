@@ -7,7 +7,7 @@ type ErrorPageProps = Readonly<{
   reset: () => void;
 }>;
 
-export default function Error({ error, reset }: ErrorPageProps) {
+export default function DashboardError({ error, reset }: ErrorPageProps) {
   useEffect(() => {
     console.error('Dashboard route error:', error);
   }, [error]);

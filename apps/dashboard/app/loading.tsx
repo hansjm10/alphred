@@ -2,9 +2,9 @@ export default function Loading() {
   return (
     <div className="app">
       <main>
-        <section className="status-panel state-panel" role="status" aria-live="polite">
+        <section className="status-panel state-panel">
           <h2>Loading dashboard</h2>
-          <p>Preparing workflow run data...</p>
+          <output aria-live="polite">Preparing workflow run data...</output>
         </section>
       </main>
     </div>
