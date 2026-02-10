@@ -1,22 +1,21 @@
 import { defineConfig, devices } from '@playwright/test';
 
-const DASHBOARD_PORT = 8080;
+const DASHBOARD_PORT = 8081;
 
 export default defineConfig({
   testDir: './apps/dashboard/e2e',
-  testMatch: ['**/fallbacks.spec.ts'],
+  testMatch: ['**/test-routes-gated.spec.ts'],
   fullyParallel: false,
-  // Keep local runs fast, but enable retries in CI so `trace: on-first-retry` can actually capture traces.
   retries: process.env.CI ? 1 : 0,
   reporter: 'list',
-  outputDir: './test-results/e2e-test-routes',
+  outputDir: './test-results/e2e-no-test-routes',
   use: {
     baseURL: `http://localhost:${DASHBOARD_PORT}`,
     trace: process.env.CI ? 'retain-on-failure' : 'on-first-retry',
   },
   webServer: {
-    // Test-only dashboard routes are gated; enable them for e2e runs only.
-    command: `node ./apps/dashboard/scripts/e2e-webserver.mjs --port=${DASHBOARD_PORT} --test-routes=1`,
+    // For this suite, test-only dashboard routes must be disabled so we can assert gating behavior.
+    command: `node ./apps/dashboard/scripts/e2e-webserver.mjs --port=${DASHBOARD_PORT} --test-routes=0`,
     url: `http://localhost:${DASHBOARD_PORT}`,
     timeout: 120000,
     reuseExistingServer: !process.env.CI,

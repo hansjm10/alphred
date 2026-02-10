@@ -17,12 +17,16 @@ dist/
 **/dist/
 .next/
 **/.next/
+.next-*/
+**/.next-*/
 coverage/
 .pnpm-store/
 pnpm-debug.log*
 .eslintcache
 test-results/
 playwright-report/
+.e2e-build-lock/
+**/.e2e-build-lock/
 
 # TypeScript build info
 *.tsbuildinfo

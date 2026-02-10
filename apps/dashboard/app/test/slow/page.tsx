@@ -1,3 +1,4 @@
+import { env } from 'node:process';
 import { notFound } from 'next/navigation';
 
 const SLOW_ROUTE_DELAY_MS = 1500;
@@ -11,7 +12,7 @@ async function sleep(milliseconds: number): Promise<void> {
 }
 
 export default async function SlowPage() {
-  if (process.env.ALPHRED_DASHBOARD_TEST_ROUTES !== '1') {
+  if (env.ALPHRED_DASHBOARD_TEST_ROUTES !== '1') {
     notFound();
   }
 
@@ -28,4 +29,3 @@ export default async function SlowPage() {
     </div>
   );
 }
-

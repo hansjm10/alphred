@@ -8,7 +8,8 @@
     "typecheck:test": "tsc --noEmit -p tsconfig.test.json",
     "build": "next build",
     "start": "next start --port 8080",
-    "test:e2e": "playwright test --config ../../playwright.config.ts"
+    "test:e2e": "playwright test --config ../../playwright.config.ts",
+    "test:e2e:no-test-routes": "playwright test --config ../../playwright.no-test-routes.config.ts"
   },
   "dependencies": {
     "next": "^16.0.1",
