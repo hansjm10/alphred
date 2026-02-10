@@ -11,7 +11,7 @@ Packages:
 - `packages/agents` - Agent provider abstraction (@alphred/agents)
 - `packages/git` - Git worktree and issue tracker integration (@alphred/git)
 - `packages/cli` - CLI entry point (@alphred/cli)
-- `apps/dashboard` - React monitoring UI (@alphred/dashboard)
+- `apps/dashboard` - Next.js monitoring UI (@alphred/dashboard)
 
 ## Commands
 
@@ -26,7 +26,7 @@ pnpm dev:dashboard    # Start dashboard dev server on port 8080
 
 ## Conventions
 
-- All packages use ESM (`"type": "module"`)
+- Core packages use ESM (`"type": "module"`)
 - Imports must include `.js` extension (NodeNext resolution)
 - Use `type` keyword for type-only imports/exports
 - Tests are co-located with source files (`*.test.ts`)

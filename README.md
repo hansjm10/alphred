@@ -14,7 +14,7 @@ Alphred is a pnpm monorepo with the following packages:
 | `@alphred/agents` | Agent provider abstraction (Claude, Codex) |
 | `@alphred/git` | Git worktree management, GitHub/Azure DevOps integration |
 | `@alphred/cli` | CLI entry point |
-| `@alphred/dashboard` | React monitoring dashboard |
+| `@alphred/dashboard` | Next.js monitoring dashboard |
 
 ## Prerequisites
 
@@ -43,7 +43,7 @@ pnpm lint
 # Run tests
 pnpm test
 
-# Dashboard dev server
+# Dashboard dev server (Next.js on port 8080)
 pnpm dev:dashboard
 ```
 

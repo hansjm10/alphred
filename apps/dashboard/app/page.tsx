@@ -1,4 +1,6 @@
-export function App() {
+export const dynamic = 'force-dynamic';
+
+export default function Page() {
   return (
     <div className="app">
       <header>
