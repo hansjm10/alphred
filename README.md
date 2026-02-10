@@ -1,0 +1,57 @@
+# Alphred - LLM Agent Orchestrator
+
+A phase-based workflow engine that orchestrates LLM agents (Claude and Codex) to automate software development tasks. Alphred manages multi-step workflows with retry/loop logic, sandboxed git worktrees, and integrates with GitHub and Azure DevOps.
+
+## Architecture
+
+Alphred is a pnpm monorepo with the following packages:
+
+| Package | Description |
+|---|---|
+| `@alphred/shared` | Shared type definitions |
+| `@alphred/db` | SQLite database layer (Drizzle ORM) |
+| `@alphred/core` | Workflow engine, state machine, guard evaluation |
+| `@alphred/agents` | Agent provider abstraction (Claude, Codex) |
+| `@alphred/git` | Git worktree management, GitHub/Azure DevOps integration |
+| `@alphred/cli` | CLI entry point |
+| `@alphred/dashboard` | React monitoring dashboard |
+
+## Prerequisites
+
+- Node.js 22+
+- pnpm 10+
+- `gh` CLI (for GitHub integration)
+- `az` CLI (for Azure DevOps integration)
+
+## Getting Started
+
+```bash
+pnpm install
+pnpm build
+pnpm test
+```
+
+## Development
+
+```bash
+# Type checking
+pnpm typecheck
+
+# Linting
+pnpm lint
+
+# Run tests
+pnpm test
+
+# Dashboard dev server
+pnpm dev:dashboard
+```
+
+## How It Works
+
+1. **Workflows** define a sequence of phases, each with an agent provider, prompt, and transitions
+2. **Runs** execute a workflow instance in an isolated git worktree
+3. **Phases** spawn fresh agent sessions - no conversation carry-over between phases
+4. **Transitions** are evaluated after each phase completes, using guard expressions
+5. **Retries** automatically re-run failed phases up to a configured limit
+6. **Reports** from each phase are stored in SQLite and loaded as context for subsequent phases
