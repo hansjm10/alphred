@@ -4,7 +4,9 @@ export default function Loading() {
       <main>
         <section className="status-panel state-panel">
           <h2>Loading dashboard</h2>
-          <output aria-live="polite">Preparing workflow run data...</output>
+          <output role="status" aria-live="polite">
+            Preparing workflow run data...
+          </output>
         </section>
       </main>
     </div>

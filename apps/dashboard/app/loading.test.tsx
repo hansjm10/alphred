@@ -10,9 +10,12 @@ describe('Loading', () => {
 
     expect(screen.getByRole('heading', { name: 'Loading dashboard' })).toBeInTheDocument();
 
+    const status = screen.getByRole('status');
+    expect(status).toHaveAttribute('aria-live', 'polite');
+    expect(status).toHaveTextContent('Preparing workflow run data...');
+
     const outputElement = container.querySelector('output');
     expect(outputElement).not.toBeNull();
-    expect(outputElement).toHaveAttribute('aria-live', 'polite');
-    expect(outputElement).toHaveTextContent('Preparing workflow run data...');
+    expect(outputElement).toBe(status);
   });
 });

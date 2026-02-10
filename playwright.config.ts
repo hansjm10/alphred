@@ -5,11 +5,12 @@ const DASHBOARD_PORT = 8080;
 export default defineConfig({
   testDir: './apps/dashboard/e2e',
   fullyParallel: false,
-  retries: 0,
+  // Keep local runs fast, but enable retries in CI so `trace: on-first-retry` can actually capture traces.
+  retries: process.env.CI ? 1 : 0,
   reporter: 'list',
   use: {
     baseURL: `http://localhost:${DASHBOARD_PORT}`,
-    trace: 'on-first-retry',
+    trace: process.env.CI ? 'retain-on-failure' : 'on-first-retry',
   },
   webServer: {
     // Test-only dashboard routes are gated; enable them for e2e runs only.
