@@ -37,6 +37,19 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm typecheck
 
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: '.nvmrc'
+          cache: 'pnpm'
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+
   test:
     name: Test
     runs-on: ubuntu-latest
@@ -58,7 +71,7 @@ jobs:
     name: SonarCloud
     runs-on: ubuntu-latest
     if: github.event.pull_request.head.repo.full_name == github.repository || github.event_name == 'push'
-    needs: [lint, typecheck, test]
+    needs: [lint, typecheck, build, test]
     steps:
       - uses: actions/checkout@v4
         with:

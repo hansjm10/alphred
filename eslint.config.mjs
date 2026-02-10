@@ -1,4 +1,5 @@
 import js from '@eslint/js';
+import nextPlugin from '@next/eslint-plugin-next';
 import tseslint from 'typescript-eslint';
 
 export default tseslint.config(
@@ -8,6 +9,15 @@ export default tseslint.config(
   js.configs.recommended,
   ...tseslint.configs.recommended,
   ...tseslint.configs.stylistic,
+  {
+    ...nextPlugin.configs['core-web-vitals'],
+    files: ['apps/dashboard/**/*.{js,jsx,ts,tsx}'],
+    settings: {
+      next: {
+        rootDir: 'apps/dashboard',
+      },
+    },
+  },
   {
     files: ['**/*.{ts,tsx}'],
     languageOptions: {
