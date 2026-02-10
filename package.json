@@ -6,6 +6,7 @@
     "lint": "eslint \"{apps,packages}/**/*.{ts,tsx,js,jsx}\" --max-warnings=0",
     "typecheck": "pnpm typecheck:packages && pnpm --filter @alphred/dashboard typecheck",
     "typecheck:packages": "tsc -b --pretty false",
+    "typecheck:test": "pnpm --filter @alphred/dashboard typecheck:test",
     "build": "pnpm build:packages && pnpm --filter @alphred/dashboard build",
     "build:packages": "tsc -b --pretty false",
     "test": "vitest run",
