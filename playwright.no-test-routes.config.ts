@@ -15,8 +15,8 @@ export default defineConfig({
     trace: process.env.CI ? 'retain-on-failure' : 'on-first-retry',
   },
   webServer: {
-    // For this suite, test-only dashboard routes must be disabled so we can assert gating behavior.
-    command: `node ./apps/dashboard/scripts/e2e-webserver.mjs --port=${DASHBOARD_PORT} --test-routes=0`,
+    // For this suite, compile test routes in but disable them at runtime.
+    command: `node ./apps/dashboard/scripts/e2e-webserver.mjs --port=${DASHBOARD_PORT} --test-routes=0 --build-test-routes=1`,
     url: `http://localhost:${DASHBOARD_PORT}`,
     // Next build/start can be slow on cold caches or lower-powered machines.
     timeout: 300000,

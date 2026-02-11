@@ -1,5 +1,5 @@
-import { env } from 'node:process';
 import { notFound } from 'next/navigation';
+import { canServeTestRoutes } from '../test-routes-gate';
 
 const SLOW_ROUTE_DELAY_MS = 1500;
 
@@ -12,8 +12,7 @@ async function sleep(milliseconds: number): Promise<void> {
 }
 
 export default async function SlowPage() {
-  const buildHasTestRoutes = process.env.NEXT_PUBLIC_ALPHRED_DASHBOARD_TEST_ROUTES_BUILD === '1';
-  if (!buildHasTestRoutes || env.ALPHRED_DASHBOARD_TEST_ROUTES !== '1') {
+  if (!canServeTestRoutes()) {
     notFound();
   }
 

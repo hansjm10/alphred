@@ -17,7 +17,7 @@ export default defineConfig({
   },
   webServer: {
     // Test-only dashboard routes are gated; enable them for e2e runs only.
-    command: `node ./apps/dashboard/scripts/e2e-webserver.mjs --port=${DASHBOARD_PORT} --test-routes=1`,
+    command: `node ./apps/dashboard/scripts/e2e-webserver.mjs --port=${DASHBOARD_PORT} --test-routes=1 --build-test-routes=1`,
     url: `http://localhost:${DASHBOARD_PORT}`,
     // Next build/start can be slow on cold caches or lower-powered machines.
     timeout: 300000,

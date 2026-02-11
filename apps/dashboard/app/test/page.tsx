@@ -1,12 +1,11 @@
-import { env } from 'node:process';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
+import { canServeTestRoutes } from './test-routes-gate';
 
 export const dynamic = 'force-dynamic';
 
 export default function TestRoutesIndexPage() {
-  const buildHasTestRoutes = process.env.NEXT_PUBLIC_ALPHRED_DASHBOARD_TEST_ROUTES_BUILD === '1';
-  if (!buildHasTestRoutes || env.ALPHRED_DASHBOARD_TEST_ROUTES !== '1') {
+  if (!canServeTestRoutes()) {
     notFound();
   }
 

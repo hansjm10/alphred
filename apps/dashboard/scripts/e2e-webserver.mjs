@@ -7,6 +7,7 @@ function parseArgs(argv) {
   const args = {
     port: null,
     testRoutes: null,
+    buildTestRoutes: null,
   };
 
   for (const raw of argv) {
@@ -14,6 +15,8 @@ function parseArgs(argv) {
       args.port = Number(raw.slice('--port='.length));
     } else if (raw.startsWith('--test-routes=')) {
       args.testRoutes = raw.slice('--test-routes='.length);
+    } else if (raw.startsWith('--build-test-routes=')) {
+      args.buildTestRoutes = raw.slice('--build-test-routes='.length);
     }
   }
 
@@ -22,6 +25,9 @@ function parseArgs(argv) {
   }
   if (args.testRoutes !== '0' && args.testRoutes !== '1') {
     throw new Error("Missing/invalid --test-routes=... (expected '0' or '1').");
+  }
+  if (args.buildTestRoutes !== '0' && args.buildTestRoutes !== '1') {
+    throw new Error("Missing/invalid --build-test-routes=... (expected '0' or '1').");
   }
 
   return args;
@@ -103,7 +109,7 @@ function runCapture(cmd, args, options) {
 }
 
 async function main() {
-  const { port, testRoutes } = parseArgs(process.argv.slice(2));
+  const { port, testRoutes, buildTestRoutes } = parseArgs(process.argv.slice(2));
 
   const scriptDir = path.dirname(fileURLToPath(import.meta.url));
   const dashboardDir = path.resolve(scriptDir, '..'); // apps/dashboard
@@ -124,15 +130,15 @@ async function main() {
 
   const envForBuild = {
     ...process.env,
-    // Compile-time flag so /test/* routes are not accidentally enabled via runtime envs in prod builds.
-    NEXT_PUBLIC_ALPHRED_DASHBOARD_TEST_ROUTES_BUILD: '1',
+    // Compile-time flag baked by next.config.ts for /test/* route availability.
+    ALPHRED_DASHBOARD_TEST_ROUTES_BUILD: buildTestRoutes,
   };
 
   await acquireLock(lockDir, { timeoutMs: lockTimeoutMs });
   try {
     const currentRev = await runCapture('git', ['rev-parse', 'HEAD'], { cwd: repoRoot, env: process.env });
     const dirtyStatus = await runCapture('git', ['status', '--porcelain'], { cwd: repoRoot, env: process.env });
-    const buildKey = `${currentRev}\n${dirtyStatus}\nNEXT_PUBLIC_ALPHRED_DASHBOARD_TEST_ROUTES_BUILD=1\n`;
+    const buildKey = `${currentRev}\n${dirtyStatus}\nALPHRED_DASHBOARD_TEST_ROUTES_BUILD=${buildTestRoutes}\n`;
 
     const hasBuild = await fileExists(buildIdPath);
     const markerMatches =

@@ -9,7 +9,9 @@
     "build": "next build",
     "start": "next start --port 8080",
     "test:e2e": "playwright test --config ../../playwright.config.ts",
-    "test:e2e:no-test-routes": "playwright test --config ../../playwright.no-test-routes.config.ts"
+    "test:e2e:no-test-routes": "playwright test --config ../../playwright.no-test-routes.config.ts",
+    "test:e2e:build-gate": "playwright test --config ../../playwright.build-gate.config.ts",
+    "test:e2e:all": "pnpm test:e2e && pnpm test:e2e:no-test-routes && pnpm test:e2e:build-gate"
   },
   "dependencies": {
     "next": "^16.0.1",

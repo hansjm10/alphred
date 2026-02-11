@@ -11,8 +11,9 @@
     "build:packages": "tsc -b --pretty false",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
-    "test:e2e": "pnpm --filter @alphred/dashboard test:e2e",
+    "test:e2e": "pnpm --filter @alphred/dashboard test:e2e:all",
     "test:e2e:no-test-routes": "pnpm --filter @alphred/dashboard test:e2e:no-test-routes",
+    "test:e2e:build-gate": "pnpm --filter @alphred/dashboard test:e2e:build-gate",
     "dev:dashboard": "pnpm --filter @alphred/dashboard dev",
     "prepare": "lefthook install"
   },

@@ -22,8 +22,9 @@ pnpm typecheck        # Type check all packages
 pnpm typecheck:test   # Type check test TS configs
 pnpm lint             # ESLint with zero warnings
 pnpm test             # Run all tests with vitest
-pnpm test:e2e         # Run dashboard e2e tests (Playwright)
+pnpm test:e2e         # Run all dashboard e2e suites (Playwright)
 pnpm test:e2e:no-test-routes  # Run dashboard e2e tests with /test/* routes disabled
+pnpm test:e2e:build-gate  # Verify runtime env cannot bypass build-time /test/* gate
 pnpm dev:dashboard    # Start dashboard dev server on port 8080
 ```
 
