@@ -59,7 +59,8 @@ function sleep(milliseconds) {
 
 export function normalizeColorEnv(baseEnv) {
   const sanitized = { ...baseEnv };
-  if (sanitized.FORCE_COLOR !== undefined && sanitized.NO_COLOR !== undefined) {
+  // pnpm can inject FORCE_COLOR for child Node processes, which conflicts with inherited NO_COLOR.
+  if (sanitized.NO_COLOR !== undefined) {
     delete sanitized.NO_COLOR;
   }
   return sanitized;

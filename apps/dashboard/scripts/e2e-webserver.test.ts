@@ -49,9 +49,8 @@ describe('normalizeColorEnv', () => {
     });
   });
 
-  it('keeps NO_COLOR when FORCE_COLOR is absent', () => {
+  it('drops NO_COLOR when FORCE_COLOR is absent', () => {
     expect(normalizeColorEnv({ NO_COLOR: '1', PATH: '/tmp/bin' })).toEqual({
-      NO_COLOR: '1',
       PATH: '/tmp/bin',
     });
   });

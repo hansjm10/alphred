@@ -16,7 +16,7 @@ export default defineConfig({
   },
   webServer: {
     // For this suite, compile test routes in but disable them at runtime.
-    command: `node ./apps/dashboard/scripts/e2e-webserver.mjs --port=${DASHBOARD_PORT} --test-routes=0 --build-test-routes=1`,
+    command: `node --no-warnings ./apps/dashboard/scripts/e2e-webserver.mjs --port=${DASHBOARD_PORT} --test-routes=0 --build-test-routes=1`,
     url: `http://localhost:${DASHBOARD_PORT}`,
     // Next build/start can be slow on cold caches or lower-powered machines.
     timeout: 300000,

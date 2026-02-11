@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process';
 
 function normalizeColorEnv(baseEnv) {
   const env = { ...baseEnv };
-  if (env.FORCE_COLOR !== undefined && env.NO_COLOR !== undefined) {
+  if (env.NO_COLOR !== undefined) {
     delete env.NO_COLOR;
   }
   return env;

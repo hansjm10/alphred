@@ -16,7 +16,7 @@ export default defineConfig({
   },
   webServer: {
     // Build excludes /test/* routes; runtime flags should not be able to re-enable them.
-    command: `node ./apps/dashboard/scripts/e2e-webserver.mjs --port=${DASHBOARD_PORT} --test-routes=1 --build-test-routes=0`,
+    command: `node --no-warnings ./apps/dashboard/scripts/e2e-webserver.mjs --port=${DASHBOARD_PORT} --test-routes=1 --build-test-routes=0`,
     url: `http://localhost:${DASHBOARD_PORT}`,
     timeout: 300000,
     reuseExistingServer: false,
