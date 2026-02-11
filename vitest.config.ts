@@ -26,7 +26,14 @@ export default defineConfig({
         'apps/*/app/**/*.ts',
         'apps/*/app/**/*.tsx',
       ],
-      exclude: ['**/*.test.ts', '**/*.test.tsx', '**/dist/**', '**/node_modules/**', '**/*.d.ts'],
+      exclude: [
+        '**/*.test.ts',
+        '**/*.test.tsx',
+        '**/dist/**',
+        '**/node_modules/**',
+        '**/*.d.ts',
+        'apps/*/app/test/**',
+      ],
     },
   },
 });
