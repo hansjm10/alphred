@@ -152,6 +152,25 @@ describe('runPhase', () => {
     expect(result.tokensUsed).toBe(40);
   });
 
+  it('prefers nested cumulative usage over top-level incremental metadata on one event', async () => {
+    const phase = createAgentPhase();
+    const emittedEvents: ProviderEvent[] = [
+      {
+        type: 'usage',
+        content: '',
+        timestamp: 100,
+        metadata: { tokens: 5, usage: { total_tokens: 40 } },
+      },
+      { type: 'result', content: 'done', timestamp: 101 },
+    ];
+
+    const result = await runPhase(phase, defaultOptions, {
+      resolveProvider: () => createProvider(emittedEvents),
+    });
+
+    expect(result.tokensUsed).toBe(40);
+  });
+
   it('throws when an agent phase is missing provider configuration', async () => {
     const phase: PhaseDefinition = {
       name: 'draft',

@@ -99,17 +99,32 @@ function extractTokenUsage(event: ProviderEvent): TokenUsage | undefined {
 
   const metadata = event.metadata;
   const topLevelUsage = readTokenUsageFromMetadata(metadata);
-  if (topLevelUsage) {
-    return topLevelUsage;
-  }
-
   const nestedUsage = metadata.usage;
-  if (!nestedUsage || typeof nestedUsage !== 'object') {
-    return undefined;
+  const nestedMetadata =
+    nestedUsage && typeof nestedUsage === 'object' ? (nestedUsage as Record<string, unknown>) : undefined;
+  const nestedTokenUsage = nestedMetadata ? readTokenUsageFromMetadata(nestedMetadata) : undefined;
+
+  const cumulativeCandidates = [topLevelUsage, nestedTokenUsage]
+    .filter((usage): usage is TokenUsage & { mode: 'cumulative' } => usage?.mode === 'cumulative')
+    .map((usage) => usage.tokens);
+  if (cumulativeCandidates.length > 0) {
+    return {
+      mode: 'cumulative',
+      tokens: Math.max(...cumulativeCandidates),
+    };
   }
 
-  const usageMetadata = nestedUsage as Record<string, unknown>;
-  return readTokenUsageFromMetadata(usageMetadata);
+  const incrementalCandidates = [topLevelUsage, nestedTokenUsage]
+    .filter((usage): usage is TokenUsage & { mode: 'incremental' } => usage?.mode === 'incremental')
+    .map((usage) => usage.tokens);
+  if (incrementalCandidates.length > 0) {
+    return {
+      mode: 'incremental',
+      tokens: Math.max(...incrementalCandidates),
+    };
+  }
+
+  return undefined;
 }
 
 export async function runPhase(
