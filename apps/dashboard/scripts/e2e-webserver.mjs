@@ -36,7 +36,16 @@ async function fileExists(p) {
   }
 }
 
-async function acquireLock(lockDir) {
+function parsePositiveIntEnv(name) {
+  const raw = process.env[name];
+  if (!raw) return null;
+  const value = Number(raw);
+  if (!Number.isFinite(value) || value <= 0) return null;
+  return Math.trunc(value);
+}
+
+async function acquireLock(lockDir, { timeoutMs }) {
+  const startedAt = Date.now();
   // Cross-platform lock: mkdir is atomic. Wait until the directory can be created.
   for (;;) {
     try {
@@ -44,6 +53,16 @@ async function acquireLock(lockDir) {
       return;
     } catch (err) {
       if (err && err.code === 'EEXIST') {
+        if (Date.now() - startedAt > timeoutMs) {
+          throw new Error(
+            [
+              `Timed out after ${timeoutMs}ms waiting for e2e build lock: ${lockDir}`,
+              `A previous run may have been interrupted and left a stale lock directory.`,
+              `Fix: rm -rf ${lockDir}`,
+              `Override: set ALPHRED_E2E_BUILD_LOCK_TIMEOUT_MS to a larger value.`,
+            ].join('\n'),
+          );
+        }
         await new Promise((r) => setTimeout(r, 250));
         continue;
       }
@@ -94,6 +113,8 @@ async function main() {
   const buildIdPath = path.join(nextDir, 'BUILD_ID');
   const buildMarkerPath = path.join(nextDir, '.e2e-build-rev');
   const lockDir = path.join(dashboardDir, '.e2e-build-lock');
+  // Allow concurrent e2e suites to share a single build, but fail eventually if the lock is stale.
+  const lockTimeoutMs = parsePositiveIntEnv('ALPHRED_E2E_BUILD_LOCK_TIMEOUT_MS') ?? 180_000;
 
   const envForServer = {
     ...process.env,
@@ -101,7 +122,7 @@ async function main() {
     ALPHRED_DASHBOARD_TEST_ROUTES: testRoutes,
   };
 
-  await acquireLock(lockDir);
+  await acquireLock(lockDir, { timeoutMs: lockTimeoutMs });
   try {
     const currentRev = await runCapture('git', ['rev-parse', 'HEAD'], { cwd: repoRoot, env: process.env });
     const dirtyStatus = await runCapture('git', ['status', '--porcelain'], { cwd: repoRoot, env: process.env });

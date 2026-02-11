@@ -1,6 +1,7 @@
 import { defineConfig, devices } from '@playwright/test';
 
-const DASHBOARD_PORT = 8080;
+// Use a non-dev port to avoid colliding with `pnpm dev:dashboard` (8080).
+const DASHBOARD_PORT = 18080;
 
 export default defineConfig({
   testDir: './apps/dashboard/e2e',
@@ -18,8 +19,10 @@ export default defineConfig({
     // Test-only dashboard routes are gated; enable them for e2e runs only.
     command: `node ./apps/dashboard/scripts/e2e-webserver.mjs --port=${DASHBOARD_PORT} --test-routes=1`,
     url: `http://localhost:${DASHBOARD_PORT}`,
-    timeout: 120000,
-    reuseExistingServer: !process.env.CI,
+    // Next build/start can be slow on cold caches or lower-powered machines.
+    timeout: 300000,
+    // Avoid silently pointing at an arbitrary already-running service on the same port.
+    reuseExistingServer: false,
   },
   projects: [
     {
