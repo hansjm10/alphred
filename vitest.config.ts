@@ -12,6 +12,7 @@ export default defineConfig({
       'apps/**/src/**/*.test.tsx',
       'apps/**/app/**/*.test.ts',
       'apps/**/app/**/*.test.tsx',
+      'apps/**/scripts/**/*.test.ts',
     ],
     exclude: ['**/dist/**', '**/node_modules/**'],
     setupFiles: ['./test/setup.ts'],
@@ -25,6 +26,7 @@ export default defineConfig({
         'apps/*/src/**/*.tsx',
         'apps/*/app/**/*.ts',
         'apps/*/app/**/*.tsx',
+        'apps/*/scripts/**/*.mjs',
       ],
       exclude: [
         '**/*.test.ts',

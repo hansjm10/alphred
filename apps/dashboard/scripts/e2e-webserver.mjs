@@ -3,7 +3,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-function parseArgs(argv) {
+export function parseArgs(argv) {
   const args = {
     port: null,
     testRoutes: null,
@@ -50,8 +50,25 @@ function parsePositiveIntEnv(name) {
   return Math.trunc(value);
 }
 
-async function acquireLock(lockDir, { timeoutMs }) {
-  const startedAt = Date.now();
+function sleep(milliseconds) {
+  return new Promise((resolve) => {
+    setTimeout(resolve, milliseconds);
+  });
+}
+
+export function normalizeColorEnv(baseEnv) {
+  const sanitized = { ...baseEnv };
+  if (sanitized.FORCE_COLOR !== undefined && sanitized.NO_COLOR !== undefined) {
+    delete sanitized.NO_COLOR;
+  }
+  return sanitized;
+}
+
+export async function acquireLock(
+  lockDir,
+  { timeoutMs, pollIntervalMs = 250, sleepFn = sleep, nowFn = Date.now },
+) {
+  const startedAt = nowFn();
   // Cross-platform lock: mkdir is atomic. Wait until the directory can be created.
   for (;;) {
     try {
@@ -59,7 +76,7 @@ async function acquireLock(lockDir, { timeoutMs }) {
       return;
     } catch (err) {
       if (err && err.code === 'EEXIST') {
-        if (Date.now() - startedAt > timeoutMs) {
+        if (nowFn() - startedAt > timeoutMs) {
           throw new Error(
             [
               `Timed out after ${timeoutMs}ms waiting for e2e build lock: ${lockDir}`,
@@ -69,7 +86,7 @@ async function acquireLock(lockDir, { timeoutMs }) {
             ].join('\n'),
           );
         }
-        await new Promise((r) => setTimeout(r, 250));
+        await sleepFn(pollIntervalMs);
         continue;
       }
       throw err;
@@ -114,6 +131,7 @@ async function main() {
   const scriptDir = path.dirname(fileURLToPath(import.meta.url));
   const dashboardDir = path.resolve(scriptDir, '..'); // apps/dashboard
   const repoRoot = path.resolve(dashboardDir, '..', '..');
+  const sanitizedEnv = normalizeColorEnv(process.env);
 
   const nextDir = path.join(dashboardDir, '.next');
   const buildIdPath = path.join(nextDir, 'BUILD_ID');
@@ -123,21 +141,21 @@ async function main() {
   const lockTimeoutMs = parsePositiveIntEnv('ALPHRED_E2E_BUILD_LOCK_TIMEOUT_MS') ?? 180_000;
 
   const envForServer = {
-    ...process.env,
+    ...sanitizedEnv,
     // Force explicit behavior per suite, while still using a shared build output.
     ALPHRED_DASHBOARD_TEST_ROUTES: testRoutes,
   };
 
   const envForBuild = {
-    ...process.env,
+    ...sanitizedEnv,
     // Compile-time flag baked by next.config.ts for /test/* route availability.
     ALPHRED_DASHBOARD_TEST_ROUTES_BUILD: buildTestRoutes,
   };
 
   await acquireLock(lockDir, { timeoutMs: lockTimeoutMs });
   try {
-    const currentRev = await runCapture('git', ['rev-parse', 'HEAD'], { cwd: repoRoot, env: process.env });
-    const dirtyStatus = await runCapture('git', ['status', '--porcelain'], { cwd: repoRoot, env: process.env });
+    const currentRev = await runCapture('git', ['rev-parse', 'HEAD'], { cwd: repoRoot, env: sanitizedEnv });
+    const dirtyStatus = await runCapture('git', ['status', '--porcelain'], { cwd: repoRoot, env: sanitizedEnv });
     const buildKey = `${currentRev}\n${dirtyStatus}\nALPHRED_DASHBOARD_TEST_ROUTES_BUILD=${buildTestRoutes}\n`;
 
     const hasBuild = await fileExists(buildIdPath);
@@ -167,8 +185,12 @@ async function main() {
   );
 }
 
-main().catch((err) => {
-  // eslint-disable-next-line no-console
-  console.error(err);
-  process.exit(1);
-});
+const isDirectExecution = process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+
+if (isDirectExecution) {
+  main().catch((err) => {
+    // eslint-disable-next-line no-console
+    console.error(err);
+    process.exit(1);
+  });
+}

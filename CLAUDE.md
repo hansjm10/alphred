@@ -28,6 +28,8 @@ pnpm test:e2e:build-gate  # Verify runtime env cannot bypass build-time /test/* 
 pnpm dev:dashboard    # Start dashboard dev server on port 8080
 ```
 
+If e2e lock acquisition times out, raise `ALPHRED_E2E_BUILD_LOCK_TIMEOUT_MS` or remove `apps/dashboard/.e2e-build-lock`.
+
 ## Conventions
 
 - Core packages use ESM (`"type": "module"`)
