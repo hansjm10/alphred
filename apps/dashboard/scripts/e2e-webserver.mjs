@@ -59,7 +59,8 @@ function sleep(milliseconds) {
 
 export function normalizeColorEnv(baseEnv) {
   const sanitized = { ...baseEnv };
-  // pnpm can inject FORCE_COLOR for child Node processes, which conflicts with inherited NO_COLOR.
+  // Drop NO_COLOR for child processes so Playwright/Next output formatting is consistent
+  // regardless of parent-shell color flags or pnpm-injected FORCE_COLOR behavior.
   if (sanitized.NO_COLOR !== undefined) {
     delete sanitized.NO_COLOR;
   }
