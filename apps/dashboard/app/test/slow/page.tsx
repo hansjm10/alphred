@@ -12,7 +12,8 @@ async function sleep(milliseconds: number): Promise<void> {
 }
 
 export default async function SlowPage() {
-  if (env.ALPHRED_DASHBOARD_TEST_ROUTES !== '1') {
+  const buildHasTestRoutes = process.env.NEXT_PUBLIC_ALPHRED_DASHBOARD_TEST_ROUTES_BUILD === '1';
+  if (!buildHasTestRoutes || env.ALPHRED_DASHBOARD_TEST_ROUTES !== '1') {
     notFound();
   }
 
@@ -21,7 +22,7 @@ export default async function SlowPage() {
   return (
     <div className="app">
       <main>
-        <section className="status-panel state-panel">
+        <section className="status-panel">
           <h2>Slow dashboard page</h2>
           <p>This route intentionally delays rendering to exercise loading fallback behavior.</p>
         </section>

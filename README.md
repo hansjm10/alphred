@@ -70,7 +70,10 @@ If Playwright browsers are not installed yet:
 pnpm exec playwright install chromium
 ```
 
-Note: the Playwright runner enables `ALPHRED_DASHBOARD_TEST_ROUTES=1` to exercise test-only dashboard routes like `/test/*` during e2e runs.
+Notes:
+- Playwright runs two suites on ports `18080` and `18081`.
+- The runner enables `ALPHRED_DASHBOARD_TEST_ROUTES=1` to exercise test-only dashboard routes like `/test/*` during e2e runs, but these routes are also guarded by a build-time flag so they cannot be enabled in normal production builds.
+- If an e2e run is interrupted, a stale build lock directory can block the next run; increase the timeout via `ALPHRED_E2E_BUILD_LOCK_TIMEOUT_MS` (default `180000`) or remove `apps/dashboard/.e2e-build-lock`.
 
 ## How It Works
 

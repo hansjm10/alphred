@@ -122,11 +122,17 @@ async function main() {
     ALPHRED_DASHBOARD_TEST_ROUTES: testRoutes,
   };
 
+  const envForBuild = {
+    ...process.env,
+    // Compile-time flag so /test/* routes are not accidentally enabled via runtime envs in prod builds.
+    NEXT_PUBLIC_ALPHRED_DASHBOARD_TEST_ROUTES_BUILD: '1',
+  };
+
   await acquireLock(lockDir, { timeoutMs: lockTimeoutMs });
   try {
     const currentRev = await runCapture('git', ['rev-parse', 'HEAD'], { cwd: repoRoot, env: process.env });
     const dirtyStatus = await runCapture('git', ['status', '--porcelain'], { cwd: repoRoot, env: process.env });
-    const buildKey = `${currentRev}\n${dirtyStatus}\n`;
+    const buildKey = `${currentRev}\n${dirtyStatus}\nNEXT_PUBLIC_ALPHRED_DASHBOARD_TEST_ROUTES_BUILD=1\n`;
 
     const hasBuild = await fileExists(buildIdPath);
     const markerMatches =
@@ -136,7 +142,7 @@ async function main() {
       await run(
         'pnpm',
         ['--filter', '@alphred/dashboard', 'exec', 'next', 'build'],
-        { cwd: repoRoot, env: process.env },
+        { cwd: repoRoot, env: envForBuild },
       );
 
       // Stamp the build with the repo revision so concurrent suites don't rebuild on top of a running server.

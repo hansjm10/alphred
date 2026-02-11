@@ -15,7 +15,7 @@ export default function DashboardError({ error, reset }: ErrorPageProps) {
   return (
     <div className="app">
       <main>
-        <section className="status-panel state-panel" role="alert" aria-live="assertive">
+        <section className="status-panel" role="alert" aria-live="assertive">
           <h2>Dashboard error</h2>
           <p>Something went wrong while loading this route.</p>
           <button className="state-action" type="button" onClick={reset}>
