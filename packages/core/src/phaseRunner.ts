@@ -148,12 +148,14 @@ export async function runPhase(
   const provider = dependencies.resolveProvider(phase.provider);
   const events: ProviderEvent[] = [];
   let report = '';
+  let hasResultEvent = false;
   let incrementalTokensUsed = 0;
   let maxCumulativeTokensUsed = 0;
 
   for await (const event of provider.run(phase.prompt, options)) {
     events.push(event);
     if (event.type === 'result') {
+      hasResultEvent = true;
       report = event.content;
     }
 
@@ -168,6 +170,10 @@ export async function runPhase(
     }
 
     maxCumulativeTokensUsed = Math.max(maxCumulativeTokensUsed, tokenUsage.tokens);
+  }
+
+  if (!hasResultEvent) {
+    throw new Error(`Agent phase "${phase.name}" completed without a result event.`);
   }
 
   return {

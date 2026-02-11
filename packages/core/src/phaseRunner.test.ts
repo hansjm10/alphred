@@ -199,6 +199,21 @@ describe('runPhase', () => {
     ).rejects.toBe(resolverError);
   });
 
+  it('throws when an agent provider stream completes without a result event', async () => {
+    const phase = createAgentPhase();
+    const emittedEvents: ProviderEvent[] = [
+      { type: 'system', content: 'started', timestamp: 100 },
+      { type: 'usage', content: '', timestamp: 101, metadata: { tokens: 8 } },
+      { type: 'assistant', content: 'partial response', timestamp: 102 },
+    ];
+
+    await expect(
+      runPhase(phase, defaultOptions, {
+        resolveProvider: () => createProvider(emittedEvents),
+      }),
+    ).rejects.toThrow('Agent phase "draft" completed without a result event.');
+  });
+
   it('skips provider resolution for non-agent phases', async () => {
     const phase: PhaseDefinition = {
       name: 'approval',
