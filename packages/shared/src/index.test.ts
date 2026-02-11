@@ -1,5 +1,11 @@
 import { describe, it, expect } from 'vitest';
-import type { RunStatus, PhaseStatus, WorkflowDefinition, GuardExpression } from './index.js';
+import {
+  compareStringsByCodeUnit,
+  type RunStatus,
+  type PhaseStatus,
+  type WorkflowDefinition,
+  type GuardExpression,
+} from './index.js';
 
 describe('shared types', () => {
   it('should allow valid run statuses', () => {
@@ -42,5 +48,12 @@ describe('shared types', () => {
       ],
     };
     expect('logic' in guard).toBe(true);
+  });
+
+  it('should compare strings by locale-independent code-unit order', () => {
+    const names = ['zeta', 'angstrom', 'alpha', 'ångstrom'];
+    const sorted = [...names].sort(compareStringsByCodeUnit);
+
+    expect(sorted).toEqual(['alpha', 'angstrom', 'zeta', 'ångstrom']);
   });
 });

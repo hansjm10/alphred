@@ -76,3 +76,19 @@ export type ProviderRunOptions = {
   timeout?: number;
   context?: string[];
 };
+
+/**
+ * Compares strings in locale-independent code-unit order.
+ * Useful when deterministic ordering must not vary by runtime locale.
+ */
+export function compareStringsByCodeUnit(a: string, b: string): number {
+  if (a < b) {
+    return -1;
+  }
+
+  if (a > b) {
+    return 1;
+  }
+
+  return 0;
+}

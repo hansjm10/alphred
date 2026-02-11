@@ -35,6 +35,7 @@ If e2e lock acquisition times out, raise `ALPHRED_E2E_BUILD_LOCK_TIMEOUT_MS` or 
 - Core packages use ESM (`"type": "module"`)
 - Imports must include `.js` extension (NodeNext resolution)
 - Use `type` keyword for type-only imports/exports
+- Tests must run in clean checkouts without prebuilt `packages/*/dist`; avoid new runtime workspace imports that require built artifacts, or add explicit Vitest source aliasing.
 - Tests are co-located with source files (`*.test.ts`)
 - Next.js App Router tests are co-located in `app/` (`*.test.tsx`)
 - UI tests should verify behavior and accessibility semantics over styling details

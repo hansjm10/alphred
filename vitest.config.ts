@@ -1,6 +1,13 @@
 import { defineConfig } from 'vitest/config';
+import { resolve } from 'node:path';
 
 export default defineConfig({
+  resolve: {
+    alias: {
+      // Keep tests independent from prebuilt package artifacts in clean checkouts.
+      '@alphred/shared': resolve(__dirname, 'packages/shared/src/index.ts'),
+    },
+  },
   esbuild: {
     jsx: 'automatic',
     jsxImportSource: 'react',
