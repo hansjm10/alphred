@@ -11,6 +11,10 @@ The package exports a default provider registry and resolver for core wiring:
 - `createAgentProviderResolver(registry)`
 - `UnknownAgentProviderError`
 
+Resolver lookups use only own registry keys. Inherited names such as `toString`,
+`constructor`, and `__proto__` are treated as unknown providers and throw
+`UnknownAgentProviderError`.
+
 ### Default registry usage
 
 ```ts

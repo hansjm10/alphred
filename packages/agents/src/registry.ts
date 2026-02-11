@@ -33,13 +33,11 @@ export function createAgentProviderResolver<TName extends string>(
   const availableProviders = Object.keys(registry).sort();
 
   return (providerName: TName | (string & {})): AgentProvider => {
-    const provider = registry[providerName as TName];
-
-    if (!provider) {
+    if (!Object.prototype.hasOwnProperty.call(registry, providerName)) {
       throw new UnknownAgentProviderError(providerName, availableProviders);
     }
 
-    return provider;
+    return registry[providerName as TName];
   };
 }
 

@@ -109,4 +109,22 @@ describe('agent provider registry', () => {
       );
     }
   });
+
+  it('treats inherited object keys as unknown providers', () => {
+    const resolver = createAgentProviderResolver<never>({});
+
+    for (const providerName of ['toString', 'constructor', '__proto__']) {
+      try {
+        resolver(providerName);
+        throw new Error(`Expected unknown provider "${providerName}" to throw`);
+      } catch (error) {
+        expect(error).toBeInstanceOf(UnknownAgentProviderError);
+
+        const typedError = error as UnknownAgentProviderError;
+        expect(typedError.code).toBe('UNKNOWN_AGENT_PROVIDER');
+        expect(typedError.providerName).toBe(providerName);
+        expect(typedError.availableProviders).toEqual([]);
+      }
+    }
+  });
 });
