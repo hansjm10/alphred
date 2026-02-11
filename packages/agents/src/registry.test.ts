@@ -91,6 +91,27 @@ describe('agent provider registry', () => {
     }
   });
 
+  it('uses locale-independent ordering for provider keys', () => {
+    const resolver = createAgentProviderResolver({
+      zeta: new FakeProvider('zeta'),
+      ångstrom: new FakeProvider('ångstrom'),
+      alpha: new FakeProvider('alpha'),
+    });
+
+    try {
+      resolver('missing-provider');
+      throw new Error('Expected unknown provider to throw');
+    } catch (error) {
+      expect(error).toBeInstanceOf(UnknownAgentProviderError);
+
+      const typedError = error as UnknownAgentProviderError;
+      expect(typedError.availableProviders).toEqual(['alpha', 'zeta', 'ångstrom']);
+      expect(typedError.message).toBe(
+        'Unknown agent provider "missing-provider". Available providers: alpha, zeta, ångstrom.',
+      );
+    }
+  });
+
   it('returns deterministic unknown-provider details for an empty registry', () => {
     const resolver = createAgentProviderResolver<never>({});
 

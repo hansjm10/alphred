@@ -1,4 +1,4 @@
-import type { AgentProviderName } from '@alphred/shared';
+import { compareStringsByCodeUnit, type AgentProviderName } from '@alphred/shared';
 import type { AgentProvider } from './provider.js';
 import { ClaudeProvider } from './providers/claude.js';
 import { CodexProvider } from './providers/codex.js';
@@ -9,13 +9,20 @@ export type AgentProviderRegistry<TName extends string = AgentProviderName> = Re
 
 export type AgentProviderResolver = (providerName: string) => AgentProvider;
 
+/**
+ * Returns a new provider-name list sorted deterministically for error output.
+ */
+function sortProviderNames(providerNames: readonly string[]): string[] {
+  return [...providerNames].sort(compareStringsByCodeUnit);
+}
+
 export class UnknownAgentProviderError extends Error {
   readonly code = 'UNKNOWN_AGENT_PROVIDER';
   readonly providerName: string;
   readonly availableProviders: readonly string[];
 
   constructor(providerName: string, availableProviders: readonly string[]) {
-    const sortedProviders = [...availableProviders].sort((a, b) => a.localeCompare(b));
+    const sortedProviders = sortProviderNames(availableProviders);
     const providersText = sortedProviders.length > 0 ? sortedProviders.join(', ') : '(none)';
     super(`Unknown agent provider "${providerName}". Available providers: ${providersText}.`);
 
@@ -28,7 +35,7 @@ export class UnknownAgentProviderError extends Error {
 export function createAgentProviderResolver<TName extends string>(
   registry: AgentProviderRegistry<TName>,
 ): AgentProviderResolver {
-  const availableProviders = Object.keys(registry).sort((a, b) => a.localeCompare(b));
+  const availableProviders = sortProviderNames(Object.keys(registry));
   const objectHasOwn = (
     Object as unknown as { hasOwn: (object: object, property: PropertyKey) => boolean }
   ).hasOwn;
