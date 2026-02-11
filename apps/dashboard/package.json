@@ -8,9 +8,9 @@
     "typecheck:test": "tsc --noEmit -p tsconfig.test.json",
     "build": "next build",
     "start": "next start --port 8080",
-    "test:e2e": "env -u NO_COLOR node ./scripts/playwright-test.mjs --config ../../playwright.config.ts",
-    "test:e2e:no-test-routes": "env -u NO_COLOR node ./scripts/playwright-test.mjs --config ../../playwright.no-test-routes.config.ts",
-    "test:e2e:build-gate": "env -u NO_COLOR node ./scripts/playwright-test.mjs --config ../../playwright.build-gate.config.ts",
+    "test:e2e": "node ./scripts/playwright-test.mjs --config ../../playwright.config.ts",
+    "test:e2e:no-test-routes": "node ./scripts/playwright-test.mjs --config ../../playwright.no-test-routes.config.ts",
+    "test:e2e:build-gate": "node ./scripts/playwright-test.mjs --config ../../playwright.build-gate.config.ts",
     "test:e2e:all": "pnpm test:e2e && pnpm test:e2e:no-test-routes && pnpm test:e2e:build-gate"
   },
   "dependencies": {
