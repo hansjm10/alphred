@@ -28,6 +28,9 @@ describe('parseArgs', () => {
   it('throws for missing or invalid port', () => {
     expect(() => parseArgs(['--test-routes=1', '--build-test-routes=1'])).toThrow(/--port/);
     expect(() => parseArgs(['--port=0', '--test-routes=1', '--build-test-routes=1'])).toThrow(/--port/);
+    expect(() => parseArgs(['--port=65536', '--test-routes=1', '--build-test-routes=1'])).toThrow(/--port/);
+    expect(() => parseArgs(['--port=18080.5', '--test-routes=1', '--build-test-routes=1'])).toThrow(/--port/);
+    expect(() => parseArgs(['--port=abc', '--test-routes=1', '--build-test-routes=1'])).toThrow(/--port/);
   });
 
   it('throws for invalid test-route flags', () => {

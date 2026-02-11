@@ -12,7 +12,8 @@ export function parseArgs(argv) {
 
   for (const raw of argv) {
     if (raw.startsWith('--port=')) {
-      args.port = Number(raw.slice('--port='.length));
+      const portRaw = raw.slice('--port='.length).trim();
+      args.port = /^\d+$/.test(portRaw) ? Number(portRaw) : Number.NaN;
     } else if (raw.startsWith('--test-routes=')) {
       args.testRoutes = raw.slice('--test-routes='.length);
     } else if (raw.startsWith('--build-test-routes=')) {
@@ -20,8 +21,8 @@ export function parseArgs(argv) {
     }
   }
 
-  if (!Number.isFinite(args.port) || args.port <= 0) {
-    throw new Error('Missing/invalid --port=... (expected positive number).');
+  if (!Number.isInteger(args.port) || args.port < 1 || args.port > 65_535) {
+    throw new Error('Missing/invalid --port=... (expected integer in range 1..65535).');
   }
   if (args.testRoutes !== '0' && args.testRoutes !== '1') {
     throw new Error("Missing/invalid --test-routes=... (expected '0' or '1').");
