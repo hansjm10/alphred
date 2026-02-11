@@ -7,9 +7,7 @@ export type AgentProviderRegistry<TName extends string = AgentProviderName> = Re
   Record<TName, AgentProvider>
 >;
 
-export type AgentProviderResolver<TName extends string = AgentProviderName> = (
-  providerName: TName | (string & {}),
-) => AgentProvider;
+export type AgentProviderResolver = (providerName: string) => AgentProvider;
 
 export class UnknownAgentProviderError extends Error {
   readonly code = 'UNKNOWN_AGENT_PROVIDER';
@@ -17,7 +15,7 @@ export class UnknownAgentProviderError extends Error {
   readonly availableProviders: readonly string[];
 
   constructor(providerName: string, availableProviders: readonly string[]) {
-    const sortedProviders = [...availableProviders].sort();
+    const sortedProviders = [...availableProviders].sort((a, b) => a.localeCompare(b));
     const providersText = sortedProviders.length > 0 ? sortedProviders.join(', ') : '(none)';
     super(`Unknown agent provider "${providerName}". Available providers: ${providersText}.`);
 
@@ -29,11 +27,14 @@ export class UnknownAgentProviderError extends Error {
 
 export function createAgentProviderResolver<TName extends string>(
   registry: AgentProviderRegistry<TName>,
-): AgentProviderResolver<TName> {
-  const availableProviders = Object.keys(registry).sort();
+): AgentProviderResolver {
+  const availableProviders = Object.keys(registry).sort((a, b) => a.localeCompare(b));
+  const objectHasOwn = (
+    Object as unknown as { hasOwn: (object: object, property: PropertyKey) => boolean }
+  ).hasOwn;
 
-  return (providerName: TName | (string & {})): AgentProvider => {
-    if (!Object.prototype.hasOwnProperty.call(registry, providerName)) {
+  return (providerName: string): AgentProvider => {
+    if (!objectHasOwn(registry, providerName)) {
       throw new UnknownAgentProviderError(providerName, availableProviders);
     }
 
