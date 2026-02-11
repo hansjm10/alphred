@@ -1,7 +1,7 @@
 import { expect, test } from '@playwright/test';
 
 test('renders loading and not-found fallbacks under navigation', async ({ page }) => {
-  await page.goto('/');
+  await page.goto('/test');
 
   await page.getByRole('link', { name: 'Open slow dashboard route' }).click();
   await expect(page.getByRole('heading', { name: 'Loading dashboard' })).toBeVisible();
