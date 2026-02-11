@@ -72,20 +72,7 @@ function readCumulativeUsage(metadata: Record<string, unknown>): number | undefi
   return Math.max(...candidates);
 }
 
-function extractTokenUsage(event: ProviderEvent): TokenUsage | undefined {
-  if (event.type !== 'usage' || !event.metadata) {
-    return undefined;
-  }
-
-  const metadata = event.metadata;
-  const directTokens = toTokenCount(metadata.tokens);
-  if (directTokens !== undefined) {
-    return {
-      mode: 'incremental',
-      tokens: directTokens,
-    };
-  }
-
+function readTokenUsageFromMetadata(metadata: Record<string, unknown>): TokenUsage | undefined {
   const cumulativeTokens = readCumulativeUsage(metadata);
   if (cumulativeTokens !== undefined) {
     return {
@@ -94,29 +81,35 @@ function extractTokenUsage(event: ProviderEvent): TokenUsage | undefined {
     };
   }
 
+  const directTokens = toTokenCount(metadata.tokens);
+  if (directTokens !== undefined) {
+    return {
+      mode: 'incremental',
+      tokens: directTokens,
+    };
+  }
+
+  return undefined;
+}
+
+function extractTokenUsage(event: ProviderEvent): TokenUsage | undefined {
+  if (event.type !== 'usage' || !event.metadata) {
+    return undefined;
+  }
+
+  const metadata = event.metadata;
+  const topLevelUsage = readTokenUsageFromMetadata(metadata);
+  if (topLevelUsage) {
+    return topLevelUsage;
+  }
+
   const nestedUsage = metadata.usage;
   if (!nestedUsage || typeof nestedUsage !== 'object') {
     return undefined;
   }
 
   const usageMetadata = nestedUsage as Record<string, unknown>;
-  const nestedTokens = toTokenCount(usageMetadata.tokens);
-  if (nestedTokens !== undefined) {
-    return {
-      mode: 'incremental',
-      tokens: nestedTokens,
-    };
-  }
-
-  const nestedCumulativeTokens = readCumulativeUsage(usageMetadata);
-  if (nestedCumulativeTokens !== undefined) {
-    return {
-      mode: 'cumulative',
-      tokens: nestedCumulativeTokens,
-    };
-  }
-
-  return undefined;
+  return readTokenUsageFromMetadata(usageMetadata);
 }
 
 export async function runPhase(
