@@ -19,10 +19,16 @@ Packages:
 pnpm install          # Install dependencies
 pnpm build            # Build all packages (tsc -b)
 pnpm typecheck        # Type check all packages
+pnpm typecheck:test   # Type check test TS configs
 pnpm lint             # ESLint with zero warnings
 pnpm test             # Run all tests with vitest
+pnpm test:e2e         # Run all dashboard e2e suites (Playwright)
+pnpm test:e2e:no-test-routes  # Run dashboard e2e tests with /test/* routes disabled
+pnpm test:e2e:build-gate  # Verify runtime env cannot bypass build-time /test/* gate
 pnpm dev:dashboard    # Start dashboard dev server on port 8080
 ```
+
+If e2e lock acquisition times out, raise `ALPHRED_E2E_BUILD_LOCK_TIMEOUT_MS` or remove `apps/dashboard/.e2e-build-lock`.
 
 ## Conventions
 
@@ -30,6 +36,8 @@ pnpm dev:dashboard    # Start dashboard dev server on port 8080
 - Imports must include `.js` extension (NodeNext resolution)
 - Use `type` keyword for type-only imports/exports
 - Tests are co-located with source files (`*.test.ts`)
+- Next.js App Router tests are co-located in `app/` (`*.test.tsx`)
+- UI tests should verify behavior and accessibility semantics over styling details
 - Database uses Drizzle ORM with better-sqlite3
 - State machine transitions are validated - invalid transitions throw
 - Each agent phase gets a fresh session (no conversation carry-over)

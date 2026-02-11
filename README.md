@@ -36,6 +36,7 @@ pnpm test
 ```bash
 # Type checking
 pnpm typecheck
+pnpm typecheck:test
 
 # Linting
 pnpm lint
@@ -46,6 +47,42 @@ pnpm test
 # Dashboard dev server (Next.js on port 8080)
 pnpm dev:dashboard
 ```
+
+## Dashboard Fallback UX
+
+The dashboard uses App Router fallback states to keep route transitions and failures explicit:
+
+- **Loading state**: route-level loads display `Loading dashboard` with the message `Preparing workflow run data...`.
+- **Error state**: route failures display `Dashboard error` and provide a `Try again` button that calls the route error boundary `reset()` callback.
+- **Not found state**: unmatched routes display `Page not found` with a `Return to home` link back to `/`.
+
+## Dashboard E2E Tests
+
+Run dashboard e2e tests with Playwright:
+
+```bash
+pnpm test:e2e
+```
+
+Run individual suites:
+
+```bash
+pnpm test:e2e:no-test-routes
+pnpm test:e2e:build-gate
+```
+
+If Playwright browsers are not installed yet:
+
+```bash
+pnpm exec playwright install chromium
+```
+
+Notes:
+- `pnpm test:e2e` runs three suites on ports `18080`, `18081`, and `18082`.
+- The runner uses `ALPHRED_DASHBOARD_TEST_ROUTES_BUILD` as a build-baked gate and `ALPHRED_DASHBOARD_TEST_ROUTES` as a runtime gate for `/test/*` routes.
+- When `/test/*` is gated off, the dashboard proxy returns a hard `404` HTML response with `x-robots-tag: noindex` for those paths.
+- A dedicated regression suite verifies runtime env overrides cannot enable `/test/*` when the build gate is off.
+- If an e2e run is interrupted, a stale build lock directory can block the next run; increase the timeout via `ALPHRED_E2E_BUILD_LOCK_TIMEOUT_MS` (default `180000`) or remove `apps/dashboard/.e2e-build-lock`.
 
 ## How It Works
 
