@@ -10,7 +10,11 @@ import {
 } from './registry.js';
 
 class FakeProvider implements AgentProvider {
-  readonly name = 'fake';
+  readonly name: string;
+
+  constructor(name = 'fake') {
+    this.name = name;
+  }
 
   async *run(_prompt: string, _options: ProviderRunOptions): AsyncIterable<ProviderEvent> {
     yield {
@@ -64,5 +68,45 @@ describe('agent provider registry', () => {
     expect(Object.isFrozen(defaultAgentProviderRegistry)).toBe(true);
     expect(defaultAgentProviderRegistry.claude).toBeInstanceOf(ClaudeProvider);
     expect(defaultAgentProviderRegistry.codex).toBeInstanceOf(CodexProvider);
+  });
+
+  it('sorts custom registry provider keys in unknown-provider errors', () => {
+    const resolver = createAgentProviderResolver({
+      zeta: new FakeProvider('zeta'),
+      alpha: new FakeProvider('alpha'),
+      beta: new FakeProvider('beta'),
+    });
+
+    try {
+      resolver('missing-provider');
+      throw new Error('Expected unknown provider to throw');
+    } catch (error) {
+      expect(error).toBeInstanceOf(UnknownAgentProviderError);
+
+      const typedError = error as UnknownAgentProviderError;
+      expect(typedError.availableProviders).toEqual(['alpha', 'beta', 'zeta']);
+      expect(typedError.message).toBe(
+        'Unknown agent provider "missing-provider". Available providers: alpha, beta, zeta.',
+      );
+    }
+  });
+
+  it('returns deterministic unknown-provider details for an empty registry', () => {
+    const resolver = createAgentProviderResolver<never>({});
+
+    try {
+      resolver('missing-provider');
+      throw new Error('Expected unknown provider to throw');
+    } catch (error) {
+      expect(error).toBeInstanceOf(UnknownAgentProviderError);
+
+      const typedError = error as UnknownAgentProviderError;
+      expect(typedError.code).toBe('UNKNOWN_AGENT_PROVIDER');
+      expect(typedError.providerName).toBe('missing-provider');
+      expect(typedError.availableProviders).toEqual([]);
+      expect(typedError.message).toBe(
+        'Unknown agent provider "missing-provider". Available providers: (none).',
+      );
+    }
   });
 });

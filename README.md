@@ -16,6 +16,8 @@ Alphred is a pnpm monorepo with the following packages:
 | `@alphred/cli` | CLI entry point |
 | `@alphred/dashboard` | Next.js monitoring dashboard |
 
+For `@alphred/agents` provider registry usage and unknown-provider error handling, see `packages/agents/README.md`.
+
 ## Prerequisites
 
 - Node.js 22+
