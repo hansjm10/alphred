@@ -228,7 +228,12 @@ function buildBridgedPrompt(prompt: string, options: ProviderRunOptions, context
 }
 
 function createRunRequest(prompt: string, options: ProviderRunOptions): CodexRunRequest {
-  const workingDirectory = (options as { workingDirectory?: unknown }).workingDirectory;
+  if (options === null || options === undefined || typeof options !== 'object' || Array.isArray(options)) {
+    throw new CodexProviderError('CODEX_INVALID_OPTIONS', 'Codex provider requires options to be an object.');
+  }
+
+  const validatedOptions = options as ProviderRunOptions & { workingDirectory?: unknown };
+  const workingDirectory = validatedOptions.workingDirectory;
   if (typeof workingDirectory !== 'string' || workingDirectory.trim().length === 0) {
     throw new CodexProviderError(
       'CODEX_INVALID_OPTIONS',
@@ -237,30 +242,30 @@ function createRunRequest(prompt: string, options: ProviderRunOptions): CodexRun
   }
 
   if (
-    options.maxTokens !== undefined &&
-    (!Number.isInteger(options.maxTokens) || options.maxTokens <= 0)
+    validatedOptions.maxTokens !== undefined &&
+    (!Number.isInteger(validatedOptions.maxTokens) || validatedOptions.maxTokens <= 0)
   ) {
     throw new CodexProviderError('CODEX_INVALID_OPTIONS', 'Codex provider requires maxTokens to be a positive integer.', {
-      maxTokens: options.maxTokens,
+      maxTokens: validatedOptions.maxTokens,
     });
   }
 
-  if (options.timeout !== undefined && (!Number.isFinite(options.timeout) || options.timeout <= 0)) {
+  if (validatedOptions.timeout !== undefined && (!Number.isFinite(validatedOptions.timeout) || validatedOptions.timeout <= 0)) {
     throw new CodexProviderError('CODEX_INVALID_OPTIONS', 'Codex provider requires timeout to be a positive number.', {
-      timeout: options.timeout,
+      timeout: validatedOptions.timeout,
     });
   }
 
-  const context = normalizeContext(options.context);
+  const context = normalizeContext(validatedOptions.context);
 
   return {
     prompt,
-    bridgedPrompt: buildBridgedPrompt(prompt, options, context),
+    bridgedPrompt: buildBridgedPrompt(prompt, validatedOptions, context),
     workingDirectory,
     context,
-    systemPrompt: options.systemPrompt?.trim() || undefined,
-    maxTokens: options.maxTokens,
-    timeout: options.timeout,
+    systemPrompt: validatedOptions.systemPrompt?.trim() || undefined,
+    maxTokens: validatedOptions.maxTokens,
+    timeout: validatedOptions.timeout,
   };
 }
 

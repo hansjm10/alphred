@@ -152,6 +152,7 @@ describe('codex provider', () => {
       { workingDirectory: '   ' },
       {},
       { workingDirectory: 123 },
+      null,
     ];
 
     for (const options of invalidOptions) {
@@ -159,6 +160,16 @@ describe('codex provider', () => {
         code: 'CODEX_INVALID_OPTIONS',
       });
     }
+
+    await expect(
+      (async () => {
+        for await (const event of provider.run('prompt', undefined as unknown as ProviderRunOptions)) {
+          void event;
+        }
+      })(),
+    ).rejects.toMatchObject({
+      code: 'CODEX_INVALID_OPTIONS',
+    });
   });
 
   it('throws a typed error when codex emits unsupported event types', async () => {
