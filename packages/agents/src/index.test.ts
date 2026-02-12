@@ -5,6 +5,7 @@ describe('agents index exports', () => {
   it('re-exports provider helpers, provider classes, and registry APIs', () => {
     expect(typeof agents.createProviderEvent).toBe('function');
     expect(typeof agents.ClaudeProvider).toBe('function');
+    expect(typeof agents.ClaudeProviderError).toBe('function');
     expect(typeof agents.CodexProvider).toBe('function');
     expect(typeof agents.CodexProviderError).toBe('function');
     expect(typeof agents.createAgentProviderResolver).toBe('function');
