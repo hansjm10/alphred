@@ -50,46 +50,68 @@ async function collectUsageEvents(provider: AgentProvider, options: ProviderRunO
   return events.filter((event) => event.type === 'usage');
 }
 
-const noopBootstrap: CodexBootstrapper = () => ({
-  client: {
-    startThread: () => ({
-      runStreamed: async () => ({
-        events: (async function* () {
-          yield { type: 'thread.started', thread_id: 'thread-1' };
-          yield {
-            type: 'item.completed',
-            item: {
-              id: 'message-1',
-              type: 'agent_message',
-              text: 'Done',
-            },
-          };
-          yield {
-            type: 'turn.completed',
-            usage: {
-              input_tokens: 10,
-              cached_input_tokens: 0,
-              output_tokens: 3,
-            },
-          };
-        })(),
-      }),
-    }),
-  } as unknown as Codex,
-  authMode: 'api_key',
-  model: 'gpt-5-codex',
-  apiKey: 'sk-test',
-  codexHome: '/tmp/.codex',
-  codexBinaryPath: '/tmp/codex',
-});
+type CapturedSdkInvocation = {
+  threadOptions?: unknown;
+  input?: unknown;
+  turnOptions?: unknown;
+};
+
+function createNoopBootstrap(capture?: CapturedSdkInvocation): ReturnType<CodexBootstrapper> {
+  return {
+    client: {
+      startThread: (threadOptions?: unknown) => {
+        if (capture) {
+          capture.threadOptions = threadOptions;
+        }
+
+        return {
+          runStreamed: async (input: unknown, turnOptions?: unknown) => {
+            if (capture) {
+              capture.input = input;
+              capture.turnOptions = turnOptions;
+            }
+
+            return {
+              events: (async function* () {
+                yield { type: 'thread.started', thread_id: 'thread-1' };
+                yield {
+                  type: 'item.completed',
+                  item: {
+                    id: 'message-1',
+                    type: 'agent_message',
+                    text: 'Done',
+                  },
+                };
+                yield {
+                  type: 'turn.completed',
+                  usage: {
+                    input_tokens: 10,
+                    cached_input_tokens: 0,
+                    output_tokens: 3,
+                  },
+                };
+              })(),
+            };
+          },
+        };
+      },
+    } as unknown as Codex,
+    authMode: 'api_key',
+    model: 'gpt-5-codex',
+    apiKey: 'sk-test',
+    codexHome: '/tmp/.codex',
+    codexBinaryPath: '/tmp/codex',
+  };
+}
 
 describe('provider usage metadata contract', () => {
-  const integrationCases: [string, AgentProvider][] = [
-    ['claude', new ClaudeProvider()],
-    ['codex', new CodexProvider(undefined, noopBootstrap)],
+  const integrationCases: [string, () => AgentProvider][] = [
+    ['claude', () => new ClaudeProvider()],
+    ['codex', () => new CodexProvider(undefined, () => createNoopBootstrap())],
   ];
 
-  it.each(integrationCases)('emits a consistent adapter event envelope for %s provider', async (name, provider) => {
+  it.each(integrationCases)('emits a consistent adapter event envelope for %s provider', async (name, createProvider) => {
+    const provider = createProvider();
     const events = await collectEvents(provider, {
       workingDirectory: process.cwd(),
       maxTokens: 64,
@@ -106,7 +128,8 @@ describe('provider usage metadata contract', () => {
     expect(events[eventTypes.length - 1]?.type).toBe('result');
   });
 
-  it.each(integrationCases)('emits parseable usage metadata for %s provider', async (name, provider) => {
+  it.each(integrationCases)('emits parseable usage metadata for %s provider', async (name, createProvider) => {
+    const provider = createProvider();
     const usageEvents = await collectUsageEvents(provider, {
       workingDirectory: process.cwd(),
       maxTokens: 64,
@@ -124,5 +147,68 @@ describe('provider usage metadata contract', () => {
         `${name} usage metadata is not in a recognized token format`,
       ).toBe(true);
     }
+  });
+
+  it.each(integrationCases)(
+    'preserves run-shaping metadata for realistic options for %s provider',
+    async (name, createProvider) => {
+      const provider = createProvider();
+      const events = await collectEvents(provider, {
+        workingDirectory: process.cwd(),
+        systemPrompt: 'Prefer deterministic and concise output.',
+        context: ['repo=alphred', 'issue=27'],
+        maxTokens: 128,
+        timeout: 30_000,
+      });
+
+      expect(events.map((event) => event.type)).toEqual(['system', 'assistant', 'usage', 'result']);
+      expect(events[0]?.metadata).toMatchObject({
+        provider: name,
+        hasSystemPrompt: true,
+        contextItemCount: 2,
+        maxTokens: 128,
+        timeout: 30_000,
+      });
+    },
+  );
+
+  it('retains codex cached_input_tokens while exposing normalized usage totals', async () => {
+    const capture: CapturedSdkInvocation = {};
+    const provider = new CodexProvider(undefined, () => createNoopBootstrap(capture));
+    const usageEvents = await collectUsageEvents(provider, {
+      workingDirectory: process.cwd(),
+      maxTokens: 64,
+      timeout: 15_000,
+    });
+
+    expect(usageEvents).toHaveLength(1);
+    expect(usageEvents[0]?.metadata).toMatchObject({
+      input_tokens: 10,
+      output_tokens: 3,
+      total_tokens: 13,
+      cached_input_tokens: 0,
+      usage: {
+        input_tokens: 10,
+        output_tokens: 3,
+        total_tokens: 13,
+      },
+    });
+    expect(capture.threadOptions).toMatchObject({
+      model: 'gpt-5-codex',
+      workingDirectory: process.cwd(),
+    });
+    expect(capture.turnOptions).toMatchObject({
+      signal: expect.any(AbortSignal),
+    });
+  });
+
+  it('handles nested usage token metadata seen in provider payloads', () => {
+    expect(hasTokenUsageShape({ usage: { usage: { total_tokens: 21 } } })).toBe(true);
+    expect(hasTokenUsageShape({ usage: { usage: { tokensUsed: 21 } } })).toBe(true);
+  });
+
+  it('rejects malformed usage metadata that only contains non-numeric token fields', () => {
+    expect(hasTokenUsageShape({ input_tokens: '10', output_tokens: 3 } as unknown as Record<string, unknown>)).toBe(false);
+    expect(hasTokenUsageShape({ usage: { total_tokens: '13' } } as unknown as Record<string, unknown>)).toBe(false);
   });
 });
