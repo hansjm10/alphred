@@ -16,7 +16,10 @@ Alphred is a pnpm monorepo with the following packages:
 | `@alphred/cli` | CLI entry point |
 | `@alphred/dashboard` | Next.js monitoring dashboard |
 
-For `@alphred/agents` provider registry usage and unknown-provider error handling, see `packages/agents/README.md`.
+Architecture notes for Agent Runtime v1 (DI + adapters):
+- `DESIGN.md` (runtime wiring, boundaries, failure semantics)
+- `packages/agents/README.md` (registry APIs, adapter usage)
+- `packages/agents/AGENTS.md` and `packages/core/AGENTS.md` (directory-specific AI guidance)
 
 ## Prerequisites
 

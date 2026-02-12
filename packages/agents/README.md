@@ -48,3 +48,32 @@ const resolveProvider = createAgentProviderResolver({
 
 const provider = resolveProvider('codex');
 ```
+
+## Runtime Boundary
+
+- `@alphred/core` receives provider resolution through dependency injection (`resolveProvider`).
+- `@alphred/agents` owns provider registry construction and adapter implementations.
+- Core must not import provider SDK/client code directly.
+
+## Event + Failure Contract
+
+- Adapters emit shared `ProviderEvent` values with types:
+  `system`, `assistant`, `result`, `tool_use`, `tool_result`, `usage`.
+- Unknown provider names throw `UnknownAgentProviderError` with deterministic
+  `availableProviders` ordering.
+- Adapter runs fail deterministically when:
+  - options are invalid
+  - an unsupported event type is emitted
+  - events are emitted after `result`
+  - no `result` event is emitted
+
+## Add a Provider Checklist
+
+1. Add provider name to `AgentProviderName` in `@alphred/shared`.
+2. Implement provider in `src/providers` using adapter core helpers.
+3. Register provider in `defaultAgentProviderRegistry`.
+4. Add/extend tests:
+   - `src/registry.test.ts`
+   - provider adapter tests
+   - `packages/core/src/phaseRunner.test.ts` coverage for propagation semantics
+5. Update docs in `DESIGN.md` and this README.

@@ -72,6 +72,89 @@ Streamed event types: `system`, `assistant`, `result`, `tool_use`, `tool_result`
 
 Each phase spawns a fresh agent session. Context from prior phases is injected via the prompt, not through conversation history.
 
+## Agent Runtime v1 (DI + Adapters)
+
+This section defines the runtime boundary between `@alphred/core` and `@alphred/agents`.
+
+### DI Wiring Pattern
+
+- `@alphred/core` does not import provider classes directly.
+- `runPhase` receives a dependency object with `resolveProvider(providerName)`.
+- The resolver is injected by the caller (composition root) and can come from:
+  - `resolveAgentProvider` (default registry in `@alphred/agents`)
+  - `createAgentProviderResolver(customRegistry)` (custom wiring)
+
+Runtime flow for agent phases:
+1. Core reads `phase.provider` from workflow configuration.
+2. Core resolves provider via injected resolver.
+3. Core executes `provider.run(phase.prompt, options)`.
+4. Core stores streamed events and final `result` content in `PhaseRunResult`.
+5. Core derives `tokensUsed` from usage metadata.
+
+### Provider Registry Responsibilities
+
+`@alphred/agents` owns provider registration and unknown-provider behavior:
+- `defaultAgentProviderRegistry` is frozen and includes `claude` and `codex`.
+- `createAgentProviderResolver(registry)` resolves only own keys (not inherited keys).
+- Unknown providers throw `UnknownAgentProviderError` with:
+  - `code = UNKNOWN_AGENT_PROVIDER`
+  - requested `providerName`
+  - deterministic, sorted `availableProviders`
+
+### Adapter Boundaries (Core vs SDK-Specific Code)
+
+`@alphred/core` responsibilities:
+- Workflow/phase orchestration
+- Provider resolution through DI
+- Event collection and `result` extraction
+- Token usage aggregation across provider usage payload variants
+- Deterministic runtime errors when provider is missing or result event is missing
+
+`@alphred/agents` responsibilities:
+- Provider adapters (`ClaudeProvider`, `CodexProvider`)
+- SDK/process integration and raw event normalization
+- Mapping provider-specific events to shared `ProviderEvent` contract
+- Provider-specific error taxonomy (`*_INVALID_OPTIONS`, `*_INVALID_EVENT`, `*_MISSING_RESULT`, `*_RUN_FAILED`)
+
+Constraint:
+- SDK/client-specific code must stay in `@alphred/agents`.
+- `@alphred/core` depends only on shared types and injected interfaces.
+
+### Event Contract and Failure Semantics
+
+Current event contract (`@alphred/shared`):
+- Event types: `system`, `assistant`, `result`, `tool_use`, `tool_result`, `usage`
+- Each event carries `content`, `timestamp`, and optional `metadata`
+
+Runtime semantics:
+- Agent phase missing `provider` -> phase runner throws immediately.
+- Unknown provider name -> resolver throws `UnknownAgentProviderError`.
+- Adapter/provider stream must include exactly one terminal `result` event for success.
+- Events after `result` are rejected by adapter runtime as invalid ordering.
+- If no `result` is emitted, adapter/provider run fails deterministically.
+- Phase runner token accounting:
+  - Sums incremental `tokens` values.
+  - Tracks max cumulative values (`tokensUsed`, `totalTokens`, `total_tokens`, `input+output` variants).
+  - Uses the higher of incremental total vs max cumulative value.
+
+### Adding a New Provider Adapter Safely
+
+1. Extend provider name types:
+  - Add provider name to `AgentProviderName` in `@alphred/shared`.
+2. Implement adapter in `@alphred/agents/src/providers`:
+  - Define provider error codes and typed error class.
+  - Use adapter core (`runAdapterProvider`) to normalize events/options.
+3. Register provider:
+  - Add instance to `defaultAgentProviderRegistry`.
+4. Verify tests:
+  - Registry resolution and unknown-provider path.
+  - Adapter event normalization and failure semantics.
+  - Phase runner event propagation and token accounting.
+5. Update docs:
+  - `DESIGN.md`
+  - `packages/agents/README.md`
+  - directory-scoped `AGENTS.md` and `CLAUDE.md` guidance where relevant.
+
 ## Database Schema
 
 Eight SQLite tables managed via Drizzle ORM:
