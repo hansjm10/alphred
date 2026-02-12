@@ -162,6 +162,26 @@ describe('codex provider', () => {
     });
   });
 
+  it('normalizes nested tokensUsed usage metadata into total_tokens', async () => {
+    const provider = createProvider(
+      createRunner([
+        { type: 'usage', metadata: { tokens: 5, usage: { tokensUsed: 40 } } },
+        { type: 'result', content: 'done' },
+      ]),
+    );
+
+    const events = await collectEvents(provider);
+
+    expect(events.map((event) => event.type)).toEqual(['system', 'usage', 'result']);
+    expect(events[1].metadata).toMatchObject({
+      tokens: 5,
+      total_tokens: 40,
+      usage: {
+        total_tokens: 40,
+      },
+    });
+  });
+
   it('bridges working directory and prompt options into the codex runner request', async () => {
     let capturedRequest: CodexRunRequest | undefined;
     const provider = createProvider(async function* (request: CodexRunRequest): AsyncIterable<CodexRawEvent> {
