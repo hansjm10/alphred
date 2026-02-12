@@ -216,7 +216,9 @@ function classifyCodexFailure(message: string, source?: unknown): CodexFailureCl
   }
 
   const isRateLimited = statusCode === 429
-    || /\b(rate[\s_-]?limit(?:ed|ing)?|too many requests?|quota|throttl(?:e|ed|ing)?|slow down)\b/i.test(textCorpus);
+    || /\b(rate[\s_-]?limit(?:ed|ing|[\s_-]?exceeded)?|too many requests?|quota|throttl(?:e|ed|ing)?|slow down)\b/i.test(
+      textCorpus,
+    );
   if (isRateLimited) {
     return {
       code: 'CODEX_RATE_LIMITED',
