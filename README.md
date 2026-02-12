@@ -19,6 +19,7 @@ Alphred is a pnpm monorepo with the following packages:
 Architecture notes for Agent Runtime v1 (DI + adapters):
 - `DESIGN.md` (runtime wiring, boundaries, failure semantics)
 - `packages/agents/README.md` (registry APIs, adapter usage)
+- `packages/agents/docs/codex-runtime-runbook.md` (Codex runtime setup, limits, error taxonomy, troubleshooting)
 - `packages/agents/AGENTS.md` and `packages/core/AGENTS.md` (directory-specific AI guidance)
 
 ## Prerequisites

@@ -55,6 +55,15 @@ const provider = resolveProvider('codex');
 - `@alphred/agents` owns provider registry construction and adapter implementations.
 - Core must not import provider SDK/client code directly.
 
+## Codex Runtime Runbook
+
+- Full setup + operations guide: `packages/agents/docs/codex-runtime-runbook.md`
+- Use this runbook for:
+  - local runtime setup
+  - CI runtime setup
+  - auth/config troubleshooting
+  - stream/failure troubleshooting
+
 ## Event + Failure Contract
 
 - Adapters emit shared `ProviderEvent` values with types:
@@ -77,6 +86,8 @@ const provider = resolveProvider('codex');
   3. existing Codex CLI login session (`codex login status`)
 - Endpoint override (`OPENAI_BASE_URL`) is validated when set.
 - Model default uses `CODEX_MODEL` when set, otherwise `gpt-5-codex`.
+- `timeout` is enforced through `AbortSignal.timeout(timeout)`.
+- `maxTokens` is validated by provider options but is not currently forwarded to the Codex SDK turn call.
 
 ## Add a Provider Checklist
 
