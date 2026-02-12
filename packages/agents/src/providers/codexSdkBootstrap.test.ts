@@ -1,6 +1,10 @@
 import type { Codex, CodexOptions } from '@openai/codex-sdk';
-import { describe, expect, it, vi } from 'vitest';
-import { CodexBootstrapError, initializeCodexSdkBootstrap } from './codexSdkBootstrap.js';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+  CodexBootstrapError,
+  initializeCodexSdkBootstrap,
+  resetCodexSdkBootstrapCache,
+} from './codexSdkBootstrap.js';
 
 const linuxBinaryPath = '/opt/codex-sdk/vendor/x86_64-unknown-linux-musl/codex/codex';
 
@@ -9,6 +13,10 @@ function createMockClient(): Codex {
 }
 
 describe('codex sdk bootstrap', () => {
+  beforeEach(() => {
+    resetCodexSdkBootstrapCache();
+  });
+
   it('prefers CODEX_API_KEY and skips CLI session checks when API key auth is configured', () => {
     const checkCliSession = vi.fn();
     const createClient = vi.fn((_options: CodexOptions) => createMockClient());
@@ -167,6 +175,7 @@ describe('codex sdk bootstrap', () => {
   it('throws deterministic errors for invalid endpoint/model configuration', () => {
     for (const env of [
       { CODEX_API_KEY: 'sk-test', OPENAI_BASE_URL: 'ftp://proxy.example.com' },
+      { CODEX_API_KEY: 'sk-test', OPENAI_BASE_URL: 'not-a-url' },
       { CODEX_API_KEY: 'sk-test', CODEX_MODEL: '   ' },
       { CODEX_API_KEY: '   ' },
     ]) {
@@ -180,6 +189,160 @@ describe('codex sdk bootstrap', () => {
         checkCliSession: () => ({ status: 'not_authenticated' }),
         createClient: (_options: CodexOptions) => createMockClient(),
       })).toThrowError(CodexBootstrapError);
+    }
+  });
+
+  it('passes configured CODEX_HOME into CLI session checks', () => {
+    const checkCliSession = vi.fn((_binaryPath: string, _env: NodeJS.ProcessEnv) => ({ status: 'authenticated' as const }));
+
+    initializeCodexSdkBootstrap({
+      env: {
+        CODEX_HOME: '  /srv/codex-auth  ',
+        HOME: '/home/tester',
+      },
+      platform: 'linux',
+      arch: 'x64',
+      getHomedir: () => '/home/ignored',
+      resolveSdkPackageJsonPath: () => '/opt/codex-sdk/package.json',
+      fileExists: (path: string) => path === linuxBinaryPath,
+      checkCliSession,
+      createClient: (_options: CodexOptions) => createMockClient(),
+    });
+
+    expect(checkCliSession).toHaveBeenCalledWith(
+      linuxBinaryPath,
+      expect.objectContaining({
+        CODEX_HOME: '/srv/codex-auth',
+        HOME: '/home/tester',
+      }),
+    );
+  });
+
+  it('resolves Windows arm64 binaries to codex.exe', () => {
+    const windowsBinaryPath = '/opt/codex-sdk/vendor/aarch64-pc-windows-msvc/codex/codex.exe';
+    const createClient = vi.fn((_options: CodexOptions) => createMockClient());
+
+    const bootstrap = initializeCodexSdkBootstrap({
+      env: { CODEX_API_KEY: 'sk-win' },
+      platform: 'win32',
+      arch: 'arm64',
+      getHomedir: () => '/home/tester',
+      resolveSdkPackageJsonPath: () => '/opt/codex-sdk/package.json',
+      fileExists: (path: string) => path === windowsBinaryPath,
+      createClient,
+    });
+
+    expect(bootstrap.codexBinaryPath).toBe(windowsBinaryPath);
+    expect(createClient).toHaveBeenCalledWith({
+      codexPathOverride: windowsBinaryPath,
+      apiKey: 'sk-win',
+      baseUrl: undefined,
+    });
+  });
+
+  it('throws deterministic errors for unsupported platform and architecture combinations', () => {
+    expect(() => initializeCodexSdkBootstrap({
+      env: { CODEX_API_KEY: 'sk-test' },
+      platform: 'freebsd',
+      arch: 'x64',
+      getHomedir: () => '/home/tester',
+      resolveSdkPackageJsonPath: () => '/opt/codex-sdk/package.json',
+      fileExists: () => true,
+      createClient: (_options: CodexOptions) => createMockClient(),
+    })).toThrowError(CodexBootstrapError);
+
+    try {
+      initializeCodexSdkBootstrap({
+        env: { CODEX_API_KEY: 'sk-test' },
+        platform: 'freebsd',
+        arch: 'x64',
+        getHomedir: () => '/home/tester',
+        resolveSdkPackageJsonPath: () => '/opt/codex-sdk/package.json',
+        fileExists: () => true,
+        createClient: (_options: CodexOptions) => createMockClient(),
+      });
+      throw new Error('Expected bootstrap to fail');
+    } catch (error) {
+      expect(error).toBeInstanceOf(CodexBootstrapError);
+      const typedError = error as CodexBootstrapError;
+      expect(typedError.code).toBe('CODEX_BOOTSTRAP_UNSUPPORTED_PLATFORM');
+      expect(typedError.details).toEqual({
+        platform: 'freebsd',
+        arch: 'x64',
+      });
+    }
+  });
+
+  it('throws deterministic errors when the bundled codex binary is missing', () => {
+    expect(() => initializeCodexSdkBootstrap({
+      env: { CODEX_API_KEY: 'sk-test' },
+      platform: 'linux',
+      arch: 'x64',
+      getHomedir: () => '/home/tester',
+      resolveSdkPackageJsonPath: () => '/opt/codex-sdk/package.json',
+      fileExists: () => false,
+      createClient: (_options: CodexOptions) => createMockClient(),
+    })).toThrowError(CodexBootstrapError);
+
+    try {
+      initializeCodexSdkBootstrap({
+        env: { CODEX_API_KEY: 'sk-test' },
+        platform: 'linux',
+        arch: 'x64',
+        getHomedir: () => '/home/tester',
+        resolveSdkPackageJsonPath: () => '/opt/codex-sdk/package.json',
+        fileExists: () => false,
+        createClient: (_options: CodexOptions) => createMockClient(),
+      });
+      throw new Error('Expected bootstrap to fail');
+    } catch (error) {
+      expect(error).toBeInstanceOf(CodexBootstrapError);
+      const typedError = error as CodexBootstrapError;
+      expect(typedError.code).toBe('CODEX_BOOTSTRAP_INVALID_CONFIG');
+      expect(typedError.message).toContain('could not find the bundled codex binary');
+      expect(typedError.details).toEqual({
+        binaryPath: linuxBinaryPath,
+      });
+    }
+  });
+
+  it('wraps sdk-client initialization failures with deterministic metadata', () => {
+    const clientInitError = new Error('mock client init failure');
+
+    expect(() => initializeCodexSdkBootstrap({
+      env: { CODEX_API_KEY: 'sk-test' },
+      platform: 'linux',
+      arch: 'x64',
+      getHomedir: () => '/home/tester',
+      resolveSdkPackageJsonPath: () => '/opt/codex-sdk/package.json',
+      fileExists: (path: string) => path === linuxBinaryPath,
+      createClient: () => {
+        throw clientInitError;
+      },
+    })).toThrowError(CodexBootstrapError);
+
+    try {
+      initializeCodexSdkBootstrap({
+        env: { CODEX_API_KEY: 'sk-test' },
+        platform: 'linux',
+        arch: 'x64',
+        getHomedir: () => '/home/tester',
+        resolveSdkPackageJsonPath: () => '/opt/codex-sdk/package.json',
+        fileExists: (path: string) => path === linuxBinaryPath,
+        createClient: () => {
+          throw clientInitError;
+        },
+      });
+      throw new Error('Expected bootstrap to fail');
+    } catch (error) {
+      expect(error).toBeInstanceOf(CodexBootstrapError);
+      const typedError = error as CodexBootstrapError;
+      expect(typedError.code).toBe('CODEX_BOOTSTRAP_CLIENT_INIT_FAILED');
+      expect(typedError.details).toEqual({
+        authMode: 'api_key',
+        codexBinaryPath: linuxBinaryPath,
+      });
+      expect(typedError.cause).toBe(clientInitError);
     }
   });
 });
