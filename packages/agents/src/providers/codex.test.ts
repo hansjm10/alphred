@@ -129,6 +129,23 @@ describe('codex provider', () => {
     expect(capturedRequest?.bridgedPrompt).toContain('User prompt:\nImplement adapter v1.');
   });
 
+  it('normalizes circular event content without default object stringification', async () => {
+    const circularContent: Record<string, unknown> = { step: 'drafting' };
+    circularContent.self = circularContent;
+    const provider = new CodexProvider(
+      createRunner([
+        { type: 'assistant', content: circularContent },
+        { type: 'result', content: 'done' },
+      ]),
+    );
+
+    const events = await collectEvents(provider);
+
+    expect(events.map((event) => event.type)).toEqual(['system', 'assistant', 'result']);
+    expect(events[1].content).not.toBe('[object Object]');
+    expect(events[1].content).toContain('step');
+  });
+
   it('throws a typed error when required options are invalid', async () => {
     const provider = new CodexProvider(createRunner([{ type: 'result', content: '' }]));
     const invalidOptions = [

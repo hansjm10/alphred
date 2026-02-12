@@ -1,3 +1,4 @@
+import { inspect } from 'node:util';
 import type { ProviderEvent, ProviderRunOptions } from '@alphred/shared';
 import type { AgentProvider } from '../provider.js';
 import { createProviderEvent } from '../provider.js';
@@ -109,9 +110,7 @@ function normalizeUsageMetadata(metadata: Record<string, unknown>): Record<strin
     return metadata;
   }
 
-  const normalizedUsage: Record<string, unknown> = {
-    ...(nestedUsage ?? {}),
-  };
+  const normalizedUsage: Record<string, unknown> = nestedUsage ? { ...nestedUsage } : {};
   if (inputTokens !== undefined) {
     normalizedUsage.input_tokens = inputTokens;
   }
@@ -156,8 +155,16 @@ function normalizeEventContent(content: unknown): string {
     return '';
   }
 
-  const serializedContent = JSON.stringify(content);
-  return serializedContent ?? String(content);
+  try {
+    const serializedContent = JSON.stringify(content);
+    if (serializedContent !== undefined) {
+      return serializedContent;
+    }
+  } catch {
+    // Fall through to inspect-based rendering for non-serializable values.
+  }
+
+  return inspect(content, { depth: null });
 }
 
 function normalizeEventMetadata(eventType: ProviderEvent['type'], metadata: unknown): Record<string, unknown> | undefined {
@@ -212,7 +219,8 @@ function buildBridgedPrompt(prompt: string, options: ProviderRunOptions, context
     sections.push(`System prompt:\n${systemPrompt}`);
   }
   if (context.length > 0) {
-    sections.push(`Context:\n${context.map((entry, index) => `[${index + 1}] ${entry}`).join('\n')}`);
+    const contextLines = context.map((entry, index) => `[${index + 1}] ${entry}`).join('\n');
+    sections.push(`Context:\n${contextLines}`);
   }
   sections.push(`User prompt:\n${prompt}`);
 
