@@ -1,4 +1,4 @@
-import type { PhaseDefinition, ProviderEvent, ProviderRunOptions } from '@alphred/shared';
+import type { AgentProviderName, PhaseDefinition, ProviderEvent, ProviderRunOptions } from '@alphred/shared';
 import { describe, expect, it, vi } from 'vitest';
 import type { PhaseProvider } from './phaseRunner.js';
 import { runPhase } from './phaseRunner.js';
@@ -7,11 +7,11 @@ const defaultOptions: ProviderRunOptions = {
   workingDirectory: '/tmp/alphred-worktree',
 };
 
-function createAgentPhase(): PhaseDefinition {
+function createAgentPhase(provider: AgentProviderName = 'codex'): PhaseDefinition {
   return {
     name: 'draft',
     type: 'agent',
-    provider: 'codex',
+    provider,
     prompt: 'Draft a response',
     transitions: [],
   };
@@ -60,6 +60,26 @@ describe('runPhase', () => {
       events: emittedEvents,
       tokensUsed: 13,
     });
+  });
+
+  it('resolves the configured claude provider and preserves emitted events', async () => {
+    const phase = createAgentPhase('claude');
+    const emittedEvents: ProviderEvent[] = [
+      { type: 'system', content: 'provider started', timestamp: 100 },
+      { type: 'assistant', content: 'intermediate text', timestamp: 101 },
+      { type: 'result', content: 'final report', timestamp: 102 },
+    ];
+    const runSpy = vi.fn(async function *run(): AsyncIterable<ProviderEvent> {
+      yield* emittedEvents;
+    });
+    const resolverSpy = vi.fn(() => ({ run: runSpy }));
+
+    const result = await runPhase(phase, defaultOptions, { resolveProvider: resolverSpy });
+
+    expect(resolverSpy).toHaveBeenCalledWith('claude');
+    expect(runSpy).toHaveBeenCalledTimes(1);
+    expect(result.report).toBe('final report');
+    expect(result.events).toEqual(emittedEvents);
   });
 
   it('uses the latest cumulative tokensUsed metadata without summing repeated usage events', async () => {

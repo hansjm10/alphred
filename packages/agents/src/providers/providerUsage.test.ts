@@ -34,16 +34,19 @@ function hasTokenUsageShape(metadata: Record<string, unknown>): boolean {
   return hasTokenUsageShape(nestedUsage as Record<string, unknown>);
 }
 
-async function collectUsageEvents(provider: AgentProvider, options: ProviderRunOptions): Promise<ProviderEvent[]> {
-  const usageEvents: ProviderEvent[] = [];
+async function collectEvents(provider: AgentProvider, options: ProviderRunOptions): Promise<ProviderEvent[]> {
+  const events: ProviderEvent[] = [];
 
   for await (const event of provider.run('Return a short test response.', options)) {
-    if (event.type === 'usage') {
-      usageEvents.push(event);
-    }
+    events.push(event);
   }
 
-  return usageEvents;
+  return events;
+}
+
+async function collectUsageEvents(provider: AgentProvider, options: ProviderRunOptions): Promise<ProviderEvent[]> {
+  const events = await collectEvents(provider, options);
+  return events.filter((event) => event.type === 'usage');
 }
 
 describe('provider usage metadata contract', () => {
@@ -51,6 +54,23 @@ describe('provider usage metadata contract', () => {
     ['claude', new ClaudeProvider()],
     ['codex', new CodexProvider()],
   ];
+
+  it.each(integrationCases)('emits a consistent adapter event envelope for %s provider', async (name, provider) => {
+    const events = await collectEvents(provider, {
+      workingDirectory: process.cwd(),
+      maxTokens: 64,
+    });
+
+    expect(events.length, `${name} provider emitted no events.`).toBeGreaterThan(0);
+    expect(events[0]?.type).toBe('system');
+    expect(events[0]?.metadata).toMatchObject({
+      provider: name,
+    });
+
+    const eventTypes = events.map((event) => event.type);
+    expect(eventTypes).toEqual(['system', 'assistant', 'usage', 'result']);
+    expect(events[eventTypes.length - 1]?.type).toBe('result');
+  });
 
   it.each(integrationCases)('emits parseable usage metadata for %s provider', async (name, provider) => {
     const usageEvents = await collectUsageEvents(provider, {
