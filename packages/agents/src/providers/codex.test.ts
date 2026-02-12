@@ -572,7 +572,7 @@ describe('codex provider', () => {
     });
   });
 
-  it('throws a typed run failure when sdk emits turn.failed', async () => {
+  it('classifies timeout failures from sdk turn.failed as retryable timeout errors', async () => {
     const provider = new CodexProvider(
       undefined,
       () => createStreamingBootstrap([
@@ -582,12 +582,58 @@ describe('codex provider', () => {
     );
 
     await expect(collectEvents(provider)).rejects.toMatchObject({
-      code: 'CODEX_RUN_FAILED',
+      code: 'CODEX_TIMEOUT',
       message: 'Codex turn failed: transport timeout',
+      retryable: true,
+      details: {
+        classification: 'timeout',
+        retryable: true,
+      },
     });
   });
 
-  it('throws a typed run failure when sdk emits fatal stream errors', async () => {
+  it('classifies rate-limited sdk failures as retryable rate-limit errors', async () => {
+    const provider = new CodexProvider(
+      undefined,
+      () => createStreamingBootstrap([
+        { type: 'thread.started', thread_id: 'thread-1' },
+        { type: 'turn.failed', error: { message: 'Too many requests', status: 429, code: 'rate_limit_exceeded' } },
+      ]),
+    );
+
+    await expect(collectEvents(provider)).rejects.toMatchObject({
+      code: 'CODEX_RATE_LIMITED',
+      retryable: true,
+      details: {
+        classification: 'rate_limit',
+        retryable: true,
+        statusCode: 429,
+        failureCode: 'rate_limit_exceeded',
+      },
+    });
+  });
+
+  it('classifies transport sdk failures as retryable transport errors', async () => {
+    const provider = new CodexProvider(
+      undefined,
+      () => createStreamingBootstrap([
+        { type: 'thread.started', thread_id: 'thread-1' },
+        { type: 'error', message: 'socket hang up' },
+      ]),
+    );
+
+    await expect(collectEvents(provider)).rejects.toMatchObject({
+      code: 'CODEX_TRANSPORT_ERROR',
+      message: 'Codex stream emitted a fatal error: socket hang up',
+      retryable: true,
+      details: {
+        classification: 'transport',
+        retryable: true,
+      },
+    });
+  });
+
+  it('classifies non-specific fatal sdk errors as internal failures', async () => {
     const provider = new CodexProvider(
       undefined,
       () => createStreamingBootstrap([
@@ -597,8 +643,13 @@ describe('codex provider', () => {
     );
 
     await expect(collectEvents(provider)).rejects.toMatchObject({
-      code: 'CODEX_RUN_FAILED',
+      code: 'CODEX_INTERNAL_ERROR',
       message: 'Codex stream emitted a fatal error: broken stream',
+      retryable: false,
+      details: {
+        classification: 'internal',
+        retryable: false,
+      },
     });
   });
 
@@ -731,7 +782,7 @@ describe('codex provider', () => {
     });
   });
 
-  it('wraps runner failures in the codex provider error path', async () => {
+  it('maps generic runner failures to internal non-retryable errors', async () => {
     const provider = createProvider(async function* (_request: CodexRunRequest): AsyncIterable<CodexRawEvent> {
       throw new Error('codex process crashed');
       yield { type: 'result', content: '' };
@@ -744,13 +795,37 @@ describe('codex provider', () => {
       expect(error).toBeInstanceOf(CodexProviderError);
 
       const typedError = error as CodexProviderError;
-      expect(typedError.code).toBe('CODEX_RUN_FAILED');
+      expect(typedError.code).toBe('CODEX_INTERNAL_ERROR');
+      expect(typedError.retryable).toBe(false);
+      expect(typedError.details).toMatchObject({
+        classification: 'internal',
+        retryable: false,
+      });
       expect(typedError.cause).toBeInstanceOf(Error);
       expect((typedError.cause as Error).message).toBe('codex process crashed');
     }
   });
 
-  it('fails fast with a typed configuration error when bootstrap validation fails', async () => {
+  it('maps runner transport failures to retryable transport errors', async () => {
+    const provider = createProvider(async function* (_request: CodexRunRequest): AsyncIterable<CodexRawEvent> {
+      const transportError = new Error('socket reset while reading stream') as Error & { code: string };
+      transportError.code = 'ECONNRESET';
+      throw transportError;
+      yield { type: 'result', content: '' };
+    });
+
+    await expect(collectEvents(provider)).rejects.toMatchObject({
+      code: 'CODEX_TRANSPORT_ERROR',
+      retryable: true,
+      details: {
+        classification: 'transport',
+        retryable: true,
+        failureCode: 'ECONNRESET',
+      },
+    });
+  });
+
+  it('fails fast with a typed auth error when bootstrap detects missing auth', async () => {
     const provider = new CodexProvider(
       createRunner([{ type: 'result', content: 'ok' }]),
       () => {
@@ -762,14 +837,40 @@ describe('codex provider', () => {
     );
 
     await expect(collectEvents(provider)).rejects.toMatchObject({
-      code: 'CODEX_INVALID_CONFIG',
+      code: 'CODEX_AUTH_ERROR',
       details: {
         bootstrapCode: 'CODEX_BOOTSTRAP_MISSING_AUTH',
+        classification: 'auth',
+        retryable: false,
+      },
+      retryable: false,
+    });
+  });
+
+  it('maps deterministic bootstrap config failures to non-retryable config errors', async () => {
+    const provider = new CodexProvider(
+      createRunner([{ type: 'result', content: 'ok' }]),
+      () => {
+        throw new CodexBootstrapError(
+          'CODEX_BOOTSTRAP_INVALID_CONFIG',
+          'Codex provider requires OPENAI_BASE_URL to be a valid URL when set.',
+          { envKey: 'OPENAI_BASE_URL' },
+        );
+      },
+    );
+
+    await expect(collectEvents(provider)).rejects.toMatchObject({
+      code: 'CODEX_INVALID_CONFIG',
+      details: {
+        bootstrapCode: 'CODEX_BOOTSTRAP_INVALID_CONFIG',
+        classification: 'config',
+        retryable: false,
+        envKey: 'OPENAI_BASE_URL',
       },
     });
   });
 
-  it('fails fast with a deterministic configuration error when bootstrap throws an unknown error', async () => {
+  it('fails fast with a deterministic internal error when bootstrap throws an unknown error', async () => {
     const bootstrapFailure = new Error('socket timeout while probing runtime');
     const provider = new CodexProvider(
       createRunner([{ type: 'result', content: 'ok' }]),
@@ -779,8 +880,13 @@ describe('codex provider', () => {
     );
 
     await expect(collectEvents(provider)).rejects.toMatchObject({
-      code: 'CODEX_INVALID_CONFIG',
-      message: 'Codex provider bootstrap failed with an unknown configuration error.',
+      code: 'CODEX_INTERNAL_ERROR',
+      message: 'Codex provider bootstrap failed with an unknown internal error.',
+      retryable: false,
+      details: {
+        classification: 'internal',
+        retryable: false,
+      },
       cause: bootstrapFailure,
     });
   });
