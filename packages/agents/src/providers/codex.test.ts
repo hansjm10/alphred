@@ -66,6 +66,40 @@ describe('codex provider', () => {
     expect(events[3].content).toBe('Implemented and validated.');
   });
 
+  it('keeps incremental tokens metadata without coercing it to total_tokens', async () => {
+    const provider = new CodexProvider(
+      createRunner([
+        { type: 'usage', metadata: { tokens: 30 } },
+        { type: 'result', content: 'done' },
+      ]),
+    );
+
+    const events = await collectEvents(provider);
+
+    expect(events.map((event) => event.type)).toEqual(['system', 'usage', 'result']);
+    expect(events[1].metadata).toEqual({ tokens: 30 });
+  });
+
+  it('preserves nested cumulative usage when top-level tokens metadata is incremental', async () => {
+    const provider = new CodexProvider(
+      createRunner([
+        { type: 'usage', metadata: { tokens: 5, usage: { total_tokens: 40 } } },
+        { type: 'result', content: 'done' },
+      ]),
+    );
+
+    const events = await collectEvents(provider);
+
+    expect(events.map((event) => event.type)).toEqual(['system', 'usage', 'result']);
+    expect(events[1].metadata).toMatchObject({
+      tokens: 5,
+      total_tokens: 40,
+      usage: {
+        total_tokens: 40,
+      },
+    });
+  });
+
   it('bridges working directory and prompt options into the codex runner request', async () => {
     let capturedRequest: CodexRunRequest | undefined;
     const provider = new CodexProvider(async function* (request: CodexRunRequest): AsyncIterable<CodexRawEvent> {

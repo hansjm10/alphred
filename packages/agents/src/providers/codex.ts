@@ -99,8 +99,8 @@ function normalizeUsageMetadata(metadata: Record<string, unknown>): Record<strin
     firstTokenCount(metadata, ['output_tokens', 'outputTokens']) ??
     (nestedUsage ? firstTokenCount(nestedUsage, ['output_tokens', 'outputTokens']) : undefined);
   const directTotalTokens =
-    firstTokenCount(metadata, ['total_tokens', 'totalTokens', 'tokensUsed', 'tokens']) ??
-    (nestedUsage ? firstTokenCount(nestedUsage, ['total_tokens', 'totalTokens', 'tokensUsed', 'tokens']) : undefined);
+    firstTokenCount(metadata, ['total_tokens', 'totalTokens', 'tokensUsed']) ??
+    (nestedUsage ? firstTokenCount(nestedUsage, ['total_tokens', 'totalTokens', 'tokensUsed']) : undefined);
   const totalTokens = directTotalTokens ?? (inputTokens !== undefined && outputTokens !== undefined
     ? inputTokens + outputTokens
     : undefined);
