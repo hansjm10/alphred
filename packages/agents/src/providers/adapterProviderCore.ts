@@ -20,7 +20,7 @@ const supportedProviderEventTypes = new Set<ProviderEvent['type']>([
   'usage',
 ]);
 
-const MAX_TIMEOUT_MS = 4_294_967_295;
+const MAX_TIMEOUT_MS = 2_147_483_647;
 
 export type AdapterRunRequest = Readonly<{
   prompt: string;

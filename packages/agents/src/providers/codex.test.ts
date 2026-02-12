@@ -691,6 +691,7 @@ describe('codex provider', () => {
       { workingDirectory: '/tmp/alphred-codex-test', context: null },
       { workingDirectory: '/tmp/alphred-codex-test', systemPrompt: 42 },
       { workingDirectory: '/tmp/alphred-codex-test', systemPrompt: { text: 'be concise' } },
+      { workingDirectory: '/tmp/alphred-codex-test', timeout: 3_000_000_000 },
       { workingDirectory: '/tmp/alphred-codex-test', timeout: Number.MAX_SAFE_INTEGER },
     ];
 
