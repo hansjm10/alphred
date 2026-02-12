@@ -11,14 +11,33 @@ import {
 import { CodexBootstrapError, type CodexSdkBootstrap, initializeCodexSdkBootstrap } from './codexSdkBootstrap.js';
 
 export type CodexProviderErrorCode =
+  | 'CODEX_AUTH_ERROR'
   | 'CODEX_INVALID_CONFIG'
   | 'CODEX_INVALID_OPTIONS'
   | 'CODEX_INVALID_EVENT'
   | 'CODEX_MISSING_RESULT'
-  | 'CODEX_RUN_FAILED';
+  | 'CODEX_TIMEOUT'
+  | 'CODEX_RATE_LIMITED'
+  | 'CODEX_TRANSPORT_ERROR'
+  | 'CODEX_INTERNAL_ERROR';
+
+type CodexFailureClass = 'auth' | 'config' | 'timeout' | 'rate_limit' | 'transport' | 'internal';
+
+type CodexFailureClassification = Readonly<{
+  code: CodexProviderErrorCode;
+  classification: CodexFailureClass;
+  retryable: boolean;
+  statusCode?: number;
+  failureCode?: string;
+}>;
+
+function isRetryableCodexErrorCode(code: CodexProviderErrorCode): boolean {
+  return code === 'CODEX_TIMEOUT' || code === 'CODEX_RATE_LIMITED' || code === 'CODEX_TRANSPORT_ERROR';
+}
 
 export class CodexProviderError extends Error {
   readonly code: CodexProviderErrorCode;
+  readonly retryable: boolean;
   readonly details?: Record<string, unknown>;
   readonly cause?: unknown;
 
@@ -31,6 +50,7 @@ export class CodexProviderError extends Error {
     super(message);
     this.name = 'CodexProviderError';
     this.code = code;
+    this.retryable = typeof details?.retryable === 'boolean' ? details.retryable : isRetryableCodexErrorCode(code);
     this.details = details;
     this.cause = cause;
   }
@@ -49,7 +69,7 @@ const codexProviderConfig: AdapterProviderConfig<CodexProviderErrorCode, CodexPr
     invalidOptions: 'CODEX_INVALID_OPTIONS',
     invalidEvent: 'CODEX_INVALID_EVENT',
     missingResult: 'CODEX_MISSING_RESULT',
-    runFailed: 'CODEX_RUN_FAILED',
+    runFailed: 'CODEX_INTERNAL_ERROR',
   } as const,
   createError: (code, message, details, cause) => new CodexProviderError(code, message, details, cause),
   isProviderError: (error: unknown): error is CodexProviderError => error instanceof CodexProviderError,
@@ -60,6 +80,254 @@ type CodexItemLifecycle = 'started' | 'updated' | 'completed';
 type CodexStreamState = {
   lastAssistantMessage: string;
 };
+
+function toRecord(value: unknown): Record<string, unknown> | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return undefined;
+  }
+
+  return value as Record<string, unknown>;
+}
+
+function toNumber(value: unknown): number | undefined {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value;
+  }
+
+  if (typeof value === 'string' && value.trim().length > 0) {
+    const numericValue = Number(value);
+    if (Number.isFinite(numericValue)) {
+      return numericValue;
+    }
+  }
+
+  return undefined;
+}
+
+function toTrimmedString(value: unknown): string | undefined {
+  if (typeof value !== 'string') {
+    return undefined;
+  }
+
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function collectFailureRecords(source: unknown): Record<string, unknown>[] {
+  const records: Record<string, unknown>[] = [];
+  const sourceRecord = toRecord(source);
+  if (sourceRecord) {
+    records.push(sourceRecord);
+    const nestedError = toRecord(sourceRecord.error);
+    if (nestedError) {
+      records.push(nestedError);
+    }
+    const nestedCause = toRecord(sourceRecord.cause);
+    if (nestedCause) {
+      records.push(nestedCause);
+    }
+  }
+
+  if (source instanceof Error) {
+    const errorRecord = toRecord(source as unknown);
+    if (errorRecord) {
+      records.push(errorRecord);
+    }
+  }
+
+  return records;
+}
+
+function extractFailureStatusCode(records: readonly Record<string, unknown>[]): number | undefined {
+  for (const record of records) {
+    const candidates = [
+      record.status,
+      record.statusCode,
+      record.status_code,
+      record.httpStatus,
+      record.http_status,
+    ];
+    for (const candidate of candidates) {
+      const statusCode = toNumber(candidate);
+      if (statusCode !== undefined) {
+        return statusCode;
+      }
+    }
+  }
+
+  return undefined;
+}
+
+function extractFailureCode(records: readonly Record<string, unknown>[]): string | undefined {
+  for (const record of records) {
+    const candidates = [
+      record.code,
+      record.error_code,
+      record.errorCode,
+      record.type,
+      record.name,
+    ];
+    for (const candidate of candidates) {
+      const failureCode = toTrimmedString(candidate);
+      if (failureCode) {
+        return failureCode;
+      }
+    }
+  }
+
+  return undefined;
+}
+
+function collectFailureMessages(records: readonly Record<string, unknown>[]): string[] {
+  const messages: string[] = [];
+  for (const record of records) {
+    const message = toTrimmedString(record.message);
+    if (message) {
+      messages.push(message);
+    }
+    const detail = toTrimmedString(record.detail);
+    if (detail) {
+      messages.push(detail);
+    }
+  }
+
+  return messages;
+}
+
+const rateLimitPatterns: readonly RegExp[] = [
+  /\brate[\s_-]?limit(?:ed|ing)?\b/i,
+  /\brate[\s_-]?limit[\s_-]?exceeded\b/i,
+  /\btoo many requests?\b/i,
+  /\bquota\b/i,
+  /\bthrottl(?:e|ed|ing)\b/i,
+  /\bslow down\b/i,
+];
+
+function isRateLimitText(textCorpus: string): boolean {
+  return rateLimitPatterns.some((pattern) => pattern.test(textCorpus));
+}
+
+function classifyCodexFailure(message: string, source?: unknown): CodexFailureClassification {
+  const records = collectFailureRecords(source);
+  const statusCode = extractFailureStatusCode(records);
+  const failureCode = extractFailureCode(records);
+  const textCorpus = [message, failureCode, ...collectFailureMessages(records)].join(' ').toLowerCase();
+
+  const isAuth = statusCode === 401
+    || statusCode === 403
+    || /\b(unauthorized|forbidden|authentication|invalid api key|not logged in|permission denied|missing auth)\b/i.test(
+      textCorpus,
+    );
+  if (isAuth) {
+    return {
+      code: 'CODEX_AUTH_ERROR',
+      classification: 'auth',
+      retryable: false,
+      statusCode,
+      failureCode,
+    };
+  }
+
+  const isRateLimited = statusCode === 429
+    || isRateLimitText(textCorpus);
+  if (isRateLimited) {
+    return {
+      code: 'CODEX_RATE_LIMITED',
+      classification: 'rate_limit',
+      retryable: true,
+      statusCode,
+      failureCode,
+    };
+  }
+
+  const isTimeout = statusCode === 408
+    || statusCode === 504
+    || /\b(timeout|timed out|timedout|etimedout|deadline exceeded|time limit exceeded|operation timed out|request timed out)\b/i.test(textCorpus);
+  if (isTimeout) {
+    return {
+      code: 'CODEX_TIMEOUT',
+      classification: 'timeout',
+      retryable: true,
+      statusCode,
+      failureCode,
+    };
+  }
+
+  const isTransport = /\b(econnreset|econnrefused|ehostunreach|enetunreach|enotfound|eai_again|socket|broken pipe|network error|connection reset|connection refused|transport)\b/i.test(
+    textCorpus,
+  );
+  if (isTransport) {
+    return {
+      code: 'CODEX_TRANSPORT_ERROR',
+      classification: 'transport',
+      retryable: true,
+      statusCode,
+      failureCode,
+    };
+  }
+
+  const isInternal = (statusCode !== undefined && statusCode >= 500 && statusCode < 600)
+    || /\b(internal server error|unexpected error|panic)\b/i.test(textCorpus);
+  if (isInternal) {
+    return {
+      code: 'CODEX_INTERNAL_ERROR',
+      classification: 'internal',
+      retryable: true,
+      statusCode,
+      failureCode,
+    };
+  }
+
+  return {
+    code: 'CODEX_INTERNAL_ERROR',
+    classification: 'internal',
+    retryable: false,
+    statusCode,
+    failureCode,
+  };
+}
+
+function createCodexFailureError(message: string, details: Record<string, unknown>, source?: unknown): CodexProviderError {
+  const classification = classifyCodexFailure(message, source);
+  const classifiedDetails: Record<string, unknown> = {
+    ...details,
+    classification: classification.classification,
+    retryable: classification.retryable,
+  };
+  if (classification.statusCode !== undefined) {
+    classifiedDetails.statusCode = classification.statusCode;
+  }
+  if (classification.failureCode !== undefined) {
+    classifiedDetails.failureCode = classification.failureCode;
+  }
+
+  return new CodexProviderError(classification.code, message, classifiedDetails, source);
+}
+
+function classifyBootstrapError(error: CodexBootstrapError): CodexFailureClassification {
+  switch (error.code) {
+    case 'CODEX_BOOTSTRAP_MISSING_AUTH':
+      return {
+        code: 'CODEX_AUTH_ERROR',
+        classification: 'auth',
+        retryable: false,
+      };
+    case 'CODEX_BOOTSTRAP_INVALID_CONFIG':
+    case 'CODEX_BOOTSTRAP_SESSION_CHECK_FAILED':
+    case 'CODEX_BOOTSTRAP_UNSUPPORTED_PLATFORM':
+      return {
+        code: 'CODEX_INVALID_CONFIG',
+        classification: 'config',
+        retryable: false,
+      };
+    case 'CODEX_BOOTSTRAP_CLIENT_INIT_FAILED':
+      return {
+        code: 'CODEX_INTERNAL_ERROR',
+        classification: 'internal',
+        retryable: false,
+      };
+  }
+}
 
 function createCodexInvalidEventError(message: string, details?: Record<string, unknown>): CodexProviderError {
   return codexProviderConfig.createError(codexProviderConfig.codes.invalidEvent, message, details);
@@ -389,23 +657,23 @@ function mapSdkStreamEvent(
     }
     case 'turn.failed': {
       const error = toRecordOrThrow(sdkEvent.error, eventIndex, 'event.error');
-      throw codexProviderConfig.createError(
-        codexProviderConfig.codes.runFailed,
+      throw createCodexFailureError(
         `Codex turn failed: ${toStringOrThrow(error.message, eventIndex, 'event.error.message')}`,
         {
           eventIndex,
           error,
         },
+        error,
       );
     }
     case 'error':
-      throw codexProviderConfig.createError(
-        codexProviderConfig.codes.runFailed,
+      throw createCodexFailureError(
         `Codex stream emitted a fatal error: ${toStringOrThrow(sdkEvent.message, eventIndex, 'event.message')}`,
         {
           eventIndex,
           message: sdkEvent.message,
         },
+        sdkEvent,
       );
     default:
       throw createCodexInvalidEventError(
@@ -473,11 +741,14 @@ export class CodexProvider implements AgentProvider {
       bootstrap = this.#bootstrap();
     } catch (error) {
       if (error instanceof CodexBootstrapError) {
+        const classification = classifyBootstrapError(error);
         throw new CodexProviderError(
-          'CODEX_INVALID_CONFIG',
+          classification.code,
           error.message,
           {
             bootstrapCode: error.code,
+            classification: classification.classification,
+            retryable: classification.retryable,
             ...error.details,
           },
           error.cause ?? error,
@@ -485,14 +756,29 @@ export class CodexProvider implements AgentProvider {
       }
 
       throw new CodexProviderError(
-        'CODEX_INVALID_CONFIG',
-        'Codex provider bootstrap failed with an unknown configuration error.',
-        undefined,
+        'CODEX_INTERNAL_ERROR',
+        'Codex provider bootstrap failed with an unknown internal error.',
+        {
+          classification: 'internal',
+          retryable: false,
+        },
         error,
       );
     }
 
     const runner = this.#runner ?? createCodexSdkRunner(bootstrap);
-    yield* runAdapterProvider(prompt, options, runner, codexProviderConfig);
+    try {
+      yield* runAdapterProvider(prompt, options, runner, codexProviderConfig);
+    } catch (error) {
+      if (error instanceof CodexProviderError && error.code === 'CODEX_INTERNAL_ERROR' && error.details?.classification === undefined) {
+        throw createCodexFailureError(
+          error.message,
+          error.details ?? {},
+          error.cause ?? error,
+        );
+      }
+
+      throw error;
+    }
   }
 }
