@@ -692,6 +692,27 @@ describe('codex provider', () => {
     });
   });
 
+  it('classifies 5xx sdk failures as retryable internal errors', async () => {
+    const provider = new CodexProvider(
+      undefined,
+      () => createStreamingBootstrap([
+        { type: 'thread.started', thread_id: 'thread-1' },
+        { type: 'turn.failed', error: { message: 'Upstream service failed', status: 503, code: 'server_error' } },
+      ]),
+    );
+
+    await expect(collectEvents(provider)).rejects.toMatchObject({
+      code: 'CODEX_INTERNAL_ERROR',
+      retryable: true,
+      details: {
+        classification: 'internal',
+        retryable: true,
+        statusCode: 503,
+        failureCode: 'server_error',
+      },
+    });
+  });
+
   it('throws a typed invalid-event error when sdk emits events after turn completion', async () => {
     const provider = new CodexProvider(
       undefined,
@@ -906,6 +927,58 @@ describe('codex provider', () => {
         retryable: false,
         envKey: 'OPENAI_BASE_URL',
       },
+    });
+  });
+
+  it('maps bootstrap session-check failures to non-retryable config errors', async () => {
+    const provider = new CodexProvider(
+      createRunner([{ type: 'result', content: 'ok' }]),
+      () => {
+        throw new CodexBootstrapError(
+          'CODEX_BOOTSTRAP_SESSION_CHECK_FAILED',
+          'Codex provider could not verify Codex CLI login status.',
+          { codexHome: '/tmp/.codex', message: 'spawn EACCES' },
+        );
+      },
+    );
+
+    await expect(collectEvents(provider)).rejects.toMatchObject({
+      code: 'CODEX_INVALID_CONFIG',
+      retryable: false,
+      details: {
+        bootstrapCode: 'CODEX_BOOTSTRAP_SESSION_CHECK_FAILED',
+        classification: 'config',
+        retryable: false,
+        codexHome: '/tmp/.codex',
+        message: 'spawn EACCES',
+      },
+    });
+  });
+
+  it('maps bootstrap client init failures to non-retryable internal errors', async () => {
+    const bootstrapCause = new Error('SDK client constructor threw');
+    const provider = new CodexProvider(
+      createRunner([{ type: 'result', content: 'ok' }]),
+      () => {
+        throw new CodexBootstrapError(
+          'CODEX_BOOTSTRAP_CLIENT_INIT_FAILED',
+          'Codex provider failed to initialize the Codex SDK client.',
+          { codexPath: '/tmp/codex' },
+          bootstrapCause,
+        );
+      },
+    );
+
+    await expect(collectEvents(provider)).rejects.toMatchObject({
+      code: 'CODEX_INTERNAL_ERROR',
+      retryable: false,
+      details: {
+        bootstrapCode: 'CODEX_BOOTSTRAP_CLIENT_INIT_FAILED',
+        classification: 'internal',
+        retryable: false,
+        codexPath: '/tmp/codex',
+      },
+      cause: bootstrapCause,
     });
   });
 
