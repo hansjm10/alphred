@@ -1,8 +1,9 @@
 import type { ProviderEvent, ProviderRunOptions } from '@alphred/shared';
+import type { Codex } from '@openai/codex-sdk';
 import { describe, expect, it } from 'vitest';
 import type { AgentProvider } from '../provider.js';
 import { ClaudeProvider } from './claude.js';
-import { CodexProvider } from './codex.js';
+import { CodexProvider, type CodexBootstrapper } from './codex.js';
 
 function hasTokenUsageShape(metadata: Record<string, unknown>): boolean {
   const directInputTokens = metadata.inputTokens;
@@ -49,10 +50,19 @@ async function collectUsageEvents(provider: AgentProvider, options: ProviderRunO
   return events.filter((event) => event.type === 'usage');
 }
 
+const noopBootstrap: CodexBootstrapper = () => ({
+  client: {} as Codex,
+  authMode: 'api_key',
+  model: 'gpt-5-codex',
+  apiKey: 'sk-test',
+  codexHome: '/tmp/.codex',
+  codexBinaryPath: '/tmp/codex',
+});
+
 describe('provider usage metadata contract', () => {
   const integrationCases: [string, AgentProvider][] = [
     ['claude', new ClaudeProvider()],
-    ['codex', new CodexProvider()],
+    ['codex', new CodexProvider(undefined, noopBootstrap)],
   ];
 
   it.each(integrationCases)('emits a consistent adapter event envelope for %s provider', async (name, provider) => {

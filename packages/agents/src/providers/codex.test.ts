@@ -1,11 +1,14 @@
 import type { ProviderEvent, ProviderRunOptions } from '@alphred/shared';
+import type { Codex } from '@openai/codex-sdk';
 import { describe, expect, it } from 'vitest';
 import {
   CodexProvider,
   CodexProviderError,
+  type CodexBootstrapper,
   type CodexRawEvent,
   type CodexRunRequest,
 } from './codex.js';
+import { CodexBootstrapError, type CodexSdkBootstrap } from './codexSdkBootstrap.js';
 
 const defaultOptions: ProviderRunOptions = {
   workingDirectory: '/tmp/alphred-codex-test',
@@ -17,6 +20,25 @@ function createRunner(events: readonly CodexRawEvent[]): (request: CodexRunReque
       yield event;
     }
   };
+}
+
+function createNoopBootstrap(): CodexSdkBootstrap {
+  return {
+    client: {} as Codex,
+    authMode: 'api_key',
+    model: 'gpt-5-codex',
+    apiKey: 'sk-test',
+    codexHome: '/tmp/.codex',
+    codexBinaryPath: '/tmp/codex',
+  };
+}
+
+const noopBootstrap: CodexBootstrapper = () => createNoopBootstrap();
+
+type RunnerFn = (request: CodexRunRequest) => AsyncIterable<CodexRawEvent>;
+
+function createProvider(runner: RunnerFn) {
+  return new CodexProvider(runner, noopBootstrap);
 }
 
 async function collectEvents(
@@ -35,7 +57,7 @@ async function collectEvents(
 
 describe('codex provider', () => {
   it('emits a normalized provider event stream with a deterministic sequence', async () => {
-    const provider = new CodexProvider(
+    const provider = createProvider(
       createRunner([
         { type: 'message', content: 'Drafting implementation.' },
         { type: 'usage', metadata: { inputTokens: 12, outputTokens: 5 } },
@@ -67,7 +89,7 @@ describe('codex provider', () => {
   });
 
   it('keeps incremental tokens metadata without coercing it to total_tokens', async () => {
-    const provider = new CodexProvider(
+    const provider = createProvider(
       createRunner([
         { type: 'usage', metadata: { tokens: 30 } },
         { type: 'result', content: 'done' },
@@ -81,7 +103,7 @@ describe('codex provider', () => {
   });
 
   it('preserves nested cumulative usage when top-level tokens metadata is incremental', async () => {
-    const provider = new CodexProvider(
+    const provider = createProvider(
       createRunner([
         { type: 'usage', metadata: { tokens: 5, usage: { total_tokens: 40 } } },
         { type: 'result', content: 'done' },
@@ -102,7 +124,7 @@ describe('codex provider', () => {
 
   it('bridges working directory and prompt options into the codex runner request', async () => {
     let capturedRequest: CodexRunRequest | undefined;
-    const provider = new CodexProvider(async function* (request: CodexRunRequest): AsyncIterable<CodexRawEvent> {
+    const provider = createProvider(async function* (request: CodexRunRequest): AsyncIterable<CodexRawEvent> {
       capturedRequest = request;
       yield { type: 'result', content: 'ok' };
     });
@@ -132,7 +154,7 @@ describe('codex provider', () => {
   it('normalizes circular event content without default object stringification', async () => {
     const circularContent: Record<string, unknown> = { step: 'drafting' };
     circularContent.self = circularContent;
-    const provider = new CodexProvider(
+    const provider = createProvider(
       createRunner([
         { type: 'assistant', content: circularContent },
         { type: 'result', content: 'done' },
@@ -147,7 +169,7 @@ describe('codex provider', () => {
   });
 
   it('throws a typed error when required options are invalid', async () => {
-    const provider = new CodexProvider(createRunner([{ type: 'result', content: '' }]));
+    const provider = createProvider(createRunner([{ type: 'result', content: '' }]));
     const invalidOptions = [
       { workingDirectory: '   ' },
       {},
@@ -173,7 +195,7 @@ describe('codex provider', () => {
   });
 
   it('throws a typed error when optional options are malformed', async () => {
-    const provider = new CodexProvider(createRunner([{ type: 'result', content: '' }]));
+    const provider = createProvider(createRunner([{ type: 'result', content: '' }]));
     const invalidOptionalOptions = [
       { workingDirectory: '/tmp/alphred-codex-test', context: 'invalid-context' },
       { workingDirectory: '/tmp/alphred-codex-test', context: null },
@@ -189,7 +211,7 @@ describe('codex provider', () => {
   });
 
   it('throws a typed error when codex emits unsupported event types', async () => {
-    const provider = new CodexProvider(createRunner([{ type: 'unsupported' }]));
+    const provider = createProvider(createRunner([{ type: 'unsupported' }]));
 
     await expect(collectEvents(provider)).rejects.toMatchObject({
       code: 'CODEX_INVALID_EVENT',
@@ -197,7 +219,7 @@ describe('codex provider', () => {
   });
 
   it('throws a typed error when codex emits events after result', async () => {
-    const provider = new CodexProvider(
+    const provider = createProvider(
       createRunner([
         { type: 'result', content: 'done' },
         { type: 'usage', metadata: { tokens: 1 } },
@@ -210,7 +232,7 @@ describe('codex provider', () => {
   });
 
   it('throws a typed error when codex completes without a result event', async () => {
-    const provider = new CodexProvider(createRunner([{ type: 'assistant', content: 'partial output' }]));
+    const provider = createProvider(createRunner([{ type: 'assistant', content: 'partial output' }]));
 
     await expect(collectEvents(provider)).rejects.toMatchObject({
       code: 'CODEX_MISSING_RESULT',
@@ -218,7 +240,7 @@ describe('codex provider', () => {
   });
 
   it('wraps runner failures in the codex provider error path', async () => {
-    const provider = new CodexProvider(async function* (_request: CodexRunRequest): AsyncIterable<CodexRawEvent> {
+    const provider = createProvider(async function* (_request: CodexRunRequest): AsyncIterable<CodexRawEvent> {
       throw new Error('codex process crashed');
       yield { type: 'result', content: '' };
     });
@@ -234,5 +256,24 @@ describe('codex provider', () => {
       expect(typedError.cause).toBeInstanceOf(Error);
       expect((typedError.cause as Error).message).toBe('codex process crashed');
     }
+  });
+
+  it('fails fast with a typed configuration error when bootstrap validation fails', async () => {
+    const provider = new CodexProvider(
+      createRunner([{ type: 'result', content: 'ok' }]),
+      () => {
+        throw new CodexBootstrapError(
+          'CODEX_BOOTSTRAP_MISSING_AUTH',
+          'Codex provider requires either an API key or an existing Codex CLI login session.',
+        );
+      },
+    );
+
+    await expect(collectEvents(provider)).rejects.toMatchObject({
+      code: 'CODEX_INVALID_CONFIG',
+      details: {
+        bootstrapCode: 'CODEX_BOOTSTRAP_MISSING_AUTH',
+      },
+    });
   });
 });

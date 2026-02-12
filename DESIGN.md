@@ -113,6 +113,7 @@ Runtime flow for agent phases:
 `@alphred/agents` responsibilities:
 - Provider adapters (`ClaudeProvider`, `CodexProvider`)
 - SDK/process integration and raw event normalization
+- Codex SDK bootstrap/auth preflight (API key or CLI session)
 - Mapping provider-specific events to shared `ProviderEvent` contract
 - Provider-specific error taxonomy (`*_INVALID_OPTIONS`, `*_INVALID_EVENT`, `*_MISSING_RESULT`, `*_RUN_FAILED`)
 
@@ -129,6 +130,7 @@ Current event contract (`@alphred/shared`):
 Runtime semantics:
 - Agent phase missing `provider` -> phase runner throws immediately.
 - Unknown provider name -> resolver throws `UnknownAgentProviderError`.
+- Codex provider validates runtime auth/config before stream execution.
 - Adapter/provider stream must include exactly one terminal `result` event for success.
 - Events after `result` are rejected by adapter runtime as invalid ordering.
 - If no `result` is emitted, adapter/provider run fails deterministically.

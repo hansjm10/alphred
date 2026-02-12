@@ -8,8 +8,10 @@ import {
   createDefaultAdapterRunner,
   runAdapterProvider,
 } from './adapterProviderCore.js';
+import { CodexBootstrapError, type CodexSdkBootstrap, initializeCodexSdkBootstrap } from './codexSdkBootstrap.js';
 
 export type CodexProviderErrorCode =
+  | 'CODEX_INVALID_CONFIG'
   | 'CODEX_INVALID_OPTIONS'
   | 'CODEX_INVALID_EVENT'
   | 'CODEX_MISSING_RESULT'
@@ -37,6 +39,7 @@ export class CodexProviderError extends Error {
 export type CodexRunRequest = AdapterRunRequest;
 export type CodexRawEvent = AdapterRawEvent;
 export type CodexRunner = AdapterRunner;
+export type CodexBootstrapper = () => CodexSdkBootstrap;
 
 const codexProviderConfig: AdapterProviderConfig<CodexProviderErrorCode, CodexProviderError> = {
   providerName: 'codex',
@@ -55,12 +58,40 @@ const codexProviderConfig: AdapterProviderConfig<CodexProviderErrorCode, CodexPr
 export class CodexProvider implements AgentProvider {
   readonly name = 'codex' as const;
   readonly #runner: CodexRunner;
+  readonly #bootstrap: CodexBootstrapper;
 
-  constructor(runner: CodexRunner = createDefaultAdapterRunner(codexProviderConfig.adapterName)) {
+  constructor(
+    runner: CodexRunner = createDefaultAdapterRunner(codexProviderConfig.adapterName),
+    bootstrap: CodexBootstrapper = initializeCodexSdkBootstrap,
+  ) {
     this.#runner = runner;
+    this.#bootstrap = bootstrap;
   }
 
   async *run(prompt: string, options: ProviderRunOptions) {
+    try {
+      this.#bootstrap();
+    } catch (error) {
+      if (error instanceof CodexBootstrapError) {
+        throw new CodexProviderError(
+          'CODEX_INVALID_CONFIG',
+          error.message,
+          {
+            bootstrapCode: error.code,
+            ...error.details,
+          },
+          error.cause ?? error,
+        );
+      }
+
+      throw new CodexProviderError(
+        'CODEX_INVALID_CONFIG',
+        'Codex provider bootstrap failed with an unknown configuration error.',
+        undefined,
+        error,
+      );
+    }
+
     yield* runAdapterProvider(prompt, options, this.#runner, codexProviderConfig);
   }
 }
