@@ -61,7 +61,8 @@ Current behavior notes:
 
 - `timeout` is enforced by `AbortSignal.timeout(timeout)`.
 - No default timeout is applied when `timeout` is omitted.
-- `maxTokens` is validated and surfaced in run metadata, but is not currently forwarded to the SDK turn call.
+- `maxTokens` is forwarded to SDK turn options as `maxTokens`.
+- Current Codex SDK releases do not expose a native turn-level output-token limiter; provider enforces `maxTokens` by failing deterministically when `turn.completed` reports `output_tokens > maxTokens`.
 
 ## Stream and Result Semantics
 
@@ -83,7 +84,7 @@ Current behavior notes:
 | `CODEX_TIMEOUT` | timeout | Yes | Timeout/deadline patterns and timeout-like status/failure codes. |
 | `CODEX_RATE_LIMITED` | rate_limit | Yes | 429 and rate-limit or quota/throttle signals. |
 | `CODEX_TRANSPORT_ERROR` | transport | Yes | Network/connection failures (for example `ECONNRESET`, `ENOTFOUND`). |
-| `CODEX_INTERNAL_ERROR` | internal | Mixed | Unexpected runtime failures; retryability depends on classification details (for example 5xx is retryable). |
+| `CODEX_INTERNAL_ERROR` | internal | Mixed | Unexpected runtime failures; retryability depends on classification details (for example 5xx is retryable). Also used for deterministic `maxTokens` budget overrun (`classification=config`, `retryable=false`). |
 
 ## Troubleshooting Playbook
 

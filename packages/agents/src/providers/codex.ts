@@ -304,6 +304,24 @@ function createCodexFailureError(message: string, details: Record<string, unknow
   return new CodexProviderError(classification.code, message, classifiedDetails, source);
 }
 
+function createCodexMaxTokensExceededError(
+  maxTokens: number,
+  outputTokens: number,
+  eventIndex: number,
+): CodexProviderError {
+  return new CodexProviderError(
+    'CODEX_INTERNAL_ERROR',
+    `Codex turn exceeded configured maxTokens (${maxTokens}) with output_tokens=${outputTokens}.`,
+    {
+      classification: 'config',
+      retryable: false,
+      eventIndex,
+      maxTokens,
+      outputTokens,
+    },
+  );
+}
+
 function classifyBootstrapError(error: CodexBootstrapError): CodexFailureClassification {
   switch (error.code) {
     case 'CODEX_BOOTSTRAP_MISSING_AUTH':
@@ -693,14 +711,24 @@ function toThreadOptions(bootstrap: CodexSdkBootstrap, request: CodexRunRequest)
   };
 }
 
-function toTurnOptions(request: CodexRunRequest): TurnOptions | undefined {
-  if (request.timeout === undefined) {
+type CodexTurnOptions = TurnOptions & {
+  maxTokens?: number;
+};
+
+function toTurnOptions(request: CodexRunRequest): CodexTurnOptions | undefined {
+  if (request.timeout === undefined && request.maxTokens === undefined) {
     return undefined;
   }
 
-  return {
-    signal: AbortSignal.timeout(request.timeout),
-  };
+  const turnOptions: CodexTurnOptions = {};
+  if (request.timeout !== undefined) {
+    turnOptions.signal = AbortSignal.timeout(request.timeout);
+  }
+  if (request.maxTokens !== undefined) {
+    turnOptions.maxTokens = request.maxTokens;
+  }
+
+  return turnOptions;
 }
 
 function createCodexSdkRunner(bootstrap: CodexSdkBootstrap): CodexRunner {
@@ -715,6 +743,20 @@ function createCodexSdkRunner(bootstrap: CodexSdkBootstrap): CodexRunner {
     for await (const sdkEvent of streamedTurn.events) {
       sdkEventIndex += 1;
       const mappedEvents = mapSdkStreamEvent(sdkEvent, state, sdkEventIndex);
+      if (request.maxTokens !== undefined) {
+        for (const mappedEvent of mappedEvents) {
+          if (mappedEvent.type !== 'usage') {
+            continue;
+          }
+
+          const usageMetadata = toRecord(mappedEvent.metadata);
+          const outputTokens = toNumber(usageMetadata?.output_tokens);
+          if (outputTokens !== undefined && outputTokens > request.maxTokens) {
+            throw createCodexMaxTokensExceededError(request.maxTokens, outputTokens, sdkEventIndex);
+          }
+        }
+      }
+
       for (const mappedEvent of mappedEvents) {
         yield mappedEvent;
       }

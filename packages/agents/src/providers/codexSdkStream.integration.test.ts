@@ -204,6 +204,38 @@ describe('codex provider sdk stream integration fixtures', () => {
     });
   });
 
+  it('passes maxTokens to sdk turn options when configured', async () => {
+    const capture: CapturedSdkInvocation = {};
+    const provider = createProviderForFixture(sdkStreamFixtures.success, capture);
+
+    await collectEvents(provider, 'Apply integration fixture tests.', {
+      ...defaultOptions,
+      maxTokens: 64,
+    });
+
+    expect(capture.turnOptions).toMatchObject({
+      maxTokens: 64,
+    });
+  });
+
+  it('fails deterministically when output usage exceeds configured maxTokens', async () => {
+    const provider = createProviderForFixture(sdkStreamFixtures.success);
+
+    await expect(collectEvents(provider, 'Apply integration fixture tests.', {
+      ...defaultOptions,
+      maxTokens: 5,
+    })).rejects.toMatchObject({
+      code: 'CODEX_INTERNAL_ERROR',
+      retryable: false,
+      details: {
+        classification: 'config',
+        retryable: false,
+        maxTokens: 5,
+        outputTokens: 8,
+      },
+    });
+  });
+
   it('fails deterministically when a partial fixture ends without a terminal result event', async () => {
     const provider = createProviderForFixture(sdkStreamFixtures.partial);
 
