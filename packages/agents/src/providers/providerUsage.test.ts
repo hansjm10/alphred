@@ -51,7 +51,31 @@ async function collectUsageEvents(provider: AgentProvider, options: ProviderRunO
 }
 
 const noopBootstrap: CodexBootstrapper = () => ({
-  client: {} as Codex,
+  client: {
+    startThread: () => ({
+      runStreamed: async () => ({
+        events: (async function* () {
+          yield { type: 'thread.started', thread_id: 'thread-1' };
+          yield {
+            type: 'item.completed',
+            item: {
+              id: 'message-1',
+              type: 'agent_message',
+              text: 'Done',
+            },
+          };
+          yield {
+            type: 'turn.completed',
+            usage: {
+              input_tokens: 10,
+              cached_input_tokens: 0,
+              output_tokens: 3,
+            },
+          };
+        })(),
+      }),
+    }),
+  } as unknown as Codex,
   authMode: 'api_key',
   model: 'gpt-5-codex',
   apiKey: 'sk-test',

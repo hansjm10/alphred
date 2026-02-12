@@ -41,6 +41,46 @@ function createProvider(runner: RunnerFn) {
   return new CodexProvider(runner, noopBootstrap);
 }
 
+type CapturedSdkInvocation = {
+  threadOptions?: unknown;
+  input?: unknown;
+  turnOptions?: unknown;
+};
+
+function createMockSdkClient(events: readonly unknown[], capture?: CapturedSdkInvocation): Codex {
+  return {
+    startThread: (threadOptions?: unknown) => {
+      if (capture) {
+        capture.threadOptions = threadOptions;
+      }
+
+      return {
+        runStreamed: async (input: unknown, turnOptions?: unknown) => {
+          if (capture) {
+            capture.input = input;
+            capture.turnOptions = turnOptions;
+          }
+
+          return {
+            events: (async function* () {
+              for (const event of events) {
+                yield event;
+              }
+            })(),
+          };
+        },
+      };
+    },
+  } as unknown as Codex;
+}
+
+function createStreamingBootstrap(events: readonly unknown[], capture?: CapturedSdkInvocation): CodexSdkBootstrap {
+  return {
+    ...createNoopBootstrap(),
+    client: createMockSdkClient(events, capture),
+  };
+}
+
 async function collectEvents(
   provider: CodexProvider,
   prompt = 'Implement the requested change.',
@@ -149,6 +189,169 @@ describe('codex provider', () => {
     expect(capturedRequest?.bridgedPrompt).toContain('System prompt:\nBe concise and deterministic.');
     expect(capturedRequest?.bridgedPrompt).toContain('Context:\n[1] issue=13\n[2] provider=codex');
     expect(capturedRequest?.bridgedPrompt).toContain('User prompt:\nImplement adapter v1.');
+  });
+
+  it('maps the default codex sdk stream into ordered provider events', async () => {
+    const capture: CapturedSdkInvocation = {};
+    const provider = new CodexProvider(
+      undefined,
+      () => createStreamingBootstrap([
+        { type: 'thread.started', thread_id: 'thread-1' },
+        { type: 'turn.started' },
+        {
+          type: 'item.started',
+          item: {
+            id: 'cmd-1',
+            type: 'command_execution',
+            command: 'pnpm test',
+            aggregated_output: '',
+            status: 'in_progress',
+          },
+        },
+        {
+          type: 'item.completed',
+          item: {
+            id: 'cmd-1',
+            type: 'command_execution',
+            command: 'pnpm test',
+            aggregated_output: 'all good',
+            status: 'completed',
+            exit_code: 0,
+          },
+        },
+        {
+          type: 'item.completed',
+          item: {
+            id: 'msg-1',
+            type: 'agent_message',
+            text: 'Implemented and validated.',
+          },
+        },
+        {
+          type: 'turn.completed',
+          usage: {
+            input_tokens: 12,
+            cached_input_tokens: 2,
+            output_tokens: 5,
+          },
+        },
+      ], capture),
+    );
+
+    const events = await collectEvents(provider, 'Implement adapter v2.', {
+      workingDirectory: '/work/alphred',
+      timeout: 25_000,
+    });
+
+    expect(events.map((event) => event.type)).toEqual(['system', 'tool_use', 'tool_result', 'assistant', 'usage', 'result']);
+    expect(events[5].content).toBe('Implemented and validated.');
+    expect(events[4].metadata).toMatchObject({
+      input_tokens: 12,
+      output_tokens: 5,
+      total_tokens: 17,
+      usage: {
+        input_tokens: 12,
+        output_tokens: 5,
+        total_tokens: 17,
+      },
+    });
+    expect(capture.threadOptions).toEqual({
+      model: 'gpt-5-codex',
+      workingDirectory: '/work/alphred',
+    });
+    expect(capture.input).toBe('Implement adapter v2.');
+    expect(capture.turnOptions).toMatchObject({
+      signal: expect.any(AbortSignal),
+    });
+  });
+
+  it('throws a typed error when sdk stream emits malformed items', async () => {
+    const provider = new CodexProvider(
+      undefined,
+      () => createStreamingBootstrap([
+        { type: 'thread.started', thread_id: 'thread-1' },
+        {
+          type: 'item.completed',
+          item: {
+            id: 'msg-1',
+            type: 'agent_message',
+          },
+        },
+      ]),
+    );
+
+    await expect(collectEvents(provider)).rejects.toMatchObject({
+      code: 'CODEX_INVALID_EVENT',
+    });
+  });
+
+  it('throws a typed run failure when sdk emits turn.failed', async () => {
+    const provider = new CodexProvider(
+      undefined,
+      () => createStreamingBootstrap([
+        { type: 'thread.started', thread_id: 'thread-1' },
+        { type: 'turn.failed', error: { message: 'transport timeout' } },
+      ]),
+    );
+
+    await expect(collectEvents(provider)).rejects.toMatchObject({
+      code: 'CODEX_RUN_FAILED',
+      message: 'Codex turn failed: transport timeout',
+    });
+  });
+
+  it('throws a typed run failure when sdk emits fatal stream errors', async () => {
+    const provider = new CodexProvider(
+      undefined,
+      () => createStreamingBootstrap([
+        { type: 'thread.started', thread_id: 'thread-1' },
+        { type: 'error', message: 'broken stream' },
+      ]),
+    );
+
+    await expect(collectEvents(provider)).rejects.toMatchObject({
+      code: 'CODEX_RUN_FAILED',
+      message: 'Codex stream emitted a fatal error: broken stream',
+    });
+  });
+
+  it('throws a typed invalid-event error when sdk emits events after turn completion', async () => {
+    const provider = new CodexProvider(
+      undefined,
+      () => createStreamingBootstrap([
+        {
+          type: 'item.completed',
+          item: {
+            id: 'msg-1',
+            type: 'agent_message',
+            text: 'final answer',
+          },
+        },
+        {
+          type: 'turn.completed',
+          usage: {
+            input_tokens: 10,
+            cached_input_tokens: 0,
+            output_tokens: 3,
+          },
+        },
+        {
+          type: 'item.completed',
+          item: {
+            id: 'cmd-2',
+            type: 'command_execution',
+            command: 'echo done',
+            aggregated_output: 'done',
+            status: 'completed',
+            exit_code: 0,
+          },
+        },
+      ]),
+    );
+
+    await expect(collectEvents(provider)).rejects.toMatchObject({
+      code: 'CODEX_INVALID_EVENT',
+    });
   });
 
   it('normalizes circular event content without default object stringification', async () => {
