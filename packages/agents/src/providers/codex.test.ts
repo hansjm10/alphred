@@ -41,6 +41,46 @@ function createProvider(runner: RunnerFn) {
   return new CodexProvider(runner, noopBootstrap);
 }
 
+type CapturedSdkInvocation = {
+  threadOptions?: unknown;
+  input?: unknown;
+  turnOptions?: unknown;
+};
+
+function createMockSdkClient(events: readonly unknown[], capture?: CapturedSdkInvocation): Codex {
+  return {
+    startThread: (threadOptions?: unknown) => {
+      if (capture) {
+        capture.threadOptions = threadOptions;
+      }
+
+      return {
+        runStreamed: async (input: unknown, turnOptions?: unknown) => {
+          if (capture) {
+            capture.input = input;
+            capture.turnOptions = turnOptions;
+          }
+
+          return {
+            events: (async function* () {
+              for (const event of events) {
+                yield event;
+              }
+            })(),
+          };
+        },
+      };
+    },
+  } as unknown as Codex;
+}
+
+function createStreamingBootstrap(events: readonly unknown[], capture?: CapturedSdkInvocation): CodexSdkBootstrap {
+  return {
+    ...createNoopBootstrap(),
+    client: createMockSdkClient(events, capture),
+  };
+}
+
 async function collectEvents(
   provider: CodexProvider,
   prompt = 'Implement the requested change.',
@@ -151,6 +191,456 @@ describe('codex provider', () => {
     expect(capturedRequest?.bridgedPrompt).toContain('User prompt:\nImplement adapter v1.');
   });
 
+  it('maps the default codex sdk stream into ordered provider events', async () => {
+    const capture: CapturedSdkInvocation = {};
+    const provider = new CodexProvider(
+      undefined,
+      () => createStreamingBootstrap([
+        { type: 'thread.started', thread_id: 'thread-1' },
+        { type: 'turn.started' },
+        {
+          type: 'item.started',
+          item: {
+            id: 'cmd-1',
+            type: 'command_execution',
+            command: 'pnpm test',
+            aggregated_output: '',
+            status: 'in_progress',
+          },
+        },
+        {
+          type: 'item.completed',
+          item: {
+            id: 'cmd-1',
+            type: 'command_execution',
+            command: 'pnpm test',
+            aggregated_output: 'all good',
+            status: 'completed',
+            exit_code: 0,
+          },
+        },
+        {
+          type: 'item.completed',
+          item: {
+            id: 'msg-1',
+            type: 'agent_message',
+            text: 'Implemented and validated.',
+          },
+        },
+        {
+          type: 'turn.completed',
+          usage: {
+            input_tokens: 12,
+            cached_input_tokens: 2,
+            output_tokens: 5,
+          },
+        },
+      ], capture),
+    );
+
+    const events = await collectEvents(provider, 'Implement adapter v2.', {
+      workingDirectory: '/work/alphred',
+      timeout: 25_000,
+    });
+
+    expect(events.map((event) => event.type)).toEqual(['system', 'tool_use', 'tool_result', 'assistant', 'usage', 'result']);
+    expect(events[5].content).toBe('Implemented and validated.');
+    expect(events[4].metadata).toMatchObject({
+      input_tokens: 12,
+      output_tokens: 5,
+      total_tokens: 17,
+      usage: {
+        input_tokens: 12,
+        output_tokens: 5,
+        total_tokens: 17,
+      },
+    });
+    expect(capture.threadOptions).toEqual({
+      model: 'gpt-5-codex',
+      workingDirectory: '/work/alphred',
+    });
+    expect(capture.input).toBe('Implement adapter v2.');
+    expect(capture.turnOptions).toMatchObject({
+      signal: expect.any(AbortSignal),
+    });
+  });
+
+  it('maps a realistic mixed codex stream including tool lifecycles and non-terminal updates', async () => {
+    const capture: CapturedSdkInvocation = {};
+    const provider = new CodexProvider(
+      undefined,
+      () => createStreamingBootstrap([
+        { type: 'thread.started', thread_id: 'thread-real-world-1' },
+        { type: 'turn.started' },
+        {
+          type: 'item.started',
+          item: {
+            id: 'cmd-1',
+            type: 'command_execution',
+            command: 'pnpm lint',
+          },
+        },
+        {
+          type: 'item.updated',
+          item: {
+            id: 'cmd-1',
+            type: 'command_execution',
+            command: 'pnpm lint',
+            status: 'in_progress',
+          },
+        },
+        {
+          type: 'item.completed',
+          item: {
+            id: 'cmd-1',
+            type: 'command_execution',
+            command: 'pnpm lint',
+            exit_code: 0,
+          },
+        },
+        {
+          type: 'item.started',
+          item: {
+            id: 'mcp-1',
+            type: 'mcp_tool_call',
+            server: 'github',
+            tool: 'search_issues',
+          },
+        },
+        {
+          type: 'item.completed',
+          item: {
+            id: 'mcp-1',
+            type: 'mcp_tool_call',
+            server: 'github',
+            tool: 'search_issues',
+            result: { total: 2 },
+          },
+        },
+        {
+          type: 'item.started',
+          item: {
+            id: 99,
+            type: 'web_search',
+            query: 'vitest coverage thresholds',
+          },
+        },
+        {
+          type: 'item.completed',
+          item: {
+            id: 99,
+            type: 'web_search',
+            query: 'vitest coverage thresholds',
+          },
+        },
+        {
+          type: 'item.started',
+          item: {
+            id: 'file-1',
+            type: 'file_change',
+            changes: [{ path: 'packages/agents/src/providers/codex.test.ts' }],
+          },
+        },
+        {
+          type: 'item.completed',
+          item: {
+            id: 'file-1',
+            type: 'file_change',
+            changes: [{ path: 'packages/agents/src/providers/codex.test.ts' }],
+          },
+        },
+        {
+          type: 'item.started',
+          item: {
+            id: 'todo-1',
+            type: 'todo_list',
+            items: [{ content: 'add edge-case tests', status: 'in_progress' }],
+          },
+        },
+        {
+          type: 'item.completed',
+          item: {
+            id: 'todo-1',
+            type: 'todo_list',
+            items: [{ content: 'add edge-case tests', status: 'completed' }],
+          },
+        },
+        {
+          type: 'item.started',
+          item: {
+            id: 'reasoning-1',
+            type: 'reasoning',
+            text: 'Inspecting provider branch coverage.',
+          },
+        },
+        {
+          type: 'item.completed',
+          item: {
+            id: 'reasoning-1',
+            type: 'reasoning',
+            text: 'Need to exercise more tool item variants.',
+          },
+        },
+        {
+          type: 'item.started',
+          item: {
+            id: 'error-1',
+            type: 'error',
+            message: 'Transient tool retry.',
+          },
+        },
+        {
+          type: 'item.completed',
+          item: {
+            id: 'error-1',
+            type: 'error',
+            message: 'Transient tool retry.',
+          },
+        },
+        {
+          type: 'item.completed',
+          item: {
+            id: 'msg-1',
+            type: 'agent_message',
+            text: 'All checks passed and changes were applied.',
+          },
+        },
+        {
+          type: 'turn.completed',
+          usage: {
+            input_tokens: 42,
+            cached_input_tokens: 6,
+            output_tokens: 9,
+          },
+        },
+      ], capture),
+    );
+
+    const events = await collectEvents(provider, 'Harden codex edge-case tests.', {
+      workingDirectory: '/work/alphred',
+    });
+
+    expect(events.map((event) => event.type)).toEqual([
+      'system',
+      'tool_use',
+      'tool_result',
+      'tool_use',
+      'tool_result',
+      'tool_use',
+      'tool_result',
+      'tool_use',
+      'tool_result',
+      'tool_use',
+      'tool_result',
+      'system',
+      'system',
+      'assistant',
+      'usage',
+      'result',
+    ]);
+    expect(events[1].content).toBe('pnpm lint');
+    expect(JSON.parse(events[2].content)).toMatchObject({
+      command: 'pnpm lint',
+      output: '',
+      exit_code: 0,
+    });
+    expect(events[3].content).toBe('github.search_issues');
+    expect(JSON.parse(events[4].content)).toMatchObject({
+      server: 'github',
+      tool: 'search_issues',
+      result: { total: 2 },
+    });
+    expect(events[5].content).toBe('vitest coverage thresholds');
+    expect(JSON.parse(events[6].content)).toEqual({ query: 'vitest coverage thresholds' });
+    expect((events[5].metadata as Record<string, unknown>).itemId).toBeUndefined();
+    expect(events[7].content).toBe('file_change:1');
+    expect(JSON.parse(events[8].content)).toEqual([{ path: 'packages/agents/src/providers/codex.test.ts' }]);
+    expect(events[9].content).toBe('todo_list');
+    expect(JSON.parse(events[10].content)).toEqual([{ content: 'add edge-case tests', status: 'completed' }]);
+    expect(events[11].content).toBe('Need to exercise more tool item variants.');
+    expect(events[12].content).toBe('Transient tool retry.');
+    expect(events[13].content).toBe('All checks passed and changes were applied.');
+    expect(events[15].content).toBe('All checks passed and changes were applied.');
+    expect(capture.turnOptions).toBeUndefined();
+  });
+
+  it('throws a typed error when sdk stream emits malformed items', async () => {
+    const provider = new CodexProvider(
+      undefined,
+      () => createStreamingBootstrap([
+        { type: 'thread.started', thread_id: 'thread-1' },
+        {
+          type: 'item.completed',
+          item: {
+            id: 'msg-1',
+            type: 'agent_message',
+          },
+        },
+      ]),
+    );
+
+    await expect(collectEvents(provider)).rejects.toMatchObject({
+      code: 'CODEX_INVALID_EVENT',
+    });
+  });
+
+  it('throws a typed invalid-event error when sdk emits malformed event payloads', async () => {
+    const provider = new CodexProvider(
+      undefined,
+      () => createStreamingBootstrap([
+        [],
+      ]),
+    );
+
+    await expect(collectEvents(provider)).rejects.toMatchObject({
+      code: 'CODEX_INVALID_EVENT',
+      details: {
+        fieldPath: 'event',
+      },
+    });
+  });
+
+  it('throws a typed invalid-event error when sdk emits unsupported item lifecycle payloads', async () => {
+    const provider = new CodexProvider(
+      undefined,
+      () => createStreamingBootstrap([
+        { type: 'thread.started', thread_id: 'thread-1' },
+        {
+          type: 'item.started',
+          item: {
+            id: 'unknown-1',
+            type: 'unknown_tool_type',
+          },
+        },
+      ]),
+    );
+
+    await expect(collectEvents(provider)).rejects.toMatchObject({
+      code: 'CODEX_INVALID_EVENT',
+      details: {
+        itemType: 'unknown_tool_type',
+      },
+    });
+  });
+
+  it('throws a typed invalid-event error when sdk usage token counts are invalid', async () => {
+    const provider = new CodexProvider(
+      undefined,
+      () => createStreamingBootstrap([
+        { type: 'thread.started', thread_id: 'thread-1' },
+        {
+          type: 'item.completed',
+          item: {
+            id: 'msg-1',
+            type: 'agent_message',
+            text: 'Done.',
+          },
+        },
+        {
+          type: 'turn.completed',
+          usage: {
+            input_tokens: 10,
+            cached_input_tokens: -1,
+            output_tokens: 3,
+          },
+        },
+      ]),
+    );
+
+    await expect(collectEvents(provider)).rejects.toMatchObject({
+      code: 'CODEX_INVALID_EVENT',
+      details: {
+        fieldPath: 'event.usage.cached_input_tokens',
+      },
+    });
+  });
+
+  it('throws a typed invalid-event error when sdk emits unsupported stream event types', async () => {
+    const provider = new CodexProvider(
+      undefined,
+      () => createStreamingBootstrap([
+        { type: 'thread.started', thread_id: 'thread-1' },
+        { type: 'turn.cancelled' },
+      ]),
+    );
+
+    await expect(collectEvents(provider)).rejects.toMatchObject({
+      code: 'CODEX_INVALID_EVENT',
+      details: {
+        eventType: 'turn.cancelled',
+      },
+    });
+  });
+
+  it('throws a typed run failure when sdk emits turn.failed', async () => {
+    const provider = new CodexProvider(
+      undefined,
+      () => createStreamingBootstrap([
+        { type: 'thread.started', thread_id: 'thread-1' },
+        { type: 'turn.failed', error: { message: 'transport timeout' } },
+      ]),
+    );
+
+    await expect(collectEvents(provider)).rejects.toMatchObject({
+      code: 'CODEX_RUN_FAILED',
+      message: 'Codex turn failed: transport timeout',
+    });
+  });
+
+  it('throws a typed run failure when sdk emits fatal stream errors', async () => {
+    const provider = new CodexProvider(
+      undefined,
+      () => createStreamingBootstrap([
+        { type: 'thread.started', thread_id: 'thread-1' },
+        { type: 'error', message: 'broken stream' },
+      ]),
+    );
+
+    await expect(collectEvents(provider)).rejects.toMatchObject({
+      code: 'CODEX_RUN_FAILED',
+      message: 'Codex stream emitted a fatal error: broken stream',
+    });
+  });
+
+  it('throws a typed invalid-event error when sdk emits events after turn completion', async () => {
+    const provider = new CodexProvider(
+      undefined,
+      () => createStreamingBootstrap([
+        {
+          type: 'item.completed',
+          item: {
+            id: 'msg-1',
+            type: 'agent_message',
+            text: 'final answer',
+          },
+        },
+        {
+          type: 'turn.completed',
+          usage: {
+            input_tokens: 10,
+            cached_input_tokens: 0,
+            output_tokens: 3,
+          },
+        },
+        {
+          type: 'item.completed',
+          item: {
+            id: 'cmd-2',
+            type: 'command_execution',
+            command: 'echo done',
+            aggregated_output: 'done',
+            status: 'completed',
+            exit_code: 0,
+          },
+        },
+      ]),
+    );
+
+    await expect(collectEvents(provider)).rejects.toMatchObject({
+      code: 'CODEX_INVALID_EVENT',
+    });
+  });
+
   it('normalizes circular event content without default object stringification', async () => {
     const circularContent: Record<string, unknown> = { step: 'drafting' };
     circularContent.self = circularContent;
@@ -201,6 +691,8 @@ describe('codex provider', () => {
       { workingDirectory: '/tmp/alphred-codex-test', context: null },
       { workingDirectory: '/tmp/alphred-codex-test', systemPrompt: 42 },
       { workingDirectory: '/tmp/alphred-codex-test', systemPrompt: { text: 'be concise' } },
+      { workingDirectory: '/tmp/alphred-codex-test', timeout: 3_000_000_000 },
+      { workingDirectory: '/tmp/alphred-codex-test', timeout: Number.MAX_SAFE_INTEGER },
     ];
 
     for (const options of invalidOptionalOptions) {

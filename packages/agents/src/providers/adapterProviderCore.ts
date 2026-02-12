@@ -20,6 +20,8 @@ const supportedProviderEventTypes = new Set<ProviderEvent['type']>([
   'usage',
 ]);
 
+const MAX_TIMEOUT_MS = 2_147_483_647;
+
 export type AdapterRunRequest = Readonly<{
   prompt: string;
   bridgedPrompt: string;
@@ -303,6 +305,14 @@ function createRunRequest<Code extends string, TError extends Error>(
       config.codes.invalidOptions,
       `${config.providerDisplayName} provider requires timeout to be a positive number.`,
       { timeout: validatedOptions.timeout },
+    );
+  }
+
+  if (validatedOptions.timeout !== undefined && validatedOptions.timeout > MAX_TIMEOUT_MS) {
+    throw config.createError(
+      config.codes.invalidOptions,
+      `${config.providerDisplayName} provider requires timeout to be no greater than ${MAX_TIMEOUT_MS} milliseconds.`,
+      { timeout: validatedOptions.timeout, maxTimeout: MAX_TIMEOUT_MS },
     );
   }
 

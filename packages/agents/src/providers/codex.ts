@@ -1,11 +1,11 @@
 import type { ProviderRunOptions } from '@alphred/shared';
+import type { ThreadOptions, TurnOptions } from '@openai/codex-sdk';
 import type { AgentProvider } from '../provider.js';
 import {
   type AdapterProviderConfig,
   type AdapterRawEvent,
   type AdapterRunRequest,
   type AdapterRunner,
-  createDefaultAdapterRunner,
   runAdapterProvider,
 } from './adapterProviderCore.js';
 import { CodexBootstrapError, type CodexSdkBootstrap, initializeCodexSdkBootstrap } from './codexSdkBootstrap.js';
@@ -55,13 +55,412 @@ const codexProviderConfig: AdapterProviderConfig<CodexProviderErrorCode, CodexPr
   isProviderError: (error: unknown): error is CodexProviderError => error instanceof CodexProviderError,
 };
 
+type CodexItemLifecycle = 'started' | 'updated' | 'completed';
+
+type CodexStreamState = {
+  lastAssistantMessage: string;
+};
+
+function createCodexInvalidEventError(message: string, details?: Record<string, unknown>): CodexProviderError {
+  return codexProviderConfig.createError(codexProviderConfig.codes.invalidEvent, message, details);
+}
+
+function toRecordOrThrow(
+  value: unknown,
+  eventIndex: number,
+  fieldPath: string,
+): Record<string, unknown> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw createCodexInvalidEventError(
+      `Codex emitted malformed event payload for "${fieldPath}".`,
+      {
+        eventIndex,
+        fieldPath,
+        value,
+      },
+    );
+  }
+
+  return value as Record<string, unknown>;
+}
+
+function toStringOrThrow(
+  value: unknown,
+  eventIndex: number,
+  fieldPath: string,
+): string {
+  if (typeof value !== 'string') {
+    throw createCodexInvalidEventError(
+      `Codex emitted a non-string value for "${fieldPath}".`,
+      {
+        eventIndex,
+        fieldPath,
+        value,
+      },
+    );
+  }
+
+  return value;
+}
+
+function toNonNegativeNumberOrThrow(
+  value: unknown,
+  eventIndex: number,
+  fieldPath: string,
+): number {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
+    throw createCodexInvalidEventError(
+      `Codex emitted an invalid numeric value for "${fieldPath}".`,
+      {
+        eventIndex,
+        fieldPath,
+        value,
+      },
+    );
+  }
+
+  return value;
+}
+
+function buildToolUseContent(itemType: string, itemRecord: Record<string, unknown>, eventIndex: number): unknown {
+  switch (itemType) {
+    case 'command_execution':
+      return toStringOrThrow(itemRecord.command, eventIndex, 'item.command');
+    case 'mcp_tool_call': {
+      const server = toStringOrThrow(itemRecord.server, eventIndex, 'item.server');
+      const tool = toStringOrThrow(itemRecord.tool, eventIndex, 'item.tool');
+      return `${server}.${tool}`;
+    }
+    case 'web_search':
+      return toStringOrThrow(itemRecord.query, eventIndex, 'item.query');
+    case 'file_change': {
+      const changes = itemRecord.changes;
+      if (!Array.isArray(changes)) {
+        throw createCodexInvalidEventError(
+          'Codex emitted file_change item without a valid changes array.',
+          {
+            eventIndex,
+            changes,
+          },
+        );
+      }
+      return `file_change:${changes.length}`;
+    }
+    case 'todo_list':
+      return 'todo_list';
+    default:
+      throw createCodexInvalidEventError(
+        `Codex emitted unsupported tool item type "${itemType}".`,
+        {
+          eventIndex,
+          itemType,
+        },
+      );
+  }
+}
+
+function buildToolResultContent(itemType: string, itemRecord: Record<string, unknown>, eventIndex: number): unknown {
+  switch (itemType) {
+    case 'command_execution': {
+      const command = toStringOrThrow(itemRecord.command, eventIndex, 'item.command');
+      const aggregatedOutput = itemRecord.aggregated_output;
+      if (aggregatedOutput !== undefined && typeof aggregatedOutput !== 'string') {
+        throw createCodexInvalidEventError(
+          'Codex emitted command_execution item with invalid aggregated_output.',
+          {
+            eventIndex,
+            aggregatedOutput,
+          },
+        );
+      }
+
+      return {
+        command,
+        output: aggregatedOutput ?? '',
+        exit_code: itemRecord.exit_code,
+      };
+    }
+    case 'mcp_tool_call': {
+      const server = toStringOrThrow(itemRecord.server, eventIndex, 'item.server');
+      const tool = toStringOrThrow(itemRecord.tool, eventIndex, 'item.tool');
+
+      return {
+        server,
+        tool,
+        result: itemRecord.result,
+        error: itemRecord.error,
+      };
+    }
+    case 'web_search':
+      return {
+        query: toStringOrThrow(itemRecord.query, eventIndex, 'item.query'),
+      };
+    case 'file_change': {
+      const changes = itemRecord.changes;
+      if (!Array.isArray(changes)) {
+        throw createCodexInvalidEventError(
+          'Codex emitted file_change item without a valid changes array.',
+          {
+            eventIndex,
+            changes,
+          },
+        );
+      }
+
+      return changes;
+    }
+    case 'todo_list': {
+      const items = itemRecord.items;
+      if (!Array.isArray(items)) {
+        throw createCodexInvalidEventError(
+          'Codex emitted todo_list item without a valid items array.',
+          {
+            eventIndex,
+            items,
+          },
+        );
+      }
+
+      return items;
+    }
+    default:
+      throw createCodexInvalidEventError(
+        `Codex emitted unsupported tool item type "${itemType}".`,
+        {
+          eventIndex,
+          itemType,
+        },
+      );
+  }
+}
+
+function mapItemLifecycleEvent(
+  itemRecord: Record<string, unknown>,
+  lifecycle: CodexItemLifecycle,
+  state: CodexStreamState,
+  eventIndex: number,
+): CodexRawEvent[] {
+  const itemType = toStringOrThrow(itemRecord.type, eventIndex, 'item.type');
+  const itemId = itemRecord.id;
+
+  const baseMetadata: Record<string, unknown> = {
+    itemType,
+    lifecycle,
+    item: itemRecord,
+  };
+  if (typeof itemId === 'string') {
+    baseMetadata.itemId = itemId;
+  }
+
+  if (itemType === 'agent_message') {
+    if (lifecycle !== 'completed') {
+      return [];
+    }
+
+    const text = toStringOrThrow(itemRecord.text, eventIndex, 'item.text');
+    state.lastAssistantMessage = text;
+    return [
+      {
+        type: 'assistant',
+        content: text,
+        metadata: baseMetadata,
+      },
+    ];
+  }
+
+  if (itemType === 'reasoning') {
+    if (lifecycle !== 'completed') {
+      return [];
+    }
+
+    return [
+      {
+        type: 'system',
+        content: toStringOrThrow(itemRecord.text, eventIndex, 'item.text'),
+        metadata: baseMetadata,
+      },
+    ];
+  }
+
+  if (itemType === 'error') {
+    if (lifecycle !== 'completed') {
+      return [];
+    }
+
+    return [
+      {
+        type: 'system',
+        content: toStringOrThrow(itemRecord.message, eventIndex, 'item.message'),
+        metadata: baseMetadata,
+      },
+    ];
+  }
+
+  if (
+    itemType !== 'command_execution'
+    && itemType !== 'mcp_tool_call'
+    && itemType !== 'web_search'
+    && itemType !== 'file_change'
+    && itemType !== 'todo_list'
+  ) {
+    throw createCodexInvalidEventError(
+      `Codex emitted unsupported item type "${itemType}" for "${lifecycle}".`,
+      {
+        eventIndex,
+        itemType,
+        lifecycle,
+      },
+    );
+  }
+
+  if (lifecycle === 'updated') {
+    return [];
+  }
+
+  if (lifecycle === 'started') {
+    return [
+      {
+        type: 'tool_use',
+        content: buildToolUseContent(itemType, itemRecord, eventIndex),
+        metadata: baseMetadata,
+      },
+    ];
+  }
+
+  return [
+    {
+      type: 'tool_result',
+      content: buildToolResultContent(itemType, itemRecord, eventIndex),
+      metadata: baseMetadata,
+    },
+  ];
+}
+
+function mapSdkStreamEvent(
+  sdkEventValue: unknown,
+  state: CodexStreamState,
+  eventIndex: number,
+): CodexRawEvent[] {
+  const sdkEvent = toRecordOrThrow(sdkEventValue, eventIndex, 'event');
+  const eventType = toStringOrThrow(sdkEvent.type, eventIndex, 'event.type');
+
+  switch (eventType) {
+    case 'thread.started':
+      toStringOrThrow(sdkEvent.thread_id, eventIndex, 'event.thread_id');
+      return [];
+    case 'turn.started':
+      return [];
+    case 'item.started': {
+      const item = toRecordOrThrow(sdkEvent.item, eventIndex, 'event.item');
+      return mapItemLifecycleEvent(item, 'started', state, eventIndex);
+    }
+    case 'item.updated': {
+      const item = toRecordOrThrow(sdkEvent.item, eventIndex, 'event.item');
+      return mapItemLifecycleEvent(item, 'updated', state, eventIndex);
+    }
+    case 'item.completed': {
+      const item = toRecordOrThrow(sdkEvent.item, eventIndex, 'event.item');
+      return mapItemLifecycleEvent(item, 'completed', state, eventIndex);
+    }
+    case 'turn.completed': {
+      const usage = toRecordOrThrow(sdkEvent.usage, eventIndex, 'event.usage');
+      const inputTokens = toNonNegativeNumberOrThrow(usage.input_tokens, eventIndex, 'event.usage.input_tokens');
+      const outputTokens = toNonNegativeNumberOrThrow(usage.output_tokens, eventIndex, 'event.usage.output_tokens');
+      const cachedInputTokens = toNonNegativeNumberOrThrow(
+        usage.cached_input_tokens,
+        eventIndex,
+        'event.usage.cached_input_tokens',
+      );
+
+      return [
+        {
+          type: 'usage',
+          metadata: {
+            input_tokens: inputTokens,
+            output_tokens: outputTokens,
+            cached_input_tokens: cachedInputTokens,
+          },
+        },
+        {
+          type: 'result',
+          content: state.lastAssistantMessage,
+        },
+      ];
+    }
+    case 'turn.failed': {
+      const error = toRecordOrThrow(sdkEvent.error, eventIndex, 'event.error');
+      throw codexProviderConfig.createError(
+        codexProviderConfig.codes.runFailed,
+        `Codex turn failed: ${toStringOrThrow(error.message, eventIndex, 'event.error.message')}`,
+        {
+          eventIndex,
+          error,
+        },
+      );
+    }
+    case 'error':
+      throw codexProviderConfig.createError(
+        codexProviderConfig.codes.runFailed,
+        `Codex stream emitted a fatal error: ${toStringOrThrow(sdkEvent.message, eventIndex, 'event.message')}`,
+        {
+          eventIndex,
+          message: sdkEvent.message,
+        },
+      );
+    default:
+      throw createCodexInvalidEventError(
+        `Codex emitted unsupported stream event type "${eventType}".`,
+        {
+          eventIndex,
+          eventType,
+        },
+      );
+  }
+}
+
+function toThreadOptions(bootstrap: CodexSdkBootstrap, request: CodexRunRequest): ThreadOptions {
+  return {
+    model: bootstrap.model,
+    workingDirectory: request.workingDirectory,
+  };
+}
+
+function toTurnOptions(request: CodexRunRequest): TurnOptions | undefined {
+  if (request.timeout === undefined) {
+    return undefined;
+  }
+
+  return {
+    signal: AbortSignal.timeout(request.timeout),
+  };
+}
+
+function createCodexSdkRunner(bootstrap: CodexSdkBootstrap): CodexRunner {
+  return async function* runCodexSdk(request: CodexRunRequest): AsyncIterable<CodexRawEvent> {
+    const thread = bootstrap.client.startThread(toThreadOptions(bootstrap, request));
+    const streamedTurn = await thread.runStreamed(request.bridgedPrompt, toTurnOptions(request));
+    const state: CodexStreamState = {
+      lastAssistantMessage: '',
+    };
+
+    let sdkEventIndex = 0;
+    for await (const sdkEvent of streamedTurn.events) {
+      sdkEventIndex += 1;
+      const mappedEvents = mapSdkStreamEvent(sdkEvent, state, sdkEventIndex);
+      for (const mappedEvent of mappedEvents) {
+        yield mappedEvent;
+      }
+    }
+  };
+}
+
 export class CodexProvider implements AgentProvider {
   readonly name = 'codex' as const;
-  readonly #runner: CodexRunner;
+  readonly #runner?: CodexRunner;
   readonly #bootstrap: CodexBootstrapper;
 
   constructor(
-    runner: CodexRunner = createDefaultAdapterRunner(codexProviderConfig.adapterName),
+    runner?: CodexRunner,
     bootstrap: CodexBootstrapper = initializeCodexSdkBootstrap,
   ) {
     this.#runner = runner;
@@ -69,8 +468,9 @@ export class CodexProvider implements AgentProvider {
   }
 
   async *run(prompt: string, options: ProviderRunOptions) {
+    let bootstrap: CodexSdkBootstrap;
     try {
-      this.#bootstrap();
+      bootstrap = this.#bootstrap();
     } catch (error) {
       if (error instanceof CodexBootstrapError) {
         throw new CodexProviderError(
@@ -92,6 +492,7 @@ export class CodexProvider implements AgentProvider {
       );
     }
 
-    yield* runAdapterProvider(prompt, options, this.#runner, codexProviderConfig);
+    const runner = this.#runner ?? createCodexSdkRunner(bootstrap);
+    yield* runAdapterProvider(prompt, options, runner, codexProviderConfig);
   }
 }
