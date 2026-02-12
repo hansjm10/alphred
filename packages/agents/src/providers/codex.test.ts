@@ -172,6 +172,22 @@ describe('codex provider', () => {
     });
   });
 
+  it('throws a typed error when optional options are malformed', async () => {
+    const provider = new CodexProvider(createRunner([{ type: 'result', content: '' }]));
+    const invalidOptionalOptions = [
+      { workingDirectory: '/tmp/alphred-codex-test', context: 'invalid-context' },
+      { workingDirectory: '/tmp/alphred-codex-test', context: null },
+      { workingDirectory: '/tmp/alphred-codex-test', systemPrompt: 42 },
+      { workingDirectory: '/tmp/alphred-codex-test', systemPrompt: { text: 'be concise' } },
+    ];
+
+    for (const options of invalidOptionalOptions) {
+      await expect(collectEvents(provider, 'prompt', options as unknown as ProviderRunOptions)).rejects.toMatchObject({
+        code: 'CODEX_INVALID_OPTIONS',
+      });
+    }
+  });
+
   it('throws a typed error when codex emits unsupported event types', async () => {
     const provider = new CodexProvider(createRunner([{ type: 'unsupported' }]));
 

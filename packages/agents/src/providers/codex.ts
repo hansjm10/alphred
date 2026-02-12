@@ -201,15 +201,39 @@ function normalizeRawEvent(rawEvent: CodexRawEvent, eventIndex: number): Provide
 }
 
 function normalizeContext(context: ProviderRunOptions['context']): string[] {
-  if (!context) {
+  if (context === undefined) {
     return [];
+  }
+
+  if (!Array.isArray(context)) {
+    throw new CodexProviderError(
+      'CODEX_INVALID_OPTIONS',
+      'Codex provider requires context to be an array when provided.',
+      { context },
+    );
   }
 
   return context.filter((item): item is string => typeof item === 'string' && item.length > 0);
 }
 
-function buildBridgedPrompt(prompt: string, options: ProviderRunOptions, context: readonly string[]): string {
-  const systemPrompt = options.systemPrompt?.trim();
+function normalizeSystemPrompt(systemPrompt: ProviderRunOptions['systemPrompt']): string | undefined {
+  if (systemPrompt === undefined) {
+    return undefined;
+  }
+
+  if (typeof systemPrompt !== 'string') {
+    throw new CodexProviderError(
+      'CODEX_INVALID_OPTIONS',
+      'Codex provider requires systemPrompt to be a string when provided.',
+      { systemPrompt },
+    );
+  }
+
+  const normalizedSystemPrompt = systemPrompt.trim();
+  return normalizedSystemPrompt.length > 0 ? normalizedSystemPrompt : undefined;
+}
+
+function buildBridgedPrompt(prompt: string, systemPrompt: string | undefined, context: readonly string[]): string {
   if (!systemPrompt && context.length === 0) {
     return prompt;
   }
@@ -256,14 +280,15 @@ function createRunRequest(prompt: string, options: ProviderRunOptions): CodexRun
     });
   }
 
+  const systemPrompt = normalizeSystemPrompt(validatedOptions.systemPrompt);
   const context = normalizeContext(validatedOptions.context);
 
   return {
     prompt,
-    bridgedPrompt: buildBridgedPrompt(prompt, validatedOptions, context),
+    bridgedPrompt: buildBridgedPrompt(prompt, systemPrompt, context),
     workingDirectory,
     context,
-    systemPrompt: validatedOptions.systemPrompt?.trim() || undefined,
+    systemPrompt,
     maxTokens: validatedOptions.maxTokens,
     timeout: validatedOptions.timeout,
   };
