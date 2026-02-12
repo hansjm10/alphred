@@ -4,8 +4,6 @@ import type { AgentProvider } from '../provider.js';
 import { ClaudeProvider } from './claude.js';
 import { CodexProvider } from './codex.js';
 
-const runProviderIntegration = process.env.ALPHRED_RUN_PROVIDER_USAGE_INTEGRATION === '1';
-
 function hasTokenUsageShape(metadata: Record<string, unknown>): boolean {
   const directInputTokens = metadata.inputTokens;
   const directOutputTokens = metadata.outputTokens;
@@ -48,7 +46,7 @@ async function collectUsageEvents(provider: AgentProvider, options: ProviderRunO
   return usageEvents;
 }
 
-describe.skipIf(!runProviderIntegration)('provider usage metadata integration (manual)', () => {
+describe('provider usage metadata contract', () => {
   const integrationCases: [string, AgentProvider][] = [
     ['claude', new ClaudeProvider()],
     ['codex', new CodexProvider()],

@@ -12,6 +12,7 @@ export class ClaudeProvider implements AgentProvider {
     // 3. Stream events as ProviderEvent
     void options;
     yield createProviderEvent('system', `Claude provider invoked with prompt length: ${prompt.length}`);
+    yield createProviderEvent('usage', '', { inputTokens: prompt.length, outputTokens: 0 });
     yield createProviderEvent('result', '');
   }
 }
