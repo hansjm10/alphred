@@ -131,14 +131,17 @@ describe('codex provider', () => {
 
   it('throws a typed error when required options are invalid', async () => {
     const provider = new CodexProvider(createRunner([{ type: 'result', content: '' }]));
+    const invalidOptions = [
+      { workingDirectory: '   ' },
+      {},
+      { workingDirectory: 123 },
+    ];
 
-    await expect(
-      collectEvents(provider, 'prompt', {
-        workingDirectory: '   ',
-      }),
-    ).rejects.toMatchObject({
-      code: 'CODEX_INVALID_OPTIONS',
-    });
+    for (const options of invalidOptions) {
+      await expect(collectEvents(provider, 'prompt', options as unknown as ProviderRunOptions)).rejects.toMatchObject({
+        code: 'CODEX_INVALID_OPTIONS',
+      });
+    }
   });
 
   it('throws a typed error when codex emits unsupported event types', async () => {

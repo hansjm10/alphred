@@ -220,7 +220,8 @@ function buildBridgedPrompt(prompt: string, options: ProviderRunOptions, context
 }
 
 function createRunRequest(prompt: string, options: ProviderRunOptions): CodexRunRequest {
-  if (options.workingDirectory.trim().length === 0) {
+  const workingDirectory = (options as { workingDirectory?: unknown }).workingDirectory;
+  if (typeof workingDirectory !== 'string' || workingDirectory.trim().length === 0) {
     throw new CodexProviderError(
       'CODEX_INVALID_OPTIONS',
       'Codex provider requires a non-empty workingDirectory option.',
@@ -247,7 +248,7 @@ function createRunRequest(prompt: string, options: ProviderRunOptions): CodexRun
   return {
     prompt,
     bridgedPrompt: buildBridgedPrompt(prompt, options, context),
-    workingDirectory: options.workingDirectory,
+    workingDirectory,
     context,
     systemPrompt: options.systemPrompt?.trim() || undefined,
     maxTokens: options.maxTokens,
