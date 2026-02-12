@@ -61,7 +61,9 @@ describe('codex sdk bootstrap entrypoint resolution', () => {
       arch: 'x64',
     });
 
-    expect(createRequireResolveMock).toHaveBeenCalledWith('@openai/codex-sdk');
+    expect(createRequireResolveMock).toHaveBeenCalledWith('@openai/codex-sdk', {
+      conditions: new Set(['import', 'node', 'default']),
+    });
     expect(bootstrap.codexBinaryPath).toBe(expectedBinaryPath);
     expect(codexConstructorMock).toHaveBeenCalledWith({
       codexPathOverride: expectedBinaryPath,

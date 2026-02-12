@@ -6,6 +6,7 @@ import { createRequire } from 'node:module';
 import { Codex, type CodexOptions } from '@openai/codex-sdk';
 
 const require = createRequire(import.meta.url);
+const SDK_IMPORT_RESOLUTION_CONDITIONS = new Set(['import', 'node', 'default']);
 
 const CODEX_API_KEY_ENV_VAR = 'CODEX_API_KEY';
 const OPENAI_API_KEY_ENV_VAR = 'OPENAI_API_KEY';
@@ -219,7 +220,12 @@ function defaultCheckCliSession(codexBinaryPath: string, env: NodeJS.ProcessEnv)
 function resolveSdkPackageJsonPathFromEntrypoint(): string {
   let sdkEntrypointPath: string;
   try {
-    sdkEntrypointPath = require.resolve('@openai/codex-sdk');
+    // Node supports custom resolution conditions at runtime, but the bundled type
+    // definition for require.resolve does not include "conditions".
+    const resolveOptions = {
+      conditions: SDK_IMPORT_RESOLUTION_CONDITIONS,
+    } as unknown as Parameters<typeof require.resolve>[1];
+    sdkEntrypointPath = require.resolve('@openai/codex-sdk', resolveOptions);
   } catch (error) {
     throw new CodexBootstrapError(
       'CODEX_BOOTSTRAP_INVALID_CONFIG',
