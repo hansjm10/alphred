@@ -12,6 +12,7 @@ export class CodexProvider implements AgentProvider {
     // 3. Stream events as ProviderEvent
     void options;
     yield createProviderEvent('system', `Codex provider invoked with prompt length: ${prompt.length}`);
+    yield createProviderEvent('usage', '', { usage: { input_tokens: prompt.length, output_tokens: 0 } });
     yield createProviderEvent('result', '');
   }
 }

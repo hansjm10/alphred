@@ -2,4 +2,10 @@ export { getPhaseByName, getPhaseTransitions, getFirstPhase } from './workflow.j
 export { canTransitionRun, canTransitionPhase, transitionRun, transitionPhase, isRunTerminal, isPhaseTerminal } from './stateMachine.js';
 export { evaluateGuard } from './guards.js';
 export { evaluateTransitions, type TransitionResult } from './workflowEngine.js';
-export { runPhase, type PhaseRunResult } from './phaseRunner.js';
+export {
+  runPhase,
+  type PhaseRunResult,
+  type PhaseProvider,
+  type PhaseProviderResolver,
+  type PhaseRunnerDependencies,
+} from './phaseRunner.js';
