@@ -6,6 +6,7 @@ describe('agents index exports', () => {
     expect(typeof agents.createProviderEvent).toBe('function');
     expect(typeof agents.ClaudeProvider).toBe('function');
     expect(typeof agents.CodexProvider).toBe('function');
+    expect(typeof agents.CodexProviderError).toBe('function');
     expect(typeof agents.createAgentProviderResolver).toBe('function');
     expect(typeof agents.resolveAgentProvider).toBe('function');
     expect(typeof agents.UnknownAgentProviderError).toBe('function');
