@@ -218,6 +218,34 @@ describe('codex provider sdk stream integration fixtures', () => {
     });
   });
 
+  it('passes timeout and maxTokens together to sdk turn options when both are configured', async () => {
+    const capture: CapturedSdkInvocation = {};
+    const provider = createProviderForFixture(sdkStreamFixtures.success, capture);
+
+    await collectEvents(provider, 'Apply integration fixture tests.', {
+      ...defaultOptions,
+      timeout: 25_000,
+      maxTokens: 64,
+    });
+
+    expect(capture.turnOptions).toMatchObject({
+      signal: expect.any(AbortSignal),
+      maxTokens: 64,
+    });
+  });
+
+  it('does not fail when output usage equals configured maxTokens', async () => {
+    const provider = createProviderForFixture(sdkStreamFixtures.success);
+
+    const events = await collectEvents(provider, 'Apply integration fixture tests.', {
+      ...defaultOptions,
+      maxTokens: 8,
+    });
+
+    expect(events.map((event) => event.type)).toContain('usage');
+    expect(events.map((event) => event.type)).toContain('result');
+  });
+
   it('fails deterministically when output usage exceeds configured maxTokens', async () => {
     const provider = createProviderForFixture(sdkStreamFixtures.success);
 
