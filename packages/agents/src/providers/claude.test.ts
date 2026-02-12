@@ -159,6 +159,7 @@ describe('claude provider', () => {
       { workingDirectory: '/tmp/alphred-claude-test', context: null },
       { workingDirectory: '/tmp/alphred-claude-test', systemPrompt: 42 },
       { workingDirectory: '/tmp/alphred-claude-test', systemPrompt: { text: 'be concise' } },
+      { workingDirectory: '/tmp/alphred-claude-test', timeout: Number.MAX_SAFE_INTEGER },
     ];
 
     for (const options of invalidOptionalOptions) {
