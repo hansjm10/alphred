@@ -64,6 +64,7 @@ async function collectEvents(
 }
 
 const sdkStreamFixtures = {
+  // Baseline fixture matrix for Codex SDK stream contracts used by this suite.
   success: [
     { type: 'thread.started', thread_id: 'thread-success-1' },
     { type: 'turn.started' },
@@ -134,6 +135,15 @@ const sdkStreamFixtures = {
       },
     },
   ] as const,
+  failureInternal: [
+    { type: 'thread.started', thread_id: 'thread-failure-internal-1' },
+    {
+      type: 'turn.failed',
+      error: {
+        message: 'Sample rate mismatch in audio parser',
+      },
+    },
+  ] as const,
 };
 
 describe('codex provider sdk stream integration fixtures', () => {
@@ -145,6 +155,11 @@ describe('codex provider sdk stream integration fixtures', () => {
 
     expect(events.map((event) => event.type)).toEqual(['system', 'tool_use', 'tool_result', 'assistant', 'usage', 'result']);
     expect(events[1].content).toBe('pnpm test');
+    expect(JSON.parse(events[2].content)).toMatchObject({
+      command: 'pnpm test',
+      output: 'all tests passed',
+      exit_code: 0,
+    });
     expect(events[3].content).toBe('All required changes are complete.');
     expect(events[5].content).toBe('All required changes are complete.');
     expect(events[4].metadata).toMatchObject({
@@ -157,7 +172,12 @@ describe('codex provider sdk stream integration fixtures', () => {
         total_tokens: 28,
       },
     });
+    expect(capture.threadOptions).toEqual({
+      model: 'gpt-5-codex',
+      workingDirectory: '/tmp/alphred-codex-integration',
+    });
     expect(capture.input).toBe('Apply integration fixture tests.');
+    expect(capture.turnOptions).toBeUndefined();
   });
 
   it('fails deterministically when a partial fixture ends without a terminal result event', async () => {
@@ -188,6 +208,19 @@ describe('codex provider sdk stream integration fixtures', () => {
       details: {
         classification: 'timeout',
         retryable: true,
+      },
+    });
+  });
+
+  it('classifies non-timeout failure fixtures into deterministic internal provider failures', async () => {
+    const provider = createProviderForFixture(sdkStreamFixtures.failureInternal);
+
+    await expect(collectEvents(provider)).rejects.toMatchObject({
+      code: 'CODEX_INTERNAL_ERROR',
+      retryable: false,
+      details: {
+        classification: 'internal',
+        retryable: false,
       },
     });
   });
