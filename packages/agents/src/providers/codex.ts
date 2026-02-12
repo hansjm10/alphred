@@ -216,7 +216,7 @@ function classifyCodexFailure(message: string, source?: unknown): CodexFailureCl
   }
 
   const isRateLimited = statusCode === 429
-    || /\b(rate limit|too many requests|quota|throttl)\b/i.test(textCorpus);
+    || /\b(rate[\s_-]?limit(?:ed|ing)?|too many requests?|quota|throttl(?:e|ed|ing)?|slow down)\b/i.test(textCorpus);
   if (isRateLimited) {
     return {
       code: 'CODEX_RATE_LIMITED',
@@ -229,7 +229,7 @@ function classifyCodexFailure(message: string, source?: unknown): CodexFailureCl
 
   const isTimeout = statusCode === 408
     || statusCode === 504
-    || /\b(timeout|timed out|deadline exceeded|time limit exceeded)\b/i.test(textCorpus);
+    || /\b(timeout|timed out|timedout|etimedout|deadline exceeded|time limit exceeded|operation timed out|request timed out)\b/i.test(textCorpus);
   if (isTimeout) {
     return {
       code: 'CODEX_TIMEOUT',

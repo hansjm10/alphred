@@ -613,6 +613,45 @@ describe('codex provider', () => {
     });
   });
 
+  it('classifies throttled sdk failures as retryable rate-limit errors', async () => {
+    const provider = new CodexProvider(
+      undefined,
+      () => createStreamingBootstrap([
+        { type: 'thread.started', thread_id: 'thread-1' },
+        { type: 'turn.failed', error: { message: 'Request throttled by upstream gateway' } },
+      ]),
+    );
+
+    await expect(collectEvents(provider)).rejects.toMatchObject({
+      code: 'CODEX_RATE_LIMITED',
+      retryable: true,
+      details: {
+        classification: 'rate_limit',
+        retryable: true,
+      },
+    });
+  });
+
+  it('classifies ETIMEDOUT sdk failures as retryable timeout errors', async () => {
+    const provider = new CodexProvider(
+      undefined,
+      () => createStreamingBootstrap([
+        { type: 'thread.started', thread_id: 'thread-1' },
+        { type: 'turn.failed', error: { message: 'Request failed', code: 'ETIMEDOUT' } },
+      ]),
+    );
+
+    await expect(collectEvents(provider)).rejects.toMatchObject({
+      code: 'CODEX_TIMEOUT',
+      retryable: true,
+      details: {
+        classification: 'timeout',
+        retryable: true,
+        failureCode: 'ETIMEDOUT',
+      },
+    });
+  });
+
   it('classifies transport sdk failures as retryable transport errors', async () => {
     const provider = new CodexProvider(
       undefined,
