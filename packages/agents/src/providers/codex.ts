@@ -194,6 +194,19 @@ function collectFailureMessages(records: readonly Record<string, unknown>[]): st
   return messages;
 }
 
+const rateLimitPatterns: readonly RegExp[] = [
+  /\brate[\s_-]?limit(?:ed|ing)?\b/i,
+  /\brate[\s_-]?limit[\s_-]?exceeded\b/i,
+  /\btoo many requests?\b/i,
+  /\bquota\b/i,
+  /\bthrottl(?:e|ed|ing)\b/i,
+  /\bslow down\b/i,
+];
+
+function isRateLimitText(textCorpus: string): boolean {
+  return rateLimitPatterns.some((pattern) => pattern.test(textCorpus));
+}
+
 function classifyCodexFailure(message: string, source?: unknown): CodexFailureClassification {
   const records = collectFailureRecords(source);
   const statusCode = extractFailureStatusCode(records);
@@ -216,9 +229,7 @@ function classifyCodexFailure(message: string, source?: unknown): CodexFailureCl
   }
 
   const isRateLimited = statusCode === 429
-    || /\b(rate[\s_-]?limit(?:ed|ing|[\s_-]?exceeded)?|too many requests?|quota|throttl(?:e|ed|ing)?|slow down)\b/i.test(
-      textCorpus,
-    );
+    || isRateLimitText(textCorpus);
   if (isRateLimited) {
     return {
       code: 'CODEX_RATE_LIMITED',

@@ -632,6 +632,54 @@ describe('codex provider', () => {
     });
   });
 
+  it('classifies common rate-limit phrases as retryable rate-limit errors', async () => {
+    const rateLimitMessages = [
+      'Rate limit exceeded for this model',
+      'Request is rate-limited, retry later',
+      'API quota exceeded',
+      'Client is throttling requests',
+      'Slow down and try again',
+    ];
+
+    for (const message of rateLimitMessages) {
+      const provider = new CodexProvider(
+        undefined,
+        () => createStreamingBootstrap([
+          { type: 'thread.started', thread_id: 'thread-1' },
+          { type: 'turn.failed', error: { message } },
+        ]),
+      );
+
+      await expect(collectEvents(provider)).rejects.toMatchObject({
+        code: 'CODEX_RATE_LIMITED',
+        retryable: true,
+        details: {
+          classification: 'rate_limit',
+          retryable: true,
+        },
+      });
+    }
+  });
+
+  it('does not classify unrelated rate wording as a rate-limit error', async () => {
+    const provider = new CodexProvider(
+      undefined,
+      () => createStreamingBootstrap([
+        { type: 'thread.started', thread_id: 'thread-1' },
+        { type: 'turn.failed', error: { message: 'Sample rate mismatch in audio parser' } },
+      ]),
+    );
+
+    await expect(collectEvents(provider)).rejects.toMatchObject({
+      code: 'CODEX_INTERNAL_ERROR',
+      retryable: false,
+      details: {
+        classification: 'internal',
+        retryable: false,
+      },
+    });
+  });
+
   it('classifies ETIMEDOUT sdk failures as retryable timeout errors', async () => {
     const provider = new CodexProvider(
       undefined,
