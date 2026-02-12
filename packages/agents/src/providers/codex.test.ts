@@ -276,4 +276,20 @@ describe('codex provider', () => {
       },
     });
   });
+
+  it('fails fast with a deterministic configuration error when bootstrap throws an unknown error', async () => {
+    const bootstrapFailure = new Error('socket timeout while probing runtime');
+    const provider = new CodexProvider(
+      createRunner([{ type: 'result', content: 'ok' }]),
+      () => {
+        throw bootstrapFailure;
+      },
+    );
+
+    await expect(collectEvents(provider)).rejects.toMatchObject({
+      code: 'CODEX_INVALID_CONFIG',
+      message: 'Codex provider bootstrap failed with an unknown configuration error.',
+      cause: bootstrapFailure,
+    });
+  });
 });

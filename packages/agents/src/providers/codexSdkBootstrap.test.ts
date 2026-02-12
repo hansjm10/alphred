@@ -240,6 +240,51 @@ describe('codex sdk bootstrap', () => {
     });
   });
 
+  it.each([
+    {
+      platform: 'linux' as const,
+      arch: 'arm64',
+      binaryPath: '/opt/codex-sdk/vendor/aarch64-unknown-linux-musl/codex/codex',
+    },
+    {
+      platform: 'darwin' as const,
+      arch: 'x64',
+      binaryPath: '/opt/codex-sdk/vendor/x86_64-apple-darwin/codex/codex',
+    },
+    {
+      platform: 'darwin' as const,
+      arch: 'arm64',
+      binaryPath: '/opt/codex-sdk/vendor/aarch64-apple-darwin/codex/codex',
+    },
+    {
+      platform: 'win32' as const,
+      arch: 'x64',
+      binaryPath: '/opt/codex-sdk/vendor/x86_64-pc-windows-msvc/codex/codex.exe',
+    },
+  ])(
+    'resolves $platform/$arch binaries to bundled codex executable path',
+    ({ platform, arch, binaryPath }) => {
+      const createClient = vi.fn((_options: CodexOptions) => createMockClient());
+
+      const bootstrap = initializeCodexSdkBootstrap({
+        env: { CODEX_API_KEY: 'sk-test' },
+        platform,
+        arch,
+        getHomedir: () => '/home/tester',
+        resolveSdkPackageJsonPath: () => '/opt/codex-sdk/package.json',
+        fileExists: (path: string) => path === binaryPath,
+        createClient,
+      });
+
+      expect(bootstrap.codexBinaryPath).toBe(binaryPath);
+      expect(createClient).toHaveBeenCalledWith({
+        codexPathOverride: binaryPath,
+        apiKey: 'sk-test',
+        baseUrl: undefined,
+      });
+    },
+  );
+
   it('throws deterministic errors for unsupported platform and architecture combinations', () => {
     expect(() => initializeCodexSdkBootstrap({
       env: { CODEX_API_KEY: 'sk-test' },
