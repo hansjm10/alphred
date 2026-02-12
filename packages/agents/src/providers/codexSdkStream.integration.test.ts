@@ -144,8 +144,18 @@ const sdkStreamFixtures = {
       },
     },
   ] as const,
+  failureMalformedError: [
+    { type: 'thread.started', thread_id: 'thread-failure-malformed-1' },
+    {
+      type: 'turn.failed',
+      error: {},
+    },
+  ] as const,
 };
 
+// Coverage boundary:
+// - This file validates fixture-driven Codex SDK stream contracts.
+// - codex.test.ts validates broader provider behavior and mixed event paths.
 describe('codex provider sdk stream integration fixtures', () => {
   it('maps the success fixture into deterministic ordered provider events', async () => {
     const capture: CapturedSdkInvocation = {};
@@ -178,6 +188,20 @@ describe('codex provider sdk stream integration fixtures', () => {
     });
     expect(capture.input).toBe('Apply integration fixture tests.');
     expect(capture.turnOptions).toBeUndefined();
+  });
+
+  it('passes an abort signal to sdk turn options when timeout is configured', async () => {
+    const capture: CapturedSdkInvocation = {};
+    const provider = createProviderForFixture(sdkStreamFixtures.success, capture);
+
+    await collectEvents(provider, 'Apply integration fixture tests.', {
+      ...defaultOptions,
+      timeout: 25_000,
+    });
+
+    expect(capture.turnOptions).toMatchObject({
+      signal: expect.any(AbortSignal),
+    });
   });
 
   it('fails deterministically when a partial fixture ends without a terminal result event', async () => {
@@ -221,6 +245,17 @@ describe('codex provider sdk stream integration fixtures', () => {
       details: {
         classification: 'internal',
         retryable: false,
+      },
+    });
+  });
+
+  it('fails deterministically with typed invalid-event errors when turn.failed has malformed error payload', async () => {
+    const provider = createProviderForFixture(sdkStreamFixtures.failureMalformedError);
+
+    await expect(collectEvents(provider)).rejects.toMatchObject({
+      code: 'CODEX_INVALID_EVENT',
+      details: {
+        fieldPath: 'event.error.message',
       },
     });
   });
