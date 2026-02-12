@@ -632,6 +632,26 @@ describe('codex provider', () => {
     });
   });
 
+  it('prioritizes auth classification over rate-limit wording when status is forbidden', async () => {
+    const provider = new CodexProvider(
+      undefined,
+      () => createStreamingBootstrap([
+        { type: 'thread.started', thread_id: 'thread-1' },
+        { type: 'turn.failed', error: { message: 'quota exceeded while authenticating request', status: 403 } },
+      ]),
+    );
+
+    await expect(collectEvents(provider)).rejects.toMatchObject({
+      code: 'CODEX_AUTH_ERROR',
+      retryable: false,
+      details: {
+        classification: 'auth',
+        retryable: false,
+        statusCode: 403,
+      },
+    });
+  });
+
   it('classifies common rate-limit phrases as retryable rate-limit errors', async () => {
     const rateLimitMessages = [
       'Rate limit exceeded for this model',
