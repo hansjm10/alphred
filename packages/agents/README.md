@@ -62,10 +62,21 @@ const provider = resolveProvider('codex');
 - Unknown provider names throw `UnknownAgentProviderError` with deterministic
   `availableProviders` ordering.
 - Adapter runs fail deterministically when:
+  - codex runtime auth/config bootstrap is invalid or missing
   - options are invalid
   - an unsupported event type is emitted
   - events are emitted after `result`
   - no `result` event is emitted
+
+### Codex SDK bootstrap
+
+- `CodexProvider` validates runtime configuration before stream execution.
+- Auth precedence is deterministic:
+  1. `CODEX_API_KEY`
+  2. `OPENAI_API_KEY`
+  3. existing Codex CLI login session (`codex login status`)
+- Endpoint override (`OPENAI_BASE_URL`) is validated when set.
+- Model default uses `CODEX_MODEL` when set, otherwise `gpt-5-codex`.
 
 ## Add a Provider Checklist
 

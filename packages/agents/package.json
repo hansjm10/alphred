@@ -6,6 +6,7 @@
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "dependencies": {
-    "@alphred/shared": "workspace:*"
+    "@alphred/shared": "workspace:*",
+    "@openai/codex-sdk": "^0.99.0"
   }
 }
