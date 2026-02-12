@@ -216,6 +216,41 @@ function defaultCheckCliSession(codexBinaryPath: string, env: NodeJS.ProcessEnv)
   };
 }
 
+function resolveSdkPackageJsonPathFromEntrypoint(): string {
+  let sdkEntrypointPath: string;
+  try {
+    sdkEntrypointPath = require.resolve('@openai/codex-sdk');
+  } catch (error) {
+    throw new CodexBootstrapError(
+      'CODEX_BOOTSTRAP_INVALID_CONFIG',
+      'Codex provider could not resolve @openai/codex-sdk from the current runtime.',
+      undefined,
+      error,
+    );
+  }
+
+  let currentDirectory = dirname(sdkEntrypointPath);
+  while (true) {
+    const packageJsonPath = join(currentDirectory, 'package.json');
+    if (existsSync(packageJsonPath)) {
+      return packageJsonPath;
+    }
+
+    const parentDirectory = dirname(currentDirectory);
+    if (parentDirectory === currentDirectory) {
+      break;
+    }
+
+    currentDirectory = parentDirectory;
+  }
+
+  throw new CodexBootstrapError(
+    'CODEX_BOOTSTRAP_INVALID_CONFIG',
+    'Codex provider could not determine the @openai/codex-sdk package root from its exported entry.',
+    { sdkEntrypointPath },
+  );
+}
+
 function resolveDependencies(overrides: CodexBootstrapOverrides): CodexBootstrapDependencies {
   return {
     env: overrides.env ?? process.env,
@@ -223,7 +258,7 @@ function resolveDependencies(overrides: CodexBootstrapOverrides): CodexBootstrap
     arch: overrides.arch ?? process.arch,
     getHomedir: overrides.getHomedir ?? homedir,
     resolveSdkPackageJsonPath: overrides.resolveSdkPackageJsonPath
-      ?? (() => require.resolve('@openai/codex-sdk/package.json')),
+      ?? resolveSdkPackageJsonPathFromEntrypoint,
     fileExists: overrides.fileExists ?? existsSync,
     checkCliSession: overrides.checkCliSession ?? defaultCheckCliSession,
     createClient: overrides.createClient ?? ((options) => new Codex(options)),
