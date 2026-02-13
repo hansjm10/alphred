@@ -98,6 +98,22 @@ const provider = resolveProvider('codex');
 - Endpoint override uses `CLAUDE_BASE_URL` when set, otherwise `ANTHROPIC_BASE_URL`; both are validated as `http`/`https` URLs.
 - Model default uses `CLAUDE_MODEL` when set, otherwise `claude-3-7-sonnet-latest`.
 
+#### Claude live smoke test (local only)
+
+- Live smoke test file: `packages/agents/src/providers/claude.live.integration.test.ts`.
+- This test is skipped by default and in CI (`CI=true` or `GITHUB_ACTIONS=true`).
+- To run locally:
+
+```bash
+CLAUDE_LIVE_SMOKE=1 pnpm vitest run packages/agents/src/providers/claude.live.integration.test.ts
+```
+
+- Auth path for this test uses an existing Claude CLI login session (it does not require exporting API keys).
+- Model selection is injected by the test:
+  - explicit override: pass CLI arg `--claude-live-model=<value>` (for example `sonnet`, `default`, `haiku`)
+  - example: `CLAUDE_LIVE_SMOKE=1 pnpm vitest run packages/agents/src/providers/claude.live.integration.test.ts -- --claude-live-model=sonnet`
+  - otherwise, the test queries SDK-supported models and picks the first available in this priority: `sonnet` -> `default` -> `haiku`
+
 ### Codex SDK bootstrap
 
 - `CodexProvider` validates runtime configuration before stream execution.
