@@ -113,7 +113,7 @@ Runtime flow for agent phases:
 `@alphred/agents` responsibilities:
 - Provider adapters (`ClaudeProvider`, `CodexProvider`)
 - SDK/process integration and raw event normalization
-- Codex SDK bootstrap/auth preflight (API key or CLI session)
+- Codex and Claude runtime bootstrap/auth preflight
 - Mapping provider-specific events to shared `ProviderEvent` contract
 - Provider-specific error taxonomy (`*_INVALID_OPTIONS`, `*_INVALID_EVENT`, `*_MISSING_RESULT`, plus classed runtime failures such as auth/config/timeout/rate-limit/transport/internal)
 

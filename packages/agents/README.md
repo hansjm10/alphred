@@ -71,11 +71,22 @@ const provider = resolveProvider('codex');
 - Unknown provider names throw `UnknownAgentProviderError` with deterministic
   `availableProviders` ordering.
 - Adapter runs fail deterministically when:
+  - claude runtime auth/config bootstrap is invalid or missing
   - codex runtime auth/config bootstrap is invalid or missing
   - options are invalid
   - an unsupported event type is emitted
   - events are emitted after `result`
   - no `result` event is emitted
+
+### Claude SDK bootstrap
+
+- `ClaudeProvider` validates runtime configuration before stream execution.
+- Auth precedence is deterministic:
+  1. `CLAUDE_API_KEY`
+  2. `ANTHROPIC_API_KEY`
+- `CLAUDE_AUTH_MODE=cli_session` fails fast with a typed config error because CLI-session auth is not supported in this runtime path.
+- Endpoint override uses `CLAUDE_BASE_URL` when set, otherwise `ANTHROPIC_BASE_URL`; both are validated as `http`/`https` URLs.
+- Model default uses `CLAUDE_MODEL` when set, otherwise `claude-3-7-sonnet-latest`.
 
 ### Codex SDK bootstrap
 
