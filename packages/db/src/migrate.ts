@@ -145,6 +145,41 @@ export function migrateDatabase(db: AlphredDatabase): void {
       SELECT RAISE(ABORT, 'tree_edges must reference source and target nodes from the same workflow_tree_id');
     END`);
 
+  db.run(sql`CREATE TRIGGER IF NOT EXISTS tree_nodes_edge_same_tree_update_ck
+    BEFORE UPDATE OF workflow_tree_id ON tree_nodes
+    FOR EACH ROW
+    WHEN (
+      NEW.workflow_tree_id <> OLD.workflow_tree_id
+      AND EXISTS (
+        SELECT 1
+        FROM tree_edges
+        WHERE
+          (source_node_id = NEW.id OR target_node_id = NEW.id)
+          AND workflow_tree_id <> NEW.workflow_tree_id
+      )
+    )
+    BEGIN
+      SELECT RAISE(ABORT, 'tree_nodes.workflow_tree_id must match workflow_tree_id for connected tree_edges');
+    END`);
+
+  db.run(sql`CREATE TRIGGER IF NOT EXISTS tree_nodes_run_nodes_same_tree_update_ck
+    BEFORE UPDATE OF workflow_tree_id ON tree_nodes
+    FOR EACH ROW
+    WHEN (
+      NEW.workflow_tree_id <> OLD.workflow_tree_id
+      AND EXISTS (
+        SELECT 1
+        FROM run_nodes
+        INNER JOIN workflow_runs ON workflow_runs.id = run_nodes.workflow_run_id
+        WHERE
+          run_nodes.tree_node_id = NEW.id
+          AND workflow_runs.workflow_tree_id <> NEW.workflow_tree_id
+      )
+    )
+    BEGIN
+      SELECT RAISE(ABORT, 'tree_nodes.workflow_tree_id must match workflow_tree_id for linked run_nodes');
+    END`);
+
   db.run(sql`CREATE TABLE IF NOT EXISTS run_nodes (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     workflow_run_id INTEGER NOT NULL REFERENCES workflow_runs(id) ON DELETE CASCADE,
@@ -203,6 +238,24 @@ export function migrateDatabase(db: AlphredDatabase): void {
     )
     BEGIN
       SELECT RAISE(ABORT, 'run_nodes.workflow_run_id and run_nodes.tree_node_id must share workflow_tree_id');
+    END`);
+
+  db.run(sql`CREATE TRIGGER IF NOT EXISTS workflow_runs_run_nodes_same_tree_update_ck
+    BEFORE UPDATE OF workflow_tree_id ON workflow_runs
+    FOR EACH ROW
+    WHEN (
+      NEW.workflow_tree_id <> OLD.workflow_tree_id
+      AND EXISTS (
+        SELECT 1
+        FROM run_nodes
+        INNER JOIN tree_nodes ON tree_nodes.id = run_nodes.tree_node_id
+        WHERE
+          run_nodes.workflow_run_id = NEW.id
+          AND tree_nodes.workflow_tree_id <> NEW.workflow_tree_id
+      )
+    )
+    BEGIN
+      SELECT RAISE(ABORT, 'workflow_runs.workflow_tree_id must match workflow_tree_id for linked run_nodes');
     END`);
 
   db.run(sql`CREATE TABLE IF NOT EXISTS routing_decisions (

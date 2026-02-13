@@ -224,6 +224,39 @@ describe('database schema hardening', () => {
     ).toThrow();
   });
 
+  it('rejects tree reassignment updates that would orphan edge and run-node tree invariants', () => {
+    const db = createDatabase(':memory:');
+    migrateDatabase(db);
+
+    const first = seedTreeState(db, 'first');
+    const second = seedTreeState(db, 'second');
+
+    db.insert(treeEdges).values({
+      workflowTreeId: first.treeId,
+      sourceNodeId: first.sourceNodeId,
+      targetNodeId: first.targetNodeId,
+      priority: 1,
+      auto: 0,
+      guardDefinitionId: first.guardDefinitionId,
+    }).run();
+
+    db.insert(runNodes).values({
+      workflowRunId: first.runId,
+      treeNodeId: first.sourceNodeId,
+      nodeKey: 'first_design',
+      status: 'pending',
+      sequenceIndex: 1,
+    }).run();
+
+    expect(() =>
+      db.update(treeNodes).set({ workflowTreeId: second.treeId }).where(eq(treeNodes.id, first.sourceNodeId)).run(),
+    ).toThrow();
+
+    expect(() =>
+      db.update(workflowRuns).set({ workflowTreeId: second.treeId }).where(eq(workflowRuns.id, first.runId)).run(),
+    ).toThrow();
+  });
+
   it('rejects routing decisions and artifacts bound to a different run than their run-node', () => {
     const db = createDatabase(':memory:');
     migrateDatabase(db);
