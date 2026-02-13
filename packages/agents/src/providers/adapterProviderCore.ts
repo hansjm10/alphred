@@ -28,7 +28,6 @@ export type AdapterRunRequest = Readonly<{
   workingDirectory: string;
   context: readonly string[];
   systemPrompt?: string;
-  maxTokens?: number;
   timeout?: number;
 }>;
 
@@ -289,17 +288,6 @@ function createRunRequest<Code extends string, TError extends Error>(
     );
   }
 
-  if (
-    validatedOptions.maxTokens !== undefined
-    && (!Number.isInteger(validatedOptions.maxTokens) || validatedOptions.maxTokens <= 0)
-  ) {
-    throw config.createError(
-      config.codes.invalidOptions,
-      `${config.providerDisplayName} provider requires maxTokens to be a positive integer.`,
-      { maxTokens: validatedOptions.maxTokens },
-    );
-  }
-
   if (validatedOptions.timeout !== undefined && (!Number.isFinite(validatedOptions.timeout) || validatedOptions.timeout <= 0)) {
     throw config.createError(
       config.codes.invalidOptions,
@@ -325,7 +313,6 @@ function createRunRequest<Code extends string, TError extends Error>(
     workingDirectory,
     context,
     systemPrompt,
-    maxTokens: validatedOptions.maxTokens,
     timeout: validatedOptions.timeout,
   };
 }
@@ -372,7 +359,6 @@ export async function* runAdapterProvider<Code extends string, TError extends Er
     workingDirectory: request.workingDirectory,
     hasSystemPrompt: request.systemPrompt !== undefined,
     contextItemCount: request.context.length,
-    maxTokens: request.maxTokens,
     timeout: request.timeout,
   });
 

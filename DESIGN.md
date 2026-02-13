@@ -69,6 +69,7 @@ interface AgentProvider {
 ```
 
 Streamed event types: `system`, `assistant`, `result`, `tool_use`, `tool_result`, `usage`.
+Shared `ProviderRunOptions` are intentionally minimal and cross-provider: required `workingDirectory`, plus optional `systemPrompt`, `context`, and `timeout`.
 
 Each phase spawns a fresh agent session. Context from prior phases is injected via the prompt, not through conversation history.
 
