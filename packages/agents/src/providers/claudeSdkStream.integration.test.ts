@@ -220,6 +220,30 @@ const sdkStreamFixtures = {
       },
     },
   ] as const,
+  failureRateLimitedStatusString: [
+    {
+      type: 'result',
+      subtype: 'error_during_execution',
+      status: '429',
+      errors: ['request failed'],
+      usage: {
+        input_tokens: 12,
+        output_tokens: 3,
+      },
+    },
+  ] as const,
+  failureAuthStatusString: [
+    {
+      type: 'result',
+      subtype: 'error_during_execution',
+      status: '401',
+      errors: ['request failed'],
+      usage: {
+        input_tokens: 12,
+        output_tokens: 3,
+      },
+    },
+  ] as const,
   failureTransportCode: [
     {
       type: 'result',
@@ -228,6 +252,21 @@ const sdkStreamFixtures = {
       error: {
         code: 'ECONNRESET',
         message: 'socket hang up',
+      },
+      usage: {
+        input_tokens: 12,
+        output_tokens: 3,
+      },
+    },
+  ] as const,
+  failureTimeoutCodeEtimedout: [
+    {
+      type: 'result',
+      subtype: 'error_during_execution',
+      errors: ['request failed'],
+      error: {
+        code: 'ETIMEDOUT',
+        message: 'connect ETIMEDOUT 1.2.3.4:443',
       },
       usage: {
         input_tokens: 12,
@@ -570,6 +609,34 @@ describe('claude provider sdk stream integration fixtures', () => {
     });
   });
 
+  it('classifies string status-code 429 failure fixtures into deterministic rate-limit errors', async () => {
+    const provider = createProviderForFixture(sdkStreamFixtures.failureRateLimitedStatusString);
+
+    await expect(collectEvents(provider)).rejects.toMatchObject({
+      code: 'CLAUDE_RATE_LIMITED',
+      retryable: true,
+      details: {
+        classification: 'rate_limit',
+        retryable: true,
+        statusCode: 429,
+      },
+    });
+  });
+
+  it('classifies string status-code 401 failure fixtures into deterministic auth errors', async () => {
+    const provider = createProviderForFixture(sdkStreamFixtures.failureAuthStatusString);
+
+    await expect(collectEvents(provider)).rejects.toMatchObject({
+      code: 'CLAUDE_AUTH_ERROR',
+      retryable: false,
+      details: {
+        classification: 'auth',
+        retryable: false,
+        statusCode: 401,
+      },
+    });
+  });
+
   it('classifies transport-code failure fixtures into deterministic transport errors', async () => {
     const provider = createProviderForFixture(sdkStreamFixtures.failureTransportCode);
 
@@ -579,6 +646,21 @@ describe('claude provider sdk stream integration fixtures', () => {
       details: {
         classification: 'transport',
         retryable: true,
+        failureCode: 'ECONNRESET',
+      },
+    });
+  });
+
+  it('classifies ETIMEDOUT code failure fixtures into deterministic timeout errors', async () => {
+    const provider = createProviderForFixture(sdkStreamFixtures.failureTimeoutCodeEtimedout);
+
+    await expect(collectEvents(provider)).rejects.toMatchObject({
+      code: 'CLAUDE_TIMEOUT',
+      retryable: true,
+      details: {
+        classification: 'timeout',
+        retryable: true,
+        failureCode: 'ETIMEDOUT',
       },
     });
   });

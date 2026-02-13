@@ -172,6 +172,22 @@ function toNonNegativeNumber(value: unknown): number | undefined {
   return value;
 }
 
+function toNonNegativeInteger(value: unknown): number | undefined {
+  // Failure payloads may surface HTTP status codes as numeric strings.
+  if (typeof value === 'number' && Number.isInteger(value) && value >= 0) {
+    return value;
+  }
+
+  if (typeof value === 'string' && value.trim().length > 0) {
+    const numericValue = Number(value);
+    if (Number.isInteger(numericValue) && numericValue >= 0) {
+      return numericValue;
+    }
+  }
+
+  return undefined;
+}
+
 function readRequiredTokenCount(
   usage: Record<string, unknown>,
   keys: readonly string[],
@@ -278,7 +294,7 @@ function extractFailureStatusCode(records: readonly Record<string, unknown>[]): 
       record.http_status,
     ];
     for (const candidate of candidates) {
-      const statusCode = toNonNegativeNumber(candidate);
+      const statusCode = toNonNegativeInteger(candidate);
       if (statusCode !== undefined) {
         return statusCode;
       }
@@ -290,10 +306,33 @@ function extractFailureStatusCode(records: readonly Record<string, unknown>[]): 
 
 function extractFailureCode(records: readonly Record<string, unknown>[]): string | undefined {
   for (const record of records) {
-    const candidates = [record.code, record.error_code, record.errorCode, record.type, record.name];
-    for (const candidate of candidates) {
+    const structuredCodeCandidates = [record.code, record.error_code, record.errorCode];
+    for (const candidate of structuredCodeCandidates) {
       const failureCode = toTrimmedString(candidate);
       if (failureCode) {
+        return failureCode;
+      }
+    }
+  }
+
+  const genericMessageTypes = new Set([
+    // SDK envelope message types are not stable failure codes (e.g., "result").
+    'assistant',
+    'auth_status',
+    'result',
+    'stream_event',
+    'system',
+    'task_notification',
+    'tool_progress',
+    'tool_use_summary',
+    'user',
+  ]);
+
+  for (const record of records) {
+    const fallbackCodeCandidates = [record.type, record.name];
+    for (const candidate of fallbackCodeCandidates) {
+      const failureCode = toTrimmedString(candidate);
+      if (failureCode && !genericMessageTypes.has(failureCode.toLowerCase())) {
         return failureCode;
       }
     }
@@ -313,6 +352,16 @@ function collectFailureMessages(records: readonly Record<string, unknown>[]): st
     const detail = toTrimmedString(record.detail);
     if (detail) {
       messages.push(detail);
+    }
+
+    const error = toTrimmedString(record.error);
+    if (error) {
+      messages.push(error);
+    }
+
+    const cause = toTrimmedString(record.cause);
+    if (cause) {
+      messages.push(cause);
     }
 
     const errors = record.errors;
@@ -377,7 +426,7 @@ function classifyClaudeFailure(message: string, source?: unknown): ClaudeFailure
 
   const isTimeout = statusCode === 408
     || statusCode === 504
-    || /\b(timeout|timed out|timedout|deadline exceeded|time limit exceeded|operation timed out|request timed out)\b/i.test(
+    || /\b(timeout|timed out|timedout|etimedout|deadline exceeded|time limit exceeded|operation timed out|request timed out)\b/i.test(
       textCorpus,
     );
   if (isTimeout) {
