@@ -404,7 +404,7 @@ function classifyClaudeFailure(message: string, source?: unknown): ClaudeFailure
   }
 
   const isInternal = (statusCode !== undefined && statusCode >= 500 && statusCode < 600)
-    || /\b(internal server error|unexpected error|panic|error_during_execution)\b/i.test(textCorpus);
+    || /\b(internal server error|unexpected error|panic|error_during_execution|server[\s_-]?error)\b/i.test(textCorpus);
 
   return {
     code: 'CLAUDE_INTERNAL_ERROR',
@@ -428,6 +428,25 @@ function createClaudeFailureError(message: string, details: Record<string, unkno
       failureCode: classification.failureCode,
     },
     source,
+  );
+}
+
+function mapAuthStatusMessage(sdkMessage: Record<string, unknown>, eventIndex: number): ClaudeRawEvent[] {
+  const authStatusError = toTrimmedString(sdkMessage.error);
+  if (!authStatusError) {
+    return [];
+  }
+
+  throw new ClaudeProviderError(
+    'CLAUDE_AUTH_ERROR',
+    `Claude authentication failed: ${authStatusError}`,
+    {
+      classification: 'auth',
+      retryable: false,
+      eventIndex,
+      authStatusError,
+    },
+    sdkMessage,
   );
 }
 
@@ -641,9 +660,10 @@ function mapClaudeSdkMessage(sdkMessageValue: unknown, state: ClaudeStreamState,
       return mapToolUseSummaryMessage(sdkMessage, eventIndex);
     case 'result':
       return mapResultMessage(sdkMessage, state, eventIndex);
+    case 'auth_status':
+      return mapAuthStatusMessage(sdkMessage, eventIndex);
     case 'system':
     case 'stream_event':
-    case 'auth_status':
     case 'task_notification':
       return [];
     default:

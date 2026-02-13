@@ -599,4 +599,42 @@ describe('claude provider sdk stream integration fixtures', () => {
       },
     });
   });
+
+  it('classifies auth_status message errors into deterministic auth errors', async () => {
+    const provider = createProviderForFixture([
+      {
+        type: 'auth_status',
+        isAuthenticating: false,
+        output: ['Authentication failed'],
+        error: 'authentication_failed',
+      },
+    ]);
+
+    await expect(collectEvents(provider)).rejects.toMatchObject({
+      code: 'CLAUDE_AUTH_ERROR',
+      details: {
+        classification: 'auth',
+        retryable: false,
+        authStatusError: 'authentication_failed',
+      },
+    });
+  });
+
+  it('classifies assistant server_error failures as retryable internal errors', async () => {
+    const provider = createProviderForFixture([
+      {
+        type: 'assistant',
+        error: 'server_error',
+      },
+    ]);
+
+    await expect(collectEvents(provider)).rejects.toMatchObject({
+      code: 'CLAUDE_INTERNAL_ERROR',
+      retryable: true,
+      details: {
+        classification: 'internal',
+        retryable: true,
+      },
+    });
+  });
 });
