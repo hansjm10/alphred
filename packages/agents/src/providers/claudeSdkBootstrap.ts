@@ -8,11 +8,9 @@ const CLAUDE_AUTH_MODE_ENV_VAR = 'CLAUDE_AUTH_MODE';
 const DEFAULT_CLAUDE_MODEL = 'claude-3-7-sonnet-latest';
 
 const SUPPORTED_AUTH_MODES = ['api_key'] as const;
-type SupportedAuthMode = (typeof SUPPORTED_AUTH_MODES)[number];
+export type SupportedAuthMode = (typeof SUPPORTED_AUTH_MODES)[number];
 
 type RequestedAuthMode = SupportedAuthMode | 'cli_session';
-
-export type ClaudeBootstrapAuthMode = SupportedAuthMode;
 
 export type ClaudeBootstrapErrorCode =
   | 'CLAUDE_BOOTSTRAP_INVALID_CONFIG'
@@ -45,7 +43,7 @@ type ClaudeBootstrapDependencies = Readonly<{
 export type ClaudeBootstrapOverrides = Partial<ClaudeBootstrapDependencies>;
 
 export type ClaudeSdkBootstrap = Readonly<{
-  authMode: ClaudeBootstrapAuthMode;
+  authMode: SupportedAuthMode;
   model: string;
   baseUrl?: string;
   apiKey: string;

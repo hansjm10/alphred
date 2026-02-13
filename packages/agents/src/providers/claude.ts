@@ -109,7 +109,7 @@ export class ClaudeProvider implements AgentProvider {
 
   async *run(prompt: string, options: ProviderRunOptions) {
     try {
-      void this.#bootstrap();
+      this.#bootstrap();
     } catch (error) {
       if (error instanceof ClaudeBootstrapError) {
         const classification = classifyBootstrapError(error);
