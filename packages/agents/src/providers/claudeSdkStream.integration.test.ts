@@ -408,6 +408,46 @@ describe('claude provider sdk stream integration fixtures', () => {
     expect(events[3]?.content).toBe('Tool finished.');
   });
 
+  it('preserves assistant and result content whitespace without trimming', async () => {
+    const provider = createProviderForFixture([
+      {
+        type: 'assistant',
+        message: {
+          content: [
+            {
+              type: 'text',
+              text: '  keep boundary whitespace  ',
+            },
+            {
+              type: 'text',
+              text: '',
+            },
+            {
+              type: 'text',
+              text: '   ',
+            },
+          ],
+        },
+      },
+      {
+        type: 'result',
+        subtype: 'success',
+        result: '   ',
+        usage: {
+          input_tokens: 9,
+          output_tokens: 5,
+        },
+      },
+    ]);
+
+    const events = await collectEvents(provider);
+    expect(events.map((event) => event.type)).toEqual(['system', 'assistant', 'assistant', 'assistant', 'usage', 'result']);
+    expect(events[1]?.content).toBe('  keep boundary whitespace  ');
+    expect(events[2]?.content).toBe('');
+    expect(events[3]?.content).toBe('   ');
+    expect(events[5]?.content).toBe('   ');
+  });
+
   it('cleans up timeout handles when sdk query construction fails synchronously', async () => {
     vi.useFakeTimers();
     try {

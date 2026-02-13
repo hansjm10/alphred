@@ -114,18 +114,43 @@ function toRecordOrThrow(value: unknown, eventIndex: number, fieldPath: string):
   );
 }
 
-function toTrimmedString(value: unknown): string | undefined {
+function toString(value: unknown): string | undefined {
   if (typeof value !== 'string') {
     return undefined;
   }
 
-  const trimmed = value.trim();
+  return value;
+}
+
+function toTrimmedString(value: unknown): string | undefined {
+  const stringValue = toString(value);
+  if (stringValue === undefined) {
+    return undefined;
+  }
+
+  const trimmed = stringValue.trim();
   return trimmed.length > 0 ? trimmed : undefined;
 }
 
 function toStringOrThrow(value: unknown, eventIndex: number, fieldPath: string): string {
-  const normalizedValue = toTrimmedString(value);
+  const normalizedValue = toString(value);
   if (normalizedValue !== undefined) {
+    return normalizedValue;
+  }
+
+  throw createClaudeInvalidEventError(
+    `Claude emitted an invalid string for "${fieldPath}" at event #${eventIndex}.`,
+    {
+      eventIndex,
+      fieldPath,
+      value,
+    },
+  );
+}
+
+function toNonBlankStringOrThrow(value: unknown, eventIndex: number, fieldPath: string): string {
+  const normalizedValue = toString(value);
+  if (normalizedValue !== undefined && normalizedValue.trim().length > 0) {
     return normalizedValue;
   }
 
@@ -437,7 +462,7 @@ function mapAssistantMessage(sdkMessage: Record<string, unknown>, state: ClaudeS
   for (let blockIndex = 0; blockIndex < content.length; blockIndex += 1) {
     const blockPath = `event.message.content[${blockIndex}]`;
     const block = toRecordOrThrow(content[blockIndex], eventIndex, blockPath);
-    const blockType = toStringOrThrow(block.type, eventIndex, `${blockPath}.type`);
+    const blockType = toNonBlankStringOrThrow(block.type, eventIndex, `${blockPath}.type`);
 
     if (blockType === 'text') {
       const text = toStringOrThrow(block.text, eventIndex, `${blockPath}.text`);
@@ -450,8 +475,8 @@ function mapAssistantMessage(sdkMessage: Record<string, unknown>, state: ClaudeS
     }
 
     if (blockType === 'tool_use') {
-      const toolName = toStringOrThrow(block.name, eventIndex, `${blockPath}.name`);
-      const toolUseId = toStringOrThrow(block.id, eventIndex, `${blockPath}.id`);
+      const toolName = toNonBlankStringOrThrow(block.name, eventIndex, `${blockPath}.name`);
+      const toolUseId = toNonBlankStringOrThrow(block.id, eventIndex, `${blockPath}.id`);
       if (state.toolUseIds.has(toolUseId)) {
         continue;
       }
@@ -514,8 +539,8 @@ function mapUserMessage(sdkMessage: Record<string, unknown>): ClaudeRawEvent[] {
 }
 
 function mapToolProgressMessage(sdkMessage: Record<string, unknown>, state: ClaudeStreamState, eventIndex: number): ClaudeRawEvent[] {
-  const toolName = toStringOrThrow(sdkMessage.tool_name, eventIndex, 'event.tool_name');
-  const toolUseId = toStringOrThrow(sdkMessage.tool_use_id, eventIndex, 'event.tool_use_id');
+  const toolName = toNonBlankStringOrThrow(sdkMessage.tool_name, eventIndex, 'event.tool_name');
+  const toolUseId = toNonBlankStringOrThrow(sdkMessage.tool_use_id, eventIndex, 'event.tool_use_id');
 
   if (state.toolUseIds.has(toolUseId)) {
     return [];
@@ -555,7 +580,7 @@ function mapToolUseSummaryMessage(sdkMessage: Record<string, unknown>, eventInde
 }
 
 function mapResultMessage(sdkMessage: Record<string, unknown>, state: ClaudeStreamState, eventIndex: number): ClaudeRawEvent[] {
-  const subtype = toStringOrThrow(sdkMessage.subtype, eventIndex, 'event.subtype');
+  const subtype = toNonBlankStringOrThrow(sdkMessage.subtype, eventIndex, 'event.subtype');
 
   if (subtype.startsWith('error_')) {
     const errors = Array.isArray(sdkMessage.errors)
@@ -587,7 +612,7 @@ function mapResultMessage(sdkMessage: Record<string, unknown>, state: ClaudeStre
 
   const usage = toRecordOrThrow(sdkMessage.usage, eventIndex, 'event.usage');
   const usageMetadata = createUsageMetadata(usage, eventIndex);
-  const result = toTrimmedString(sdkMessage.result) ?? state.lastAssistantMessage;
+  const result = toString(sdkMessage.result) ?? state.lastAssistantMessage;
 
   return [
     {
@@ -603,7 +628,7 @@ function mapResultMessage(sdkMessage: Record<string, unknown>, state: ClaudeStre
 
 function mapClaudeSdkMessage(sdkMessageValue: unknown, state: ClaudeStreamState, eventIndex: number): ClaudeRawEvent[] {
   const sdkMessage = toRecordOrThrow(sdkMessageValue, eventIndex, 'event');
-  const messageType = toStringOrThrow(sdkMessage.type, eventIndex, 'event.type');
+  const messageType = toNonBlankStringOrThrow(sdkMessage.type, eventIndex, 'event.type');
 
   switch (messageType) {
     case 'assistant':
