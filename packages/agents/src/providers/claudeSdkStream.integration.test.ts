@@ -287,6 +287,71 @@ describe('claude provider sdk stream integration fixtures', () => {
     });
   });
 
+  it('maps timeout expiry into a deterministic claude timeout error', async () => {
+    vi.useFakeTimers();
+    try {
+      let resolveQueryStarted: (() => void) | undefined;
+      const queryStarted = new Promise<void>((resolve) => {
+        resolveQueryStarted = resolve;
+      });
+
+      const provider = new ClaudeProvider(
+        undefined,
+        () => ({
+          authMode: 'api_key',
+          model: 'claude-3-7-sonnet-latest',
+          apiKey: 'sk-test',
+          apiKeySource: 'CLAUDE_API_KEY',
+        }),
+        ((params: { prompt: string | AsyncIterable<unknown>; options?: unknown }) => {
+          const options = params.options as { abortController?: AbortController } | undefined;
+          const abortController = options?.abortController;
+          resolveQueryStarted?.();
+          return (async function* () {
+            if (!abortController) {
+              throw new Error('missing abort controller');
+            }
+            yield { type: 'system', subtype: 'waiting_for_timeout' };
+            await new Promise<never>((_resolve, reject) => {
+              if (abortController.signal.aborted) {
+                reject(new Error('aborted'));
+                return;
+              }
+              abortController.signal.addEventListener(
+                'abort',
+                () => {
+                  reject(new Error('aborted'));
+                },
+                { once: true },
+              );
+            });
+          })();
+        }) as unknown as ClaudeSdkQuery,
+      );
+
+      const pendingEvents = collectEvents(provider, 'Apply integration fixture tests.', {
+        ...defaultOptions,
+        timeout: 25_000,
+      });
+      const pendingTimeoutError = expect(pendingEvents).rejects.toMatchObject({
+        code: 'CLAUDE_TIMEOUT',
+        retryable: true,
+        details: {
+          classification: 'timeout',
+          retryable: true,
+          timeout: 25_000,
+        },
+      });
+      await queryStarted;
+      await vi.advanceTimersByTimeAsync(25_000);
+
+      await pendingTimeoutError;
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('deduplicates tool_use events when assistant tool_use is followed by tool_progress for the same id', async () => {
     const provider = createProviderForFixture(sdkStreamFixtures.mixedToolUseAssistantThenProgress);
 
@@ -307,6 +372,40 @@ describe('claude provider sdk stream integration fixtures', () => {
     expect(events.find((event) => event.type === 'tool_use')?.metadata).toMatchObject({
       toolUseId: 'tool-99',
     });
+  });
+
+  it('ignores unknown assistant content blocks while preserving known mapped blocks', async () => {
+    const provider = createProviderForFixture([
+      {
+        type: 'assistant',
+        message: {
+          content: [
+            {
+              type: 'image',
+              source: 'https://example.com/image.png',
+            },
+            {
+              type: 'text',
+              text: 'Tool finished.',
+            },
+          ],
+        },
+      },
+      {
+        type: 'result',
+        subtype: 'success',
+        result: 'Tool finished.',
+        usage: {
+          input_tokens: 9,
+          output_tokens: 5,
+        },
+      },
+    ]);
+
+    const events = await collectEvents(provider);
+    expect(events.map((event) => event.type)).toEqual(['system', 'assistant', 'usage', 'result']);
+    expect(events[1]?.content).toBe('Tool finished.');
+    expect(events[3]?.content).toBe('Tool finished.');
   });
 
   it('cleans up timeout handles when sdk query construction fails synchronously', async () => {
