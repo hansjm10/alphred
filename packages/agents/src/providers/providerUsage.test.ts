@@ -2,7 +2,7 @@ import type { ProviderEvent, ProviderRunOptions } from '@alphred/shared';
 import type { Codex } from '@openai/codex-sdk';
 import { describe, expect, it } from 'vitest';
 import type { AgentProvider } from '../provider.js';
-import { ClaudeProvider, type ClaudeBootstrapper } from './claude.js';
+import { ClaudeProvider, type ClaudeBootstrapper, type ClaudeSdkQuery } from './claude.js';
 import { CodexProvider, type CodexBootstrapper } from './codex.js';
 
 function hasTokenUsageShape(metadata: Record<string, unknown>): boolean {
@@ -113,9 +113,37 @@ function createNoopClaudeBootstrap(): ReturnType<ClaudeBootstrapper> {
   };
 }
 
+function createNoopClaudeQuery(): ClaudeSdkQuery {
+  return ((params: { prompt: string | AsyncIterable<unknown> }) => {
+    void params;
+    return (async function* () {
+      yield {
+        type: 'assistant',
+        message: {
+          content: [
+            {
+              type: 'text',
+              text: 'Done',
+            },
+          ],
+        },
+      };
+      yield {
+        type: 'result',
+        subtype: 'success',
+        result: 'Done',
+        usage: {
+          input_tokens: 10,
+          output_tokens: 3,
+        },
+      };
+    })();
+  }) as unknown as ClaudeSdkQuery;
+}
+
 describe('provider usage metadata contract', () => {
   const integrationCases: [string, () => AgentProvider][] = [
-    ['claude', () => new ClaudeProvider(undefined, () => createNoopClaudeBootstrap())],
+    ['claude', () => new ClaudeProvider(undefined, () => createNoopClaudeBootstrap(), createNoopClaudeQuery())],
     ['codex', () => new CodexProvider(undefined, () => createNoopBootstrap())],
   ];
 

@@ -81,12 +81,38 @@ const provider = resolveProvider('codex');
 ### Claude SDK bootstrap
 
 - `ClaudeProvider` validates runtime configuration before stream execution.
+- `ClaudeProvider` default runtime path uses the Claude Agent SDK stream (`query(...)`) rather than the adapter stub runner.
+- `timeout` is bridged into SDK cancellation via `abortController`.
+- SDK stream message mapping into shared provider events:
+  - `assistant` text blocks -> `assistant`
+  - assistant `tool_use` blocks and `tool_progress` -> `tool_use` (first-seen `tool_use_id` is emitted; duplicates are dropped)
+  - assistant `tool_result` blocks, `user.tool_use_result`, and `tool_use_summary` -> `tool_result`
+  - unrecognized assistant content block types are ignored
+  - `result` success -> `usage` then terminal `result`
+  - unsupported message types fail with typed `CLAUDE_INVALID_EVENT`
+- Failure classification precedence is deterministic: auth (401/403/auth text) -> rate limit (429/quota/throttle text) -> timeout (408/504/timeout text) -> transport (network/socket codes/text) -> internal.
 - Auth precedence is deterministic:
   1. `CLAUDE_API_KEY`
   2. `ANTHROPIC_API_KEY`
 - `CLAUDE_AUTH_MODE=cli_session` fails fast with a typed config error because CLI-session auth is not supported in this runtime path.
 - Endpoint override uses `CLAUDE_BASE_URL` when set, otherwise `ANTHROPIC_BASE_URL`; both are validated as `http`/`https` URLs.
 - Model default uses `CLAUDE_MODEL` when set, otherwise `claude-3-7-sonnet-latest`.
+
+#### Claude live smoke test (local only)
+
+- Live smoke test file: `packages/agents/src/providers/claude.live.integration.test.ts`.
+- This test is skipped by default and in CI (`CI=true` or `GITHUB_ACTIONS=true`).
+- To run locally:
+
+```bash
+CLAUDE_LIVE_SMOKE=1 pnpm vitest run packages/agents/src/providers/claude.live.integration.test.ts
+```
+
+- Auth path for this test uses an existing Claude CLI login session (it does not require exporting API keys).
+- Model selection is injected by the test:
+  - explicit override: pass CLI arg `--claude-live-model=<value>` (for example `sonnet`, `default`, `haiku`)
+  - example: `CLAUDE_LIVE_SMOKE=1 pnpm vitest run packages/agents/src/providers/claude.live.integration.test.ts -- --claude-live-model=sonnet`
+  - otherwise, the test queries SDK-supported models and picks the first available in this priority: `sonnet` -> `default` -> `haiku`
 
 ### Codex SDK bootstrap
 
