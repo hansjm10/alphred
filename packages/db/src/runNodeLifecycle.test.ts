@@ -135,6 +135,32 @@ describe('run-node lifecycle guard', () => {
 
     expect(persisted.status).toBe('failed');
     expect(persisted.completedAt).toBe('2026-01-01T00:01:00.000Z');
+
+    transitionRunNodeStatus(db, {
+      runNodeId,
+      expectedFrom: 'failed',
+      to: 'running',
+      occurredAt: '2026-01-01T00:02:00.000Z',
+    });
+
+    persisted = db
+      .select({
+        status: runNodes.status,
+        startedAt: runNodes.startedAt,
+        completedAt: runNodes.completedAt,
+      })
+      .from(runNodes)
+      .where(eq(runNodes.id, runNodeId))
+      .get();
+
+    expect(persisted).toBeDefined();
+    if (!persisted) {
+      throw new Error('Expected run-node row to exist after retry transition');
+    }
+
+    expect(persisted.status).toBe('running');
+    expect(persisted.startedAt).toBe('2026-01-01T00:02:00.000Z');
+    expect(persisted.completedAt).toBeNull();
   });
 
   it('rejects invalid transitions and stale expected states', () => {

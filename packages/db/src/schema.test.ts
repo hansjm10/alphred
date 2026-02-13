@@ -510,6 +510,8 @@ describe('database schema hardening', () => {
     expect(names.has('run_nodes_run_id_status_idx')).toBe(true);
     expect(names.has('run_nodes_run_id_sequence_idx')).toBe(true);
     expect(names.has('run_nodes_run_id_id_uq')).toBe(true);
+    expect(names.has('run_nodes_node_key_idx')).toBe(true);
+    expect(names.has('run_nodes_created_at_idx')).toBe(true);
     expect(names.has('tree_nodes_node_key_idx')).toBe(true);
     expect(names.has('phase_artifacts_created_at_idx')).toBe(true);
     expect(names.has('routing_decisions_created_at_idx')).toBe(true);

@@ -225,7 +225,8 @@ FK behavior is explicit:
 
 Run-node state transitions are additionally guarded in the DB package write path to reject invalid status moves (`pending -> running/skipped/cancelled`, `running -> completed/failed/cancelled`, `failed -> running`).
 
-Schema migration is non-destructive and idempotent (`CREATE ... IF NOT EXISTS`), so repeated migration runs do not drop previously persisted rows.
+Schema migration reruns are idempotent (`CREATE ... IF NOT EXISTS`), so repeated runs do not drop previously persisted rows in the migrated schema.
+For this transition, treat any optional one-time legacy-schema replacement during initial adoption as a destructive cutover decision; rerunning the current migration after that cutover is non-destructive.
 
 ## Git Integration
 
