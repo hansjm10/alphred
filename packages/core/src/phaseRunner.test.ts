@@ -97,6 +97,30 @@ describe('runPhase', () => {
     expect(result.tokensUsed).toBe(160);
   });
 
+  it.each([
+    ['tokensUsed', { tokensUsed: 24 }, 24],
+    ['totalTokens', { totalTokens: 25 }, 25],
+    ['total_tokens', { total_tokens: 26 }, 26],
+    ['inputTokens+outputTokens', { inputTokens: 14, outputTokens: 13 }, 27],
+    ['input_tokens+output_tokens', { input_tokens: 14, output_tokens: 14 }, 28],
+    ['nested usage.totalTokens', { usage: { totalTokens: 29 } }, 29],
+    ['nested usage.tokensUsed', { usage: { tokensUsed: 30 } }, 30],
+    ['nested usage.inputTokens+outputTokens', { usage: { inputTokens: 20, outputTokens: 11 } }, 31],
+    ['nested usage.input_tokens+output_tokens', { usage: { input_tokens: 20, output_tokens: 12 } }, 32],
+  ])('supports cumulative usage metadata variant: %s', async (_name, metadata, expectedTokens) => {
+    const phase = createAgentPhase('claude');
+    const emittedEvents: ProviderEvent[] = [
+      { type: 'usage', content: '', timestamp: 100, metadata },
+      { type: 'result', content: 'done', timestamp: 101 },
+    ];
+
+    const result = await runPhase(phase, defaultOptions, {
+      resolveProvider: () => createProvider(emittedEvents),
+    });
+
+    expect(result.tokensUsed).toBe(expectedTokens);
+  });
+
   it('sums incremental usage metadata when tokens are emitted as deltas', async () => {
     const phase = createAgentPhase();
     const emittedEvents: ProviderEvent[] = [
@@ -158,6 +182,22 @@ describe('runPhase', () => {
     const emittedEvents: ProviderEvent[] = [
       { type: 'usage', content: '', timestamp: 100, metadata: { tokens: 20 } },
       { type: 'usage', content: '', timestamp: 101, metadata: { usage: { tokensUsed: 30 } } },
+      { type: 'usage', content: '', timestamp: 102, metadata: { tokens: 20 } },
+      { type: 'result', content: 'done', timestamp: 103 },
+    ];
+
+    const result = await runPhase(phase, defaultOptions, {
+      resolveProvider: () => createProvider(emittedEvents),
+    });
+
+    expect(result.tokensUsed).toBe(40);
+  });
+
+  it('keeps the higher incremental total when nested input/output snapshots lag behind', async () => {
+    const phase = createAgentPhase('claude');
+    const emittedEvents: ProviderEvent[] = [
+      { type: 'usage', content: '', timestamp: 100, metadata: { tokens: 20 } },
+      { type: 'usage', content: '', timestamp: 101, metadata: { usage: { input_tokens: 8, output_tokens: 7 } } },
       { type: 'usage', content: '', timestamp: 102, metadata: { tokens: 20 } },
       { type: 'result', content: 'done', timestamp: 103 },
     ];

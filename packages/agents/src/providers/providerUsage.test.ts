@@ -234,9 +234,72 @@ describe('provider usage metadata contract', () => {
     });
   });
 
+  it('accepts Claude-style cumulative usage payload variants in the shared token contract', () => {
+    const claudeUsagePayloads: Record<string, unknown>[] = [
+      {
+        input_tokens: 20,
+        output_tokens: 8,
+        total_tokens: 28,
+        usage: {
+          input_tokens: 20,
+          output_tokens: 8,
+          total_tokens: 28,
+        },
+      },
+      {
+        inputTokens: 20,
+        outputTokens: 8,
+      },
+      {
+        usage: {
+          totalTokens: 28,
+        },
+      },
+      {
+        usage: {
+          tokensUsed: 28,
+        },
+      },
+      {
+        tokens: 4,
+        usage: {
+          total_tokens: 28,
+        },
+      },
+    ];
+
+    for (const payload of claudeUsagePayloads) {
+      expect(hasTokenUsageShape(payload)).toBe(true);
+    }
+  });
+
+  it('accepts mixed incremental and nested cumulative usage payload shapes', () => {
+    const mixedPayloads: Record<string, unknown>[] = [
+      {
+        tokens: 12,
+      },
+      {
+        usage: {
+          input_tokens: 9,
+          output_tokens: 6,
+        },
+      },
+      {
+        tokens: 2,
+        usage: {
+          total_tokens: 15,
+        },
+      },
+    ];
+
+    for (const payload of mixedPayloads) {
+      expect(hasTokenUsageShape(payload)).toBe(true);
+    }
+  });
+
   it('handles nested usage token metadata seen in provider payloads', () => {
-    expect(hasTokenUsageShape({ usage: { usage: { total_tokens: 21 } } })).toBe(true);
-    expect(hasTokenUsageShape({ usage: { usage: { tokensUsed: 21 } } })).toBe(true);
+    expect(hasTokenUsageShape({ usage: { total_tokens: 21 } })).toBe(true);
+    expect(hasTokenUsageShape({ usage: { tokensUsed: 21 } })).toBe(true);
   });
 
   it('rejects malformed usage metadata that only contains non-numeric token fields', () => {
