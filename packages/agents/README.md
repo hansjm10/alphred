@@ -55,6 +55,15 @@ const provider = resolveProvider('codex');
 - `@alphred/agents` owns provider registry construction and adapter implementations.
 - Core must not import provider SDK/client code directly.
 
+## Claude Runtime Runbook
+
+- Full setup + operations guide: `packages/agents/docs/claude-runtime-runbook.md`
+- Use this runbook for:
+  - local runtime setup
+  - CI runtime setup
+  - auth/config troubleshooting
+  - stream/failure troubleshooting
+
 ## Codex Runtime Runbook
 
 - Full setup + operations guide: `packages/agents/docs/codex-runtime-runbook.md`
