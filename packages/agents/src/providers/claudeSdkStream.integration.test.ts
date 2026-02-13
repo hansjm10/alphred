@@ -718,6 +718,86 @@ describe('claude provider sdk stream integration fixtures', () => {
     });
   });
 
+  it('prioritizes auth classification over rate-limit wording when status is forbidden', async () => {
+    const provider = createProviderForFixture([
+      {
+        type: 'result',
+        subtype: 'error_during_execution',
+        status: 403,
+        errors: ['rate limit exceeded while validating credentials'],
+        usage: {
+          input_tokens: 12,
+          output_tokens: 3,
+        },
+      },
+    ]);
+
+    await expect(collectEvents(provider)).rejects.toMatchObject({
+      code: 'CLAUDE_AUTH_ERROR',
+      retryable: false,
+      details: {
+        classification: 'auth',
+        retryable: false,
+        statusCode: 403,
+      },
+    });
+  });
+
+  it('prioritizes rate-limit classification over timeout wording when status is 429', async () => {
+    const provider = createProviderForFixture([
+      {
+        type: 'result',
+        subtype: 'error_during_execution',
+        status: 429,
+        errors: ['request timed out while waiting for retry slot'],
+        usage: {
+          input_tokens: 12,
+          output_tokens: 3,
+        },
+      },
+    ]);
+
+    await expect(collectEvents(provider)).rejects.toMatchObject({
+      code: 'CLAUDE_RATE_LIMITED',
+      retryable: true,
+      details: {
+        classification: 'rate_limit',
+        retryable: true,
+        statusCode: 429,
+      },
+    });
+  });
+
+  it('prioritizes timeout classification over transport-code wording when status is 408', async () => {
+    const provider = createProviderForFixture([
+      {
+        type: 'result',
+        subtype: 'error_during_execution',
+        status: 408,
+        errors: ['connection reset by peer'],
+        error: {
+          code: 'ECONNRESET',
+          message: 'connection reset by peer',
+        },
+        usage: {
+          input_tokens: 12,
+          output_tokens: 3,
+        },
+      },
+    ]);
+
+    await expect(collectEvents(provider)).rejects.toMatchObject({
+      code: 'CLAUDE_TIMEOUT',
+      retryable: true,
+      details: {
+        classification: 'timeout',
+        retryable: true,
+        statusCode: 408,
+        failureCode: 'ECONNRESET',
+      },
+    });
+  });
+
   it('classifies billing_error result failures as deterministic non-retryable auth errors', async () => {
     const provider = createProviderForFixture(sdkStreamFixtures.failureBillingError);
 
