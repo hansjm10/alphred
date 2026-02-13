@@ -597,7 +597,14 @@ function mapAssistantContentBlock(
     case 'redacted_thinking':
       return mapAssistantThinkingBlock(block, blockType);
     default:
-      return { events: [] };
+      throw createClaudeInvalidEventError(
+        `Claude emitted unsupported assistant content block type "${blockType}" at event #${eventIndex}.`,
+        {
+          eventIndex,
+          blockType,
+          blockPath,
+        },
+      );
   }
 }
 

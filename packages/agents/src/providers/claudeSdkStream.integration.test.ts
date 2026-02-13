@@ -457,7 +457,7 @@ describe('claude provider sdk stream integration fixtures', () => {
     });
   });
 
-  it('ignores unknown assistant content blocks while preserving known mapped blocks', async () => {
+  it('fails deterministically when assistant content includes unsupported block types', async () => {
     const provider = createProviderForFixture([
       {
         type: 'assistant',
@@ -485,10 +485,13 @@ describe('claude provider sdk stream integration fixtures', () => {
       },
     ]);
 
-    const events = await collectEvents(provider);
-    expect(events.map((event) => event.type)).toEqual(['system', 'assistant', 'usage', 'result']);
-    expect(events[1]?.content).toBe('Tool finished.');
-    expect(events[3]?.content).toBe('Tool finished.');
+    await expect(collectEvents(provider)).rejects.toMatchObject({
+      code: 'CLAUDE_INVALID_EVENT',
+      details: {
+        blockType: 'image',
+        blockPath: 'event.message.content[0]',
+      },
+    });
   });
 
   it('preserves assistant and result content whitespace without trimming', async () => {

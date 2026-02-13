@@ -87,7 +87,7 @@ const provider = resolveProvider('codex');
   - `assistant` text blocks -> `assistant`
   - assistant `tool_use` blocks and `tool_progress` -> `tool_use` (first-seen `tool_use_id` is emitted; duplicates are dropped)
   - assistant `tool_result` blocks, `user.tool_use_result`, and `tool_use_summary` -> `tool_result`
-  - unrecognized assistant content block types are ignored
+  - unsupported assistant content block types fail with typed `CLAUDE_INVALID_EVENT`
   - `result` success -> `usage` then terminal `result`
   - unsupported message types fail with typed `CLAUDE_INVALID_EVENT`
 - Failure classification precedence is deterministic: auth (401/403/auth text) -> rate limit (429/quota/throttle text) -> timeout (408/504/timeout text) -> transport (network/socket codes/text) -> internal.
