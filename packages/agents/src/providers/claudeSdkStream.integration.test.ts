@@ -244,6 +244,50 @@ const sdkStreamFixtures = {
       },
     },
   ] as const,
+  failureBillingError: [
+    {
+      type: 'result',
+      subtype: 'error_during_execution',
+      errors: ['billing_error'],
+      usage: {
+        input_tokens: 12,
+        output_tokens: 3,
+      },
+    },
+  ] as const,
+  failureMaxTurns: [
+    {
+      type: 'result',
+      subtype: 'error_max_turns',
+      errors: [],
+      usage: {
+        input_tokens: 12,
+        output_tokens: 3,
+      },
+    },
+  ] as const,
+  failureMaxBudgetUsd: [
+    {
+      type: 'result',
+      subtype: 'error_max_budget_usd',
+      errors: [],
+      usage: {
+        input_tokens: 12,
+        output_tokens: 3,
+      },
+    },
+  ] as const,
+  failureMaxStructuredOutputRetries: [
+    {
+      type: 'result',
+      subtype: 'error_max_structured_output_retries',
+      errors: [],
+      usage: {
+        input_tokens: 12,
+        output_tokens: 3,
+      },
+    },
+  ] as const,
   failureTransportCode: [
     {
       type: 'result',
@@ -637,6 +681,39 @@ describe('claude provider sdk stream integration fixtures', () => {
     });
   });
 
+  it('classifies billing_error result failures as deterministic non-retryable auth errors', async () => {
+    const provider = createProviderForFixture(sdkStreamFixtures.failureBillingError);
+
+    await expect(collectEvents(provider)).rejects.toMatchObject({
+      code: 'CLAUDE_AUTH_ERROR',
+      retryable: false,
+      details: {
+        classification: 'auth',
+        retryable: false,
+      },
+    });
+  });
+
+  it.each([
+    ['error_max_turns', sdkStreamFixtures.failureMaxTurns],
+    ['error_max_budget_usd', sdkStreamFixtures.failureMaxBudgetUsd],
+    ['error_max_structured_output_retries', sdkStreamFixtures.failureMaxStructuredOutputRetries],
+  ] as const)(
+    'classifies result subtype %s as deterministic non-retryable internal errors',
+    async (_subtype, fixture) => {
+      const provider = createProviderForFixture(fixture);
+
+      await expect(collectEvents(provider)).rejects.toMatchObject({
+        code: 'CLAUDE_INTERNAL_ERROR',
+        retryable: false,
+        details: {
+          classification: 'internal',
+          retryable: false,
+        },
+      });
+    },
+  );
+
   it('classifies transport-code failure fixtures into deterministic transport errors', async () => {
     const provider = createProviderForFixture(sdkStreamFixtures.failureTransportCode);
 
@@ -716,6 +793,24 @@ describe('claude provider sdk stream integration fixtures', () => {
       details: {
         classification: 'internal',
         retryable: true,
+      },
+    });
+  });
+
+  it('classifies assistant billing_error failures as deterministic non-retryable auth errors', async () => {
+    const provider = createProviderForFixture([
+      {
+        type: 'assistant',
+        error: 'billing_error',
+      },
+    ]);
+
+    await expect(collectEvents(provider)).rejects.toMatchObject({
+      code: 'CLAUDE_AUTH_ERROR',
+      retryable: false,
+      details: {
+        classification: 'auth',
+        retryable: false,
       },
     });
   });

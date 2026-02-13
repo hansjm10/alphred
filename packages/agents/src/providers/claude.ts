@@ -385,7 +385,6 @@ const rateLimitPatterns: readonly RegExp[] = [
   /\bquota\b/i,
   /\bthrottl(?:e|ed|ing)\b/i,
   /\bslow down\b/i,
-  /\bbilling_error\b/i,
 ];
 
 function isRateLimitText(textCorpus: string): boolean {
@@ -400,7 +399,7 @@ function classifyClaudeFailure(message: string, source?: unknown): ClaudeFailure
 
   const isAuth = statusCode === 401
     || statusCode === 403
-    || /\b(authentication_failed|unauthorized|forbidden|authentication|invalid api key|permission denied|missing auth)\b/i.test(
+    || /\b(authentication_failed|billing_error|unauthorized|forbidden|authentication|invalid api key|permission denied|missing auth)\b/i.test(
       textCorpus,
     );
   if (isAuth) {
