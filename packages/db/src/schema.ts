@@ -1,5 +1,5 @@
 import { sql } from 'drizzle-orm';
-import { check, index, integer, sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqlite-core';
+import { check, foreignKey, index, integer, sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqlite-core';
 
 const utcNow = sql`(strftime('%Y-%m-%dT%H:%M:%fZ','now'))`;
 
@@ -182,6 +182,7 @@ export const runNodes = sqliteTable(
       table.nodeKey,
       table.attempt,
     ),
+    runIdIdUnique: uniqueIndex('run_nodes_run_id_id_uq').on(table.workflowRunId, table.id),
     statusCheck: check(
       'run_nodes_status_ck',
       sql`${table.status} in ('pending', 'running', 'completed', 'failed', 'skipped', 'cancelled')`,
@@ -224,6 +225,11 @@ export const routingDecisions = sqliteTable(
     createdAt: text('created_at').notNull().default(utcNow),
   },
   table => ({
+    runNodeBelongsToRunFk: foreignKey({
+      columns: [table.workflowRunId, table.runNodeId],
+      foreignColumns: [runNodes.workflowRunId, runNodes.id],
+      name: 'routing_decisions_run_id_run_node_id_fk',
+    }).onDelete('cascade'),
     decisionTypeCheck: check(
       'routing_decisions_decision_type_ck',
       sql`${table.decisionType} in ('approved', 'changes_requested', 'blocked', 'retry', 'no_route')`,
@@ -250,6 +256,11 @@ export const phaseArtifacts = sqliteTable(
     createdAt: text('created_at').notNull().default(utcNow),
   },
   table => ({
+    runNodeBelongsToRunFk: foreignKey({
+      columns: [table.workflowRunId, table.runNodeId],
+      foreignColumns: [runNodes.workflowRunId, runNodes.id],
+      name: 'phase_artifacts_run_id_run_node_id_fk',
+    }).onDelete('cascade'),
     artifactTypeCheck: check('phase_artifacts_artifact_type_ck', sql`${table.artifactType} in ('report', 'note', 'log')`),
     contentTypeCheck: check(
       'phase_artifacts_content_type_ck',

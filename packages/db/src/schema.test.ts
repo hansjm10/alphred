@@ -23,13 +23,13 @@ type Seed = {
   treeId: number;
 };
 
-function seedTreeState(db: ReturnType<typeof createDatabase>): Seed {
+function seedTreeState(db: ReturnType<typeof createDatabase>, keyPrefix = 'design'): Seed {
   const tree = db
     .insert(workflowTrees)
     .values({
-      treeKey: 'design_tree',
+      treeKey: `${keyPrefix}_tree`,
       version: 1,
-      name: 'Design tree',
+      name: `${keyPrefix} tree`,
     })
     .returning({ id: workflowTrees.id })
     .get();
@@ -37,7 +37,7 @@ function seedTreeState(db: ReturnType<typeof createDatabase>): Seed {
   const promptTemplate = db
     .insert(promptTemplates)
     .values({
-      templateKey: 'design_prompt',
+      templateKey: `${keyPrefix}_prompt`,
       version: 1,
       content: 'Create a design report',
       contentType: 'markdown',
@@ -48,7 +48,7 @@ function seedTreeState(db: ReturnType<typeof createDatabase>): Seed {
   const guardDefinition = db
     .insert(guardDefinitions)
     .values({
-      guardKey: 'needs_revision',
+      guardKey: `${keyPrefix}_needs_revision`,
       version: 1,
       expression: { field: 'decision', operator: '==', value: 'changes_requested' },
     })
@@ -59,7 +59,7 @@ function seedTreeState(db: ReturnType<typeof createDatabase>): Seed {
     .insert(treeNodes)
     .values({
       workflowTreeId: tree.id,
-      nodeKey: 'design',
+      nodeKey: `${keyPrefix}_design`,
       nodeType: 'agent',
       provider: 'codex',
       promptTemplateId: promptTemplate.id,
@@ -73,7 +73,7 @@ function seedTreeState(db: ReturnType<typeof createDatabase>): Seed {
     .insert(treeNodes)
     .values({
       workflowTreeId: tree.id,
-      nodeKey: 'implement',
+      nodeKey: `${keyPrefix}_implement`,
       nodeType: 'agent',
       provider: 'codex',
       promptTemplateId: promptTemplate.id,
@@ -103,12 +103,21 @@ function seedTreeState(db: ReturnType<typeof createDatabase>): Seed {
 }
 
 describe('database schema hardening', () => {
-  it('runs migrations reproducibly in repeated executions', () => {
+  it('runs migrations reproducibly in repeated executions without dropping existing data', () => {
     const db = createDatabase(':memory:');
-    expect(() => {
-      migrateDatabase(db);
-      migrateDatabase(db);
-    }).not.toThrow();
+
+    migrateDatabase(db);
+
+    db.insert(workflowTrees).values({
+      treeKey: 'persisted_tree',
+      version: 1,
+      name: 'Persisted tree',
+    }).run();
+
+    expect(() => migrateDatabase(db)).not.toThrow();
+
+    const trees = db.select({ id: workflowTrees.id }).from(workflowTrees).all();
+    expect(trees).toHaveLength(1);
   });
 
   it('supports a full SQL representation of a design tree and execution artifacts', () => {
@@ -186,6 +195,72 @@ describe('database schema hardening', () => {
     ).toThrow();
   });
 
+  it('rejects cross-tree run-node and edge relationships', () => {
+    const db = createDatabase(':memory:');
+    migrateDatabase(db);
+
+    const first = seedTreeState(db, 'first');
+    const second = seedTreeState(db, 'second');
+
+    expect(() =>
+      db.insert(runNodes).values({
+        workflowRunId: first.runId,
+        treeNodeId: second.sourceNodeId,
+        nodeKey: 'cross_tree_node',
+        status: 'pending',
+        sequenceIndex: 99,
+      }).run(),
+    ).toThrow();
+
+    expect(() =>
+      db.insert(treeEdges).values({
+        workflowTreeId: first.treeId,
+        sourceNodeId: first.sourceNodeId,
+        targetNodeId: second.targetNodeId,
+        priority: 99,
+        auto: 0,
+        guardDefinitionId: first.guardDefinitionId,
+      }).run(),
+    ).toThrow();
+  });
+
+  it('rejects routing decisions and artifacts bound to a different run than their run-node', () => {
+    const db = createDatabase(':memory:');
+    migrateDatabase(db);
+
+    const first = seedTreeState(db, 'first');
+    const second = seedTreeState(db, 'second');
+    const firstRunNode = db
+      .insert(runNodes)
+      .values({
+        workflowRunId: first.runId,
+        treeNodeId: first.sourceNodeId,
+        nodeKey: 'first_design',
+        status: 'pending',
+        sequenceIndex: 1,
+      })
+      .returning({ id: runNodes.id })
+      .get();
+
+    expect(() =>
+      db.insert(routingDecisions).values({
+        workflowRunId: second.runId,
+        runNodeId: firstRunNode.id,
+        decisionType: 'approved',
+      }).run(),
+    ).toThrow();
+
+    expect(() =>
+      db.insert(phaseArtifacts).values({
+        workflowRunId: second.runId,
+        runNodeId: firstRunNode.id,
+        artifactType: 'report',
+        contentType: 'text',
+        content: 'cross-run artifact should fail',
+      }).run(),
+    ).toThrow();
+  });
+
   it('enforces uniqueness for node identity and run sequence ordering', () => {
     const db = createDatabase(':memory:');
     migrateDatabase(db);
@@ -194,7 +269,7 @@ describe('database schema hardening', () => {
     expect(() =>
       db.insert(treeNodes).values({
         workflowTreeId: seed.treeId,
-        nodeKey: 'design',
+        nodeKey: 'design_design',
         nodeType: 'agent',
         provider: 'codex',
         promptTemplateId: seed.promptTemplateId,
@@ -271,6 +346,7 @@ describe('database schema hardening', () => {
 
     expect(names.has('run_nodes_run_id_status_idx')).toBe(true);
     expect(names.has('run_nodes_run_id_sequence_idx')).toBe(true);
+    expect(names.has('run_nodes_run_id_id_uq')).toBe(true);
     expect(names.has('tree_nodes_node_key_idx')).toBe(true);
     expect(names.has('phase_artifacts_created_at_idx')).toBe(true);
     expect(names.has('routing_decisions_created_at_idx')).toBe(true);

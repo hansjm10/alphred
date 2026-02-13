@@ -217,9 +217,15 @@ SQL-first workflow topology and execution state are modeled with normalized tabl
 FK behavior is explicit:
 - Template topology rows cascade from `workflow_trees`.
 - Execution rows cascade from `workflow_runs` and `run_nodes`.
+- Composite FKs bind `routing_decisions`/`phase_artifacts` to the same `(workflow_run_id, run_node_id)` tuple from `run_nodes`.
 - Shared references (`prompt_templates`, `guard_definitions`) use `RESTRICT` to prevent dangling refs.
+- Trigger guards enforce cross-row invariants not representable as a single-column FK:
+  - `tree_edges.workflow_tree_id` must match both endpoint node tree IDs.
+  - `run_nodes.workflow_run_id` and `run_nodes.tree_node_id` must resolve to the same tree.
 
 Run-node state transitions are additionally guarded in the DB package write path to reject invalid status moves (`pending -> running/skipped/cancelled`, `running -> completed/failed/cancelled`, `failed -> running`).
+
+Schema migration is non-destructive and idempotent (`CREATE ... IF NOT EXISTS`), so repeated migration runs do not drop previously persisted rows.
 
 ## Git Integration
 
