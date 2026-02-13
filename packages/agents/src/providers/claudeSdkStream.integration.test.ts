@@ -1,5 +1,5 @@
 import type { ProviderEvent, ProviderRunOptions } from '@alphred/shared';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { ClaudeProvider, type ClaudeSdkQuery } from './claude.js';
 
 const defaultOptions: ProviderRunOptions = {
@@ -89,6 +89,78 @@ const sdkStreamFixtures = {
       },
     },
   ] as const,
+  mixedToolUseAssistantThenProgress: [
+    {
+      type: 'assistant',
+      message: {
+        content: [
+          {
+            type: 'tool_use',
+            id: 'tool-42',
+            name: 'Bash',
+            input: { command: 'echo hi' },
+          },
+          {
+            type: 'text',
+            text: 'Continuing after tool call.',
+          },
+        ],
+      },
+      parent_tool_use_id: null,
+    },
+    {
+      type: 'tool_progress',
+      tool_name: 'Bash',
+      tool_use_id: 'tool-42',
+      parent_tool_use_id: null,
+      elapsed_time_seconds: 2,
+    },
+    {
+      type: 'result',
+      subtype: 'success',
+      result: 'done',
+      usage: {
+        input_tokens: 8,
+        output_tokens: 4,
+      },
+    },
+  ] as const,
+  mixedToolUseProgressThenAssistant: [
+    {
+      type: 'tool_progress',
+      tool_name: 'Bash',
+      tool_use_id: 'tool-99',
+      parent_tool_use_id: null,
+      elapsed_time_seconds: 1,
+    },
+    {
+      type: 'assistant',
+      message: {
+        content: [
+          {
+            type: 'tool_use',
+            id: 'tool-99',
+            name: 'Bash',
+            input: { command: 'echo after progress' },
+          },
+          {
+            type: 'text',
+            text: 'Tool finished.',
+          },
+        ],
+      },
+      parent_tool_use_id: null,
+    },
+    {
+      type: 'result',
+      subtype: 'success',
+      result: 'Tool finished.',
+      usage: {
+        input_tokens: 9,
+        output_tokens: 5,
+      },
+    },
+  ] as const,
   partial: [
     {
       type: 'assistant',
@@ -130,6 +202,33 @@ const sdkStreamFixtures = {
       type: 'result',
       subtype: 'error_during_execution',
       errors: ['Sample rate mismatch in audio parser'],
+      usage: {
+        input_tokens: 12,
+        output_tokens: 3,
+      },
+    },
+  ] as const,
+  failureRateLimitedStatus: [
+    {
+      type: 'result',
+      subtype: 'error_during_execution',
+      status: 429,
+      errors: ['quota exceeded for this workspace'],
+      usage: {
+        input_tokens: 12,
+        output_tokens: 3,
+      },
+    },
+  ] as const,
+  failureTransportCode: [
+    {
+      type: 'result',
+      subtype: 'error_during_execution',
+      errors: ['connection dropped'],
+      error: {
+        code: 'ECONNRESET',
+        message: 'socket hang up',
+      },
       usage: {
         input_tokens: 12,
         output_tokens: 3,
@@ -188,6 +287,93 @@ describe('claude provider sdk stream integration fixtures', () => {
     });
   });
 
+  it('deduplicates tool_use events when assistant tool_use is followed by tool_progress for the same id', async () => {
+    const provider = createProviderForFixture(sdkStreamFixtures.mixedToolUseAssistantThenProgress);
+
+    const events = await collectEvents(provider);
+    expect(events.map((event) => event.type)).toEqual(['system', 'tool_use', 'assistant', 'usage', 'result']);
+    expect(events.filter((event) => event.type === 'tool_use')).toHaveLength(1);
+    expect(events.find((event) => event.type === 'tool_use')?.metadata).toMatchObject({
+      toolUseId: 'tool-42',
+    });
+  });
+
+  it('deduplicates tool_use events when tool_progress is followed by assistant tool_use for the same id', async () => {
+    const provider = createProviderForFixture(sdkStreamFixtures.mixedToolUseProgressThenAssistant);
+
+    const events = await collectEvents(provider);
+    expect(events.map((event) => event.type)).toEqual(['system', 'tool_use', 'assistant', 'usage', 'result']);
+    expect(events.filter((event) => event.type === 'tool_use')).toHaveLength(1);
+    expect(events.find((event) => event.type === 'tool_use')?.metadata).toMatchObject({
+      toolUseId: 'tool-99',
+    });
+  });
+
+  it('cleans up timeout handles when sdk query construction fails synchronously', async () => {
+    vi.useFakeTimers();
+    try {
+      const provider = new ClaudeProvider(
+        undefined,
+        () => ({
+          authMode: 'api_key',
+          model: 'claude-3-7-sonnet-latest',
+          apiKey: 'sk-test',
+          apiKeySource: 'CLAUDE_API_KEY',
+        }),
+        ((params: { prompt: string | AsyncIterable<unknown>; options?: unknown }) => {
+          void params;
+          throw new Error('sync query construction failed');
+        }) as unknown as ClaudeSdkQuery,
+      );
+
+      await expect(collectEvents(provider, 'Apply integration fixture tests.', { ...defaultOptions, timeout: 25_000 })).rejects.toMatchObject({
+        code: 'CLAUDE_INTERNAL_ERROR',
+      });
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('cleans up timeout handles when sdk stream fails during iteration', async () => {
+    vi.useFakeTimers();
+    try {
+      const provider = new ClaudeProvider(
+        undefined,
+        () => ({
+          authMode: 'api_key',
+          model: 'claude-3-7-sonnet-latest',
+          apiKey: 'sk-test',
+          apiKeySource: 'CLAUDE_API_KEY',
+        }),
+        ((params: { prompt: string | AsyncIterable<unknown>; options?: unknown }) => {
+          void params;
+          return (async function* () {
+            yield {
+              type: 'assistant',
+              message: {
+                content: [
+                  {
+                    type: 'text',
+                    text: 'Partial output before failure.',
+                  },
+                ],
+              },
+            };
+            throw new Error('stream failed during iteration');
+          })();
+        }) as unknown as ClaudeSdkQuery,
+      );
+
+      await expect(collectEvents(provider, 'Apply integration fixture tests.', { ...defaultOptions, timeout: 25_000 })).rejects.toMatchObject({
+        code: 'CLAUDE_INTERNAL_ERROR',
+      });
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('fails deterministically when a partial fixture ends without a terminal result event', async () => {
     const provider = createProviderForFixture(sdkStreamFixtures.partial);
 
@@ -227,6 +413,33 @@ describe('claude provider sdk stream integration fixtures', () => {
       code: 'CLAUDE_INTERNAL_ERROR',
       details: {
         classification: 'internal',
+      },
+    });
+  });
+
+  it('classifies status-code 429 failure fixtures into deterministic rate-limit errors', async () => {
+    const provider = createProviderForFixture(sdkStreamFixtures.failureRateLimitedStatus);
+
+    await expect(collectEvents(provider)).rejects.toMatchObject({
+      code: 'CLAUDE_RATE_LIMITED',
+      retryable: true,
+      details: {
+        classification: 'rate_limit',
+        retryable: true,
+        statusCode: 429,
+      },
+    });
+  });
+
+  it('classifies transport-code failure fixtures into deterministic transport errors', async () => {
+    const provider = createProviderForFixture(sdkStreamFixtures.failureTransportCode);
+
+    await expect(collectEvents(provider)).rejects.toMatchObject({
+      code: 'CLAUDE_TRANSPORT_ERROR',
+      retryable: true,
+      details: {
+        classification: 'transport',
+        retryable: true,
       },
     });
   });

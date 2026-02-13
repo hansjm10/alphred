@@ -452,6 +452,9 @@ function mapAssistantMessage(sdkMessage: Record<string, unknown>, state: ClaudeS
     if (blockType === 'tool_use') {
       const toolName = toStringOrThrow(block.name, eventIndex, `${blockPath}.name`);
       const toolUseId = toStringOrThrow(block.id, eventIndex, `${blockPath}.id`);
+      if (state.toolUseIds.has(toolUseId)) {
+        continue;
+      }
       state.toolUseIds.add(toolUseId);
       mappedEvents.push({
         type: 'tool_use',
@@ -671,18 +674,19 @@ function createClaudeSdkRunner(bootstrap: ClaudeSdkBootstrap, sdkQuery: ClaudeSd
         abortController?.abort();
       }, request.timeout);
 
-    const stream = sdkQuery({
-      prompt: request.bridgedPrompt,
-      options: createClaudeQueryOptions(bootstrap, request, abortController),
-    });
-
-    const state: ClaudeStreamState = {
-      lastAssistantMessage: '',
-      toolUseIds: new Set(),
-    };
-
+    let stream: ReturnType<ClaudeSdkQuery> | undefined;
     let sdkEventIndex = 0;
     try {
+      stream = sdkQuery({
+        prompt: request.bridgedPrompt,
+        options: createClaudeQueryOptions(bootstrap, request, abortController),
+      });
+
+      const state: ClaudeStreamState = {
+        lastAssistantMessage: '',
+        toolUseIds: new Set(),
+      };
+
       for await (const sdkMessage of stream) {
         sdkEventIndex += 1;
         const mappedEvents = mapClaudeSdkMessage(sdkMessage, state, sdkEventIndex);
@@ -715,8 +719,8 @@ function createClaudeSdkRunner(bootstrap: ClaudeSdkBootstrap, sdkQuery: ClaudeSd
         clearTimeout(timeoutHandle);
       }
 
-      const queryStream = stream as { close?: () => void };
-      if (typeof queryStream.close === 'function') {
+      const queryStream = stream as { close?: () => void } | undefined;
+      if (queryStream && typeof queryStream.close === 'function') {
         queryStream.close();
       }
     }
