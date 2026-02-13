@@ -227,7 +227,11 @@ describe('claude provider', () => {
       expect(error).toBeInstanceOf(ClaudeProviderError);
 
       const typedError = error as ClaudeProviderError;
-      expect(typedError.code).toBe('CLAUDE_RUN_FAILED');
+      expect(typedError.code).toBe('CLAUDE_INTERNAL_ERROR');
+      expect(typedError.details).toMatchObject({
+        classification: 'internal',
+        retryable: false,
+      });
       expect(typedError.cause).toBeInstanceOf(Error);
       expect((typedError.cause as Error).message).toBe('claude process crashed');
     }

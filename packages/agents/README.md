@@ -81,6 +81,8 @@ const provider = resolveProvider('codex');
 ### Claude SDK bootstrap
 
 - `ClaudeProvider` validates runtime configuration before stream execution.
+- `ClaudeProvider` default runtime path uses the Claude Agent SDK stream (`query(...)`) rather than the adapter stub runner.
+- `timeout` is bridged into SDK cancellation via `abortController`.
 - Auth precedence is deterministic:
   1. `CLAUDE_API_KEY`
   2. `ANTHROPIC_API_KEY`
