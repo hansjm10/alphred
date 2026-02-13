@@ -368,6 +368,84 @@ describe('database schema hardening', () => {
     ).toThrow();
   });
 
+  it('enforces initial run-node insert state at the DB layer', () => {
+    const db = createDatabase(':memory:');
+    migrateDatabase(db);
+    const seed = seedTreeState(db);
+
+    expect(() =>
+      db.insert(runNodes).values({
+        workflowRunId: seed.runId,
+        treeNodeId: seed.sourceNodeId,
+        nodeKey: 'bad_running_insert',
+        status: 'running',
+        startedAt: '2026-01-01T00:00:00.000Z',
+        sequenceIndex: 1,
+      }).run(),
+    ).toThrow('run_nodes must be inserted in pending state with null started_at/completed_at');
+
+    expect(() =>
+      db.insert(runNodes).values({
+        workflowRunId: seed.runId,
+        treeNodeId: seed.sourceNodeId,
+        nodeKey: 'bad_completed_insert',
+        status: 'completed',
+        completedAt: '2026-01-01T00:00:00.000Z',
+        sequenceIndex: 2,
+      }).run(),
+    ).toThrow('run_nodes must be inserted in pending state with null started_at/completed_at');
+  });
+
+  it('enforces run-node status transition graph on direct status updates', () => {
+    const db = createDatabase(':memory:');
+    migrateDatabase(db);
+    const seed = seedTreeState(db);
+
+    const runNode = db
+      .insert(runNodes)
+      .values({
+        workflowRunId: seed.runId,
+        treeNodeId: seed.sourceNodeId,
+        nodeKey: 'design',
+        status: 'pending',
+        sequenceIndex: 1,
+      })
+      .returning({ id: runNodes.id })
+      .get();
+
+    expect(() =>
+      db
+        .update(runNodes)
+        .set({ status: 'completed', completedAt: '2026-01-01T00:00:00.000Z' })
+        .where(eq(runNodes.id, runNode.id))
+        .run(),
+    ).toThrow('run_nodes status transition is not allowed');
+
+    expect(() =>
+      db
+        .update(runNodes)
+        .set({ status: 'running', startedAt: '2026-01-01T00:00:00.000Z' })
+        .where(eq(runNodes.id, runNode.id))
+        .run(),
+    ).not.toThrow();
+
+    expect(() =>
+      db
+        .update(runNodes)
+        .set({ status: 'completed', completedAt: '2026-01-01T00:01:00.000Z' })
+        .where(eq(runNodes.id, runNode.id))
+        .run(),
+    ).not.toThrow();
+
+    expect(() =>
+      db
+        .update(runNodes)
+        .set({ status: 'running', startedAt: '2026-01-01T00:02:00.000Z', completedAt: null })
+        .where(eq(runNodes.id, runNode.id))
+        .run(),
+    ).toThrow('run_nodes status transition is not allowed');
+  });
+
   it('creates required performance indexes for run and artifact hot paths', () => {
     const db = createDatabase(':memory:');
     migrateDatabase(db);

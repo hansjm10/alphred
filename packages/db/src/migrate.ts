@@ -220,6 +220,35 @@ export function migrateDatabase(db: AlphredDatabase): void {
   db.run(sql`CREATE INDEX IF NOT EXISTS run_nodes_created_at_idx
     ON run_nodes(created_at)`);
 
+  db.run(sql`CREATE TRIGGER IF NOT EXISTS run_nodes_status_transition_update_ck
+    BEFORE UPDATE OF status ON run_nodes
+    FOR EACH ROW
+    WHEN (
+      NEW.status <> OLD.status
+      AND NOT (
+        (OLD.status = 'pending' AND NEW.status IN ('running', 'skipped', 'cancelled'))
+        OR
+        (OLD.status = 'running' AND NEW.status IN ('completed', 'failed', 'cancelled'))
+        OR
+        (OLD.status = 'failed' AND NEW.status = 'running')
+      )
+    )
+    BEGIN
+      SELECT RAISE(ABORT, 'run_nodes status transition is not allowed');
+    END`);
+
+  db.run(sql`CREATE TRIGGER IF NOT EXISTS run_nodes_initial_state_insert_ck
+    BEFORE INSERT ON run_nodes
+    FOR EACH ROW
+    WHEN (
+      NEW.status <> 'pending'
+      OR NEW.started_at IS NOT NULL
+      OR NEW.completed_at IS NOT NULL
+    )
+    BEGIN
+      SELECT RAISE(ABORT, 'run_nodes must be inserted in pending state with null started_at/completed_at');
+    END`);
+
   db.run(sql`CREATE TRIGGER IF NOT EXISTS run_nodes_same_tree_insert_ck
     BEFORE INSERT ON run_nodes
     FOR EACH ROW
