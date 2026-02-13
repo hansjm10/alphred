@@ -131,6 +131,8 @@ Current event contract (`@alphred/shared`):
 Runtime semantics:
 - Agent phase missing `provider` -> phase runner throws immediately.
 - Unknown provider name -> resolver throws `UnknownAgentProviderError`.
+- Claude provider validates runtime auth/config before stream execution.
+- Claude provider classifies runtime failures with deterministic typed codes and retryability metadata for orchestration consumers.
 - Codex provider validates runtime auth/config before stream execution.
 - Codex provider classifies runtime failures with deterministic typed codes and retryability metadata for orchestration consumers.
 - Adapter/provider stream must include exactly one terminal `result` event for success.
