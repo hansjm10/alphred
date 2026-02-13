@@ -27,6 +27,18 @@ describe('claude sdk bootstrap', () => {
     expect(bootstrap.model).toBe('claude-3-7-sonnet-latest');
   });
 
+  it('ignores invalid ANTHROPIC_BASE_URL when CLAUDE_BASE_URL is configured', () => {
+    const bootstrap = initializeClaudeSdkBootstrap({
+      env: {
+        CLAUDE_API_KEY: 'sk-claude',
+        CLAUDE_BASE_URL: 'https://claude-proxy.example.com/v1',
+        ANTHROPIC_BASE_URL: '   ',
+      },
+    });
+
+    expect(bootstrap.baseUrl).toBe('https://claude-proxy.example.com/v1');
+  });
+
   it('accepts ANTHROPIC_API_KEY fallback and validates model/base URL overrides', () => {
     const bootstrap = initializeClaudeSdkBootstrap({
       env: {

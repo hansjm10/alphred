@@ -99,8 +99,8 @@ function resolveConfiguredAuthMode(env: NodeJS.ProcessEnv): RequestedAuthMode | 
 
 function resolveBaseUrl(env: NodeJS.ProcessEnv): string | undefined {
   const claudeBaseUrl = readConfiguredEnvValue(env, CLAUDE_BASE_URL_ENV_VAR);
-  const anthropicBaseUrl = readConfiguredEnvValue(env, ANTHROPIC_BASE_URL_ENV_VAR);
-  const baseUrl = claudeBaseUrl ?? anthropicBaseUrl;
+  const baseUrl =
+    claudeBaseUrl ?? readConfiguredEnvValue(env, ANTHROPIC_BASE_URL_ENV_VAR);
   if (baseUrl === undefined) {
     return undefined;
   }
