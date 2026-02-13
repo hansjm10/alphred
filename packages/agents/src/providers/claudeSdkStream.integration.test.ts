@@ -41,7 +41,7 @@ function createProviderForFixture(messages: readonly unknown[], capture?: Captur
 
 async function collectEvents(
   provider: ClaudeProvider,
-  prompt = 'Implement issue #48 runtime tests.',
+  prompt = 'Implement issue #36 runtime tests.',
   options: ProviderRunOptions = defaultOptions,
 ): Promise<ProviderEvent[]> {
   const events: ProviderEvent[] = [];
@@ -49,6 +49,14 @@ async function collectEvents(
     events.push(event);
   }
   return events;
+}
+
+async function expectFixtureFailure(
+  fixture: readonly unknown[],
+  expected: Record<string, unknown>,
+): Promise<void> {
+  const provider = createProviderForFixture(fixture);
+  await expect(collectEvents(provider)).rejects.toMatchObject(expected);
 }
 
 const sdkStreamFixtures = {
@@ -320,6 +328,9 @@ const sdkStreamFixtures = {
   ] as const,
 };
 
+// Coverage boundary:
+// - This file validates fixture-driven Claude SDK stream contracts.
+// - claude.test.ts validates broader provider behavior and mixed event paths.
 describe('claude provider sdk stream integration fixtures', () => {
   it('maps the success fixture into deterministic ordered provider events', async () => {
     const capture: CapturedSdkInvocation = {};
@@ -652,68 +663,87 @@ describe('claude provider sdk stream integration fixtures', () => {
     });
   });
 
-  it('classifies timeout-like failure fixtures into deterministic typed provider failures', async () => {
-    const provider = createProviderForFixture(sdkStreamFixtures.failureTimeout);
-
-    await expect(collectEvents(provider)).rejects.toMatchObject({
-      code: 'CLAUDE_TIMEOUT',
-      retryable: true,
-      details: {
-        classification: 'timeout',
+  it.each([
+    [
+      'classifies timeout-like failure fixtures into deterministic typed provider failures',
+      sdkStreamFixtures.failureTimeout,
+      {
+        code: 'CLAUDE_TIMEOUT',
         retryable: true,
+        message: 'Claude run failed: transport timeout',
+        details: {
+          classification: 'timeout',
+          retryable: true,
+        },
       },
-    });
-  });
-
-  it('classifies non-timeout failure fixtures into deterministic internal provider failures', async () => {
-    const provider = createProviderForFixture(sdkStreamFixtures.failureInternal);
-
-    await expect(collectEvents(provider)).rejects.toMatchObject({
-      code: 'CLAUDE_INTERNAL_ERROR',
-      details: {
-        classification: 'internal',
+    ],
+    [
+      'classifies non-timeout failure fixtures into deterministic internal provider failures',
+      sdkStreamFixtures.failureInternal,
+      {
+        code: 'CLAUDE_INTERNAL_ERROR',
+        message: 'Claude run failed: Sample rate mismatch in audio parser',
+        details: {
+          classification: 'internal',
+        },
       },
-    });
-  });
-
-  it('classifies status-code 429 failure fixtures into deterministic rate-limit errors', async () => {
-    const provider = createProviderForFixture(sdkStreamFixtures.failureRateLimitedStatus);
-
-    await expect(collectEvents(provider)).rejects.toMatchObject({
-      code: 'CLAUDE_RATE_LIMITED',
-      retryable: true,
-      details: {
-        classification: 'rate_limit',
+    ],
+    [
+      'classifies status-code 429 failure fixtures into deterministic rate-limit errors',
+      sdkStreamFixtures.failureRateLimitedStatus,
+      {
+        code: 'CLAUDE_RATE_LIMITED',
         retryable: true,
-        statusCode: 429,
+        message: 'Claude run failed: quota exceeded for this workspace',
+        details: {
+          classification: 'rate_limit',
+          retryable: true,
+          statusCode: 429,
+        },
       },
-    });
-  });
-
-  it('classifies string status-code 429 failure fixtures into deterministic rate-limit errors', async () => {
-    const provider = createProviderForFixture(sdkStreamFixtures.failureRateLimitedStatusString);
-
-    await expect(collectEvents(provider)).rejects.toMatchObject({
-      code: 'CLAUDE_RATE_LIMITED',
-      retryable: true,
-      details: {
-        classification: 'rate_limit',
+    ],
+    [
+      'classifies string status-code 429 failure fixtures into deterministic rate-limit errors',
+      sdkStreamFixtures.failureRateLimitedStatusString,
+      {
+        code: 'CLAUDE_RATE_LIMITED',
         retryable: true,
-        statusCode: 429,
+        message: 'Claude run failed: request failed',
+        details: {
+          classification: 'rate_limit',
+          retryable: true,
+          statusCode: 429,
+        },
       },
-    });
-  });
-
-  it('classifies string status-code 401 failure fixtures into deterministic auth errors', async () => {
-    const provider = createProviderForFixture(sdkStreamFixtures.failureAuthStatusString);
-
-    await expect(collectEvents(provider)).rejects.toMatchObject({
-      code: 'CLAUDE_AUTH_ERROR',
-      retryable: false,
-      details: {
-        classification: 'auth',
+    ],
+    [
+      'classifies string status-code 401 failure fixtures into deterministic auth errors',
+      sdkStreamFixtures.failureAuthStatusString,
+      {
+        code: 'CLAUDE_AUTH_ERROR',
         retryable: false,
-        statusCode: 401,
+        message: 'Claude run failed: request failed',
+        details: {
+          classification: 'auth',
+          retryable: false,
+          statusCode: 401,
+        },
+      },
+    ],
+  ] as const)('%s', async (_title, fixture, expected) => {
+    await expectFixtureFailure(fixture, expected);
+  });
+
+  it('uses a deterministic fallback failure message when result failures omit error text', async () => {
+    await expectFixtureFailure(sdkStreamFixtures.failureMaxTurns, {
+      code: 'CLAUDE_INTERNAL_ERROR',
+      retryable: false,
+      message: 'Claude run failed: Claude reported a terminal result failure with subtype "error_max_turns".',
+      details: {
+        subtype: 'error_max_turns',
+        errors: [],
+        classification: 'internal',
+        retryable: false,
       },
     });
   });
