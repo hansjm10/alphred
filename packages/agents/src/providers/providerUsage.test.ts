@@ -287,9 +287,7 @@ describe('provider usage metadata contract', () => {
       {
         tokens: 2,
         usage: {
-          usage: {
-            total_tokens: 15,
-          },
+          total_tokens: 15,
         },
       },
     ];
@@ -300,8 +298,8 @@ describe('provider usage metadata contract', () => {
   });
 
   it('handles nested usage token metadata seen in provider payloads', () => {
-    expect(hasTokenUsageShape({ usage: { usage: { total_tokens: 21 } } })).toBe(true);
-    expect(hasTokenUsageShape({ usage: { usage: { tokensUsed: 21 } } })).toBe(true);
+    expect(hasTokenUsageShape({ usage: { total_tokens: 21 } })).toBe(true);
+    expect(hasTokenUsageShape({ usage: { tokensUsed: 21 } })).toBe(true);
   });
 
   it('rejects malformed usage metadata that only contains non-numeric token fields', () => {
