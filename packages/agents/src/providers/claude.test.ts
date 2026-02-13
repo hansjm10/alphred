@@ -3,9 +3,11 @@ import { describe, expect, it } from 'vitest';
 import {
   ClaudeProvider,
   ClaudeProviderError,
+  type ClaudeBootstrapper,
   type ClaudeRawEvent,
   type ClaudeRunRequest,
 } from './claude.js';
+import { ClaudeBootstrapError } from './claudeSdkBootstrap.js';
 
 const defaultOptions: ProviderRunOptions = {
   workingDirectory: '/tmp/alphred-claude-test',
@@ -17,6 +19,19 @@ function createRunner(events: readonly ClaudeRawEvent[]): (request: ClaudeRunReq
       yield event;
     }
   };
+}
+
+function createNoopBootstrap(): ReturnType<ClaudeBootstrapper> {
+  return {
+    authMode: 'api_key',
+    model: 'claude-3-7-sonnet-latest',
+    apiKey: 'sk-claude',
+    apiKeySource: 'CLAUDE_API_KEY',
+  };
+}
+
+function createProvider(runner: (request: ClaudeRunRequest) => AsyncIterable<ClaudeRawEvent>): ClaudeProvider {
+  return new ClaudeProvider(runner, () => createNoopBootstrap());
 }
 
 async function collectEvents(
@@ -35,7 +50,7 @@ async function collectEvents(
 
 describe('claude provider', () => {
   it('emits a normalized provider event stream with a deterministic sequence', async () => {
-    const provider = new ClaudeProvider(
+    const provider = createProvider(
       createRunner([
         { type: 'message', content: 'Drafting implementation.' },
         { type: 'usage', metadata: { inputTokens: 12, outputTokens: 5 } },
@@ -67,7 +82,7 @@ describe('claude provider', () => {
   });
 
   it('keeps incremental tokens metadata without coercing it to total_tokens', async () => {
-    const provider = new ClaudeProvider(
+    const provider = createProvider(
       createRunner([
         { type: 'usage', metadata: { tokens: 30 } },
         { type: 'result', content: 'done' },
@@ -82,7 +97,7 @@ describe('claude provider', () => {
 
   it('bridges working directory and prompt options into the claude runner request', async () => {
     let capturedRequest: ClaudeRunRequest | undefined;
-    const provider = new ClaudeProvider(async function* (request: ClaudeRunRequest): AsyncIterable<ClaudeRawEvent> {
+    const provider = createProvider(async function* (request: ClaudeRunRequest): AsyncIterable<ClaudeRawEvent> {
       capturedRequest = request;
       yield { type: 'result', content: 'ok' };
     });
@@ -112,7 +127,7 @@ describe('claude provider', () => {
   it('normalizes circular event content without default object stringification', async () => {
     const circularContent: Record<string, unknown> = { step: 'drafting' };
     circularContent.self = circularContent;
-    const provider = new ClaudeProvider(
+    const provider = createProvider(
       createRunner([
         { type: 'assistant', content: circularContent },
         { type: 'result', content: 'done' },
@@ -127,7 +142,7 @@ describe('claude provider', () => {
   });
 
   it('throws a typed error when required options are invalid', async () => {
-    const provider = new ClaudeProvider(createRunner([{ type: 'result', content: '' }]));
+    const provider = createProvider(createRunner([{ type: 'result', content: '' }]));
     const invalidOptions = [
       { workingDirectory: '   ' },
       {},
@@ -153,7 +168,7 @@ describe('claude provider', () => {
   });
 
   it('throws a typed error when optional options are malformed', async () => {
-    const provider = new ClaudeProvider(createRunner([{ type: 'result', content: '' }]));
+    const provider = createProvider(createRunner([{ type: 'result', content: '' }]));
     const invalidOptionalOptions = [
       { workingDirectory: '/tmp/alphred-claude-test', context: 'invalid-context' },
       { workingDirectory: '/tmp/alphred-claude-test', context: null },
@@ -171,7 +186,7 @@ describe('claude provider', () => {
   });
 
   it('throws a typed error when claude emits unsupported event types', async () => {
-    const provider = new ClaudeProvider(createRunner([{ type: 'unsupported' }]));
+    const provider = createProvider(createRunner([{ type: 'unsupported' }]));
 
     await expect(collectEvents(provider)).rejects.toMatchObject({
       code: 'CLAUDE_INVALID_EVENT',
@@ -179,7 +194,7 @@ describe('claude provider', () => {
   });
 
   it('throws a typed error when claude emits events after result', async () => {
-    const provider = new ClaudeProvider(
+    const provider = createProvider(
       createRunner([
         { type: 'result', content: 'done' },
         { type: 'usage', metadata: { tokens: 1 } },
@@ -192,7 +207,7 @@ describe('claude provider', () => {
   });
 
   it('throws a typed error when claude completes without a result event', async () => {
-    const provider = new ClaudeProvider(createRunner([{ type: 'assistant', content: 'partial output' }]));
+    const provider = createProvider(createRunner([{ type: 'assistant', content: 'partial output' }]));
 
     await expect(collectEvents(provider)).rejects.toMatchObject({
       code: 'CLAUDE_MISSING_RESULT',
@@ -200,7 +215,7 @@ describe('claude provider', () => {
   });
 
   it('wraps runner failures in the claude provider error path', async () => {
-    const provider = new ClaudeProvider(async function* (_request: ClaudeRunRequest): AsyncIterable<ClaudeRawEvent> {
+    const provider = createProvider(async function* (_request: ClaudeRunRequest): AsyncIterable<ClaudeRawEvent> {
       throw new Error('claude process crashed');
       yield { type: 'result', content: '' };
     });
@@ -216,5 +231,71 @@ describe('claude provider', () => {
       expect(typedError.cause).toBeInstanceOf(Error);
       expect((typedError.cause as Error).message).toBe('claude process crashed');
     }
+  });
+
+  it('fails fast with a typed auth error when bootstrap detects missing auth', async () => {
+    const provider = new ClaudeProvider(
+      createRunner([{ type: 'result', content: 'ok' }]),
+      () => {
+        throw new ClaudeBootstrapError(
+          'CLAUDE_BOOTSTRAP_MISSING_AUTH',
+          'Claude provider requires an API key via CLAUDE_API_KEY or ANTHROPIC_API_KEY.',
+        );
+      },
+    );
+
+    await expect(collectEvents(provider)).rejects.toMatchObject({
+      code: 'CLAUDE_AUTH_ERROR',
+      details: {
+        bootstrapCode: 'CLAUDE_BOOTSTRAP_MISSING_AUTH',
+        classification: 'auth',
+        retryable: false,
+      },
+      retryable: false,
+    });
+  });
+
+  it('maps deterministic bootstrap config failures to non-retryable config errors', async () => {
+    const provider = new ClaudeProvider(
+      createRunner([{ type: 'result', content: 'ok' }]),
+      () => {
+        throw new ClaudeBootstrapError(
+          'CLAUDE_BOOTSTRAP_INVALID_CONFIG',
+          'Claude provider requires ANTHROPIC_BASE_URL to be a valid URL when set.',
+          { envKey: 'ANTHROPIC_BASE_URL' },
+        );
+      },
+    );
+
+    await expect(collectEvents(provider)).rejects.toMatchObject({
+      code: 'CLAUDE_INVALID_CONFIG',
+      details: {
+        bootstrapCode: 'CLAUDE_BOOTSTRAP_INVALID_CONFIG',
+        classification: 'config',
+        retryable: false,
+        envKey: 'ANTHROPIC_BASE_URL',
+      },
+    });
+  });
+
+  it('fails fast with deterministic internal errors for unknown bootstrap failures', async () => {
+    const bootstrapFailure = new Error('socket timeout while probing runtime');
+    const provider = new ClaudeProvider(
+      createRunner([{ type: 'result', content: 'ok' }]),
+      () => {
+        throw bootstrapFailure;
+      },
+    );
+
+    await expect(collectEvents(provider)).rejects.toMatchObject({
+      code: 'CLAUDE_INTERNAL_ERROR',
+      message: 'Claude provider bootstrap failed with an unknown internal error.',
+      retryable: false,
+      details: {
+        classification: 'internal',
+        retryable: false,
+      },
+      cause: bootstrapFailure,
+    });
   });
 });
