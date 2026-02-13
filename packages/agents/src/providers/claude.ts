@@ -525,6 +525,7 @@ function mapAssistantMessage(sdkMessage: Record<string, unknown>, state: ClaudeS
   }
 
   const mappedEvents: ClaudeRawEvent[] = [];
+  const assistantTextBlocks: string[] = [];
 
   for (let blockIndex = 0; blockIndex < content.length; blockIndex += 1) {
     const blockPath = `event.message.content[${blockIndex}]`;
@@ -533,7 +534,7 @@ function mapAssistantMessage(sdkMessage: Record<string, unknown>, state: ClaudeS
 
     if (blockType === 'text') {
       const text = toStringOrThrow(block.text, eventIndex, `${blockPath}.text`);
-      state.lastAssistantMessage = text;
+      assistantTextBlocks.push(text);
       mappedEvents.push({
         type: 'assistant',
         content: text,
@@ -584,6 +585,10 @@ function mapAssistantMessage(sdkMessage: Record<string, unknown>, state: ClaudeS
         });
       }
     }
+  }
+
+  if (assistantTextBlocks.length > 0) {
+    state.lastAssistantMessage = assistantTextBlocks.join('');
   }
 
   return mappedEvents;

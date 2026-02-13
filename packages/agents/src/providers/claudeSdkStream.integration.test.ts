@@ -531,6 +531,40 @@ describe('claude provider sdk stream integration fixtures', () => {
     expect(events[5]?.content).toBe('   ');
   });
 
+  it('falls back to concatenated assistant text when success result omits result content', async () => {
+    const provider = createProviderForFixture([
+      {
+        type: 'assistant',
+        message: {
+          content: [
+            {
+              type: 'text',
+              text: 'Alpha',
+            },
+            {
+              type: 'text',
+              text: 'Beta',
+            },
+          ],
+        },
+      },
+      {
+        type: 'result',
+        subtype: 'success',
+        usage: {
+          input_tokens: 9,
+          output_tokens: 5,
+        },
+      },
+    ]);
+
+    const events = await collectEvents(provider);
+    expect(events.map((event) => event.type)).toEqual(['system', 'assistant', 'assistant', 'usage', 'result']);
+    expect(events[1]?.content).toBe('Alpha');
+    expect(events[2]?.content).toBe('Beta');
+    expect(events[4]?.content).toBe('AlphaBeta');
+  });
+
   it('cleans up timeout handles when sdk query construction fails synchronously', async () => {
     vi.useFakeTimers();
     try {
