@@ -163,16 +163,63 @@ Runtime semantics:
 
 ## Database Schema
 
-Eight SQLite tables managed via Drizzle ORM:
+SQL-first workflow topology and execution state are modeled with normalized tables in SQLite (via Drizzle ORM):
 
-- `workflows` - Template definitions (JSON workflow spec)
-- `runs` - Execution instances with status tracking
-- `phases` - Individual phase records within a run
-- `phase_reports` - Output artifacts from phase execution
-- `agent_sessions` - Individual agent invocations with token/cost tracking
-- `agent_events` - Streaming event log
-- `run_logs` - Structured application logs
-- `state_snapshots` - Persistent key-value state between phases
+- `workflow_trees`
+  - Versioned tree definitions (`tree_key`, `version`, `name`) and ownership root for topology rows.
+  - Constraint/index rationale:
+    - Unique `(tree_key, version)` prevents ambiguous template identity.
+    - `created_at` index supports chronological catalog queries.
+- `prompt_templates`
+  - Reusable prompt references for node templates.
+  - Constraint/index rationale:
+    - Unique `(template_key, version)` supports immutable prompt versions.
+    - `content_type` check enforces allowed prompt formats.
+- `guard_definitions`
+  - Reusable guard references (stored as JSON text expressions).
+  - Constraint/index rationale:
+    - Unique `(guard_key, version)` provides deterministic guard lookup.
+- `tree_nodes`
+  - Phase template nodes (`node_key`, `node_type`, `provider`, `prompt_template_id`, retry policy).
+  - Constraint/index rationale:
+    - Unique `(workflow_tree_id, node_key)` enforces node identity within a tree version.
+    - Unique `(workflow_tree_id, sequence_index)` enforces deterministic ordering.
+    - `node_type` check and `provider`-required-for-agent check harden topology validity.
+    - `node_key` and `created_at` indexes support lookup and listing hot paths.
+- `tree_edges`
+  - Directed transitions (`source_node_id`, `target_node_id`, `priority`, `guard_definition_id`, `auto`).
+  - Constraint/index rationale:
+    - Unique `(source_node_id, priority)` enforces deterministic transition precedence.
+    - `auto` boolean and transition-mode checks enforce unconditional-vs-guarded edge semantics.
+- `workflow_runs`
+  - Execution instances bound to a specific workflow tree version.
+  - Constraint/index rationale:
+    - Run status check enforces lifecycle enum.
+    - Completion timestamp check ensures terminal states have `completed_at`.
+- `run_nodes`
+  - Materialized node execution records per run.
+  - Constraint/index rationale:
+    - Unique `(workflow_run_id, sequence_index)` enforces deterministic run order.
+    - Unique `(workflow_run_id, node_key, attempt)` prevents duplicate attempt identity.
+    - Status and timestamp checks enforce lifecycle integrity at DB boundary.
+    - Required hot-path indexes: `(workflow_run_id, status)`, `(workflow_run_id, sequence_index)`, `node_key`, `created_at`.
+- `routing_decisions`
+  - Typed routing outcomes (`approved`, `changes_requested`, `blocked`, `retry`, `no_route`) stored separately from model output text.
+  - Constraint/index rationale:
+    - `decision_type` check enforces allowed decision taxonomy.
+    - `(workflow_run_id, created_at)` and `created_at` indexes support timeline queries.
+- `phase_artifacts`
+  - Free-form phase outputs (text/markdown/json/diff) and metadata.
+  - Constraint/index rationale:
+    - Content/artifact type checks enforce valid storage classes.
+    - `(workflow_run_id, created_at)` and `created_at` indexes support artifact retrieval patterns.
+
+FK behavior is explicit:
+- Template topology rows cascade from `workflow_trees`.
+- Execution rows cascade from `workflow_runs` and `run_nodes`.
+- Shared references (`prompt_templates`, `guard_definitions`) use `RESTRICT` to prevent dangling refs.
+
+Run-node state transitions are additionally guarded in the DB package write path to reject invalid status moves (`pending -> running/skipped/cancelled`, `running -> completed/failed/cancelled`, `failed -> running`).
 
 ## Git Integration
 
