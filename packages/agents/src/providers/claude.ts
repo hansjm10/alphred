@@ -18,6 +18,10 @@ const claudeEventTypeAliases: Readonly<Record<string, ProviderEvent['type']>> = 
   text: 'assistant',
 });
 
+const objectWithHasOwn = Object as ObjectConstructor & {
+  hasOwn(object: object, property: PropertyKey): boolean;
+};
+
 export type ClaudeProviderErrorCode =
   | 'CLAUDE_AUTH_ERROR'
   | 'CLAUDE_INVALID_CONFIG'
@@ -342,35 +346,25 @@ function extractFailureCode(records: readonly Record<string, unknown>[]): string
 }
 
 function collectFailureMessages(records: readonly Record<string, unknown>[]): string[] {
+  const directFailureMessageFields = ['message', 'detail', 'error', 'cause'] as const;
   const messages: string[] = [];
+
+  const appendFailureMessage = (value: unknown): void => {
+    const normalizedMessage = toTrimmedString(value);
+    if (normalizedMessage) {
+      messages.push(normalizedMessage);
+    }
+  };
+
   for (const record of records) {
-    const message = toTrimmedString(record.message);
-    if (message) {
-      messages.push(message);
-    }
-
-    const detail = toTrimmedString(record.detail);
-    if (detail) {
-      messages.push(detail);
-    }
-
-    const error = toTrimmedString(record.error);
-    if (error) {
-      messages.push(error);
-    }
-
-    const cause = toTrimmedString(record.cause);
-    if (cause) {
-      messages.push(cause);
+    for (const field of directFailureMessageFields) {
+      appendFailureMessage(record[field]);
     }
 
     const errors = record.errors;
     if (Array.isArray(errors)) {
       for (const errorMessage of errors) {
-        const normalizedErrorMessage = toTrimmedString(errorMessage);
-        if (normalizedErrorMessage) {
-          messages.push(normalizedErrorMessage);
-        }
+        appendFailureMessage(errorMessage);
       }
     }
   }
@@ -498,6 +492,115 @@ function mapAuthStatusMessage(sdkMessage: Record<string, unknown>, eventIndex: n
   );
 }
 
+type AssistantContentBlockMapping = Readonly<{
+  assistantText?: string;
+  events: ClaudeRawEvent[];
+}>;
+
+function mapAssistantTextBlock(
+  block: Record<string, unknown>,
+  eventIndex: number,
+  blockPath: string,
+): AssistantContentBlockMapping {
+  const text = toStringOrThrow(block.text, eventIndex, `${blockPath}.text`);
+  return {
+    assistantText: text,
+    events: [
+      {
+        type: 'assistant',
+        content: text,
+      },
+    ],
+  };
+}
+
+function mapAssistantToolUseBlock(
+  block: Record<string, unknown>,
+  state: ClaudeStreamState,
+  eventIndex: number,
+  blockPath: string,
+): AssistantContentBlockMapping {
+  const toolName = toNonBlankStringOrThrow(block.name, eventIndex, `${blockPath}.name`);
+  const toolUseId = toNonBlankStringOrThrow(block.id, eventIndex, `${blockPath}.id`);
+  if (state.toolUseIds.has(toolUseId)) {
+    return { events: [] };
+  }
+
+  state.toolUseIds.add(toolUseId);
+  return {
+    events: [
+      {
+        type: 'tool_use',
+        content: toolName,
+        metadata: {
+          toolName,
+          toolUseId,
+          input: block.input,
+        },
+      },
+    ],
+  };
+}
+
+function mapAssistantToolResultBlock(block: Record<string, unknown>): AssistantContentBlockMapping {
+  return {
+    events: [
+      {
+        type: 'tool_result',
+        content: block.content,
+        metadata: {
+          toolUseId: toTrimmedString(block.tool_use_id),
+          isError: block.is_error,
+        },
+      },
+    ],
+  };
+}
+
+function mapAssistantThinkingBlock(block: Record<string, unknown>, blockType: string): AssistantContentBlockMapping {
+  const thinkingText = toTrimmedString(block.text);
+  if (!thinkingText) {
+    return { events: [] };
+  }
+
+  return {
+    events: [
+      {
+        type: 'system',
+        content: thinkingText,
+        metadata: {
+          contentBlockType: blockType,
+        },
+      },
+    ],
+  };
+}
+
+function mapAssistantContentBlock(
+  contentBlock: unknown,
+  state: ClaudeStreamState,
+  eventIndex: number,
+  blockIndex: number,
+): AssistantContentBlockMapping {
+  const blockPath = `event.message.content[${blockIndex}]`;
+  const block = toRecordOrThrow(contentBlock, eventIndex, blockPath);
+  const blockType = toNonBlankStringOrThrow(block.type, eventIndex, `${blockPath}.type`);
+
+  switch (blockType) {
+    case 'text':
+      return mapAssistantTextBlock(block, eventIndex, blockPath);
+    case 'tool_use':
+      return mapAssistantToolUseBlock(block, state, eventIndex, blockPath);
+    case 'tool_result':
+      return mapAssistantToolResultBlock(block);
+    case 'thinking':
+    case 'redacted_thinking':
+      return mapAssistantThinkingBlock(block, blockType);
+    default:
+      return { events: [] };
+  }
+}
+
 function mapAssistantMessage(sdkMessage: Record<string, unknown>, state: ClaudeStreamState, eventIndex: number): ClaudeRawEvent[] {
   const assistantError = toTrimmedString(sdkMessage.error);
   if (assistantError) {
@@ -528,63 +631,11 @@ function mapAssistantMessage(sdkMessage: Record<string, unknown>, state: ClaudeS
   const assistantTextBlocks: string[] = [];
 
   for (let blockIndex = 0; blockIndex < content.length; blockIndex += 1) {
-    const blockPath = `event.message.content[${blockIndex}]`;
-    const block = toRecordOrThrow(content[blockIndex], eventIndex, blockPath);
-    const blockType = toNonBlankStringOrThrow(block.type, eventIndex, `${blockPath}.type`);
-
-    if (blockType === 'text') {
-      const text = toStringOrThrow(block.text, eventIndex, `${blockPath}.text`);
-      assistantTextBlocks.push(text);
-      mappedEvents.push({
-        type: 'assistant',
-        content: text,
-      });
-      continue;
+    const mappedBlock = mapAssistantContentBlock(content[blockIndex], state, eventIndex, blockIndex);
+    if (mappedBlock.assistantText !== undefined) {
+      assistantTextBlocks.push(mappedBlock.assistantText);
     }
-
-    if (blockType === 'tool_use') {
-      const toolName = toNonBlankStringOrThrow(block.name, eventIndex, `${blockPath}.name`);
-      const toolUseId = toNonBlankStringOrThrow(block.id, eventIndex, `${blockPath}.id`);
-      if (state.toolUseIds.has(toolUseId)) {
-        continue;
-      }
-      state.toolUseIds.add(toolUseId);
-      mappedEvents.push({
-        type: 'tool_use',
-        content: toolName,
-        metadata: {
-          toolName,
-          toolUseId,
-          input: block.input,
-        },
-      });
-      continue;
-    }
-
-    if (blockType === 'tool_result') {
-      mappedEvents.push({
-        type: 'tool_result',
-        content: block.content,
-        metadata: {
-          toolUseId: toTrimmedString(block.tool_use_id),
-          isError: block.is_error,
-        },
-      });
-      continue;
-    }
-
-    if (blockType === 'thinking' || blockType === 'redacted_thinking') {
-      const thinkingText = toTrimmedString(block.text);
-      if (thinkingText) {
-        mappedEvents.push({
-          type: 'system',
-          content: thinkingText,
-          metadata: {
-            contentBlockType: blockType,
-          },
-        });
-      }
-    }
+    mappedEvents.push(...mappedBlock.events);
   }
 
   if (assistantTextBlocks.length > 0) {
@@ -595,7 +646,7 @@ function mapAssistantMessage(sdkMessage: Record<string, unknown>, state: ClaudeS
 }
 
 function mapUserMessage(sdkMessage: Record<string, unknown>): ClaudeRawEvent[] {
-  if (!Object.prototype.hasOwnProperty.call(sdkMessage, 'tool_use_result')) {
+  if (!objectWithHasOwn.hasOwn(sdkMessage, 'tool_use_result')) {
     return [];
   }
 
