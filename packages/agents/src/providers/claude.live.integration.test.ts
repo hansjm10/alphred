@@ -137,6 +137,30 @@ async function collectEvents(
   return events;
 }
 
+function collectAssistantText(content: unknown): string {
+  if (!Array.isArray(content)) {
+    return '';
+  }
+
+  return content
+    .filter((block) => block && typeof block === 'object' && !Array.isArray(block))
+    .filter((block) => (block as { type?: unknown }).type === 'text' && typeof (block as { text?: unknown }).text === 'string')
+    .map((block) => (block as { text: string }).text)
+    .join('');
+}
+
+function createLiveSdkQueryOptions(model: string): Record<string, unknown> {
+  return {
+    cwd: process.cwd(),
+    model,
+    env: {
+      ...process.env,
+      CLAUDE_API_KEY: undefined,
+      ANTHROPIC_API_KEY: undefined,
+    },
+  };
+}
+
 describeLive('claude provider live smoke integration', () => {
   it(
     'runs against live Claude SDK credentials and returns a valid provider event stream',
@@ -164,6 +188,57 @@ describeLive('claude provider live smoke integration', () => {
       expect((events.at(-1)?.content ?? '').length).toBeGreaterThan(0);
       expect(typeof liveModel).toBe('string');
       expect(liveModel.length).toBeGreaterThan(0);
+    },
+    90_000,
+  );
+
+  it(
+    'enforces live SDK success contract: terminal success includes complete string result',
+    async () => {
+      const sdkQuery = createCliSessionQueryWrapper();
+      const liveModel = await resolveLiveModel(sdkQuery);
+      const stream = sdkQuery({
+        prompt: 'Reply with exactly two lines: "Alpha" on line one and "Beta" on line two.',
+        options: createLiveSdkQueryOptions(liveModel),
+      }) as AsyncIterable<unknown> & { close?: () => void };
+
+      let terminalSuccessSeen = false;
+      let terminalResult: unknown;
+      let lastAssistantText = '';
+
+      try {
+        for await (const message of stream) {
+          if (!message || typeof message !== 'object' || Array.isArray(message)) {
+            continue;
+          }
+
+          const typedMessage = message as {
+            type?: unknown;
+            subtype?: unknown;
+            result?: unknown;
+            message?: { content?: unknown };
+          };
+          if (typedMessage.type === 'assistant') {
+            const assistantText = collectAssistantText(typedMessage.message?.content);
+            if (assistantText.length > 0) {
+              lastAssistantText = assistantText;
+            }
+          }
+
+          if (typedMessage.type === 'result' && typedMessage.subtype === 'success') {
+            terminalSuccessSeen = true;
+            terminalResult = typedMessage.result;
+          }
+        }
+      } finally {
+        stream.close?.();
+      }
+
+      expect(terminalSuccessSeen).toBe(true);
+      expect(typeof terminalResult).toBe('string');
+      expect((terminalResult as string).length).toBeGreaterThan(0);
+      expect(lastAssistantText.length).toBeGreaterThan(0);
+      expect(terminalResult).toBe(lastAssistantText);
     },
     90_000,
   );
