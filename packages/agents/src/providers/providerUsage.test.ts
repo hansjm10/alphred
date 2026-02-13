@@ -151,7 +151,6 @@ describe('provider usage metadata contract', () => {
     const provider = createProvider();
     const events = await collectEvents(provider, {
       workingDirectory: process.cwd(),
-      maxTokens: 64,
     });
 
     expect(events.length, `${name} provider emitted no events.`).toBeGreaterThan(0);
@@ -169,7 +168,6 @@ describe('provider usage metadata contract', () => {
     const provider = createProvider();
     const usageEvents = await collectUsageEvents(provider, {
       workingDirectory: process.cwd(),
-      maxTokens: 64,
     });
 
     expect(
@@ -194,7 +192,6 @@ describe('provider usage metadata contract', () => {
         workingDirectory: process.cwd(),
         systemPrompt: 'Prefer deterministic and concise output.',
         context: ['repo=alphred', 'issue=27'],
-        maxTokens: 128,
         timeout: 30_000,
       });
 
@@ -203,7 +200,6 @@ describe('provider usage metadata contract', () => {
         provider: name,
         hasSystemPrompt: true,
         contextItemCount: 2,
-        maxTokens: 128,
         timeout: 30_000,
       });
     },
@@ -214,7 +210,6 @@ describe('provider usage metadata contract', () => {
     const provider = new CodexProvider(undefined, () => createNoopBootstrap(capture));
     const usageEvents = await collectUsageEvents(provider, {
       workingDirectory: process.cwd(),
-      maxTokens: 64,
       timeout: 15_000,
     });
 

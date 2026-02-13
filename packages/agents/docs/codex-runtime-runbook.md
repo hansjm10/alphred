@@ -54,14 +54,12 @@ When CLI auth is used, the provider checks login state via the bundled Codex bin
 - `workingDirectory`: required, non-empty string.
 - `systemPrompt`: optional string; trimmed; empty values ignored.
 - `context`: optional string array; non-string entries are dropped.
-- `maxTokens`: optional positive integer.
 - `timeout`: optional positive number in milliseconds, maximum `2_147_483_647`.
 
 Current behavior notes:
 
 - `timeout` is enforced by `AbortSignal.timeout(timeout)`.
 - No default timeout is applied when `timeout` is omitted.
-- `maxTokens` is validated and surfaced in run metadata, but is not currently forwarded to the SDK turn call.
 
 ## Stream and Result Semantics
 
@@ -77,7 +75,7 @@ Current behavior notes:
 |---|---|---|---|
 | `CODEX_AUTH_ERROR` | auth | No | Missing auth, invalid key, unauthorized/forbidden responses, no CLI login session. |
 | `CODEX_INVALID_CONFIG` | config | No | Invalid env config, invalid URL/protocol, unsupported platform/arch, CLI status-check failures, missing bundled binary. |
-| `CODEX_INVALID_OPTIONS` | config | No | Invalid `ProviderRunOptions` (missing working directory, malformed timeout/maxTokens/context/systemPrompt). |
+| `CODEX_INVALID_OPTIONS` | config | No | Invalid `ProviderRunOptions` (missing working directory, malformed timeout/context/systemPrompt). |
 | `CODEX_INVALID_EVENT` | config | No | Unsupported/malformed SDK stream events or invalid event ordering. |
 | `CODEX_MISSING_RESULT` | config | No | Stream ended without terminal `result`. |
 | `CODEX_TIMEOUT` | timeout | Yes | Timeout/deadline patterns and timeout-like status/failure codes. |

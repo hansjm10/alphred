@@ -124,7 +124,6 @@ CLAUDE_LIVE_SMOKE=1 pnpm vitest run packages/agents/src/providers/claude.live.in
 - Endpoint override (`OPENAI_BASE_URL`) is validated when set.
 - Model default uses `CODEX_MODEL` when set, otherwise `gpt-5-codex`.
 - `timeout` is enforced through `AbortSignal.timeout(timeout)`.
-- `maxTokens` is validated by provider options but is not currently forwarded to the Codex SDK turn call.
 
 ## Add a Provider Checklist
 

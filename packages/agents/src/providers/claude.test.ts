@@ -106,7 +106,6 @@ describe('claude provider', () => {
       workingDirectory: '/work/alphred',
       systemPrompt: 'Be concise and deterministic.',
       context: ['issue=14', 'provider=claude'],
-      maxTokens: 512,
       timeout: 30_000,
     };
 
@@ -117,7 +116,6 @@ describe('claude provider', () => {
     expect(capturedRequest?.workingDirectory).toBe('/work/alphred');
     expect(capturedRequest?.systemPrompt).toBe('Be concise and deterministic.');
     expect(capturedRequest?.context).toEqual(['issue=14', 'provider=claude']);
-    expect(capturedRequest?.maxTokens).toBe(512);
     expect(capturedRequest?.timeout).toBe(30_000);
     expect(capturedRequest?.bridgedPrompt).toContain('System prompt:\nBe concise and deterministic.');
     expect(capturedRequest?.bridgedPrompt).toContain('Context:\n[1] issue=14\n[2] provider=claude');

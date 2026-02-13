@@ -72,7 +72,6 @@ export type ProviderEvent = {
 export type ProviderRunOptions = {
   workingDirectory: string;
   systemPrompt?: string;
-  maxTokens?: number;
   timeout?: number;
   context?: string[];
 };
