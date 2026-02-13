@@ -67,6 +67,32 @@ jobs:
           name: coverage
           path: coverage/lcov.info
 
+  codex_live_smoke:
+    name: Codex Live Smoke
+    runs-on: ubuntu-latest
+    if: >
+      (
+        github.event_name == 'push'
+        || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)
+      )
+      && (secrets.CODEX_API_KEY != '' || secrets.OPENAI_API_KEY != '')
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: '.nvmrc'
+          cache: 'pnpm'
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm vitest run packages/agents/src/providers/codex.live.integration.test.ts
+        env:
+          CODEX_LIVE_SMOKE: '1'
+          CODEX_API_KEY: ${{ secrets.CODEX_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          CODEX_MODEL: ${{ vars.CODEX_LIVE_SMOKE_MODEL }}
+          OPENAI_BASE_URL: ${{ vars.CODEX_LIVE_SMOKE_OPENAI_BASE_URL }}
+
   sonar:
     name: SonarCloud
     runs-on: ubuntu-latest

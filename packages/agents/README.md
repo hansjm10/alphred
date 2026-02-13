@@ -134,6 +134,30 @@ CLAUDE_LIVE_SMOKE=1 pnpm vitest run packages/agents/src/providers/claude.live.in
 - Model default uses `CODEX_MODEL` when set, otherwise `gpt-5-codex`.
 - `timeout` is enforced through `AbortSignal.timeout(timeout)`.
 
+#### Codex live smoke test (optional, CI-gated)
+
+- Live smoke test file: `packages/agents/src/providers/codex.live.integration.test.ts`.
+- This test is skipped by default unless `CODEX_LIVE_SMOKE=1`.
+- To run locally:
+
+```bash
+CODEX_LIVE_SMOKE=1 pnpm vitest run packages/agents/src/providers/codex.live.integration.test.ts
+```
+
+- CI job: `.github/workflows/ci.yml` -> `Codex Live Smoke`.
+- CI gating:
+  - runs only on trusted contexts (`push` and same-repository `pull_request`)
+  - runs only when at least one auth secret is configured: `CODEX_API_KEY` or `OPENAI_API_KEY`
+- Optional CI variables:
+  - `CODEX_LIVE_SMOKE_MODEL`
+  - `CODEX_LIVE_SMOKE_OPENAI_BASE_URL`
+- Failure output is surfaced with deterministic provider diagnostics:
+  - `code`
+  - `details.classification`
+  - `retryable`
+  - `details.statusCode`
+  - `details.failureCode`
+
 ## Add a Provider Checklist
 
 1. Add provider name to `AgentProviderName` in `@alphred/shared`.

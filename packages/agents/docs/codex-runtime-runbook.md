@@ -143,15 +143,42 @@ Actions:
 
 ## CI Guidance
 
-Current repository CI uses mocked Codex stream tests and does not require live Codex credentials.
+Repository CI keeps mocked Codex stream coverage as the deterministic baseline in `pnpm test:coverage`.
+Live runtime smoke coverage is added as a gated supplemental job: `.github/workflows/ci.yml` -> `Codex Live Smoke`.
 
-If a live Codex runtime CI job is introduced:
+`Codex Live Smoke` execution gates:
 
-1. Provide one secret auth variable:
+1. Runs only in trusted contexts:
+   - `push`
+   - same-repository `pull_request` (fork PRs are excluded)
+2. Requires at least one secret auth variable:
    - `CODEX_API_KEY` or `OPENAI_API_KEY`
-2. Optionally configure:
+3. Optionally configure repository variables:
+   - `CODEX_LIVE_SMOKE_MODEL`
+   - `CODEX_LIVE_SMOKE_OPENAI_BASE_URL`
+4. Job command:
+
+```bash
+CODEX_LIVE_SMOKE=1 pnpm vitest run packages/agents/src/providers/codex.live.integration.test.ts
+```
+
+5. Optional runtime env values available to that test:
    - `CODEX_MODEL`
    - `OPENAI_BASE_URL`
    - `CODEX_HOME`
-3. Keep retries/backoff policy aligned to `CodexProviderError.retryable`.
-4. Keep deterministic failure handling by branching on `code` and `details.classification`.
+6. Keep retries/backoff policy aligned to `CodexProviderError.retryable`.
+7. Keep deterministic failure handling by branching on `code` and `details.classification`.
+8. Live-smoke failures are surfaced with actionable diagnostics:
+   - `code`
+   - `details.classification`
+   - `retryable`
+   - `details.statusCode`
+   - `details.failureCode`
+
+## Live Smoke Test (Optional)
+
+This test validates at least one successful live Codex runtime path and is skipped by default.
+
+```bash
+CODEX_LIVE_SMOKE=1 pnpm vitest run packages/agents/src/providers/codex.live.integration.test.ts
+```
