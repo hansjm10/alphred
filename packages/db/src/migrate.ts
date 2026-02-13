@@ -196,6 +196,8 @@ export function migrateDatabase(db: AlphredDatabase): void {
       CHECK (status IN ('pending', 'running', 'completed', 'failed', 'skipped', 'cancelled')),
     CONSTRAINT run_nodes_attempt_ck
       CHECK (attempt > 0),
+    CONSTRAINT run_nodes_pending_started_at_ck
+      CHECK ((status <> 'pending') OR (started_at IS NULL)),
     CONSTRAINT run_nodes_running_started_at_ck
       CHECK ((status <> 'running') OR (started_at IS NOT NULL)),
     CONSTRAINT run_nodes_completion_timestamp_ck
@@ -249,6 +251,26 @@ export function migrateDatabase(db: AlphredDatabase): void {
       SELECT RAISE(ABORT, 'run_nodes must be inserted in pending state with null started_at/completed_at');
     END`);
 
+  db.run(sql`CREATE TRIGGER IF NOT EXISTS run_nodes_node_key_matches_tree_node_insert_ck
+    BEFORE INSERT ON run_nodes
+    FOR EACH ROW
+    WHEN (
+      NEW.node_key <> (SELECT node_key FROM tree_nodes WHERE id = NEW.tree_node_id)
+    )
+    BEGIN
+      SELECT RAISE(ABORT, 'run_nodes.node_key must match tree_nodes.node_key for run_nodes.tree_node_id');
+    END`);
+
+  db.run(sql`CREATE TRIGGER IF NOT EXISTS run_nodes_node_key_matches_tree_node_update_ck
+    BEFORE UPDATE OF tree_node_id, node_key ON run_nodes
+    FOR EACH ROW
+    WHEN (
+      NEW.node_key <> (SELECT node_key FROM tree_nodes WHERE id = NEW.tree_node_id)
+    )
+    BEGIN
+      SELECT RAISE(ABORT, 'run_nodes.node_key must match tree_nodes.node_key for run_nodes.tree_node_id');
+    END`);
+
   db.run(sql`CREATE TRIGGER IF NOT EXISTS run_nodes_same_tree_insert_ck
     BEFORE INSERT ON run_nodes
     FOR EACH ROW
@@ -267,6 +289,21 @@ export function migrateDatabase(db: AlphredDatabase): void {
     )
     BEGIN
       SELECT RAISE(ABORT, 'run_nodes.workflow_run_id and run_nodes.tree_node_id must share workflow_tree_id');
+    END`);
+
+  db.run(sql`CREATE TRIGGER IF NOT EXISTS tree_nodes_node_key_update_referenced_by_run_nodes_ck
+    BEFORE UPDATE OF node_key ON tree_nodes
+    FOR EACH ROW
+    WHEN (
+      NEW.node_key <> OLD.node_key
+      AND EXISTS (
+        SELECT 1
+        FROM run_nodes
+        WHERE run_nodes.tree_node_id = NEW.id
+      )
+    )
+    BEGIN
+      SELECT RAISE(ABORT, 'tree_nodes.node_key cannot change while referenced by run_nodes');
     END`);
 
   db.run(sql`CREATE TRIGGER IF NOT EXISTS workflow_runs_run_nodes_same_tree_update_ck

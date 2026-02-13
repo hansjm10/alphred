@@ -19,7 +19,9 @@ type Seed = {
   promptTemplateId: number;
   runId: number;
   sourceNodeId: number;
+  sourceNodeKey: string;
   targetNodeId: number;
+  targetNodeKey: string;
   treeId: number;
 };
 
@@ -97,7 +99,9 @@ function seedTreeState(db: ReturnType<typeof createDatabase>, keyPrefix = 'desig
     promptTemplateId: promptTemplate.id,
     guardDefinitionId: guardDefinition.id,
     sourceNodeId: sourceNode.id,
+    sourceNodeKey: `${keyPrefix}_design`,
     targetNodeId: targetNode.id,
+    targetNodeKey: `${keyPrefix}_implement`,
     runId: run.id,
   };
 }
@@ -144,7 +148,7 @@ describe('database schema hardening', () => {
       .values({
         workflowRunId: seed.runId,
         treeNodeId: seed.sourceNodeId,
-        nodeKey: 'design',
+        nodeKey: seed.sourceNodeKey,
         status: 'pending',
         sequenceIndex: 1,
       })
@@ -206,7 +210,7 @@ describe('database schema hardening', () => {
       db.insert(runNodes).values({
         workflowRunId: first.runId,
         treeNodeId: second.sourceNodeId,
-        nodeKey: 'cross_tree_node',
+        nodeKey: second.sourceNodeKey,
         status: 'pending',
         sequenceIndex: 99,
       }).run(),
@@ -222,6 +226,46 @@ describe('database schema hardening', () => {
         guardDefinitionId: first.guardDefinitionId,
       }).run(),
     ).toThrow();
+  });
+
+  it('enforces run-node node_key consistency with referenced tree nodes', () => {
+    const db = createDatabase(':memory:');
+    migrateDatabase(db);
+    const seed = seedTreeState(db);
+
+    expect(() =>
+      db.insert(runNodes).values({
+        workflowRunId: seed.runId,
+        treeNodeId: seed.sourceNodeId,
+        nodeKey: 'mismatched_node_key',
+        status: 'pending',
+        sequenceIndex: 1,
+      }).run(),
+    ).toThrow('run_nodes.node_key must match tree_nodes.node_key for run_nodes.tree_node_id');
+
+    const runNode = db
+      .insert(runNodes)
+      .values({
+        workflowRunId: seed.runId,
+        treeNodeId: seed.sourceNodeId,
+        nodeKey: seed.sourceNodeKey,
+        status: 'pending',
+        sequenceIndex: 1,
+      })
+      .returning({ id: runNodes.id })
+      .get();
+
+    expect(() =>
+      db.update(runNodes).set({ nodeKey: 'tampered_key' }).where(eq(runNodes.id, runNode.id)).run(),
+    ).toThrow('run_nodes.node_key must match tree_nodes.node_key for run_nodes.tree_node_id');
+
+    expect(() =>
+      db
+        .update(treeNodes)
+        .set({ nodeKey: 'renamed_source_node' })
+        .where(eq(treeNodes.id, seed.sourceNodeId))
+        .run(),
+    ).toThrow('tree_nodes.node_key cannot change while referenced by run_nodes');
   });
 
   it('rejects tree reassignment updates that would orphan edge and run-node tree invariants', () => {
@@ -313,7 +357,7 @@ describe('database schema hardening', () => {
     db.insert(runNodes).values({
       workflowRunId: seed.runId,
       treeNodeId: seed.sourceNodeId,
-      nodeKey: 'design',
+      nodeKey: seed.sourceNodeKey,
       status: 'pending',
       sequenceIndex: 1,
     }).run();
@@ -322,7 +366,7 @@ describe('database schema hardening', () => {
       db.insert(runNodes).values({
         workflowRunId: seed.runId,
         treeNodeId: seed.targetNodeId,
-        nodeKey: 'implement',
+        nodeKey: seed.targetNodeKey,
         status: 'pending',
         sequenceIndex: 1,
       }).run(),
@@ -348,7 +392,7 @@ describe('database schema hardening', () => {
       .values({
         workflowRunId: seed.runId,
         treeNodeId: seed.sourceNodeId,
-        nodeKey: 'design',
+        nodeKey: seed.sourceNodeKey,
         status: 'pending',
         sequenceIndex: 1,
       })
@@ -361,6 +405,14 @@ describe('database schema hardening', () => {
         runNodeId: runNode.id,
         decisionType: 'unknown',
       }).run(),
+    ).toThrow();
+
+    expect(() =>
+      db
+        .update(runNodes)
+        .set({ startedAt: '2026-01-01T00:00:00.000Z' })
+        .where(eq(runNodes.id, runNode.id))
+        .run(),
     ).toThrow();
 
     expect(() =>
@@ -377,7 +429,7 @@ describe('database schema hardening', () => {
       db.insert(runNodes).values({
         workflowRunId: seed.runId,
         treeNodeId: seed.sourceNodeId,
-        nodeKey: 'bad_running_insert',
+        nodeKey: seed.sourceNodeKey,
         status: 'running',
         startedAt: '2026-01-01T00:00:00.000Z',
         sequenceIndex: 1,
@@ -388,7 +440,7 @@ describe('database schema hardening', () => {
       db.insert(runNodes).values({
         workflowRunId: seed.runId,
         treeNodeId: seed.sourceNodeId,
-        nodeKey: 'bad_completed_insert',
+        nodeKey: seed.sourceNodeKey,
         status: 'completed',
         completedAt: '2026-01-01T00:00:00.000Z',
         sequenceIndex: 2,
@@ -406,7 +458,7 @@ describe('database schema hardening', () => {
       .values({
         workflowRunId: seed.runId,
         treeNodeId: seed.sourceNodeId,
-        nodeKey: 'design',
+        nodeKey: seed.sourceNodeKey,
         status: 'pending',
         sequenceIndex: 1,
       })

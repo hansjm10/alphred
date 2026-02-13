@@ -188,6 +188,10 @@ export const runNodes = sqliteTable(
       sql`${table.status} in ('pending', 'running', 'completed', 'failed', 'skipped', 'cancelled')`,
     ),
     attemptCheck: check('run_nodes_attempt_ck', sql`${table.attempt} > 0`),
+    pendingStartedAtCheck: check(
+      'run_nodes_pending_started_at_ck',
+      sql`(${table.status} <> 'pending') or (${table.startedAt} is null)`,
+    ),
     runningStartedAtCheck: check(
       'run_nodes_running_started_at_ck',
       sql`(${table.status} <> 'running') or (${table.startedAt} is not null)`,
