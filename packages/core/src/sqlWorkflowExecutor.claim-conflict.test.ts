@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 const mockState = vi.hoisted(() => ({
   injectClaimConflict: false,
+  injectUnexpectedClaimError: false,
 }));
 
 vi.mock('@alphred/db', async () => {
@@ -19,6 +20,9 @@ vi.mock('@alphred/db', async () => {
         throw new Error(
           `Run-node transition precondition failed for id=${params.runNodeId}; expected status "${params.expectedFrom}".`,
         );
+      }
+      if (mockState.injectUnexpectedClaimError && params.expectedFrom === 'pending' && params.to === 'running') {
+        throw new Error('unexpected claim failure');
       }
 
       return actual.transitionRunNodeStatus(db, params);
@@ -153,5 +157,30 @@ describe('createSqlWorkflowExecutor claim conflicts', () => {
     }
 
     expect(persistedRun.status).toBe('running');
+  });
+
+  it('rethrows unexpected claim errors', async () => {
+    const { db, runId } = seedSingleAgentRun();
+    const executor = createSqlWorkflowExecutor(db, {
+      resolveProvider: () =>
+        createProvider([
+          { type: 'system', content: 'start', timestamp: 100 },
+          { type: 'result', content: 'Design report body', timestamp: 102 },
+        ]),
+    });
+
+    mockState.injectUnexpectedClaimError = true;
+    try {
+      await expect(
+        executor.executeNextRunnableNode({
+          workflowRunId: runId,
+          options: {
+            workingDirectory: '/tmp/alphred-worktree',
+          },
+        }),
+      ).rejects.toThrow('unexpected claim failure');
+    } finally {
+      mockState.injectUnexpectedClaimError = false;
+    }
   });
 });

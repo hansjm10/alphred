@@ -9,6 +9,8 @@ import {
   phaseArtifacts,
   promptTemplates,
   runNodes,
+  transitionRunNodeStatus,
+  transitionWorkflowRunStatus,
   treeEdges,
   treeNodes,
   workflowRuns,
@@ -26,7 +28,7 @@ function createProvider(events: ProviderEvent[]) {
   };
 }
 
-function seedSingleAgentRun() {
+function seedSingleAgentRun(promptContentType: 'markdown' | 'text' = 'markdown') {
   const db = createDatabase(':memory:');
   migrateDatabase(db);
 
@@ -46,7 +48,7 @@ function seedSingleAgentRun() {
       templateKey: 'design_prompt',
       version: 1,
       content: 'Create a design report',
-      contentType: 'markdown',
+      contentType: promptContentType,
     })
     .returning({ id: promptTemplates.id })
     .get();
@@ -67,6 +69,270 @@ function seedSingleAgentRun() {
     db,
     runId: materialized.run.id,
     runNodeId: materialized.runNodes[0].id,
+  };
+}
+
+function seedTwoRootAgentRun() {
+  const db = createDatabase(':memory:');
+  migrateDatabase(db);
+
+  const tree = db
+    .insert(workflowTrees)
+    .values({
+      treeKey: 'two_root_tree',
+      version: 1,
+      name: 'Two Root Tree',
+    })
+    .returning({ id: workflowTrees.id })
+    .get();
+
+  const prompt = db
+    .insert(promptTemplates)
+    .values({
+      templateKey: 'two_root_prompt',
+      version: 1,
+      content: 'Create report',
+      contentType: 'markdown',
+    })
+    .returning({ id: promptTemplates.id })
+    .get();
+
+  db.insert(treeNodes)
+    .values([
+      {
+        workflowTreeId: tree.id,
+        nodeKey: 'a',
+        nodeType: 'agent',
+        provider: 'codex',
+        promptTemplateId: prompt.id,
+        sequenceIndex: 1,
+      },
+      {
+        workflowTreeId: tree.id,
+        nodeKey: 'b',
+        nodeType: 'agent',
+        provider: 'codex',
+        promptTemplateId: prompt.id,
+        sequenceIndex: 2,
+      },
+    ])
+    .run();
+
+  const materialized = materializeWorkflowRunFromTree(db, { treeKey: 'two_root_tree' });
+  const nodeRows = db
+    .select({
+      id: runNodes.id,
+      nodeKey: runNodes.nodeKey,
+    })
+    .from(runNodes)
+    .where(eq(runNodes.workflowRunId, materialized.run.id))
+    .all();
+
+  const firstNode = nodeRows.find(node => node.nodeKey === 'a');
+  const secondNode = nodeRows.find(node => node.nodeKey === 'b');
+  if (!firstNode || !secondNode) {
+    throw new Error('Expected both root run-nodes to be materialized.');
+  }
+
+  return {
+    db,
+    runId: materialized.run.id,
+    firstRunNodeId: firstNode.id,
+    secondRunNodeId: secondNode.id,
+  };
+}
+
+function seedLinearAutoRun() {
+  const db = createDatabase(':memory:');
+  migrateDatabase(db);
+
+  const tree = db
+    .insert(workflowTrees)
+    .values({
+      treeKey: 'linear_auto_tree',
+      version: 1,
+      name: 'Linear Auto Tree',
+    })
+    .returning({ id: workflowTrees.id })
+    .get();
+
+  const prompt = db
+    .insert(promptTemplates)
+    .values({
+      templateKey: 'linear_auto_prompt',
+      version: 1,
+      content: 'Create report',
+      contentType: 'markdown',
+    })
+    .returning({ id: promptTemplates.id })
+    .get();
+
+  const sourceNode = db
+    .insert(treeNodes)
+    .values({
+      workflowTreeId: tree.id,
+      nodeKey: 'source',
+      nodeType: 'agent',
+      provider: 'codex',
+      promptTemplateId: prompt.id,
+      sequenceIndex: 1,
+    })
+    .returning({ id: treeNodes.id })
+    .get();
+
+  const targetNode = db
+    .insert(treeNodes)
+    .values({
+      workflowTreeId: tree.id,
+      nodeKey: 'target',
+      nodeType: 'agent',
+      provider: 'codex',
+      promptTemplateId: prompt.id,
+      sequenceIndex: 2,
+    })
+    .returning({ id: treeNodes.id })
+    .get();
+
+  db.insert(treeEdges)
+    .values({
+      workflowTreeId: tree.id,
+      sourceNodeId: sourceNode.id,
+      targetNodeId: targetNode.id,
+      priority: 0,
+      auto: 1,
+    })
+    .run();
+
+  const materialized = materializeWorkflowRunFromTree(db, { treeKey: 'linear_auto_tree' });
+  const nodeRows = db
+    .select({
+      id: runNodes.id,
+      nodeKey: runNodes.nodeKey,
+    })
+    .from(runNodes)
+    .where(eq(runNodes.workflowRunId, materialized.run.id))
+    .all();
+
+  const sourceRunNode = nodeRows.find(node => node.nodeKey === 'source');
+  const targetRunNode = nodeRows.find(node => node.nodeKey === 'target');
+  if (!sourceRunNode || !targetRunNode) {
+    throw new Error('Expected linear auto run-nodes to be materialized.');
+  }
+
+  return {
+    db,
+    runId: materialized.run.id,
+    sourceRunNodeId: sourceRunNode.id,
+    targetRunNodeId: targetRunNode.id,
+  };
+}
+
+function seedConvergingAutoRun() {
+  const db = createDatabase(':memory:');
+  migrateDatabase(db);
+
+  const tree = db
+    .insert(workflowTrees)
+    .values({
+      treeKey: 'converging_auto_tree',
+      version: 1,
+      name: 'Converging Auto Tree',
+    })
+    .returning({ id: workflowTrees.id })
+    .get();
+
+  const prompt = db
+    .insert(promptTemplates)
+    .values({
+      templateKey: 'converging_auto_prompt',
+      version: 1,
+      content: 'Create report',
+      contentType: 'markdown',
+    })
+    .returning({ id: promptTemplates.id })
+    .get();
+
+  const sourceA = db
+    .insert(treeNodes)
+    .values({
+      workflowTreeId: tree.id,
+      nodeKey: 'source_a',
+      nodeType: 'agent',
+      provider: 'codex',
+      promptTemplateId: prompt.id,
+      sequenceIndex: 1,
+    })
+    .returning({ id: treeNodes.id })
+    .get();
+
+  const sourceB = db
+    .insert(treeNodes)
+    .values({
+      workflowTreeId: tree.id,
+      nodeKey: 'source_b',
+      nodeType: 'agent',
+      provider: 'codex',
+      promptTemplateId: prompt.id,
+      sequenceIndex: 2,
+    })
+    .returning({ id: treeNodes.id })
+    .get();
+
+  const target = db
+    .insert(treeNodes)
+    .values({
+      workflowTreeId: tree.id,
+      nodeKey: 'target',
+      nodeType: 'agent',
+      provider: 'codex',
+      promptTemplateId: prompt.id,
+      sequenceIndex: 3,
+    })
+    .returning({ id: treeNodes.id })
+    .get();
+
+  db.insert(treeEdges)
+    .values([
+      {
+        workflowTreeId: tree.id,
+        sourceNodeId: sourceA.id,
+        targetNodeId: target.id,
+        priority: 0,
+        auto: 1,
+      },
+      {
+        workflowTreeId: tree.id,
+        sourceNodeId: sourceB.id,
+        targetNodeId: target.id,
+        priority: 1,
+        auto: 1,
+      },
+    ])
+    .run();
+
+  const materialized = materializeWorkflowRunFromTree(db, { treeKey: 'converging_auto_tree' });
+  const nodeRows = db
+    .select({
+      id: runNodes.id,
+      nodeKey: runNodes.nodeKey,
+    })
+    .from(runNodes)
+    .where(eq(runNodes.workflowRunId, materialized.run.id))
+    .all();
+
+  const sourceARunNode = nodeRows.find(node => node.nodeKey === 'source_a');
+  const sourceBRunNode = nodeRows.find(node => node.nodeKey === 'source_b');
+  const targetRunNode = nodeRows.find(node => node.nodeKey === 'target');
+  if (!sourceARunNode || !sourceBRunNode || !targetRunNode) {
+    throw new Error('Expected converging auto run-nodes to be materialized.');
+  }
+
+  return {
+    db,
+    runId: materialized.run.id,
+    sourceARunNodeId: sourceARunNode.id,
+    sourceBRunNodeId: sourceBRunNode.id,
+    targetRunNodeId: targetRunNode.id,
   };
 }
 
@@ -554,5 +820,390 @@ describe('createSqlWorkflowExecutor', () => {
     expect(artifacts[0].artifactType).toBe('log');
     expect(artifacts[0].contentType).toBe('text');
     expect(artifacts[0].content).toContain('Unsupported node type "human"');
+  });
+
+  it('returns run_terminal when the workflow run is already terminal', async () => {
+    const { db, runId } = seedSingleAgentRun();
+    transitionWorkflowRunStatus(db, {
+      workflowRunId: runId,
+      expectedFrom: 'pending',
+      to: 'cancelled',
+      occurredAt: '2026-01-01T00:00:00.000Z',
+    });
+
+    const resolveProvider = vi.fn(() => createProvider([]));
+    const executor = createSqlWorkflowExecutor(db, {
+      resolveProvider,
+    });
+
+    const result = await executor.executeNextRunnableNode({
+      workflowRunId: runId,
+      options: {
+        workingDirectory: '/tmp/alphred-worktree',
+      },
+    });
+
+    expect(result).toEqual({
+      outcome: 'run_terminal',
+      workflowRunId: runId,
+      runStatus: 'cancelled',
+    });
+    expect(resolveProvider).not.toHaveBeenCalled();
+  });
+
+  it('returns no_runnable and completes a running workflow when all latest attempts are terminal', async () => {
+    const { db, runId, runNodeId } = seedSingleAgentRun();
+    transitionWorkflowRunStatus(db, {
+      workflowRunId: runId,
+      expectedFrom: 'pending',
+      to: 'running',
+      occurredAt: '2026-01-01T00:00:00.000Z',
+    });
+    transitionRunNodeStatus(db, {
+      runNodeId,
+      expectedFrom: 'pending',
+      to: 'running',
+      occurredAt: '2026-01-01T00:01:00.000Z',
+    });
+    transitionRunNodeStatus(db, {
+      runNodeId,
+      expectedFrom: 'running',
+      to: 'completed',
+      occurredAt: '2026-01-01T00:02:00.000Z',
+    });
+
+    const executor = createSqlWorkflowExecutor(db, {
+      resolveProvider: () => createProvider([]),
+    });
+
+    const result = await executor.executeNextRunnableNode({
+      workflowRunId: runId,
+      options: {
+        workingDirectory: '/tmp/alphred-worktree',
+      },
+    });
+
+    expect(result).toEqual({
+      outcome: 'no_runnable',
+      workflowRunId: runId,
+      runStatus: 'completed',
+    });
+  });
+
+  it('returns blocked and fails the run when failures exist but pending nodes are not runnable', async () => {
+    const { db, runId, sourceRunNodeId } = seedLinearAutoRun();
+    transitionRunNodeStatus(db, {
+      runNodeId: sourceRunNodeId,
+      expectedFrom: 'pending',
+      to: 'running',
+      occurredAt: '2026-01-01T00:00:00.000Z',
+    });
+    transitionRunNodeStatus(db, {
+      runNodeId: sourceRunNodeId,
+      expectedFrom: 'running',
+      to: 'failed',
+      occurredAt: '2026-01-01T00:01:00.000Z',
+    });
+
+    const resolveProvider = vi.fn(() => createProvider([]));
+    const executor = createSqlWorkflowExecutor(db, {
+      resolveProvider,
+    });
+
+    const result = await executor.executeNextRunnableNode({
+      workflowRunId: runId,
+      options: {
+        workingDirectory: '/tmp/alphred-worktree',
+      },
+    });
+
+    expect(result).toEqual({
+      outcome: 'blocked',
+      workflowRunId: runId,
+      runStatus: 'failed',
+    });
+    expect(resolveProvider).not.toHaveBeenCalled();
+  });
+
+  it('supports converging auto edges when selecting the next runnable node', async () => {
+    const { db, runId, sourceARunNodeId, sourceBRunNodeId, targetRunNodeId } = seedConvergingAutoRun();
+    transitionRunNodeStatus(db, {
+      runNodeId: sourceARunNodeId,
+      expectedFrom: 'pending',
+      to: 'running',
+      occurredAt: '2026-01-01T00:00:00.000Z',
+    });
+    transitionRunNodeStatus(db, {
+      runNodeId: sourceARunNodeId,
+      expectedFrom: 'running',
+      to: 'completed',
+      occurredAt: '2026-01-01T00:01:00.000Z',
+    });
+    transitionRunNodeStatus(db, {
+      runNodeId: sourceBRunNodeId,
+      expectedFrom: 'pending',
+      to: 'running',
+      occurredAt: '2026-01-01T00:02:00.000Z',
+    });
+    transitionRunNodeStatus(db, {
+      runNodeId: sourceBRunNodeId,
+      expectedFrom: 'running',
+      to: 'completed',
+      occurredAt: '2026-01-01T00:03:00.000Z',
+    });
+
+    const executor = createSqlWorkflowExecutor(db, {
+      resolveProvider: () =>
+        createProvider([
+          { type: 'result', content: 'Merged output', timestamp: 10 },
+        ]),
+    });
+
+    const result = await executor.executeNextRunnableNode({
+      workflowRunId: runId,
+      options: {
+        workingDirectory: '/tmp/alphred-worktree',
+      },
+    });
+
+    expect(result).toEqual({
+      outcome: 'executed',
+      workflowRunId: runId,
+      runNodeId: targetRunNodeId,
+      nodeKey: 'target',
+      runNodeStatus: 'completed',
+      runStatus: 'completed',
+      artifactId: expect.any(Number),
+    });
+  });
+
+  it('keeps run status running when another latest attempt is already running', async () => {
+    const { db, runId, firstRunNodeId, secondRunNodeId } = seedTwoRootAgentRun();
+    transitionRunNodeStatus(db, {
+      runNodeId: firstRunNodeId,
+      expectedFrom: 'pending',
+      to: 'running',
+      occurredAt: '2026-01-01T00:00:00.000Z',
+    });
+
+    const executor = createSqlWorkflowExecutor(db, {
+      resolveProvider: () =>
+        createProvider([
+          { type: 'result', content: 'Second node result', timestamp: 10 },
+        ]),
+    });
+
+    const result = await executor.executeNextRunnableNode({
+      workflowRunId: runId,
+      options: {
+        workingDirectory: '/tmp/alphred-worktree',
+      },
+    });
+
+    expect(result).toEqual({
+      outcome: 'executed',
+      workflowRunId: runId,
+      runNodeId: secondRunNodeId,
+      nodeKey: 'b',
+      runNodeStatus: 'completed',
+      runStatus: 'running',
+      artifactId: expect.any(Number),
+    });
+  });
+
+  it('marks run failed after a successful step when a separate latest attempt already failed', async () => {
+    const { db, runId, firstRunNodeId, secondRunNodeId } = seedTwoRootAgentRun();
+    transitionRunNodeStatus(db, {
+      runNodeId: secondRunNodeId,
+      expectedFrom: 'pending',
+      to: 'running',
+      occurredAt: '2026-01-01T00:00:00.000Z',
+    });
+    transitionRunNodeStatus(db, {
+      runNodeId: secondRunNodeId,
+      expectedFrom: 'running',
+      to: 'failed',
+      occurredAt: '2026-01-01T00:01:00.000Z',
+    });
+
+    const executor = createSqlWorkflowExecutor(db, {
+      resolveProvider: () =>
+        createProvider([
+          { type: 'result', content: 'First node result', timestamp: 10 },
+        ]),
+    });
+
+    const result = await executor.executeNextRunnableNode({
+      workflowRunId: runId,
+      options: {
+        workingDirectory: '/tmp/alphred-worktree',
+      },
+    });
+
+    expect(result).toEqual({
+      outcome: 'executed',
+      workflowRunId: runId,
+      runNodeId: firstRunNodeId,
+      nodeKey: 'a',
+      runNodeStatus: 'completed',
+      runStatus: 'failed',
+      artifactId: expect.any(Number),
+    });
+  });
+
+  it('stores provider errors that are not Error instances as string content', async () => {
+    const { db, runId, runNodeId } = seedSingleAgentRun();
+    const executor = createSqlWorkflowExecutor(db, {
+      resolveProvider: () => ({
+        async *run(): AsyncIterable<ProviderEvent> {
+          throw 'provider exploded';
+          yield { type: 'system', content: '', timestamp: 0 };
+        },
+      }),
+    });
+
+    const result = await executor.executeRun({
+      workflowRunId: runId,
+      options: {
+        workingDirectory: '/tmp/alphred-worktree',
+      },
+    });
+
+    expect(result.finalStep).toEqual({
+      outcome: 'run_terminal',
+      workflowRunId: runId,
+      runStatus: 'failed',
+    });
+
+    const artifact = db
+      .select({
+        artifactType: phaseArtifacts.artifactType,
+        contentType: phaseArtifacts.contentType,
+        content: phaseArtifacts.content,
+      })
+      .from(phaseArtifacts)
+      .where(eq(phaseArtifacts.runNodeId, runNodeId))
+      .get();
+
+    expect(artifact).toEqual({
+      artifactType: 'log',
+      contentType: 'text',
+      content: 'provider exploded',
+    });
+  });
+
+  it('persists recognized prompt content types on successful artifacts', async () => {
+    const { db, runId, runNodeId } = seedSingleAgentRun('text');
+    const executor = createSqlWorkflowExecutor(db, {
+      resolveProvider: () =>
+        createProvider([
+          { type: 'result', content: 'Plain text report', timestamp: 10 },
+        ]),
+    });
+
+    const result = await executor.executeRun({
+      workflowRunId: runId,
+      options: {
+        workingDirectory: '/tmp/alphred-worktree',
+      },
+    });
+
+    expect(result.finalStep).toEqual({
+      outcome: 'run_terminal',
+      workflowRunId: runId,
+      runStatus: 'completed',
+    });
+
+    const artifact = db
+      .select({
+        artifactType: phaseArtifacts.artifactType,
+        contentType: phaseArtifacts.contentType,
+      })
+      .from(phaseArtifacts)
+      .where(eq(phaseArtifacts.runNodeId, runNodeId))
+      .get();
+
+    expect(artifact).toEqual({
+      artifactType: 'report',
+      contentType: 'text',
+    });
+  });
+
+  it('returns blocked from executeRun when the first step has no runnable node', async () => {
+    const { db, runId } = seedGuardedCycleRun();
+    const executor = createSqlWorkflowExecutor(db, {
+      resolveProvider: () => createProvider([]),
+    });
+
+    const result = await executor.executeRun({
+      workflowRunId: runId,
+      options: {
+        workingDirectory: '/tmp/alphred-worktree',
+      },
+    });
+
+    expect(result).toEqual({
+      workflowRunId: runId,
+      executedNodes: 0,
+      finalStep: {
+        outcome: 'blocked',
+        workflowRunId: runId,
+        runStatus: 'running',
+      },
+    });
+  });
+
+  it('throws when maxSteps is less than or equal to zero', async () => {
+    const { db, runId } = seedSingleAgentRun();
+    const executor = createSqlWorkflowExecutor(db, {
+      resolveProvider: () => createProvider([]),
+    });
+
+    await expect(
+      executor.executeRun({
+        workflowRunId: runId,
+        options: {
+          workingDirectory: '/tmp/alphred-worktree',
+        },
+        maxSteps: 0,
+      }),
+    ).rejects.toThrow('maxSteps must be greater than zero.');
+  });
+
+  it('throws when execution exceeds maxSteps before reaching a terminal step', async () => {
+    const { db, runId } = seedTwoRootAgentRun();
+    const executor = createSqlWorkflowExecutor(db, {
+      resolveProvider: () =>
+        createProvider([
+          { type: 'result', content: 'Node output', timestamp: 10 },
+        ]),
+    });
+
+    await expect(
+      executor.executeRun({
+        workflowRunId: runId,
+        options: {
+          workingDirectory: '/tmp/alphred-worktree',
+        },
+        maxSteps: 1,
+      }),
+    ).rejects.toThrow(`Execution loop exceeded maxSteps=1 for workflow run id=${runId}`);
+  });
+
+  it('throws when the workflow run id does not exist', async () => {
+    const db = createDatabase(':memory:');
+    migrateDatabase(db);
+    const executor = createSqlWorkflowExecutor(db, {
+      resolveProvider: () => createProvider([]),
+    });
+
+    await expect(
+      executor.executeNextRunnableNode({
+        workflowRunId: 999,
+        options: {
+          workingDirectory: '/tmp/alphred-worktree',
+        },
+      }),
+    ).rejects.toThrow('Workflow run id=999 was not found.');
   });
 });
