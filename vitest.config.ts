@@ -5,6 +5,7 @@ export default defineConfig({
   resolve: {
     alias: {
       // Keep tests independent from prebuilt package artifacts in clean checkouts.
+      '@alphred/db': resolve(__dirname, 'packages/db/src/index.ts'),
       '@alphred/shared': resolve(__dirname, 'packages/shared/src/index.ts'),
     },
   },

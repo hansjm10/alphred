@@ -102,6 +102,9 @@ importers:
 
   packages/core:
     dependencies:
+      '@alphred/db':
+        specifier: workspace:*
+        version: link:../db
       '@alphred/shared':
         specifier: workspace:*
         version: link:../shared
