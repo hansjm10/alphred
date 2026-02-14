@@ -1,4 +1,4 @@
-import { eq, inArray } from 'drizzle-orm';
+import { asc, eq, inArray } from 'drizzle-orm';
 import type { ProviderEvent, ProviderRunOptions } from '@alphred/shared';
 import { describe, expect, it, vi } from 'vitest';
 import {
@@ -862,6 +862,7 @@ describe('createSqlWorkflowExecutor', () => {
       })
       .from(phaseArtifacts)
       .where(eq(phaseArtifacts.runNodeId, runNodeId))
+      .orderBy(asc(phaseArtifacts.id))
       .all();
 
     expect(artifacts).toHaveLength(2);
@@ -934,6 +935,7 @@ describe('createSqlWorkflowExecutor', () => {
       })
       .from(phaseArtifacts)
       .where(eq(phaseArtifacts.runNodeId, runNodeId))
+      .orderBy(asc(phaseArtifacts.id))
       .all();
 
     expect(artifacts).toHaveLength(2);
