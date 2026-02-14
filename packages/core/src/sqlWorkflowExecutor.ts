@@ -423,6 +423,15 @@ function loadLatestRoutingDecisionsByRunNodeId(
   return latestByRunNodeId;
 }
 
+function appendEdgeToNodeMap(edgesByNodeId: Map<number, EdgeRow[]>, nodeId: number, edge: EdgeRow): void {
+  const edges = edgesByNodeId.get(nodeId);
+  if (edges) {
+    edges.push(edge);
+    return;
+  }
+  edgesByNodeId.set(nodeId, [edge]);
+}
+
 function buildRoutingSelection(
   latestNodeAttempts: RunNodeExecutionRow[],
   edges: EdgeRow[],
@@ -432,19 +441,8 @@ function buildRoutingSelection(
   const incomingEdgesByTargetNodeId = new Map<number, EdgeRow[]>();
   const outgoingEdgesBySourceNodeId = new Map<number, EdgeRow[]>();
   for (const edge of edges) {
-    const incomingEdges = incomingEdgesByTargetNodeId.get(edge.targetNodeId);
-    if (incomingEdges) {
-      incomingEdges.push(edge);
-    } else {
-      incomingEdgesByTargetNodeId.set(edge.targetNodeId, [edge]);
-    }
-
-    const outgoingEdges = outgoingEdgesBySourceNodeId.get(edge.sourceNodeId);
-    if (outgoingEdges) {
-      outgoingEdges.push(edge);
-    } else {
-      outgoingEdgesBySourceNodeId.set(edge.sourceNodeId, [edge]);
-    }
+    appendEdgeToNodeMap(incomingEdgesByTargetNodeId, edge.targetNodeId, edge);
+    appendEdgeToNodeMap(outgoingEdgesBySourceNodeId, edge.sourceNodeId, edge);
   }
 
   const selectedEdgeIdBySourceNodeId = new Map<number, number>();
