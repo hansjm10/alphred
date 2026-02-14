@@ -11,6 +11,7 @@ import {
 import {
   AmbiguousWorkflowTreeVersionError,
   WorkflowTreeNotFoundError,
+  loadWorkflowTreeTopology,
   materializeWorkflowRunFromTree,
   selectActiveWorkflowTreeVersion,
 } from './workflowPlanner.js';
@@ -173,6 +174,22 @@ describe('workflow planner/materializer', () => {
     ).toThrow(AmbiguousWorkflowTreeVersionError);
   });
 
+  it('loads an explicit tree version and throws when explicit version is missing', () => {
+    const { db, oldVersionTreeId, activeTreeId } = seedDesignTreeVersions();
+
+    const explicitOldVersionTopology = loadWorkflowTreeTopology(db, { treeKey: 'design_tree', treeVersion: 1 });
+    expect(explicitOldVersionTopology.tree.id).toBe(oldVersionTreeId);
+    expect(explicitOldVersionTopology.tree.version).toBe(1);
+
+    const explicitActiveVersionTopology = loadWorkflowTreeTopology(db, { treeKey: 'design_tree', treeVersion: 2 });
+    expect(explicitActiveVersionTopology.tree.id).toBe(activeTreeId);
+    expect(explicitActiveVersionTopology.tree.version).toBe(2);
+
+    expect(() => loadWorkflowTreeTopology(db, { treeKey: 'design_tree', treeVersion: 99 })).toThrow(
+      WorkflowTreeNotFoundError,
+    );
+  });
+
   it('materializes deterministic run nodes from the active SQL tree topology', () => {
     const { db, activeTreeId } = seedDesignTreeVersions();
 
@@ -191,5 +208,24 @@ describe('workflow planner/materializer', () => {
 
     expect(secondRun.runNodes.map(node => node.nodeKey)).toEqual(firstRun.runNodes.map(node => node.nodeKey));
     expect(secondRun.runNodes.map(node => node.sequenceIndex)).toEqual(firstRun.runNodes.map(node => node.sequenceIndex));
+  });
+
+  it('materializes running runs with default and explicit startedAt timestamps', () => {
+    const { db } = seedDesignTreeVersions();
+
+    const runningRun = materializeWorkflowRunFromTree(db, { treeKey: 'design_tree', runStatus: 'running' });
+    expect(runningRun.run.status).toBe('running');
+    expect(runningRun.run.startedAt).toMatch(
+      /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/,
+    );
+
+    const explicitStartedAt = '2025-01-02T03:04:05.678Z';
+    const runningRunWithExplicitStart = materializeWorkflowRunFromTree(db, {
+      treeKey: 'design_tree',
+      runStatus: 'running',
+      runStartedAt: explicitStartedAt,
+    });
+    expect(runningRunWithExplicitStart.run.status).toBe('running');
+    expect(runningRunWithExplicitStart.run.startedAt).toBe(explicitStartedAt);
   });
 });
