@@ -9,6 +9,7 @@ import {
   phaseArtifacts,
   promptTemplates,
   runNodes,
+  routingDecisions,
   transitionRunNodeStatus,
   transitionWorkflowRunStatus,
   treeEdges,
@@ -498,6 +499,148 @@ function seedGuardedCycleRun() {
   };
 }
 
+function seedDecisionRoutingRun() {
+  const db = createDatabase(':memory:');
+  migrateDatabase(db);
+
+  const tree = db
+    .insert(workflowTrees)
+    .values({
+      treeKey: 'decision_routing_tree',
+      version: 1,
+      name: 'Decision Routing Tree',
+    })
+    .returning({ id: workflowTrees.id })
+    .get();
+
+  const prompt = db
+    .insert(promptTemplates)
+    .values({
+      templateKey: 'decision_routing_prompt',
+      version: 1,
+      content: 'Produce route decision',
+      contentType: 'markdown',
+    })
+    .returning({ id: promptTemplates.id })
+    .get();
+
+  const approvedGuard = db
+    .insert(guardDefinitions)
+    .values({
+      guardKey: 'route_approved',
+      version: 1,
+      expression: {
+        field: 'decision',
+        operator: '==',
+        value: 'approved',
+      },
+    })
+    .returning({ id: guardDefinitions.id })
+    .get();
+
+  const changesRequestedGuard = db
+    .insert(guardDefinitions)
+    .values({
+      guardKey: 'route_changes_requested',
+      version: 1,
+      expression: {
+        field: 'decision',
+        operator: '==',
+        value: 'changes_requested',
+      },
+    })
+    .returning({ id: guardDefinitions.id })
+    .get();
+
+  const reviewNode = db
+    .insert(treeNodes)
+    .values({
+      workflowTreeId: tree.id,
+      nodeKey: 'review',
+      nodeType: 'agent',
+      provider: 'codex',
+      promptTemplateId: prompt.id,
+      sequenceIndex: 1,
+    })
+    .returning({ id: treeNodes.id })
+    .get();
+
+  const approvedNode = db
+    .insert(treeNodes)
+    .values({
+      workflowTreeId: tree.id,
+      nodeKey: 'approved_target',
+      nodeType: 'agent',
+      provider: 'codex',
+      promptTemplateId: prompt.id,
+      sequenceIndex: 2,
+    })
+    .returning({ id: treeNodes.id })
+    .get();
+
+  const reviseNode = db
+    .insert(treeNodes)
+    .values({
+      workflowTreeId: tree.id,
+      nodeKey: 'revise_target',
+      nodeType: 'agent',
+      provider: 'codex',
+      promptTemplateId: prompt.id,
+      sequenceIndex: 3,
+    })
+    .returning({ id: treeNodes.id })
+    .get();
+
+  db.insert(treeEdges)
+    .values([
+      {
+        workflowTreeId: tree.id,
+        sourceNodeId: reviewNode.id,
+        targetNodeId: approvedNode.id,
+        priority: 0,
+        auto: 0,
+        guardDefinitionId: approvedGuard.id,
+      },
+      {
+        workflowTreeId: tree.id,
+        sourceNodeId: reviewNode.id,
+        targetNodeId: reviseNode.id,
+        priority: 1,
+        auto: 0,
+        guardDefinitionId: changesRequestedGuard.id,
+      },
+    ])
+    .run();
+
+  const materialized = materializeWorkflowRunFromTree(db, {
+    treeKey: 'decision_routing_tree',
+  });
+
+  const nodeRows = db
+    .select({
+      id: runNodes.id,
+      nodeKey: runNodes.nodeKey,
+    })
+    .from(runNodes)
+    .where(eq(runNodes.workflowRunId, materialized.run.id))
+    .all();
+
+  const reviewRunNode = nodeRows.find(node => node.nodeKey === 'review');
+  const approvedRunNode = nodeRows.find(node => node.nodeKey === 'approved_target');
+  const reviseRunNode = nodeRows.find(node => node.nodeKey === 'revise_target');
+  if (!reviewRunNode || !approvedRunNode || !reviseRunNode) {
+    throw new Error('Expected decision-routing run-nodes to be materialized.');
+  }
+
+  return {
+    db,
+    runId: materialized.run.id,
+    reviewRunNodeId: reviewRunNode.id,
+    approvedRunNodeId: approvedRunNode.id,
+    reviseRunNodeId: reviseRunNode.id,
+  };
+}
+
 describe('createSqlWorkflowExecutor', () => {
   it('executes runnable nodes, persists artifacts, and completes the run on success', async () => {
     const { db, runId, runNodeId } = seedSingleAgentRun();
@@ -704,6 +847,201 @@ describe('createSqlWorkflowExecutor', () => {
 
     expect(pendingNodes).toHaveLength(2);
     expect(pendingNodes.every((node) => node.status === 'pending')).toBe(true);
+  });
+
+  it('routes to the approved branch and persists an approved decision', async () => {
+    const { db, runId, reviewRunNodeId, approvedRunNodeId, reviseRunNodeId } = seedDecisionRoutingRun();
+    let runInvocation = 0;
+    const executor = createSqlWorkflowExecutor(db, {
+      resolveProvider: () => ({
+        async *run(): AsyncIterable<ProviderEvent> {
+          runInvocation += 1;
+          if (runInvocation === 1) {
+            yield { type: 'result', content: 'decision: approved\nShip it.', timestamp: 10 };
+            return;
+          }
+
+          yield { type: 'result', content: `Executed node ${runInvocation}.`, timestamp: 20 };
+        },
+      }),
+    });
+
+    const firstStep = await executor.executeNextRunnableNode({
+      workflowRunId: runId,
+      options: {
+        workingDirectory: '/tmp/alphred-worktree',
+      },
+    });
+
+    expect(firstStep).toEqual({
+      outcome: 'executed',
+      workflowRunId: runId,
+      runNodeId: reviewRunNodeId,
+      nodeKey: 'review',
+      runNodeStatus: 'completed',
+      runStatus: 'running',
+      artifactId: expect.any(Number),
+    });
+
+    const persistedReviewDecision = db
+      .select({
+        decisionType: routingDecisions.decisionType,
+      })
+      .from(routingDecisions)
+      .where(eq(routingDecisions.runNodeId, reviewRunNodeId))
+      .get();
+
+    expect(persistedReviewDecision).toEqual({
+      decisionType: 'approved',
+    });
+
+    const secondStep = await executor.executeNextRunnableNode({
+      workflowRunId: runId,
+      options: {
+        workingDirectory: '/tmp/alphred-worktree',
+      },
+    });
+
+    expect(secondStep).toEqual({
+      outcome: 'executed',
+      workflowRunId: runId,
+      runNodeId: approvedRunNodeId,
+      nodeKey: 'approved_target',
+      runNodeStatus: 'completed',
+      runStatus: 'running',
+      artifactId: expect.any(Number),
+    });
+
+    const reviseStatus = db
+      .select({
+        status: runNodes.status,
+      })
+      .from(runNodes)
+      .where(eq(runNodes.id, reviseRunNodeId))
+      .get();
+
+    expect(reviseStatus).toEqual({
+      status: 'pending',
+    });
+  });
+
+  it('routes to the revise branch and persists a changes_requested decision', async () => {
+    const { db, runId, reviewRunNodeId, reviseRunNodeId } = seedDecisionRoutingRun();
+    let runInvocation = 0;
+    const executor = createSqlWorkflowExecutor(db, {
+      resolveProvider: () => ({
+        async *run(): AsyncIterable<ProviderEvent> {
+          runInvocation += 1;
+          if (runInvocation === 1) {
+            yield { type: 'result', content: 'decision: changes_requested\nNeeds another pass.', timestamp: 10 };
+            return;
+          }
+
+          yield { type: 'result', content: `Executed node ${runInvocation}.`, timestamp: 20 };
+        },
+      }),
+    });
+
+    const firstStep = await executor.executeNextRunnableNode({
+      workflowRunId: runId,
+      options: {
+        workingDirectory: '/tmp/alphred-worktree',
+      },
+    });
+
+    expect(firstStep).toEqual({
+      outcome: 'executed',
+      workflowRunId: runId,
+      runNodeId: reviewRunNodeId,
+      nodeKey: 'review',
+      runNodeStatus: 'completed',
+      runStatus: 'running',
+      artifactId: expect.any(Number),
+    });
+
+    const persistedReviewDecision = db
+      .select({
+        decisionType: routingDecisions.decisionType,
+      })
+      .from(routingDecisions)
+      .where(eq(routingDecisions.runNodeId, reviewRunNodeId))
+      .get();
+
+    expect(persistedReviewDecision).toEqual({
+      decisionType: 'changes_requested',
+    });
+
+    const secondStep = await executor.executeNextRunnableNode({
+      workflowRunId: runId,
+      options: {
+        workingDirectory: '/tmp/alphred-worktree',
+      },
+    });
+
+    expect(secondStep).toEqual({
+      outcome: 'executed',
+      workflowRunId: runId,
+      runNodeId: reviseRunNodeId,
+      nodeKey: 'revise_target',
+      runNodeStatus: 'completed',
+      runStatus: 'running',
+      artifactId: expect.any(Number),
+    });
+  });
+
+  it('persists no_route and fails the run when no guarded edge matches', async () => {
+    const { db, runId, reviewRunNodeId } = seedDecisionRoutingRun();
+    const resolveProvider = vi.fn(() => ({
+      async *run(): AsyncIterable<ProviderEvent> {
+        yield { type: 'result', content: 'decision: blocked\nCannot proceed yet.', timestamp: 10 };
+      },
+    }));
+    const executor = createSqlWorkflowExecutor(db, {
+      resolveProvider,
+    });
+
+    const firstStep = await executor.executeNextRunnableNode({
+      workflowRunId: runId,
+      options: {
+        workingDirectory: '/tmp/alphred-worktree',
+      },
+    });
+
+    expect(firstStep).toEqual({
+      outcome: 'executed',
+      workflowRunId: runId,
+      runNodeId: reviewRunNodeId,
+      nodeKey: 'review',
+      runNodeStatus: 'completed',
+      runStatus: 'failed',
+      artifactId: expect.any(Number),
+    });
+
+    const persistedReviewDecision = db
+      .select({
+        decisionType: routingDecisions.decisionType,
+      })
+      .from(routingDecisions)
+      .where(eq(routingDecisions.runNodeId, reviewRunNodeId))
+      .get();
+
+    expect(persistedReviewDecision).toEqual({
+      decisionType: 'no_route',
+    });
+
+    const secondStep = await executor.executeNextRunnableNode({
+      workflowRunId: runId,
+      options: {
+        workingDirectory: '/tmp/alphred-worktree',
+      },
+    });
+
+    expect(secondStep).toEqual({
+      outcome: 'run_terminal',
+      workflowRunId: runId,
+      runStatus: 'failed',
+    });
+    expect(resolveProvider).toHaveBeenCalledTimes(1);
   });
 
   it('defaults persisted artifact content type to markdown when prompt content type is absent', async () => {
