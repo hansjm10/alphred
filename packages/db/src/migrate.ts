@@ -2,7 +2,8 @@ import type { AlphredDatabase } from './connection.js';
 import { sql } from 'drizzle-orm';
 
 export function migrateDatabase(db: AlphredDatabase): void {
-  db.run(sql`CREATE TABLE IF NOT EXISTS workflow_trees (
+  db.transaction((tx) => {
+    tx.run(sql`CREATE TABLE IF NOT EXISTS workflow_trees (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     tree_key TEXT NOT NULL,
     version INTEGER NOT NULL,
@@ -11,12 +12,12 @@ export function migrateDatabase(db: AlphredDatabase): void {
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
     updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
   )`);
-  db.run(sql`CREATE UNIQUE INDEX IF NOT EXISTS workflow_trees_tree_key_version_uq
+  tx.run(sql`CREATE UNIQUE INDEX IF NOT EXISTS workflow_trees_tree_key_version_uq
     ON workflow_trees(tree_key, version)`);
-  db.run(sql`CREATE INDEX IF NOT EXISTS workflow_trees_created_at_idx
+  tx.run(sql`CREATE INDEX IF NOT EXISTS workflow_trees_created_at_idx
     ON workflow_trees(created_at)`);
 
-  db.run(sql`CREATE TABLE IF NOT EXISTS prompt_templates (
+  tx.run(sql`CREATE TABLE IF NOT EXISTS prompt_templates (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     template_key TEXT NOT NULL,
     version INTEGER NOT NULL DEFAULT 1,
@@ -28,12 +29,12 @@ export function migrateDatabase(db: AlphredDatabase): void {
     CONSTRAINT prompt_templates_content_type_ck
       CHECK (content_type IN ('text', 'markdown'))
   )`);
-  db.run(sql`CREATE UNIQUE INDEX IF NOT EXISTS prompt_templates_template_key_version_uq
+  tx.run(sql`CREATE UNIQUE INDEX IF NOT EXISTS prompt_templates_template_key_version_uq
     ON prompt_templates(template_key, version)`);
-  db.run(sql`CREATE INDEX IF NOT EXISTS prompt_templates_created_at_idx
+  tx.run(sql`CREATE INDEX IF NOT EXISTS prompt_templates_created_at_idx
     ON prompt_templates(created_at)`);
 
-  db.run(sql`CREATE TABLE IF NOT EXISTS guard_definitions (
+  tx.run(sql`CREATE TABLE IF NOT EXISTS guard_definitions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     guard_key TEXT NOT NULL,
     version INTEGER NOT NULL DEFAULT 1,
@@ -42,12 +43,12 @@ export function migrateDatabase(db: AlphredDatabase): void {
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
     updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
   )`);
-  db.run(sql`CREATE UNIQUE INDEX IF NOT EXISTS guard_definitions_guard_key_version_uq
+  tx.run(sql`CREATE UNIQUE INDEX IF NOT EXISTS guard_definitions_guard_key_version_uq
     ON guard_definitions(guard_key, version)`);
-  db.run(sql`CREATE INDEX IF NOT EXISTS guard_definitions_created_at_idx
+  tx.run(sql`CREATE INDEX IF NOT EXISTS guard_definitions_created_at_idx
     ON guard_definitions(created_at)`);
 
-  db.run(sql`CREATE TABLE IF NOT EXISTS workflow_runs (
+  tx.run(sql`CREATE TABLE IF NOT EXISTS workflow_runs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     workflow_tree_id INTEGER NOT NULL REFERENCES workflow_trees(id) ON DELETE RESTRICT,
     status TEXT NOT NULL DEFAULT 'pending',
@@ -64,10 +65,10 @@ export function migrateDatabase(db: AlphredDatabase): void {
         (status IN ('completed', 'failed', 'cancelled') AND completed_at IS NOT NULL)
       )
   )`);
-  db.run(sql`CREATE INDEX IF NOT EXISTS workflow_runs_created_at_idx
+  tx.run(sql`CREATE INDEX IF NOT EXISTS workflow_runs_created_at_idx
     ON workflow_runs(created_at)`);
 
-  db.run(sql`CREATE TABLE IF NOT EXISTS tree_nodes (
+  tx.run(sql`CREATE TABLE IF NOT EXISTS tree_nodes (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     workflow_tree_id INTEGER NOT NULL REFERENCES workflow_trees(id) ON DELETE CASCADE,
     node_key TEXT NOT NULL,
@@ -85,16 +86,16 @@ export function migrateDatabase(db: AlphredDatabase): void {
     CONSTRAINT tree_nodes_max_retries_ck
       CHECK (max_retries >= 0)
   )`);
-  db.run(sql`CREATE UNIQUE INDEX IF NOT EXISTS tree_nodes_tree_id_node_key_uq
+  tx.run(sql`CREATE UNIQUE INDEX IF NOT EXISTS tree_nodes_tree_id_node_key_uq
     ON tree_nodes(workflow_tree_id, node_key)`);
-  db.run(sql`CREATE UNIQUE INDEX IF NOT EXISTS tree_nodes_tree_id_sequence_uq
+  tx.run(sql`CREATE UNIQUE INDEX IF NOT EXISTS tree_nodes_tree_id_sequence_uq
     ON tree_nodes(workflow_tree_id, sequence_index)`);
-  db.run(sql`CREATE INDEX IF NOT EXISTS tree_nodes_node_key_idx
+  tx.run(sql`CREATE INDEX IF NOT EXISTS tree_nodes_node_key_idx
     ON tree_nodes(node_key)`);
-  db.run(sql`CREATE INDEX IF NOT EXISTS tree_nodes_created_at_idx
+  tx.run(sql`CREATE INDEX IF NOT EXISTS tree_nodes_created_at_idx
     ON tree_nodes(created_at)`);
 
-  db.run(sql`CREATE TABLE IF NOT EXISTS tree_edges (
+  tx.run(sql`CREATE TABLE IF NOT EXISTS tree_edges (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     workflow_tree_id INTEGER NOT NULL REFERENCES workflow_trees(id) ON DELETE CASCADE,
     source_node_id INTEGER NOT NULL REFERENCES tree_nodes(id) ON DELETE CASCADE,
@@ -114,14 +115,14 @@ export function migrateDatabase(db: AlphredDatabase): void {
         (auto = 0 AND guard_definition_id IS NOT NULL)
       )
   )`);
-  db.run(sql`CREATE UNIQUE INDEX IF NOT EXISTS tree_edges_source_priority_uq
+  tx.run(sql`CREATE UNIQUE INDEX IF NOT EXISTS tree_edges_source_priority_uq
     ON tree_edges(source_node_id, priority)`);
-  db.run(sql`CREATE INDEX IF NOT EXISTS tree_edges_source_node_idx
+  tx.run(sql`CREATE INDEX IF NOT EXISTS tree_edges_source_node_idx
     ON tree_edges(source_node_id)`);
-  db.run(sql`CREATE INDEX IF NOT EXISTS tree_edges_created_at_idx
+  tx.run(sql`CREATE INDEX IF NOT EXISTS tree_edges_created_at_idx
     ON tree_edges(created_at)`);
 
-  db.run(sql`CREATE TRIGGER IF NOT EXISTS tree_edges_same_tree_insert_ck
+  tx.run(sql`CREATE TRIGGER IF NOT EXISTS tree_edges_same_tree_insert_ck
     BEFORE INSERT ON tree_edges
     FOR EACH ROW
     WHEN (
@@ -133,7 +134,7 @@ export function migrateDatabase(db: AlphredDatabase): void {
       SELECT RAISE(ABORT, 'tree_edges must reference source and target nodes from the same workflow_tree_id');
     END`);
 
-  db.run(sql`CREATE TRIGGER IF NOT EXISTS tree_edges_same_tree_update_ck
+  tx.run(sql`CREATE TRIGGER IF NOT EXISTS tree_edges_same_tree_update_ck
     BEFORE UPDATE OF workflow_tree_id, source_node_id, target_node_id ON tree_edges
     FOR EACH ROW
     WHEN (
@@ -145,7 +146,7 @@ export function migrateDatabase(db: AlphredDatabase): void {
       SELECT RAISE(ABORT, 'tree_edges must reference source and target nodes from the same workflow_tree_id');
     END`);
 
-  db.run(sql`CREATE TRIGGER IF NOT EXISTS tree_nodes_edge_same_tree_update_ck
+  tx.run(sql`CREATE TRIGGER IF NOT EXISTS tree_nodes_edge_same_tree_update_ck
     BEFORE UPDATE OF workflow_tree_id ON tree_nodes
     FOR EACH ROW
     WHEN (
@@ -162,7 +163,7 @@ export function migrateDatabase(db: AlphredDatabase): void {
       SELECT RAISE(ABORT, 'tree_nodes.workflow_tree_id must match workflow_tree_id for connected tree_edges');
     END`);
 
-  db.run(sql`CREATE TRIGGER IF NOT EXISTS tree_nodes_run_nodes_same_tree_update_ck
+  tx.run(sql`CREATE TRIGGER IF NOT EXISTS tree_nodes_run_nodes_same_tree_update_ck
     BEFORE UPDATE OF workflow_tree_id ON tree_nodes
     FOR EACH ROW
     WHEN (
@@ -180,7 +181,7 @@ export function migrateDatabase(db: AlphredDatabase): void {
       SELECT RAISE(ABORT, 'tree_nodes.workflow_tree_id must match workflow_tree_id for linked run_nodes');
     END`);
 
-  db.run(sql`CREATE TABLE IF NOT EXISTS run_nodes (
+  tx.run(sql`CREATE TABLE IF NOT EXISTS run_nodes (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     workflow_run_id INTEGER NOT NULL REFERENCES workflow_runs(id) ON DELETE CASCADE,
     tree_node_id INTEGER NOT NULL REFERENCES tree_nodes(id) ON DELETE RESTRICT,
@@ -207,22 +208,22 @@ export function migrateDatabase(db: AlphredDatabase): void {
         (status IN ('completed', 'failed', 'skipped', 'cancelled') AND completed_at IS NOT NULL)
       )
   )`);
-  db.run(sql`CREATE UNIQUE INDEX IF NOT EXISTS run_nodes_run_id_sequence_uq
+  tx.run(sql`CREATE UNIQUE INDEX IF NOT EXISTS run_nodes_run_id_sequence_uq
     ON run_nodes(workflow_run_id, sequence_index)`);
-  db.run(sql`CREATE UNIQUE INDEX IF NOT EXISTS run_nodes_run_id_node_attempt_uq
+  tx.run(sql`CREATE UNIQUE INDEX IF NOT EXISTS run_nodes_run_id_node_attempt_uq
     ON run_nodes(workflow_run_id, node_key, attempt)`);
-  db.run(sql`CREATE UNIQUE INDEX IF NOT EXISTS run_nodes_run_id_id_uq
+  tx.run(sql`CREATE UNIQUE INDEX IF NOT EXISTS run_nodes_run_id_id_uq
     ON run_nodes(workflow_run_id, id)`);
-  db.run(sql`CREATE INDEX IF NOT EXISTS run_nodes_run_id_status_idx
+  tx.run(sql`CREATE INDEX IF NOT EXISTS run_nodes_run_id_status_idx
     ON run_nodes(workflow_run_id, status)`);
-  db.run(sql`CREATE INDEX IF NOT EXISTS run_nodes_run_id_sequence_idx
+  tx.run(sql`CREATE INDEX IF NOT EXISTS run_nodes_run_id_sequence_idx
     ON run_nodes(workflow_run_id, sequence_index)`);
-  db.run(sql`CREATE INDEX IF NOT EXISTS run_nodes_node_key_idx
+  tx.run(sql`CREATE INDEX IF NOT EXISTS run_nodes_node_key_idx
     ON run_nodes(node_key)`);
-  db.run(sql`CREATE INDEX IF NOT EXISTS run_nodes_created_at_idx
+  tx.run(sql`CREATE INDEX IF NOT EXISTS run_nodes_created_at_idx
     ON run_nodes(created_at)`);
 
-  db.run(sql`CREATE TRIGGER IF NOT EXISTS run_nodes_status_transition_update_ck
+  tx.run(sql`CREATE TRIGGER IF NOT EXISTS run_nodes_status_transition_update_ck
     BEFORE UPDATE OF status ON run_nodes
     FOR EACH ROW
     WHEN (
@@ -239,7 +240,7 @@ export function migrateDatabase(db: AlphredDatabase): void {
       SELECT RAISE(ABORT, 'run_nodes status transition is not allowed');
     END`);
 
-  db.run(sql`CREATE TRIGGER IF NOT EXISTS run_nodes_initial_state_insert_ck
+  tx.run(sql`CREATE TRIGGER IF NOT EXISTS run_nodes_initial_state_insert_ck
     BEFORE INSERT ON run_nodes
     FOR EACH ROW
     WHEN (
@@ -251,7 +252,7 @@ export function migrateDatabase(db: AlphredDatabase): void {
       SELECT RAISE(ABORT, 'run_nodes must be inserted in pending state with null started_at/completed_at');
     END`);
 
-  db.run(sql`CREATE TRIGGER IF NOT EXISTS run_nodes_node_key_matches_tree_node_insert_ck
+  tx.run(sql`CREATE TRIGGER IF NOT EXISTS run_nodes_node_key_matches_tree_node_insert_ck
     BEFORE INSERT ON run_nodes
     FOR EACH ROW
     WHEN (
@@ -261,7 +262,7 @@ export function migrateDatabase(db: AlphredDatabase): void {
       SELECT RAISE(ABORT, 'run_nodes.node_key must match tree_nodes.node_key for run_nodes.tree_node_id');
     END`);
 
-  db.run(sql`CREATE TRIGGER IF NOT EXISTS run_nodes_node_key_matches_tree_node_update_ck
+  tx.run(sql`CREATE TRIGGER IF NOT EXISTS run_nodes_node_key_matches_tree_node_update_ck
     BEFORE UPDATE OF tree_node_id, node_key ON run_nodes
     FOR EACH ROW
     WHEN (
@@ -271,7 +272,7 @@ export function migrateDatabase(db: AlphredDatabase): void {
       SELECT RAISE(ABORT, 'run_nodes.node_key must match tree_nodes.node_key for run_nodes.tree_node_id');
     END`);
 
-  db.run(sql`CREATE TRIGGER IF NOT EXISTS run_nodes_same_tree_insert_ck
+  tx.run(sql`CREATE TRIGGER IF NOT EXISTS run_nodes_same_tree_insert_ck
     BEFORE INSERT ON run_nodes
     FOR EACH ROW
     WHEN (
@@ -281,7 +282,7 @@ export function migrateDatabase(db: AlphredDatabase): void {
       SELECT RAISE(ABORT, 'run_nodes.workflow_run_id and run_nodes.tree_node_id must share workflow_tree_id');
     END`);
 
-  db.run(sql`CREATE TRIGGER IF NOT EXISTS run_nodes_same_tree_update_ck
+  tx.run(sql`CREATE TRIGGER IF NOT EXISTS run_nodes_same_tree_update_ck
     BEFORE UPDATE OF workflow_run_id, tree_node_id ON run_nodes
     FOR EACH ROW
     WHEN (
@@ -291,7 +292,7 @@ export function migrateDatabase(db: AlphredDatabase): void {
       SELECT RAISE(ABORT, 'run_nodes.workflow_run_id and run_nodes.tree_node_id must share workflow_tree_id');
     END`);
 
-  db.run(sql`CREATE TRIGGER IF NOT EXISTS tree_nodes_node_key_update_referenced_by_run_nodes_ck
+  tx.run(sql`CREATE TRIGGER IF NOT EXISTS tree_nodes_node_key_update_referenced_by_run_nodes_ck
     BEFORE UPDATE OF node_key ON tree_nodes
     FOR EACH ROW
     WHEN (
@@ -306,7 +307,7 @@ export function migrateDatabase(db: AlphredDatabase): void {
       SELECT RAISE(ABORT, 'tree_nodes.node_key cannot change while referenced by run_nodes');
     END`);
 
-  db.run(sql`CREATE TRIGGER IF NOT EXISTS workflow_runs_run_nodes_same_tree_update_ck
+  tx.run(sql`CREATE TRIGGER IF NOT EXISTS workflow_runs_run_nodes_same_tree_update_ck
     BEFORE UPDATE OF workflow_tree_id ON workflow_runs
     FOR EACH ROW
     WHEN (
@@ -324,7 +325,7 @@ export function migrateDatabase(db: AlphredDatabase): void {
       SELECT RAISE(ABORT, 'workflow_runs.workflow_tree_id must match workflow_tree_id for linked run_nodes');
     END`);
 
-  db.run(sql`CREATE TABLE IF NOT EXISTS routing_decisions (
+  tx.run(sql`CREATE TABLE IF NOT EXISTS routing_decisions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     workflow_run_id INTEGER NOT NULL REFERENCES workflow_runs(id) ON DELETE CASCADE,
     run_node_id INTEGER NOT NULL REFERENCES run_nodes(id) ON DELETE CASCADE,
@@ -339,12 +340,12 @@ export function migrateDatabase(db: AlphredDatabase): void {
     CONSTRAINT routing_decisions_decision_type_ck
       CHECK (decision_type IN ('approved', 'changes_requested', 'blocked', 'retry', 'no_route'))
   )`);
-  db.run(sql`CREATE INDEX IF NOT EXISTS routing_decisions_run_id_created_at_idx
+  tx.run(sql`CREATE INDEX IF NOT EXISTS routing_decisions_run_id_created_at_idx
     ON routing_decisions(workflow_run_id, created_at)`);
-  db.run(sql`CREATE INDEX IF NOT EXISTS routing_decisions_created_at_idx
+  tx.run(sql`CREATE INDEX IF NOT EXISTS routing_decisions_created_at_idx
     ON routing_decisions(created_at)`);
 
-  db.run(sql`CREATE TABLE IF NOT EXISTS phase_artifacts (
+  tx.run(sql`CREATE TABLE IF NOT EXISTS phase_artifacts (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     workflow_run_id INTEGER NOT NULL REFERENCES workflow_runs(id) ON DELETE CASCADE,
     run_node_id INTEGER NOT NULL REFERENCES run_nodes(id) ON DELETE CASCADE,
@@ -362,8 +363,9 @@ export function migrateDatabase(db: AlphredDatabase): void {
     CONSTRAINT phase_artifacts_content_type_ck
       CHECK (content_type IN ('text', 'markdown', 'json', 'diff'))
   )`);
-  db.run(sql`CREATE INDEX IF NOT EXISTS phase_artifacts_run_id_created_at_idx
+  tx.run(sql`CREATE INDEX IF NOT EXISTS phase_artifacts_run_id_created_at_idx
     ON phase_artifacts(workflow_run_id, created_at)`);
-  db.run(sql`CREATE INDEX IF NOT EXISTS phase_artifacts_created_at_idx
+  tx.run(sql`CREATE INDEX IF NOT EXISTS phase_artifacts_created_at_idx
     ON phase_artifacts(created_at)`);
+  });
 }

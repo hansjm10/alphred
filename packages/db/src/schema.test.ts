@@ -228,6 +228,86 @@ describe('database schema hardening', () => {
     ).toThrow();
   });
 
+  it('enforces workflow-run completion timestamps against run status', () => {
+    const db = createDatabase(':memory:');
+    migrateDatabase(db);
+    const seed = seedTreeState(db);
+
+    expect(() =>
+      db.insert(workflowRuns).values({
+        workflowTreeId: seed.treeId,
+        status: 'completed',
+      }).run(),
+    ).toThrow();
+
+    expect(() =>
+      db.insert(workflowRuns).values({
+        workflowTreeId: seed.treeId,
+        status: 'running',
+        completedAt: '2026-01-01T00:00:00.000Z',
+      }).run(),
+    ).toThrow();
+
+    expect(() =>
+      db
+        .update(workflowRuns)
+        .set({
+          status: 'failed',
+          completedAt: '2026-01-01T00:01:00.000Z',
+        })
+        .where(eq(workflowRuns.id, seed.runId))
+        .run(),
+    ).not.toThrow();
+  });
+
+  it('enforces tree edge transition mode combinations', () => {
+    const db = createDatabase(':memory:');
+    migrateDatabase(db);
+    const seed = seedTreeState(db);
+
+    expect(() =>
+      db.insert(treeEdges).values({
+        workflowTreeId: seed.treeId,
+        sourceNodeId: seed.sourceNodeId,
+        targetNodeId: seed.targetNodeId,
+        priority: 1,
+        auto: 1,
+        guardDefinitionId: seed.guardDefinitionId,
+      }).run(),
+    ).toThrow();
+
+    expect(() =>
+      db.insert(treeEdges).values({
+        workflowTreeId: seed.treeId,
+        sourceNodeId: seed.sourceNodeId,
+        targetNodeId: seed.targetNodeId,
+        priority: 2,
+        auto: 0,
+      }).run(),
+    ).toThrow();
+
+    expect(() =>
+      db.insert(treeEdges).values({
+        workflowTreeId: seed.treeId,
+        sourceNodeId: seed.sourceNodeId,
+        targetNodeId: seed.targetNodeId,
+        priority: 3,
+        auto: 1,
+      }).run(),
+    ).not.toThrow();
+
+    expect(() =>
+      db.insert(treeEdges).values({
+        workflowTreeId: seed.treeId,
+        sourceNodeId: seed.sourceNodeId,
+        targetNodeId: seed.targetNodeId,
+        priority: 4,
+        auto: 0,
+        guardDefinitionId: seed.guardDefinitionId,
+      }).run(),
+    ).not.toThrow();
+  });
+
   it('enforces run-node node_key consistency with referenced tree nodes', () => {
     const db = createDatabase(':memory:');
     migrateDatabase(db);
