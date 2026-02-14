@@ -137,8 +137,7 @@ const routeDecisionSignals: ReadonlySet<RouteDecisionSignal> = new Set([
   'retry',
 ]);
 const guardOperators: ReadonlySet<GuardCondition['operator']> = new Set(['==', '!=', '>', '<', '>=', '<=']);
-// Routing decisions are parsed from a phase report line shaped like: `decision: approved`.
-const routingDecisionPattern = /^\s*decision\s*:\s*([a-z_]+)\s*$/im;
+const decisionKeyword = 'decision';
 
 function toRunNodeStatus(value: string): RunNodeStatus {
   return value as RunNodeStatus;
@@ -219,18 +218,113 @@ function isGuardExpression(value: unknown): value is GuardExpression {
   return ['string', 'number', 'boolean'].includes(typeof value.value);
 }
 
-function parseRouteDecisionSignal(report: string): RouteDecisionSignal | null {
-  const match = routingDecisionPattern.exec(report);
-  if (!match) {
+function isAsciiWhitespace(codeUnit: number): boolean {
+  return codeUnit === 0x20 || codeUnit === 0x09 || codeUnit === 0x0b || codeUnit === 0x0c || codeUnit === 0x0d;
+}
+
+function toLowerAscii(codeUnit: number): number {
+  if (codeUnit >= 0x41 && codeUnit <= 0x5a) {
+    return codeUnit + 0x20;
+  }
+
+  return codeUnit;
+}
+
+function isAsciiLetterOrUnderscore(codeUnit: number): boolean {
+  return (
+    codeUnit === 0x5f ||
+    (codeUnit >= 0x41 && codeUnit <= 0x5a) ||
+    (codeUnit >= 0x61 && codeUnit <= 0x7a)
+  );
+}
+
+function parseRouteDecisionLine(line: string): RouteDecisionSignal | null {
+  let index = 0;
+  while (index < line.length && isAsciiWhitespace(line.charCodeAt(index))) {
+    index += 1;
+  }
+
+  for (let keywordIndex = 0; keywordIndex < decisionKeyword.length; keywordIndex += 1) {
+    if (index + keywordIndex >= line.length) {
+      return null;
+    }
+
+    const actual = toLowerAscii(line.charCodeAt(index + keywordIndex));
+    const expected = decisionKeyword.charCodeAt(keywordIndex);
+    if (actual !== expected) {
+      return null;
+    }
+  }
+  index += decisionKeyword.length;
+
+  while (index < line.length && isAsciiWhitespace(line.charCodeAt(index))) {
+    index += 1;
+  }
+
+  if (index >= line.length || line.charCodeAt(index) !== 0x3a) {
+    return null;
+  }
+  index += 1;
+
+  while (index < line.length && isAsciiWhitespace(line.charCodeAt(index))) {
+    index += 1;
+  }
+
+  const tokenStart = index;
+  while (index < line.length && isAsciiLetterOrUnderscore(line.charCodeAt(index))) {
+    index += 1;
+  }
+  const tokenEnd = index;
+  if (tokenStart === tokenEnd) {
     return null;
   }
 
-  const candidate = match[1].toLowerCase();
+  while (index < line.length && isAsciiWhitespace(line.charCodeAt(index))) {
+    index += 1;
+  }
+
+  if (index !== line.length) {
+    return null;
+  }
+
+  const candidate = line.slice(tokenStart, tokenEnd).toLowerCase();
   if (!routeDecisionSignals.has(candidate as RouteDecisionSignal)) {
     return null;
   }
 
   return candidate as RouteDecisionSignal;
+}
+
+function parseRouteDecisionSignal(report: string): RouteDecisionSignal | null {
+  let lineStart = 0;
+
+  for (let index = 0; index <= report.length; index += 1) {
+    const atEnd = index === report.length;
+    if (!atEnd) {
+      const codeUnit = report.charCodeAt(index);
+      if (codeUnit !== 0x0a && codeUnit !== 0x0d) {
+        continue;
+      }
+    }
+
+    const parsed = parseRouteDecisionLine(report.slice(lineStart, index));
+    if (parsed) {
+      return parsed;
+    }
+
+    if (
+      !atEnd &&
+      report.charCodeAt(index) === 0x0d &&
+      index + 1 < report.length &&
+      report.charCodeAt(index + 1) === 0x0a
+    ) {
+      index += 1;
+    }
+
+    lineStart = index + 1;
+  }
+
+  return null;
 }
 
 function doesEdgeMatchDecision(edge: EdgeRow, decisionType: RoutingDecisionType | null): boolean {
