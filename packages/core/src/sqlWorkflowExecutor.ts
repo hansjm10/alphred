@@ -238,56 +238,82 @@ function isAsciiLetterOrUnderscore(codeUnit: number): boolean {
   );
 }
 
-function parseRouteDecisionLine(line: string): RouteDecisionSignal | null {
-  let index = 0;
-  while (index < line.length && isAsciiWhitespace(line.charCodeAt(index))) {
+function codePointAtOrNegativeOne(value: string, index: number): number {
+  return value.codePointAt(index) ?? -1;
+}
+
+function skipAsciiWhitespace(value: string, start: number): number {
+  let index = start;
+  while (index < value.length && isAsciiWhitespace(codePointAtOrNegativeOne(value, index))) {
     index += 1;
   }
 
+  return index;
+}
+
+function consumeDecisionKeyword(line: string, start: number): number | null {
   for (let keywordIndex = 0; keywordIndex < decisionKeyword.length; keywordIndex += 1) {
-    if (index + keywordIndex >= line.length) {
+    const lineIndex = start + keywordIndex;
+    if (lineIndex >= line.length) {
       return null;
     }
 
-    const actual = toLowerAscii(line.charCodeAt(index + keywordIndex));
-    const expected = decisionKeyword.charCodeAt(keywordIndex);
+    const actual = toLowerAscii(codePointAtOrNegativeOne(line, lineIndex));
+    const expected = codePointAtOrNegativeOne(decisionKeyword, keywordIndex);
     if (actual !== expected) {
       return null;
     }
   }
-  index += decisionKeyword.length;
 
-  while (index < line.length && isAsciiWhitespace(line.charCodeAt(index))) {
+  return start + decisionKeyword.length;
+}
+
+function readDecisionToken(
+  line: string,
+  start: number,
+): {
+  token: string;
+  nextIndex: number;
+} | null {
+  let index = start;
+  while (index < line.length && isAsciiLetterOrUnderscore(codePointAtOrNegativeOne(line, index))) {
     index += 1;
   }
 
-  if (index >= line.length || line.charCodeAt(index) !== 0x3a) {
-    return null;
-  }
-  index += 1;
-
-  while (index < line.length && isAsciiWhitespace(line.charCodeAt(index))) {
-    index += 1;
-  }
-
-  const tokenStart = index;
-  while (index < line.length && isAsciiLetterOrUnderscore(line.charCodeAt(index))) {
-    index += 1;
-  }
-  const tokenEnd = index;
-  if (tokenStart === tokenEnd) {
+  if (index === start) {
     return null;
   }
 
-  while (index < line.length && isAsciiWhitespace(line.charCodeAt(index))) {
-    index += 1;
+  return {
+    token: line.slice(start, index),
+    nextIndex: index,
+  };
+}
+
+function parseRouteDecisionLine(line: string): RouteDecisionSignal | null {
+  const keywordStart = skipAsciiWhitespace(line, 0);
+  const afterKeyword = consumeDecisionKeyword(line, keywordStart);
+  if (afterKeyword === null) {
+    return null;
   }
+
+  let index = skipAsciiWhitespace(line, afterKeyword);
+  if (index >= line.length || codePointAtOrNegativeOne(line, index) !== 0x3a) {
+    return null;
+  }
+  index = skipAsciiWhitespace(line, index + 1);
+
+  const token = readDecisionToken(line, index);
+  if (!token) {
+    return null;
+  }
+  index = skipAsciiWhitespace(line, token.nextIndex);
 
   if (index !== line.length) {
     return null;
   }
 
-  const candidate = line.slice(tokenStart, tokenEnd).toLowerCase();
+  const candidate = token.token.toLowerCase();
   if (!routeDecisionSignals.has(candidate as RouteDecisionSignal)) {
     return null;
   }
@@ -295,33 +321,41 @@ function parseRouteDecisionLine(line: string): RouteDecisionSignal | null {
   return candidate as RouteDecisionSignal;
 }
 
+function findLineBreakIndex(report: string, start: number): number {
+  for (let index = start; index < report.length; index += 1) {
+    const codePoint = codePointAtOrNegativeOne(report, index);
+    if (codePoint === 0x0a || codePoint === 0x0d) {
+      return index;
+    }
+  }
+
+  return report.length;
+}
+
+function moveToNextLineStart(report: string, lineBreakIndex: number): number {
+  const current = codePointAtOrNegativeOne(report, lineBreakIndex);
+  if (current === 0x0d && codePointAtOrNegativeOne(report, lineBreakIndex + 1) === 0x0a) {
+    return lineBreakIndex + 2;
+  }
+
+  return lineBreakIndex + 1;
+}
+
 function parseRouteDecisionSignal(report: string): RouteDecisionSignal | null {
   let lineStart = 0;
 
-  for (let index = 0; index <= report.length; index += 1) {
-    const atEnd = index === report.length;
-    if (!atEnd) {
-      const codeUnit = report.charCodeAt(index);
-      if (codeUnit !== 0x0a && codeUnit !== 0x0d) {
-        continue;
-      }
-    }
-
-    const parsed = parseRouteDecisionLine(report.slice(lineStart, index));
+  while (lineStart <= report.length) {
+    const lineEnd = findLineBreakIndex(report, lineStart);
+    const parsed = parseRouteDecisionLine(report.slice(lineStart, lineEnd));
     if (parsed) {
       return parsed;
     }
 
-    if (
-      !atEnd &&
-      report.charCodeAt(index) === 0x0d &&
-      index + 1 < report.length &&
-      report.charCodeAt(index + 1) === 0x0a
-    ) {
-      index += 1;
+    if (lineEnd >= report.length) {
+      break;
     }
 
-    lineStart = index + 1;
+    lineStart = moveToNextLineStart(report, lineEnd);
   }
 
   return null;
