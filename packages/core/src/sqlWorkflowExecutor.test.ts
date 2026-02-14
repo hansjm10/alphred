@@ -1,4 +1,4 @@
-import { eq } from 'drizzle-orm';
+import { eq, inArray } from 'drizzle-orm';
 import type { ProviderEvent, ProviderRunOptions } from '@alphred/shared';
 import { describe, expect, it, vi } from 'vitest';
 import {
@@ -1523,6 +1523,76 @@ describe('createSqlWorkflowExecutor', () => {
       runStatus: 'failed',
     });
     expect(resolveProvider).not.toHaveBeenCalled();
+  });
+
+  it('returns blocked without failing when a completed guarded node has no persisted routing decision', async () => {
+    const { db, runId, reviewRunNodeId, approvedRunNodeId, reviseRunNodeId } = seedDecisionRoutingRun();
+    transitionRunNodeStatus(db, {
+      runNodeId: reviewRunNodeId,
+      expectedFrom: 'pending',
+      to: 'running',
+      occurredAt: '2026-01-01T00:00:00.000Z',
+    });
+    transitionRunNodeStatus(db, {
+      runNodeId: reviewRunNodeId,
+      expectedFrom: 'running',
+      to: 'completed',
+      occurredAt: '2026-01-01T00:01:00.000Z',
+    });
+
+    const resolveProvider = vi.fn(() => createProvider([]));
+    const executor = createSqlWorkflowExecutor(db, {
+      resolveProvider,
+    });
+
+    const result = await executor.executeNextRunnableNode({
+      workflowRunId: runId,
+      options: {
+        workingDirectory: '/tmp/alphred-worktree',
+      },
+    });
+
+    expect(result).toEqual({
+      outcome: 'blocked',
+      workflowRunId: runId,
+      runStatus: 'running',
+    });
+    expect(resolveProvider).not.toHaveBeenCalled();
+
+    const persistedRun = db
+      .select({
+        status: workflowRuns.status,
+      })
+      .from(workflowRuns)
+      .where(eq(workflowRuns.id, runId))
+      .get();
+
+    expect(persistedRun).toEqual({
+      status: 'running',
+    });
+
+    const branchStatuses = db
+      .select({
+        id: runNodes.id,
+        status: runNodes.status,
+      })
+      .from(runNodes)
+      .where(
+        inArray(runNodes.id, [approvedRunNodeId, reviseRunNodeId]),
+      )
+      .all()
+      .sort((a, b) => a.id - b.id);
+
+    expect(branchStatuses).toEqual([
+      {
+        id: approvedRunNodeId,
+        status: 'pending',
+      },
+      {
+        id: reviseRunNodeId,
+        status: 'pending',
+      },
+    ]);
   });
 
   it('fails execution when guarded-edge expressions are invalid', async () => {

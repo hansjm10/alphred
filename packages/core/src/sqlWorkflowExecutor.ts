@@ -73,6 +73,7 @@ type RoutingSelection = {
   latestByTreeNodeId: Map<number, RunNodeExecutionRow>;
   incomingEdgesByTargetNodeId: Map<number, EdgeRow[]>;
   selectedEdgeIdBySourceNodeId: Map<number, number>;
+  unresolvedDecisionSourceNodeIds: Set<number>;
   hasNoRouteDecision: boolean;
 };
 
@@ -445,6 +446,7 @@ function buildRoutingSelection(
   }
 
   const selectedEdgeIdBySourceNodeId = new Map<number, number>();
+  const unresolvedDecisionSourceNodeIds = new Set<number>();
   let hasNoRouteDecision = false;
   for (const sourceNode of latestNodeAttempts) {
     if (sourceNode.status !== 'completed') {
@@ -456,20 +458,27 @@ function buildRoutingSelection(
       continue;
     }
 
-    const decisionType = latestRoutingDecisionsByRunNodeId.get(sourceNode.runNodeId)?.decisionType ?? null;
+    const decision = latestRoutingDecisionsByRunNodeId.get(sourceNode.runNodeId) ?? null;
+    const decisionType = decision?.decisionType ?? null;
     const matchingEdge = selectFirstMatchingOutgoingEdge(outgoingEdges, decisionType);
     if (matchingEdge) {
       selectedEdgeIdBySourceNodeId.set(sourceNode.treeNodeId, matchingEdge.edgeId);
       continue;
     }
 
-    hasNoRouteDecision = true;
+    if (decision) {
+      hasNoRouteDecision = true;
+      continue;
+    }
+
+    unresolvedDecisionSourceNodeIds.add(sourceNode.treeNodeId);
   }
 
   return {
     latestByTreeNodeId,
     incomingEdgesByTargetNodeId,
     selectedEdgeIdBySourceNodeId,
+    unresolvedDecisionSourceNodeIds,
     hasNoRouteDecision,
   };
 }
@@ -478,6 +487,7 @@ function hasPotentialIncomingRoute(
   incomingEdges: EdgeRow[],
   latestByTreeNodeId: Map<number, RunNodeExecutionRow>,
   selectedEdgeIdBySourceNodeId: Map<number, number>,
+  unresolvedDecisionSourceNodeIds: Set<number>,
 ): boolean {
   return incomingEdges.some((edge) => {
     const sourceNode = latestByTreeNodeId.get(edge.sourceNodeId);
@@ -486,6 +496,9 @@ function hasPotentialIncomingRoute(
     }
 
     if (sourceNode.status === 'completed') {
+      if (unresolvedDecisionSourceNodeIds.has(edge.sourceNodeId)) {
+        return true;
+      }
       return selectedEdgeIdBySourceNodeId.get(edge.sourceNodeId) === edge.edgeId;
     }
 
@@ -565,6 +578,7 @@ function markUnreachablePendingNodesAsSkipped(
         incomingEdges,
         routingSelection.latestByTreeNodeId,
         routingSelection.selectedEdgeIdBySourceNodeId,
+        routingSelection.unresolvedDecisionSourceNodeIds,
       );
     });
 
