@@ -406,6 +406,159 @@ function persistFailureArtifact(
   return artifact.id;
 }
 
+function resolveNoRunnableOutcome(
+  db: AlphredDatabase,
+  run: WorkflowRunRow,
+  latestNodeAttempts: RunNodeExecutionRow[],
+): ExecuteNextRunnableNodeResult {
+  const hasPending = latestNodeAttempts.some(node => node.status === 'pending');
+  const hasRunning = latestNodeAttempts.some(node => node.status === 'running');
+  const hasTerminalFailure = latestNodeAttempts.some(node => node.status === 'failed');
+
+  if (!hasPending && !hasRunning) {
+    const resolvedRunStatus = hasTerminalFailure ? 'failed' : 'completed';
+    const runStatus = transitionRunTo(db, run.id, run.status, resolvedRunStatus);
+    return {
+      outcome: 'no_runnable',
+      workflowRunId: run.id,
+      runStatus,
+    };
+  }
+
+  if (hasTerminalFailure) {
+    const runStatus = transitionRunTo(db, run.id, run.status, 'failed');
+    return {
+      outcome: 'blocked',
+      workflowRunId: run.id,
+      runStatus,
+    };
+  }
+
+  const runStatus = run.status === 'pending' ? transitionRunTo(db, run.id, run.status, 'running') : run.status;
+  return {
+    outcome: 'blocked',
+    workflowRunId: run.id,
+    runStatus,
+  };
+}
+
+function ensureRunIsRunning(db: AlphredDatabase, run: WorkflowRunRow): WorkflowRunStatus {
+  if (run.status === 'pending') {
+    return transitionRunTo(db, run.id, run.status, 'running');
+  }
+
+  return run.status;
+}
+
+function claimRunnableNode(
+  db: AlphredDatabase,
+  run: WorkflowRunRow,
+  runNodeId: number,
+): ExecuteNextRunnableNodeResult | null {
+  try {
+    transitionRunNodeStatus(db, {
+      runNodeId,
+      expectedFrom: 'pending',
+      to: 'running',
+    });
+  } catch (error) {
+    if (isRunNodeTransitionPreconditionFailure(error)) {
+      const refreshedRun = loadWorkflowRunRow(db, run.id);
+      return {
+        outcome: 'blocked',
+        workflowRunId: run.id,
+        runStatus: refreshedRun.status,
+      };
+    }
+    throw error;
+  }
+
+  return null;
+}
+
+async function executeClaimedRunnableNode(
+  db: AlphredDatabase,
+  dependencies: SqlWorkflowExecutorDependencies,
+  run: WorkflowRunRow,
+  node: RunNodeExecutionRow,
+  options: ProviderRunOptions,
+  runStatus: WorkflowRunStatus,
+): Promise<ExecuteNextRunnableNodeResult> {
+  let currentRunStatus = runStatus;
+
+  try {
+    const phase = createExecutionPhase(node);
+    const phaseResult = await runPhase(phase, options, {
+      resolveProvider: dependencies.resolveProvider,
+    });
+
+    const artifactId = persistSuccessArtifact(db, {
+      workflowRunId: run.id,
+      runNodeId: node.runNodeId,
+      content: phaseResult.report,
+      contentType: node.promptContentType,
+      metadata: {
+        success: true,
+        provider: node.provider,
+        nodeKey: node.nodeKey,
+        tokensUsed: phaseResult.tokensUsed,
+        eventCount: phaseResult.events.length,
+      },
+    });
+
+    transitionRunNodeStatus(db, {
+      runNodeId: node.runNodeId,
+      expectedFrom: 'running',
+      to: 'completed',
+    });
+
+    const latestAfterSuccess = getLatestRunNodeAttempts(loadRunNodeExecutionRows(db, run.id));
+    const targetRunStatus = resolveRunStatusFromNodes(latestAfterSuccess);
+    currentRunStatus = transitionRunTo(db, run.id, currentRunStatus, targetRunStatus);
+
+    return {
+      outcome: 'executed',
+      workflowRunId: run.id,
+      runNodeId: node.runNodeId,
+      nodeKey: node.nodeKey,
+      runNodeStatus: 'completed',
+      runStatus: currentRunStatus,
+      artifactId,
+    };
+  } catch (error) {
+    const errorMessage = toErrorMessage(error);
+    const artifactId = persistFailureArtifact(db, {
+      workflowRunId: run.id,
+      runNodeId: node.runNodeId,
+      content: errorMessage,
+      metadata: {
+        success: false,
+        provider: node.provider,
+        nodeKey: node.nodeKey,
+        errorName: error instanceof Error ? error.name : 'Error',
+      },
+    });
+
+    transitionRunNodeStatus(db, {
+      runNodeId: node.runNodeId,
+      expectedFrom: 'running',
+      to: 'failed',
+    });
+
+    currentRunStatus = transitionRunTo(db, run.id, currentRunStatus, 'failed');
+
+    return {
+      outcome: 'executed',
+      workflowRunId: run.id,
+      runNodeId: node.runNodeId,
+      nodeKey: node.nodeKey,
+      runNodeStatus: 'failed',
+      runStatus: currentRunStatus,
+      artifactId,
+    };
+  }
+}
+
 export function createSqlWorkflowExecutor(
   db: AlphredDatabase,
   dependencies: SqlWorkflowExecutorDependencies,
@@ -426,128 +579,16 @@ export function createSqlWorkflowExecutor(
       const { nextRunnableNode, latestNodeAttempts } = selectNextRunnableNode(runNodeRows, edgeRows);
 
       if (!nextRunnableNode) {
-        const hasPending = latestNodeAttempts.some(node => node.status === 'pending');
-        const hasRunning = latestNodeAttempts.some(node => node.status === 'running');
-        const hasTerminalFailure = latestNodeAttempts.some(node => node.status === 'failed');
-
-        if (!hasPending && !hasRunning) {
-          const resolvedRunStatus = hasTerminalFailure ? 'failed' : 'completed';
-          const runStatus = transitionRunTo(db, run.id, run.status, resolvedRunStatus);
-          return {
-            outcome: 'no_runnable',
-            workflowRunId: run.id,
-            runStatus,
-          };
-        }
-
-        if (hasTerminalFailure) {
-          const runStatus = transitionRunTo(db, run.id, run.status, 'failed');
-          return {
-            outcome: 'blocked',
-            workflowRunId: run.id,
-            runStatus,
-          };
-        }
-
-        const runStatus = run.status === 'pending' ? transitionRunTo(db, run.id, run.status, 'running') : run.status;
-        return {
-          outcome: 'blocked',
-          workflowRunId: run.id,
-          runStatus,
-        };
+        return resolveNoRunnableOutcome(db, run, latestNodeAttempts);
       }
 
-      let runStatus = run.status === 'pending' ? transitionRunTo(db, run.id, run.status, 'running') : run.status;
-
-      try {
-        transitionRunNodeStatus(db, {
-          runNodeId: nextRunnableNode.runNodeId,
-          expectedFrom: 'pending',
-          to: 'running',
-        });
-      } catch (error) {
-        if (isRunNodeTransitionPreconditionFailure(error)) {
-          const refreshedRun = loadWorkflowRunRow(db, run.id);
-          return {
-            outcome: 'blocked',
-            workflowRunId: run.id,
-            runStatus: refreshedRun.status,
-          };
-        }
-        throw error;
+      const runStatus = ensureRunIsRunning(db, run);
+      const claimResult = claimRunnableNode(db, run, nextRunnableNode.runNodeId);
+      if (claimResult) {
+        return claimResult;
       }
 
-      try {
-        const phase = createExecutionPhase(nextRunnableNode);
-        const phaseResult = await runPhase(phase, params.options, {
-          resolveProvider: dependencies.resolveProvider,
-        });
-
-        const artifactId = persistSuccessArtifact(db, {
-          workflowRunId: run.id,
-          runNodeId: nextRunnableNode.runNodeId,
-          content: phaseResult.report,
-          contentType: nextRunnableNode.promptContentType,
-          metadata: {
-            success: true,
-            provider: nextRunnableNode.provider,
-            nodeKey: nextRunnableNode.nodeKey,
-            tokensUsed: phaseResult.tokensUsed,
-            eventCount: phaseResult.events.length,
-          },
-        });
-
-        transitionRunNodeStatus(db, {
-          runNodeId: nextRunnableNode.runNodeId,
-          expectedFrom: 'running',
-          to: 'completed',
-        });
-
-        const latestAfterSuccess = getLatestRunNodeAttempts(loadRunNodeExecutionRows(db, run.id));
-        const targetRunStatus = resolveRunStatusFromNodes(latestAfterSuccess);
-        runStatus = transitionRunTo(db, run.id, runStatus, targetRunStatus);
-
-        return {
-          outcome: 'executed',
-          workflowRunId: run.id,
-          runNodeId: nextRunnableNode.runNodeId,
-          nodeKey: nextRunnableNode.nodeKey,
-          runNodeStatus: 'completed',
-          runStatus,
-          artifactId,
-        };
-      } catch (error) {
-        const errorMessage = toErrorMessage(error);
-        const artifactId = persistFailureArtifact(db, {
-          workflowRunId: run.id,
-          runNodeId: nextRunnableNode.runNodeId,
-          content: errorMessage,
-          metadata: {
-            success: false,
-            provider: nextRunnableNode.provider,
-            nodeKey: nextRunnableNode.nodeKey,
-            errorName: error instanceof Error ? error.name : 'Error',
-          },
-        });
-
-        transitionRunNodeStatus(db, {
-          runNodeId: nextRunnableNode.runNodeId,
-          expectedFrom: 'running',
-          to: 'failed',
-        });
-
-        runStatus = transitionRunTo(db, run.id, runStatus, 'failed');
-
-        return {
-          outcome: 'executed',
-          workflowRunId: run.id,
-          runNodeId: nextRunnableNode.runNodeId,
-          nodeKey: nextRunnableNode.nodeKey,
-          runNodeStatus: 'failed',
-          runStatus,
-          artifactId,
-        };
-      }
+      return executeClaimedRunnableNode(db, dependencies, run, nextRunnableNode, params.options, runStatus);
     },
 
     async executeRun(params: ExecuteWorkflowRunParams): Promise<ExecuteWorkflowRunResult> {
