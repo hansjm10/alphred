@@ -21,6 +21,7 @@ Architecture notes for Agent Runtime v1 (DI + adapters):
 - `packages/agents/README.md` (registry APIs, adapter usage)
 - `packages/agents/docs/claude-runtime-runbook.md` (Claude runtime setup, limits, error taxonomy, troubleshooting)
 - `packages/agents/docs/codex-runtime-runbook.md` (Codex runtime setup, limits, error taxonomy, troubleshooting)
+- `packages/core/README.md` (SQL workflow executor routing directive and no-route semantics)
 - `packages/agents/AGENTS.md` and `packages/core/AGENTS.md` (directory-specific AI guidance)
 
 ## Prerequisites
