@@ -64,6 +64,11 @@ export type WorkflowTreeTopology = {
 
 export type LoadWorkflowTreeTopologyParams = {
   treeKey: string;
+  /**
+   * If omitted, the active version is resolved as the highest `workflow_trees.version`
+   * for `treeKey`. Missing trees throw `WorkflowTreeNotFoundError`; ties at the highest
+   * version throw `AmbiguousWorkflowTreeVersionError`.
+   */
   treeVersion?: number;
 };
 
@@ -197,6 +202,10 @@ function computeInitialRunnableNodeKeys(nodes: PlannedTreeNode[], edges: Planned
     .map(node => node.nodeKey);
 }
 
+/**
+ * Resolves the single active tree version for a `treeKey`.
+ * Throws when no candidates exist or when the highest version is ambiguous.
+ */
 export function selectActiveWorkflowTreeVersion(
   candidates: WorkflowTreeVersion[],
   treeKey: string,
@@ -218,6 +227,10 @@ export function selectActiveWorkflowTreeVersion(
   return activeCandidates[0];
 }
 
+/**
+ * Resolves an explicit tree version when provided, otherwise resolves the active version.
+ * This function is the source of truth for version-selection behavior used by planner APIs.
+ */
 function resolveWorkflowTreeVersion(db: TopologyReader, params: LoadWorkflowTreeTopologyParams): WorkflowTreeVersion {
   if (params.treeVersion !== undefined) {
     const exactVersion = db

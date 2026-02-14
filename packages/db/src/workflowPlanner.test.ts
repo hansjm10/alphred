@@ -4,8 +4,10 @@ import { migrateDatabase } from './migrate.js';
 import {
   guardDefinitions,
   promptTemplates,
+  runNodes,
   treeEdges,
   treeNodes,
+  workflowRuns,
   workflowTrees,
 } from './schema.js';
 import {
@@ -726,6 +728,87 @@ describe('workflow planner/materializer', () => {
     });
     expect(runningRunWithExplicitStart.run.status).toBe('running');
     expect(runningRunWithExplicitStart.run.startedAt).toBe(explicitStartedAt);
+  });
+
+  it('keeps startedAt null for pending runs even when runStartedAt is provided', () => {
+    const { db } = seedDesignTreeVersions();
+
+    const pendingRun = materializeWorkflowRunFromTree(db, {
+      treeKey: 'design_tree',
+      runStatus: 'pending',
+      runStartedAt: '2025-01-02T03:04:05.678Z',
+    });
+
+    expect(pendingRun.run.status).toBe('pending');
+    expect(pendingRun.run.startedAt).toBeNull();
+  });
+
+  it('rolls back run materialization when run-node persistence fails', () => {
+    const { db } = seedDesignTreeVersions();
+    const injectedFailure = new Error('Injected run-node insert failure');
+
+    const rollbackAwareDb = new Proxy(db, {
+      get(target, property) {
+        if (property === 'transaction') {
+          return (callback: (tx: unknown) => unknown) =>
+            target.transaction((tx) => {
+              const txWithInjectedFailure = new Proxy(tx, {
+                get(txTarget, txProperty) {
+                  if (txProperty === 'insert') {
+                    return (table: unknown) => {
+                      const insertQuery = txTarget.insert(table as never);
+                      if (table !== runNodes) {
+                        return insertQuery;
+                      }
+
+                      return new Proxy(insertQuery, {
+                        get(insertTarget, insertProperty) {
+                          if (insertProperty === 'values') {
+                            return (...args: unknown[]) => {
+                              const valuesQuery = (insertTarget as { values: (...values: unknown[]) => unknown }).values(
+                                ...args,
+                              );
+
+                              return new Proxy(valuesQuery as object, {
+                                get(valuesTarget, valuesProperty) {
+                                  if (valuesProperty === 'run') {
+                                    return () => {
+                                      throw injectedFailure;
+                                    };
+                                  }
+
+                                  return Reflect.get(valuesTarget, valuesProperty);
+                                },
+                              });
+                            };
+                          }
+
+                          return Reflect.get(insertTarget, insertProperty);
+                        },
+                      });
+                    };
+                  }
+
+                  return Reflect.get(txTarget, txProperty);
+                },
+              });
+
+              return callback(txWithInjectedFailure);
+            });
+        }
+
+        return Reflect.get(target, property);
+      },
+    });
+
+    expect(() => materializeWorkflowRunFromTree(rollbackAwareDb as typeof db, { treeKey: 'design_tree' })).toThrow(
+      injectedFailure,
+    );
+
+    const persistedRuns = db.select({ id: workflowRuns.id }).from(workflowRuns).all();
+    const persistedRunNodes = db.select({ id: runNodes.id }).from(runNodes).all();
+    expect(persistedRuns).toEqual([]);
+    expect(persistedRunNodes).toEqual([]);
   });
 
   it('loads topology within the transaction boundary during materialization', () => {
