@@ -268,6 +268,26 @@ describe('workflow planner/materializer', () => {
     );
   });
 
+  it('materializes runs for an explicit tree version and throws when explicit version is missing', () => {
+    const { db, oldVersionTreeId, activeTreeId } = seedDesignTreeVersions();
+
+    const explicitOldVersionRun = materializeWorkflowRunFromTree(db, { treeKey: 'design_tree', treeVersion: 1 });
+    expect(explicitOldVersionRun.topology.tree.id).toBe(oldVersionTreeId);
+    expect(explicitOldVersionRun.topology.tree.version).toBe(1);
+    expect(explicitOldVersionRun.run.workflowTreeId).toBe(oldVersionTreeId);
+    expect(explicitOldVersionRun.runNodes).toEqual([]);
+
+    const explicitActiveVersionRun = materializeWorkflowRunFromTree(db, { treeKey: 'design_tree', treeVersion: 2 });
+    expect(explicitActiveVersionRun.topology.tree.id).toBe(activeTreeId);
+    expect(explicitActiveVersionRun.topology.tree.version).toBe(2);
+    expect(explicitActiveVersionRun.run.workflowTreeId).toBe(activeTreeId);
+    expect(explicitActiveVersionRun.runNodes.map(node => node.nodeKey)).toEqual(['design', 'implement', 'review']);
+
+    expect(() => materializeWorkflowRunFromTree(db, { treeKey: 'design_tree', treeVersion: 99 })).toThrow(
+      WorkflowTreeNotFoundError,
+    );
+  });
+
   it('materializes runs for trees that have no nodes', () => {
     const db = seedEmptyTree();
 
