@@ -7,6 +7,7 @@
   "types": "./dist/index.d.ts",
   "dependencies": {
     "@alphred/db": "workspace:*",
-    "@alphred/shared": "workspace:*"
+    "@alphred/shared": "workspace:*",
+    "drizzle-orm": "^0.44.2"
   }
 }

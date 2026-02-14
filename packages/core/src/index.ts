@@ -10,3 +10,12 @@ export {
   type PhaseRunnerDependencies,
 } from './phaseRunner.js';
 export { createSqlWorkflowPlanner, type SqlWorkflowPlanner } from './sqlWorkflowPlanner.js';
+export {
+  createSqlWorkflowExecutor,
+  type SqlWorkflowExecutor,
+  type SqlWorkflowExecutorDependencies,
+  type ExecuteNextRunnableNodeParams,
+  type ExecuteNextRunnableNodeResult,
+  type ExecuteWorkflowRunParams,
+  type ExecuteWorkflowRunResult,
+} from './sqlWorkflowExecutor.js';
