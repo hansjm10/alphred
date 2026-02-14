@@ -197,6 +197,13 @@ function toErrorMessage(error: unknown): string {
   return String(error);
 }
 
+function isRunNodeTransitionPreconditionFailure(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    error.message.startsWith('Run-node transition precondition failed')
+  );
+}
+
 function transitionRunTo(
   db: AlphredDatabase,
   runId: number,
@@ -452,11 +459,23 @@ export function createSqlWorkflowExecutor(
 
       let runStatus = run.status === 'pending' ? transitionRunTo(db, run.id, run.status, 'running') : run.status;
 
-      transitionRunNodeStatus(db, {
-        runNodeId: nextRunnableNode.runNodeId,
-        expectedFrom: 'pending',
-        to: 'running',
-      });
+      try {
+        transitionRunNodeStatus(db, {
+          runNodeId: nextRunnableNode.runNodeId,
+          expectedFrom: 'pending',
+          to: 'running',
+        });
+      } catch (error) {
+        if (isRunNodeTransitionPreconditionFailure(error)) {
+          const refreshedRun = loadWorkflowRunRow(db, run.id);
+          return {
+            outcome: 'blocked',
+            workflowRunId: run.id,
+            runStatus: refreshedRun.status,
+          };
+        }
+        throw error;
+      }
 
       try {
         const phase = createExecutionPhase(nextRunnableNode);

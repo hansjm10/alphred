@@ -34,11 +34,17 @@ function seedPendingWorkflowRun() {
 describe('workflow-run lifecycle guard', () => {
   it('allows only configured workflow-run status transitions', () => {
     expect(() => assertValidWorkflowRunTransition('pending', 'running')).not.toThrow();
+    expect(() => assertValidWorkflowRunTransition('pending', 'cancelled')).not.toThrow();
     expect(() => assertValidWorkflowRunTransition('running', 'completed')).not.toThrow();
+    expect(() => assertValidWorkflowRunTransition('running', 'failed')).not.toThrow();
+    expect(() => assertValidWorkflowRunTransition('running', 'cancelled')).not.toThrow();
     expect(() => assertValidWorkflowRunTransition('running', 'paused')).not.toThrow();
     expect(() => assertValidWorkflowRunTransition('paused', 'running')).not.toThrow();
+    expect(() => assertValidWorkflowRunTransition('paused', 'cancelled')).not.toThrow();
     expect(() => assertValidWorkflowRunTransition('pending', 'failed')).toThrow();
     expect(() => assertValidWorkflowRunTransition('completed', 'running')).toThrow();
+    expect(() => assertValidWorkflowRunTransition('failed', 'running')).toThrow();
+    expect(() => assertValidWorkflowRunTransition('cancelled', 'running')).toThrow();
   });
 
   it('persists valid transitions with optimistic state preconditions', () => {
@@ -136,5 +142,72 @@ describe('workflow-run lifecycle guard', () => {
         to: 'cancelled',
       }),
     ).toThrow('Workflow-run transition precondition failed');
+  });
+
+  it('persists terminal failed transitions with completion timestamp', () => {
+    const { db, workflowRunId } = seedPendingWorkflowRun();
+
+    transitionWorkflowRunStatus(db, {
+      workflowRunId,
+      expectedFrom: 'pending',
+      to: 'running',
+      occurredAt: '2026-01-01T00:00:00.000Z',
+    });
+
+    transitionWorkflowRunStatus(db, {
+      workflowRunId,
+      expectedFrom: 'running',
+      to: 'failed',
+      occurredAt: '2026-01-01T00:02:00.000Z',
+    });
+
+    const persisted = db
+      .select({
+        status: workflowRuns.status,
+        startedAt: workflowRuns.startedAt,
+        completedAt: workflowRuns.completedAt,
+      })
+      .from(workflowRuns)
+      .where(eq(workflowRuns.id, workflowRunId))
+      .get();
+
+    expect(persisted).toBeDefined();
+    if (!persisted) {
+      throw new Error('Expected workflow run row after failed transition.');
+    }
+
+    expect(persisted.status).toBe('failed');
+    expect(persisted.startedAt).toBe('2026-01-01T00:00:00.000Z');
+    expect(persisted.completedAt).toBe('2026-01-01T00:02:00.000Z');
+  });
+
+  it('persists terminal cancelled transitions from pending with completion timestamp', () => {
+    const { db, workflowRunId } = seedPendingWorkflowRun();
+
+    transitionWorkflowRunStatus(db, {
+      workflowRunId,
+      expectedFrom: 'pending',
+      to: 'cancelled',
+      occurredAt: '2026-01-01T00:05:00.000Z',
+    });
+
+    const persisted = db
+      .select({
+        status: workflowRuns.status,
+        startedAt: workflowRuns.startedAt,
+        completedAt: workflowRuns.completedAt,
+      })
+      .from(workflowRuns)
+      .where(eq(workflowRuns.id, workflowRunId))
+      .get();
+
+    expect(persisted).toBeDefined();
+    if (!persisted) {
+      throw new Error('Expected workflow run row after cancelled transition.');
+    }
+
+    expect(persisted.status).toBe('cancelled');
+    expect(persisted.startedAt).toBeNull();
+    expect(persisted.completedAt).toBe('2026-01-01T00:05:00.000Z');
   });
 });
