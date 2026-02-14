@@ -1,4 +1,4 @@
-import { asc, eq } from 'drizzle-orm';
+import { and, asc, eq } from 'drizzle-orm';
 import {
   guardDefinitions,
   phaseArtifacts,
@@ -32,6 +32,7 @@ type RunNodeExecutionRow = {
   status: RunNodeStatus;
   sequenceIndex: number;
   attempt: number;
+  maxRetries: number;
   nodeType: string;
   provider: string | null;
   prompt: string | null;
@@ -723,6 +724,7 @@ function loadRunNodeExecutionRows(db: AlphredDatabase, workflowRunId: number): R
       status: runNodes.status,
       sequenceIndex: runNodes.sequenceIndex,
       attempt: runNodes.attempt,
+      maxRetries: treeNodes.maxRetries,
       nodeType: treeNodes.nodeType,
       provider: treeNodes.provider,
       prompt: promptTemplates.content,
@@ -742,6 +744,7 @@ function loadRunNodeExecutionRows(db: AlphredDatabase, workflowRunId: number): R
     status: toRunNodeStatus(row.status),
     sequenceIndex: row.sequenceIndex,
     attempt: row.attempt,
+    maxRetries: row.maxRetries,
     nodeType: row.nodeType,
     provider: row.provider,
     prompt: row.prompt,
@@ -902,6 +905,112 @@ function persistFailureArtifact(
   return artifact.id;
 }
 
+function shouldRetryNodeAttempt(attempt: number, maxRetries: number): boolean {
+  return attempt <= maxRetries;
+}
+
+function transitionFailedRunNodeToRetryAttempt(
+  db: AlphredDatabase,
+  params: {
+    runNodeId: number;
+    currentAttempt: number;
+    nextAttempt: number;
+  },
+): void {
+  const occurredAt = new Date().toISOString();
+  transitionRunNodeStatus(db, {
+    runNodeId: params.runNodeId,
+    expectedFrom: 'failed',
+    to: 'running',
+    occurredAt,
+  });
+
+  const updated = db
+    .update(runNodes)
+    .set({
+      attempt: params.nextAttempt,
+      updatedAt: occurredAt,
+    })
+    .where(
+      and(
+        eq(runNodes.id, params.runNodeId),
+        eq(runNodes.status, 'running'),
+        eq(runNodes.attempt, params.currentAttempt),
+      ),
+    )
+    .run();
+
+  if (updated.changes !== 1) {
+    throw new Error(
+      `Run-node retry attempt update precondition failed for id=${params.runNodeId}; expected attempt=${params.currentAttempt}.`,
+    );
+  }
+}
+
+function failRunOnIterationLimit(
+  db: AlphredDatabase,
+  run: WorkflowRunRow,
+  params: {
+    maxSteps: number;
+    executedNodes: number;
+  },
+): WorkflowRunStatus {
+  const message = `Execution loop exceeded maxSteps=${params.maxSteps} for workflow run id=${run.id} (status=${run.status}).`;
+  const runNodeRows = loadRunNodeExecutionRows(db, run.id);
+  const edgeRows = loadEdgeRows(db, run.workflowTreeId);
+  const latestRoutingDecisionsByRunNodeId = loadLatestRoutingDecisionsByRunNodeId(db, run.id);
+  const { nextRunnableNode, latestNodeAttempts } = selectNextRunnableNode(
+    runNodeRows,
+    edgeRows,
+    latestRoutingDecisionsByRunNodeId,
+  );
+
+  const targetedNode =
+    nextRunnableNode ??
+    latestNodeAttempts.find(node => node.status === 'running') ??
+    latestNodeAttempts[latestNodeAttempts.length - 1] ??
+    null;
+
+  if (targetedNode) {
+    let status = targetedNode.status;
+    if (status === 'pending') {
+      transitionRunNodeStatus(db, {
+        runNodeId: targetedNode.runNodeId,
+        expectedFrom: 'pending',
+        to: 'running',
+      });
+      status = 'running';
+    }
+
+    persistFailureArtifact(db, {
+      workflowRunId: run.id,
+      runNodeId: targetedNode.runNodeId,
+      content: message,
+      metadata: {
+        success: false,
+        provider: targetedNode.provider,
+        nodeKey: targetedNode.nodeKey,
+        attempt: targetedNode.attempt,
+        maxRetries: targetedNode.maxRetries,
+        failureReason: 'iteration_limit_exceeded',
+        limitType: 'max_steps',
+        maxSteps: params.maxSteps,
+        executedNodes: params.executedNodes,
+      },
+    });
+
+    if (status === 'running') {
+      transitionRunNodeStatus(db, {
+        runNodeId: targetedNode.runNodeId,
+        expectedFrom: 'running',
+        to: 'failed',
+      });
+    }
+  }
+
+  return transitionRunTo(db, run.id, run.status, 'failed');
+}
+
 function resolveNoRunnableOutcome(
   db: AlphredDatabase,
   run: WorkflowRunRow,
@@ -993,90 +1102,114 @@ async function executeClaimedRunnableNode(
   runStatus: WorkflowRunStatus,
 ): Promise<ExecuteNextRunnableNodeResult> {
   let currentRunStatus = runStatus;
+  let currentAttempt = node.attempt;
 
-  try {
-    const phase = createExecutionPhase(node);
-    const phaseResult = await runPhase(phase, options, {
-      resolveProvider: dependencies.resolveProvider,
-    });
+  while (true) {
+    try {
+      const phase = createExecutionPhase(node);
+      const phaseResult = await runPhase(phase, options, {
+        resolveProvider: dependencies.resolveProvider,
+      });
 
-    const artifactId = persistSuccessArtifact(db, {
-      workflowRunId: run.id,
-      runNodeId: node.runNodeId,
-      content: phaseResult.report,
-      contentType: node.promptContentType,
-      metadata: {
-        success: true,
-        provider: node.provider,
+      const artifactId = persistSuccessArtifact(db, {
+        workflowRunId: run.id,
+        runNodeId: node.runNodeId,
+        content: phaseResult.report,
+        contentType: node.promptContentType,
+        metadata: {
+          success: true,
+          provider: node.provider,
+          nodeKey: node.nodeKey,
+          attempt: currentAttempt,
+          maxRetries: node.maxRetries,
+          retriesUsed: Math.max(currentAttempt - 1, 0),
+          tokensUsed: phaseResult.tokensUsed,
+          eventCount: phaseResult.events.length,
+        },
+      });
+
+      const routingDecision = persistCompletedNodeRoutingDecision(db, {
+        workflowRunId: run.id,
+        runNodeId: node.runNodeId,
+        treeNodeId: node.treeNodeId,
+        report: phaseResult.report,
+        edgeRows,
+      });
+
+      transitionRunNodeStatus(db, {
+        runNodeId: node.runNodeId,
+        expectedFrom: 'running',
+        to: 'completed',
+      });
+
+      if (routingDecision === 'no_route') {
+        currentRunStatus = transitionRunTo(db, run.id, currentRunStatus, 'failed');
+      } else {
+        markUnreachablePendingNodesAsSkipped(db, run.id, edgeRows);
+        const latestAfterSuccess = getLatestRunNodeAttempts(loadRunNodeExecutionRows(db, run.id));
+        const targetRunStatus = resolveRunStatusFromNodes(latestAfterSuccess);
+        currentRunStatus = transitionRunTo(db, run.id, currentRunStatus, targetRunStatus);
+      }
+
+      return {
+        outcome: 'executed',
+        workflowRunId: run.id,
+        runNodeId: node.runNodeId,
         nodeKey: node.nodeKey,
-        tokensUsed: phaseResult.tokensUsed,
-        eventCount: phaseResult.events.length,
-      },
-    });
+        runNodeStatus: 'completed',
+        runStatus: currentRunStatus,
+        artifactId,
+      };
+    } catch (error) {
+      const errorMessage = toErrorMessage(error);
+      const canRetry = shouldRetryNodeAttempt(currentAttempt, node.maxRetries);
+      const retriesRemaining = Math.max(node.maxRetries - currentAttempt, 0);
 
-    const routingDecision = persistCompletedNodeRoutingDecision(db, {
-      workflowRunId: run.id,
-      runNodeId: node.runNodeId,
-      treeNodeId: node.treeNodeId,
-      report: phaseResult.report,
-      edgeRows,
-    });
+      const artifactId = persistFailureArtifact(db, {
+        workflowRunId: run.id,
+        runNodeId: node.runNodeId,
+        content: errorMessage,
+        metadata: {
+          success: false,
+          provider: node.provider,
+          nodeKey: node.nodeKey,
+          attempt: currentAttempt,
+          maxRetries: node.maxRetries,
+          retriesRemaining,
+          errorName: error instanceof Error ? error.name : 'Error',
+          failureReason: canRetry ? 'retry_scheduled' : 'retry_limit_exceeded',
+        },
+      });
 
-    transitionRunNodeStatus(db, {
-      runNodeId: node.runNodeId,
-      expectedFrom: 'running',
-      to: 'completed',
-    });
+      transitionRunNodeStatus(db, {
+        runNodeId: node.runNodeId,
+        expectedFrom: 'running',
+        to: 'failed',
+      });
 
-    if (routingDecision === 'no_route') {
+      if (canRetry) {
+        const nextAttempt = currentAttempt + 1;
+        transitionFailedRunNodeToRetryAttempt(db, {
+          runNodeId: node.runNodeId,
+          currentAttempt,
+          nextAttempt,
+        });
+        currentAttempt = nextAttempt;
+        continue;
+      }
+
       currentRunStatus = transitionRunTo(db, run.id, currentRunStatus, 'failed');
-    } else {
-      markUnreachablePendingNodesAsSkipped(db, run.id, edgeRows);
-      const latestAfterSuccess = getLatestRunNodeAttempts(loadRunNodeExecutionRows(db, run.id));
-      const targetRunStatus = resolveRunStatusFromNodes(latestAfterSuccess);
-      currentRunStatus = transitionRunTo(db, run.id, currentRunStatus, targetRunStatus);
-    }
 
-    return {
-      outcome: 'executed',
-      workflowRunId: run.id,
-      runNodeId: node.runNodeId,
-      nodeKey: node.nodeKey,
-      runNodeStatus: 'completed',
-      runStatus: currentRunStatus,
-      artifactId,
-    };
-  } catch (error) {
-    const errorMessage = toErrorMessage(error);
-    const artifactId = persistFailureArtifact(db, {
-      workflowRunId: run.id,
-      runNodeId: node.runNodeId,
-      content: errorMessage,
-      metadata: {
-        success: false,
-        provider: node.provider,
+      return {
+        outcome: 'executed',
+        workflowRunId: run.id,
+        runNodeId: node.runNodeId,
         nodeKey: node.nodeKey,
-        errorName: error instanceof Error ? error.name : 'Error',
-      },
-    });
-
-    transitionRunNodeStatus(db, {
-      runNodeId: node.runNodeId,
-      expectedFrom: 'running',
-      to: 'failed',
-    });
-
-    currentRunStatus = transitionRunTo(db, run.id, currentRunStatus, 'failed');
-
-    return {
-      outcome: 'executed',
-      workflowRunId: run.id,
-      runNodeId: node.runNodeId,
-      nodeKey: node.nodeKey,
-      runNodeStatus: 'failed',
-      runStatus: currentRunStatus,
-      artifactId,
-    };
+        runNodeStatus: 'failed',
+        runStatus: currentRunStatus,
+        artifactId,
+      };
+    }
   }
 }
 
@@ -1154,9 +1287,19 @@ export function createSqlWorkflowExecutor(
       }
 
       const run = loadWorkflowRunRow(db, params.workflowRunId);
-      throw new Error(
-        `Execution loop exceeded maxSteps=${maxSteps} for workflow run id=${params.workflowRunId} (status=${run.status}).`,
-      );
+      const runStatus = failRunOnIterationLimit(db, run, {
+        maxSteps,
+        executedNodes,
+      });
+      return {
+        workflowRunId: params.workflowRunId,
+        executedNodes,
+        finalStep: {
+          outcome: 'run_terminal',
+          workflowRunId: params.workflowRunId,
+          runStatus,
+        },
+      };
     },
   };
 }

@@ -29,7 +29,10 @@ function createProvider(events: ProviderEvent[]) {
   };
 }
 
-function seedSingleAgentRun(promptContentType: 'markdown' | 'text' = 'markdown') {
+function seedSingleAgentRun(
+  promptContentType: 'markdown' | 'text' = 'markdown',
+  maxRetries = 0,
+) {
   const db = createDatabase(':memory:');
   migrateDatabase(db);
 
@@ -61,6 +64,7 @@ function seedSingleAgentRun(promptContentType: 'markdown' | 'text' = 'markdown')
       nodeType: 'agent',
       provider: 'codex',
       promptTemplateId: prompt.id,
+      maxRetries,
       sequenceIndex: 1,
     })
     .run();
@@ -802,6 +806,152 @@ describe('createSqlWorkflowExecutor', () => {
     expect(artifacts[0].artifactType).toBe('log');
     expect(artifacts[0].contentType).toBe('text');
     expect(artifacts[0].content).toContain('without a result event');
+  });
+
+  it('retries a failed node within max_retries and completes the run on a later attempt', async () => {
+    const { db, runId, runNodeId } = seedSingleAgentRun('markdown', 1);
+    let invocation = 0;
+    const executor = createSqlWorkflowExecutor(db, {
+      resolveProvider: () => ({
+        async *run(): AsyncIterable<ProviderEvent> {
+          invocation += 1;
+          if (invocation === 1) {
+            throw new Error('Transient failure on first attempt');
+          }
+
+          yield { type: 'result', content: 'Recovered successfully', timestamp: 20 };
+        },
+      }),
+    });
+
+    const result = await executor.executeRun({
+      workflowRunId: runId,
+      options: {
+        workingDirectory: '/tmp/alphred-worktree',
+      },
+    });
+
+    expect(result).toEqual({
+      workflowRunId: runId,
+      executedNodes: 1,
+      finalStep: {
+        outcome: 'run_terminal',
+        workflowRunId: runId,
+        runStatus: 'completed',
+      },
+    });
+
+    const persistedRunNode = db
+      .select({
+        status: runNodes.status,
+        attempt: runNodes.attempt,
+      })
+      .from(runNodes)
+      .where(eq(runNodes.id, runNodeId))
+      .get();
+
+    expect(persistedRunNode).toEqual({
+      status: 'completed',
+      attempt: 2,
+    });
+
+    const artifacts = db
+      .select({
+        artifactType: phaseArtifacts.artifactType,
+        metadata: phaseArtifacts.metadata,
+      })
+      .from(phaseArtifacts)
+      .where(eq(phaseArtifacts.runNodeId, runNodeId))
+      .all();
+
+    expect(artifacts).toHaveLength(2);
+    expect(artifacts[0]).toEqual({
+      artifactType: 'log',
+      metadata: expect.objectContaining({
+        failureReason: 'retry_scheduled',
+        attempt: 1,
+        maxRetries: 1,
+      }),
+    });
+    expect(artifacts[1]).toEqual({
+      artifactType: 'report',
+      metadata: expect.objectContaining({
+        attempt: 2,
+        maxRetries: 1,
+        retriesUsed: 1,
+      }),
+    });
+  });
+
+  it('fails after exhausting max_retries and persists retry-limit metadata', async () => {
+    const { db, runId, runNodeId } = seedSingleAgentRun('markdown', 1);
+    let invocation = 0;
+    const executor = createSqlWorkflowExecutor(db, {
+      resolveProvider: () => ({
+        async *run(): AsyncIterable<ProviderEvent> {
+          invocation += 1;
+          yield { type: 'system', content: `attempt ${invocation}`, timestamp: invocation };
+          throw new Error(`Attempt ${invocation} failed`);
+        },
+      }),
+    });
+
+    const result = await executor.executeRun({
+      workflowRunId: runId,
+      options: {
+        workingDirectory: '/tmp/alphred-worktree',
+      },
+    });
+
+    expect(result).toEqual({
+      workflowRunId: runId,
+      executedNodes: 1,
+      finalStep: {
+        outcome: 'run_terminal',
+        workflowRunId: runId,
+        runStatus: 'failed',
+      },
+    });
+
+    const persistedRunNode = db
+      .select({
+        status: runNodes.status,
+        attempt: runNodes.attempt,
+      })
+      .from(runNodes)
+      .where(eq(runNodes.id, runNodeId))
+      .get();
+
+    expect(persistedRunNode).toEqual({
+      status: 'failed',
+      attempt: 2,
+    });
+
+    const artifacts = db
+      .select({
+        artifactType: phaseArtifacts.artifactType,
+        metadata: phaseArtifacts.metadata,
+      })
+      .from(phaseArtifacts)
+      .where(eq(phaseArtifacts.runNodeId, runNodeId))
+      .all();
+
+    expect(artifacts).toHaveLength(2);
+    expect(artifacts[0]).toEqual({
+      artifactType: 'log',
+      metadata: expect.objectContaining({
+        failureReason: 'retry_scheduled',
+        attempt: 1,
+      }),
+    });
+    expect(artifacts[1]).toEqual({
+      artifactType: 'log',
+      metadata: expect.objectContaining({
+        failureReason: 'retry_limit_exceeded',
+        attempt: 2,
+        retriesRemaining: 0,
+      }),
+    });
   });
 
   it('returns blocked when pending nodes exist but none are runnable', async () => {
@@ -2286,8 +2436,8 @@ describe('createSqlWorkflowExecutor', () => {
     ).rejects.toThrow('maxSteps must be greater than zero.');
   });
 
-  it('throws when execution exceeds maxSteps before reaching a terminal step', async () => {
-    const { db, runId } = seedTwoRootAgentRun();
+  it('fails the run and persists iteration-limit metadata when execution exceeds maxSteps', async () => {
+    const { db, runId, secondRunNodeId } = seedTwoRootAgentRun();
     const executor = createSqlWorkflowExecutor(db, {
       resolveProvider: () =>
         createProvider([
@@ -2295,15 +2445,65 @@ describe('createSqlWorkflowExecutor', () => {
         ]),
     });
 
-    await expect(
-      executor.executeRun({
+    const result = await executor.executeRun({
+      workflowRunId: runId,
+      options: {
+        workingDirectory: '/tmp/alphred-worktree',
+      },
+      maxSteps: 1,
+    });
+
+    expect(result).toEqual({
+      workflowRunId: runId,
+      executedNodes: 1,
+      finalStep: {
+        outcome: 'run_terminal',
         workflowRunId: runId,
-        options: {
-          workingDirectory: '/tmp/alphred-worktree',
-        },
+        runStatus: 'failed',
+      },
+    });
+
+    const persistedRun = db
+      .select({
+        status: workflowRuns.status,
+      })
+      .from(workflowRuns)
+      .where(eq(workflowRuns.id, runId))
+      .get();
+
+    expect(persistedRun).toEqual({
+      status: 'failed',
+    });
+
+    const failedNode = db
+      .select({
+        status: runNodes.status,
+      })
+      .from(runNodes)
+      .where(eq(runNodes.id, secondRunNodeId))
+      .get();
+
+    expect(failedNode).toEqual({
+      status: 'failed',
+    });
+
+    const iterationLimitArtifact = db
+      .select({
+        artifactType: phaseArtifacts.artifactType,
+        metadata: phaseArtifacts.metadata,
+      })
+      .from(phaseArtifacts)
+      .where(eq(phaseArtifacts.runNodeId, secondRunNodeId))
+      .get();
+
+    expect(iterationLimitArtifact).toEqual({
+      artifactType: 'log',
+      metadata: expect.objectContaining({
+        failureReason: 'iteration_limit_exceeded',
         maxSteps: 1,
+        executedNodes: 1,
       }),
-    ).rejects.toThrow(`Execution loop exceeded maxSteps=1 for workflow run id=${runId}`);
+    });
   });
 
   it('throws when the workflow run id does not exist', async () => {
