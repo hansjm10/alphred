@@ -16,6 +16,61 @@ import {
   selectActiveWorkflowTreeVersion,
 } from './workflowPlanner.js';
 
+type MockSelectStep = {
+  all?: unknown;
+  get?: unknown;
+};
+
+function createMockTopologyReader(steps: MockSelectStep[]): Parameters<typeof loadWorkflowTreeTopology>[0] {
+  let selectCallCount = 0;
+
+  const mockReader = {
+    select() {
+      const step = steps[selectCallCount];
+      selectCallCount += 1;
+      if (!step) {
+        throw new Error(`Unexpected select() call #${selectCallCount}.`);
+      }
+
+      const query = {
+        from: () => query,
+        leftJoin: () => query,
+        where: () => query,
+        orderBy: () => query,
+        all: () => {
+          if (!('all' in step)) {
+            throw new Error(`Unexpected all() call for select() #${selectCallCount}.`);
+          }
+          return step.all as never;
+        },
+        get: () => {
+          if (!('get' in step)) {
+            throw new Error(`Unexpected get() call for select() #${selectCallCount}.`);
+          }
+          return step.get as never;
+        },
+      };
+
+      return query;
+    },
+  };
+
+  return mockReader as unknown as Parameters<typeof loadWorkflowTreeTopology>[0];
+}
+
+function loadTopologyWithMockRows(nodeRows: unknown[], edgeRows: unknown[]) {
+  return loadWorkflowTreeTopology(
+    createMockTopologyReader([
+      {
+        all: [{ id: 101, treeKey: 'mock_tree', version: 1, name: 'Mock Tree', description: null }],
+      },
+      { all: nodeRows },
+      { all: edgeRows },
+    ]),
+    { treeKey: 'mock_tree' },
+  );
+}
+
 function seedDesignTreeVersions() {
   const db = createDatabase(':memory:');
   migrateDatabase(db);
@@ -250,6 +305,325 @@ describe('workflow planner/materializer', () => {
         'design_tree',
       ),
     ).toThrow(AmbiguousWorkflowTreeVersionError);
+  });
+
+  it('sorts nodes and edges deterministically with tie breakers', () => {
+    const topology = loadTopologyWithMockRows(
+      [
+        {
+          nodeId: 21,
+          nodeKey: 'zeta',
+          nodeType: 'agent',
+          provider: 'codex',
+          maxRetries: 0,
+          sequenceIndex: 10,
+          promptTemplateId: null,
+          promptTemplateKey: null,
+          promptTemplateVersion: null,
+          promptTemplateContent: null,
+          promptTemplateContentType: null,
+        },
+        {
+          nodeId: 23,
+          nodeKey: 'alpha',
+          nodeType: 'agent',
+          provider: 'codex',
+          maxRetries: 0,
+          sequenceIndex: 10,
+          promptTemplateId: null,
+          promptTemplateKey: null,
+          promptTemplateVersion: null,
+          promptTemplateContent: null,
+          promptTemplateContentType: null,
+        },
+        {
+          nodeId: 22,
+          nodeKey: 'alpha',
+          nodeType: 'agent',
+          provider: 'codex',
+          maxRetries: 0,
+          sequenceIndex: 10,
+          promptTemplateId: null,
+          promptTemplateKey: null,
+          promptTemplateVersion: null,
+          promptTemplateContent: null,
+          promptTemplateContentType: null,
+        },
+        {
+          nodeId: 24,
+          nodeKey: 'omega',
+          nodeType: 'agent',
+          provider: 'codex',
+          maxRetries: 0,
+          sequenceIndex: 40,
+          promptTemplateId: null,
+          promptTemplateKey: null,
+          promptTemplateVersion: null,
+          promptTemplateContent: null,
+          promptTemplateContentType: null,
+        },
+      ],
+      [
+        {
+          edgeId: 500,
+          sourceNodeId: 24,
+          targetNodeId: 22,
+          priority: 5,
+          auto: 1,
+          guardDefinitionId: null,
+          guardKey: null,
+          guardVersion: null,
+          guardExpression: null,
+          guardDescription: null,
+        },
+        {
+          edgeId: 501,
+          sourceNodeId: 22,
+          targetNodeId: 24,
+          priority: 2,
+          auto: 1,
+          guardDefinitionId: null,
+          guardKey: null,
+          guardVersion: null,
+          guardExpression: null,
+          guardDescription: null,
+        },
+        {
+          edgeId: 502,
+          sourceNodeId: 22,
+          targetNodeId: 21,
+          priority: 1,
+          auto: 1,
+          guardDefinitionId: null,
+          guardKey: null,
+          guardVersion: null,
+          guardExpression: null,
+          guardDescription: null,
+        },
+        {
+          edgeId: 504,
+          sourceNodeId: 22,
+          targetNodeId: 24,
+          priority: 1,
+          auto: 1,
+          guardDefinitionId: null,
+          guardKey: null,
+          guardVersion: null,
+          guardExpression: null,
+          guardDescription: null,
+        },
+        {
+          edgeId: 503,
+          sourceNodeId: 22,
+          targetNodeId: 23,
+          priority: 1,
+          auto: 1,
+          guardDefinitionId: null,
+          guardKey: null,
+          guardVersion: null,
+          guardExpression: null,
+          guardDescription: null,
+        },
+      ],
+    );
+
+    expect(topology.nodes.map(node => node.id)).toEqual([22, 23, 21, 24]);
+    expect(topology.nodes.map(node => node.nodeKey)).toEqual(['alpha', 'alpha', 'zeta', 'omega']);
+    expect(topology.edges.map(edge => edge.id)).toEqual([502, 503, 504, 501, 500]);
+    expect(topology.initialRunnableNodeKeys).toEqual([]);
+  });
+
+  it('orders same-sequence node keys consistently', () => {
+    const topology = loadTopologyWithMockRows(
+      [
+        {
+          nodeId: 40,
+          nodeKey: 'alpha',
+          nodeType: 'agent',
+          provider: 'codex',
+          maxRetries: 0,
+          sequenceIndex: 1,
+          promptTemplateId: null,
+          promptTemplateKey: null,
+          promptTemplateVersion: null,
+          promptTemplateContent: null,
+          promptTemplateContentType: null,
+        },
+        {
+          nodeId: 41,
+          nodeKey: 'zeta',
+          nodeType: 'agent',
+          provider: 'codex',
+          maxRetries: 0,
+          sequenceIndex: 1,
+          promptTemplateId: null,
+          promptTemplateKey: null,
+          promptTemplateVersion: null,
+          promptTemplateContent: null,
+          promptTemplateContentType: null,
+        },
+      ],
+      [],
+    );
+
+    expect(topology.nodes.map(node => node.nodeKey)).toEqual(['alpha', 'zeta']);
+  });
+
+  it('sorts edges with unknown source or target nodes after known sequences', () => {
+    const topology = loadTopologyWithMockRows(
+      [
+        {
+          nodeId: 50,
+          nodeKey: 'design',
+          nodeType: 'agent',
+          provider: 'codex',
+          maxRetries: 0,
+          sequenceIndex: 1,
+          promptTemplateId: null,
+          promptTemplateKey: null,
+          promptTemplateVersion: null,
+          promptTemplateContent: null,
+          promptTemplateContentType: null,
+        },
+      ],
+      [
+        {
+          edgeId: 601,
+          sourceNodeId: 50,
+          targetNodeId: 999,
+          priority: 1,
+          auto: 1,
+          guardDefinitionId: null,
+          guardKey: null,
+          guardVersion: null,
+          guardExpression: null,
+          guardDescription: null,
+        },
+        {
+          edgeId: 602,
+          sourceNodeId: 50,
+          targetNodeId: 50,
+          priority: 1,
+          auto: 1,
+          guardDefinitionId: null,
+          guardKey: null,
+          guardVersion: null,
+          guardExpression: null,
+          guardDescription: null,
+        },
+        {
+          edgeId: 603,
+          sourceNodeId: 999,
+          targetNodeId: 50,
+          priority: 0,
+          auto: 1,
+          guardDefinitionId: null,
+          guardKey: null,
+          guardVersion: null,
+          guardExpression: null,
+          guardDescription: null,
+        },
+      ],
+    );
+
+    expect(topology.edges.map(edge => edge.id)).toEqual([602, 601, 603]);
+  });
+
+  it('applies unknown-node fallbacks regardless of comparator argument side', () => {
+    const nodeRows = [
+      {
+        nodeId: 50,
+        nodeKey: 'design',
+        nodeType: 'agent',
+        provider: 'codex',
+        maxRetries: 0,
+        sequenceIndex: 1,
+        promptTemplateId: null,
+        promptTemplateKey: null,
+        promptTemplateVersion: null,
+        promptTemplateContent: null,
+        promptTemplateContentType: null,
+      },
+    ];
+
+    const sourceFallbackTopology = loadTopologyWithMockRows(nodeRows, [
+      {
+        edgeId: 703,
+        sourceNodeId: 999,
+        targetNodeId: 50,
+        priority: 1,
+        auto: 1,
+        guardDefinitionId: null,
+        guardKey: null,
+        guardVersion: null,
+        guardExpression: null,
+        guardDescription: null,
+      },
+      {
+        edgeId: 704,
+        sourceNodeId: 50,
+        targetNodeId: 50,
+        priority: 1,
+        auto: 1,
+        guardDefinitionId: null,
+        guardKey: null,
+        guardVersion: null,
+        guardExpression: null,
+        guardDescription: null,
+      },
+    ]);
+    expect(sourceFallbackTopology.edges.map(edge => edge.id)).toEqual([704, 703]);
+
+    const targetFallbackTopology = loadTopologyWithMockRows(nodeRows, [
+      {
+        edgeId: 701,
+        sourceNodeId: 50,
+        targetNodeId: 50,
+        priority: 1,
+        auto: 1,
+        guardDefinitionId: null,
+        guardKey: null,
+        guardVersion: null,
+        guardExpression: null,
+        guardDescription: null,
+      },
+      {
+        edgeId: 702,
+        sourceNodeId: 50,
+        targetNodeId: 999,
+        priority: 1,
+        auto: 1,
+        guardDefinitionId: null,
+        guardKey: null,
+        guardVersion: null,
+        guardExpression: null,
+        guardDescription: null,
+      },
+    ]);
+    expect(targetFallbackTopology.edges.map(edge => edge.id)).toEqual([701, 702]);
+  });
+
+  it('throws when joined prompt template fields are unexpectedly missing', () => {
+    expect(() =>
+      loadTopologyWithMockRows(
+        [
+          {
+            nodeId: 31,
+            nodeKey: 'design',
+            nodeType: 'agent',
+            provider: 'codex',
+            maxRetries: 0,
+            sequenceIndex: 1,
+            promptTemplateId: 123,
+            promptTemplateKey: null,
+            promptTemplateVersion: 1,
+            promptTemplateContent: 'Design prompt',
+            promptTemplateContentType: 'markdown',
+          },
+        ],
+        [],
+      ),
+    ).toThrow('prompt_templates.template_key');
   });
 
   it('loads an explicit tree version and throws when explicit version is missing', () => {
