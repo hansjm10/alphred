@@ -499,7 +499,14 @@ function seedGuardedCycleRun() {
   };
 }
 
-function seedDecisionRoutingRun() {
+function seedDecisionRoutingRun(
+  options: {
+    approvedGuardOperator?: '==' | '!=';
+    approvedGuardValue?: string;
+    changesRequestedGuardOperator?: '==' | '!=';
+    changesRequestedGuardValue?: string;
+  } = {},
+) {
   const db = createDatabase(':memory:');
   migrateDatabase(db);
 
@@ -531,8 +538,8 @@ function seedDecisionRoutingRun() {
       version: 1,
       expression: {
         field: 'decision',
-        operator: '==',
-        value: 'approved',
+        operator: options.approvedGuardOperator ?? '==',
+        value: options.approvedGuardValue ?? 'approved',
       },
     })
     .returning({ id: guardDefinitions.id })
@@ -545,8 +552,8 @@ function seedDecisionRoutingRun() {
       version: 1,
       expression: {
         field: 'decision',
-        operator: '==',
-        value: 'changes_requested',
+        operator: options.changesRequestedGuardOperator ?? '==',
+        value: options.changesRequestedGuardValue ?? 'changes_requested',
       },
     })
     .returning({ id: guardDefinitions.id })
@@ -1082,6 +1089,140 @@ describe('createSqlWorkflowExecutor', () => {
       runStatus: 'failed',
     });
     expect(resolveProvider).toHaveBeenCalledTimes(1);
+  });
+
+  it('persists no_route and fails when decision output is missing even with != guards', async () => {
+    const { db, runId, reviewRunNodeId } = seedDecisionRoutingRun({
+      approvedGuardOperator: '!=',
+      approvedGuardValue: 'approved',
+      changesRequestedGuardOperator: '!=',
+      changesRequestedGuardValue: 'changes_requested',
+    });
+    const resolveProvider = vi.fn(() => ({
+      async *run(): AsyncIterable<ProviderEvent> {
+        yield {
+          type: 'result',
+          content: 'Route analysis complete. No explicit decision line was provided.',
+          timestamp: 10,
+        };
+      },
+    }));
+    const executor = createSqlWorkflowExecutor(db, {
+      resolveProvider,
+    });
+
+    const firstStep = await executor.executeNextRunnableNode({
+      workflowRunId: runId,
+      options: {
+        workingDirectory: '/tmp/alphred-worktree',
+      },
+    });
+
+    expect(firstStep).toEqual({
+      outcome: 'executed',
+      workflowRunId: runId,
+      runNodeId: reviewRunNodeId,
+      nodeKey: 'review',
+      runNodeStatus: 'completed',
+      runStatus: 'failed',
+      artifactId: expect.any(Number),
+    });
+
+    const persistedReviewDecision = db
+      .select({
+        decisionType: routingDecisions.decisionType,
+      })
+      .from(routingDecisions)
+      .where(eq(routingDecisions.runNodeId, reviewRunNodeId))
+      .get();
+
+    expect(persistedReviewDecision).toEqual({
+      decisionType: 'no_route',
+    });
+
+    const secondStep = await executor.executeNextRunnableNode({
+      workflowRunId: runId,
+      options: {
+        workingDirectory: '/tmp/alphred-worktree',
+      },
+    });
+
+    expect(secondStep).toEqual({
+      outcome: 'run_terminal',
+      workflowRunId: runId,
+      runStatus: 'failed',
+    });
+    expect(resolveProvider).toHaveBeenCalledTimes(1);
+  });
+
+  it('uses priority order when multiple guarded branches match the same decision', async () => {
+    const { db, runId, reviewRunNodeId, approvedRunNodeId, reviseRunNodeId } = seedDecisionRoutingRun({
+      approvedGuardOperator: '!=',
+      approvedGuardValue: 'retry',
+      changesRequestedGuardOperator: '!=',
+      changesRequestedGuardValue: 'blocked',
+    });
+    let runInvocation = 0;
+    const executor = createSqlWorkflowExecutor(db, {
+      resolveProvider: () => ({
+        async *run(): AsyncIterable<ProviderEvent> {
+          runInvocation += 1;
+          if (runInvocation === 1) {
+            yield { type: 'result', content: 'decision: approved\nBoth guards should match.', timestamp: 10 };
+            return;
+          }
+
+          yield { type: 'result', content: `Executed node ${runInvocation}.`, timestamp: 20 };
+        },
+      }),
+    });
+
+    const firstStep = await executor.executeNextRunnableNode({
+      workflowRunId: runId,
+      options: {
+        workingDirectory: '/tmp/alphred-worktree',
+      },
+    });
+
+    expect(firstStep).toEqual({
+      outcome: 'executed',
+      workflowRunId: runId,
+      runNodeId: reviewRunNodeId,
+      nodeKey: 'review',
+      runNodeStatus: 'completed',
+      runStatus: 'running',
+      artifactId: expect.any(Number),
+    });
+
+    const secondStep = await executor.executeNextRunnableNode({
+      workflowRunId: runId,
+      options: {
+        workingDirectory: '/tmp/alphred-worktree',
+      },
+    });
+
+    expect(secondStep).toEqual({
+      outcome: 'executed',
+      workflowRunId: runId,
+      runNodeId: approvedRunNodeId,
+      nodeKey: 'approved_target',
+      runNodeStatus: 'completed',
+      runStatus: 'completed',
+      artifactId: expect.any(Number),
+    });
+
+    const reviseStatus = db
+      .select({
+        status: runNodes.status,
+      })
+      .from(runNodes)
+      .where(eq(runNodes.id, reviseRunNodeId))
+      .get();
+
+    expect(reviseStatus).toEqual({
+      status: 'skipped',
+    });
+    expect(runInvocation).toBe(2);
   });
 
   it('defaults persisted artifact content type to markdown when prompt content type is absent', async () => {

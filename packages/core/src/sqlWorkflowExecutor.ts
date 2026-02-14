@@ -137,6 +137,7 @@ const routeDecisionSignals: ReadonlySet<RouteDecisionSignal> = new Set([
   'retry',
 ]);
 const guardOperators: ReadonlySet<GuardCondition['operator']> = new Set(['==', '!=', '>', '<', '>=', '<=']);
+// Routing decisions are parsed from a phase report line shaped like: `decision: approved`.
 const routingDecisionPattern = /^\s*decision\s*:\s*([a-z_]+)\s*$/im;
 
 function toRunNodeStatus(value: string): RunNodeStatus {
@@ -235,6 +236,11 @@ function parseRouteDecisionSignal(report: string): RouteDecisionSignal | null {
 function doesEdgeMatchDecision(edge: EdgeRow, decisionType: RoutingDecisionType | null): boolean {
   if (edge.auto === 1) {
     return true;
+  }
+
+  // Guarded routes require a concrete decision signal from the phase output.
+  if (decisionType === null || decisionType === 'no_route') {
+    return false;
   }
 
   if (!isGuardExpression(edge.guardExpression)) {
