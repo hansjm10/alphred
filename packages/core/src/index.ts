@@ -9,3 +9,4 @@ export {
   type PhaseProviderResolver,
   type PhaseRunnerDependencies,
 } from './phaseRunner.js';
+export { createSqlWorkflowPlanner, type SqlWorkflowPlanner } from './sqlWorkflowPlanner.js';

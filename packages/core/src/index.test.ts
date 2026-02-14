@@ -9,5 +9,6 @@ describe('core index exports', () => {
     expect(typeof core.canTransitionRun).toBe('function');
     expect(typeof core.evaluateTransitions).toBe('function');
     expect(typeof core.runPhase).toBe('function');
+    expect(typeof core.createSqlWorkflowPlanner).toBe('function');
   });
 });
