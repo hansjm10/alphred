@@ -67,6 +67,7 @@ type NextRunnableSelection = {
   nextRunnableNode: RunNodeExecutionRow | null;
   latestNodeAttempts: RunNodeExecutionRow[];
   hasNoRouteDecision: boolean;
+  hasUnresolvedDecision: boolean;
 };
 
 type RoutingSelection = {
@@ -75,6 +76,7 @@ type RoutingSelection = {
   selectedEdgeIdBySourceNodeId: Map<number, number>;
   unresolvedDecisionSourceNodeIds: Set<number>;
   hasNoRouteDecision: boolean;
+  hasUnresolvedDecision: boolean;
 };
 
 export type ExecuteWorkflowRunParams = {
@@ -480,6 +482,7 @@ function buildRoutingSelection(
     selectedEdgeIdBySourceNodeId,
     unresolvedDecisionSourceNodeIds,
     hasNoRouteDecision,
+    hasUnresolvedDecision: unresolvedDecisionSourceNodeIds.size > 0,
   };
 }
 
@@ -551,6 +554,7 @@ function selectNextRunnableNode(
     nextRunnableNode,
     latestNodeAttempts,
     hasNoRouteDecision: routingSelection.hasNoRouteDecision,
+    hasUnresolvedDecision: routingSelection.hasUnresolvedDecision,
   };
 }
 
@@ -905,12 +909,13 @@ function resolveNoRunnableOutcome(
   run: WorkflowRunRow,
   latestNodeAttempts: RunNodeExecutionRow[],
   hasNoRouteDecision: boolean,
+  hasUnresolvedDecision: boolean,
 ): ExecuteNextRunnableNodeResult {
   const hasPending = latestNodeAttempts.some(node => node.status === 'pending');
   const hasRunning = latestNodeAttempts.some(node => node.status === 'running');
   const hasTerminalFailure = latestNodeAttempts.some(node => node.status === 'failed');
 
-  if (hasNoRouteDecision) {
+  if (hasNoRouteDecision || hasUnresolvedDecision) {
     const runStatus = transitionRunTo(db, run.id, run.status, 'failed');
     return {
       outcome: 'blocked',
@@ -1095,14 +1100,14 @@ export function createSqlWorkflowExecutor(
       const runNodeRows = loadRunNodeExecutionRows(db, run.id);
       const edgeRows = loadEdgeRows(db, run.workflowTreeId);
       const latestRoutingDecisionsByRunNodeId = loadLatestRoutingDecisionsByRunNodeId(db, run.id);
-      const { nextRunnableNode, latestNodeAttempts, hasNoRouteDecision } = selectNextRunnableNode(
+      const { nextRunnableNode, latestNodeAttempts, hasNoRouteDecision, hasUnresolvedDecision } = selectNextRunnableNode(
         runNodeRows,
         edgeRows,
         latestRoutingDecisionsByRunNodeId,
       );
 
       if (!nextRunnableNode) {
-        return resolveNoRunnableOutcome(db, run, latestNodeAttempts, hasNoRouteDecision);
+        return resolveNoRunnableOutcome(db, run, latestNodeAttempts, hasNoRouteDecision, hasUnresolvedDecision);
       }
 
       const runStatus = ensureRunIsRunning(db, run);

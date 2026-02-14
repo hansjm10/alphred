@@ -1525,7 +1525,7 @@ describe('createSqlWorkflowExecutor', () => {
     expect(resolveProvider).not.toHaveBeenCalled();
   });
 
-  it('returns blocked without failing when a completed guarded node has no persisted routing decision', async () => {
+  it('returns blocked and fails when a completed guarded node has no persisted routing decision', async () => {
     const { db, runId, reviewRunNodeId, approvedRunNodeId, reviseRunNodeId } = seedDecisionRoutingRun();
     transitionRunNodeStatus(db, {
       runNodeId: reviewRunNodeId,
@@ -1555,7 +1555,7 @@ describe('createSqlWorkflowExecutor', () => {
     expect(result).toEqual({
       outcome: 'blocked',
       workflowRunId: runId,
-      runStatus: 'running',
+      runStatus: 'failed',
     });
     expect(resolveProvider).not.toHaveBeenCalled();
 
@@ -1568,7 +1568,7 @@ describe('createSqlWorkflowExecutor', () => {
       .get();
 
     expect(persistedRun).toEqual({
-      status: 'running',
+      status: 'failed',
     });
 
     const branchStatuses = db
@@ -1718,6 +1718,106 @@ describe('createSqlWorkflowExecutor', () => {
 
     expect(reviseStatus).toEqual({
       status: 'skipped',
+    });
+    expect(runInvocation).toBe(2);
+  });
+
+  it('rejects same-priority sibling edges, preventing ambiguous guarded tie-breaks', async () => {
+    const { db } = seedDecisionRoutingRun({
+      approvedGuardOperator: '!=',
+      approvedGuardValue: 'retry',
+      changesRequestedGuardOperator: '!=',
+      changesRequestedGuardValue: 'blocked',
+    });
+    expect(() => db.update(treeEdges).set({ priority: 0 }).run()).toThrow();
+  });
+
+  it('falls back to a lower-priority auto edge when guarded edges do not match', async () => {
+    const { db, runId, reviewRunNodeId, reviseRunNodeId } = seedDecisionRoutingRun();
+    const fallbackEdge = db
+      .select({
+        id: treeEdges.id,
+      })
+      .from(treeEdges)
+      .where(eq(treeEdges.priority, 1))
+      .get();
+    if (!fallbackEdge) {
+      throw new Error('Expected fallback edge row.');
+    }
+
+    db.update(treeEdges)
+      .set({
+        auto: 1,
+        guardDefinitionId: null,
+      })
+      .where(eq(treeEdges.id, fallbackEdge.id))
+      .run();
+
+    let runInvocation = 0;
+    const executor = createSqlWorkflowExecutor(db, {
+      resolveProvider: () => ({
+        async *run(): AsyncIterable<ProviderEvent> {
+          runInvocation += 1;
+          if (runInvocation === 1) {
+            yield { type: 'result', content: 'decision: blocked\nUse fallback route.', timestamp: 10 };
+            return;
+          }
+
+          yield { type: 'result', content: `Executed node ${runInvocation}.`, timestamp: 20 };
+        },
+      }),
+    });
+
+    const firstStep = await executor.executeNextRunnableNode({
+      workflowRunId: runId,
+      options: {
+        workingDirectory: '/tmp/alphred-worktree',
+      },
+    });
+
+    expect(firstStep).toEqual({
+      outcome: 'executed',
+      workflowRunId: runId,
+      runNodeId: reviewRunNodeId,
+      nodeKey: 'review',
+      runNodeStatus: 'completed',
+      runStatus: 'running',
+      artifactId: expect.any(Number),
+    });
+
+    const persistedReviewDecision = db
+      .select({
+        decisionType: routingDecisions.decisionType,
+        rawOutput: routingDecisions.rawOutput,
+      })
+      .from(routingDecisions)
+      .where(eq(routingDecisions.runNodeId, reviewRunNodeId))
+      .get();
+
+    expect(persistedReviewDecision).toEqual({
+      decisionType: 'blocked',
+      rawOutput: {
+        source: 'phase_result',
+        decision: 'blocked',
+        selectedEdgeId: fallbackEdge.id,
+      },
+    });
+
+    const secondStep = await executor.executeNextRunnableNode({
+      workflowRunId: runId,
+      options: {
+        workingDirectory: '/tmp/alphred-worktree',
+      },
+    });
+
+    expect(secondStep).toEqual({
+      outcome: 'executed',
+      workflowRunId: runId,
+      runNodeId: reviseRunNodeId,
+      nodeKey: 'revise_target',
+      runNodeStatus: 'completed',
+      runStatus: 'completed',
+      artifactId: expect.any(Number),
     });
     expect(runInvocation).toBe(2);
   });
