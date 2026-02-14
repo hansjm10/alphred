@@ -10,6 +10,8 @@ import {
   workflowTrees,
 } from './schema.js';
 
+type TopologyReader = Pick<AlphredDatabase, 'select'>;
+
 export type WorkflowTreeVersion = {
   id: number;
   treeKey: string;
@@ -216,7 +218,7 @@ export function selectActiveWorkflowTreeVersion(
   return activeCandidates[0];
 }
 
-function resolveWorkflowTreeVersion(db: AlphredDatabase, params: LoadWorkflowTreeTopologyParams): WorkflowTreeVersion {
+function resolveWorkflowTreeVersion(db: TopologyReader, params: LoadWorkflowTreeTopologyParams): WorkflowTreeVersion {
   if (params.treeVersion !== undefined) {
     const exactVersion = db
       .select({
@@ -254,7 +256,7 @@ function resolveWorkflowTreeVersion(db: AlphredDatabase, params: LoadWorkflowTre
 }
 
 export function loadWorkflowTreeTopology(
-  db: AlphredDatabase,
+  db: TopologyReader,
   params: LoadWorkflowTreeTopologyParams,
 ): WorkflowTreeTopology {
   const tree = resolveWorkflowTreeVersion(db, params);
@@ -352,11 +354,13 @@ export function materializeWorkflowRunFromTree(
   db: AlphredDatabase,
   params: MaterializeWorkflowRunParams,
 ): MaterializedWorkflowRun {
-  const topology = loadWorkflowTreeTopology(db, params);
   const runStatus = params.runStatus ?? 'pending';
   const runStartedAt = runStatus === 'running' ? (params.runStartedAt ?? new Date().toISOString()) : null;
 
   return db.transaction(tx => {
+    // Keep topology resolution and persistence in one transaction snapshot.
+    const topology = loadWorkflowTreeTopology(tx, params);
+
     const run = tx
       .insert(workflowRuns)
       .values({

@@ -154,6 +154,84 @@ function seedDesignTreeVersions() {
   return { db, oldVersionTreeId: oldVersionTree.id, activeTreeId: activeTree.id };
 }
 
+function seedEmptyTree() {
+  const db = createDatabase(':memory:');
+  migrateDatabase(db);
+
+  db.insert(workflowTrees)
+    .values({
+      treeKey: 'empty_tree',
+      version: 1,
+      name: 'Empty tree',
+    })
+    .run();
+
+  return db;
+}
+
+function seedCyclicTree() {
+  const db = createDatabase(':memory:');
+  migrateDatabase(db);
+
+  const tree = db
+    .insert(workflowTrees)
+    .values({
+      treeKey: 'cyclic_tree',
+      version: 1,
+      name: 'Cyclic tree',
+    })
+    .returning({ id: workflowTrees.id })
+    .get();
+
+  const designNode = db
+    .insert(treeNodes)
+    .values({
+      workflowTreeId: tree.id,
+      nodeKey: 'design',
+      nodeType: 'agent',
+      provider: 'codex',
+      sequenceIndex: 10,
+    })
+    .returning({ id: treeNodes.id })
+    .get();
+
+  const implementNode = db
+    .insert(treeNodes)
+    .values({
+      workflowTreeId: tree.id,
+      nodeKey: 'implement',
+      nodeType: 'agent',
+      provider: 'codex',
+      sequenceIndex: 20,
+    })
+    .returning({ id: treeNodes.id })
+    .get();
+
+  db.insert(treeEdges)
+    .values({
+      workflowTreeId: tree.id,
+      sourceNodeId: designNode.id,
+      targetNodeId: implementNode.id,
+      priority: 1,
+      auto: 1,
+      guardDefinitionId: null,
+    })
+    .run();
+
+  db.insert(treeEdges)
+    .values({
+      workflowTreeId: tree.id,
+      sourceNodeId: implementNode.id,
+      targetNodeId: designNode.id,
+      priority: 1,
+      auto: 1,
+      guardDefinitionId: null,
+    })
+    .run();
+
+  return db;
+}
+
 describe('workflow planner/materializer', () => {
   it('throws for missing tree keys', () => {
     const db = createDatabase(':memory:');
@@ -188,6 +266,33 @@ describe('workflow planner/materializer', () => {
     expect(() => loadWorkflowTreeTopology(db, { treeKey: 'design_tree', treeVersion: 99 })).toThrow(
       WorkflowTreeNotFoundError,
     );
+  });
+
+  it('materializes runs for trees that have no nodes', () => {
+    const db = seedEmptyTree();
+
+    const topology = loadWorkflowTreeTopology(db, { treeKey: 'empty_tree' });
+    expect(topology.nodes).toEqual([]);
+    expect(topology.edges).toEqual([]);
+    expect(topology.initialRunnableNodeKeys).toEqual([]);
+
+    const run = materializeWorkflowRunFromTree(db, { treeKey: 'empty_tree' });
+    expect(run.initialRunnableNodeKeys).toEqual([]);
+    expect(run.run.status).toBe('pending');
+    expect(run.runNodes).toEqual([]);
+  });
+
+  it('materializes cyclic trees with no initial runnable nodes', () => {
+    const db = seedCyclicTree();
+
+    const topology = loadWorkflowTreeTopology(db, { treeKey: 'cyclic_tree' });
+    expect(topology.initialRunnableNodeKeys).toEqual([]);
+    expect(topology.nodes.map(node => node.nodeKey)).toEqual(['design', 'implement']);
+
+    const run = materializeWorkflowRunFromTree(db, { treeKey: 'cyclic_tree' });
+    expect(run.initialRunnableNodeKeys).toEqual([]);
+    expect(run.runNodes.map(node => node.nodeKey)).toEqual(['design', 'implement']);
+    expect(run.runNodes.map(node => node.isInitialRunnable)).toEqual([false, false]);
   });
 
   it('materializes deterministic run nodes from the active SQL tree topology', () => {
@@ -227,5 +332,28 @@ describe('workflow planner/materializer', () => {
     });
     expect(runningRunWithExplicitStart.run.status).toBe('running');
     expect(runningRunWithExplicitStart.run.startedAt).toBe(explicitStartedAt);
+  });
+
+  it('loads topology within the transaction boundary during materialization', () => {
+    const { db } = seedDesignTreeVersions();
+    let enteredTransaction = false;
+
+    const transactionOnlyDb = new Proxy(db, {
+      get(target, property) {
+        if (property === 'transaction') {
+          return (callback: (tx: unknown) => unknown) =>
+            target.transaction((tx) => {
+              enteredTransaction = true;
+              return callback(tx);
+            });
+        }
+
+        throw new Error(`Unexpected outer database access: ${String(property)}`);
+      },
+    });
+
+    const run = materializeWorkflowRunFromTree(transactionOnlyDb as typeof db, { treeKey: 'design_tree' });
+    expect(enteredTransaction).toBe(true);
+    expect(run.runNodes.map(node => node.nodeKey)).toEqual(['design', 'implement', 'review']);
   });
 });
