@@ -69,6 +69,13 @@ type NextRunnableSelection = {
   hasNoRouteDecision: boolean;
 };
 
+type RoutingSelection = {
+  latestByTreeNodeId: Map<number, RunNodeExecutionRow>;
+  incomingEdgesByTargetNodeId: Map<number, EdgeRow[]>;
+  selectedEdgeIdBySourceNodeId: Map<number, number>;
+  hasNoRouteDecision: boolean;
+};
+
 export type ExecuteWorkflowRunParams = {
   workflowRunId: number;
   options: ProviderRunOptions;
@@ -279,12 +286,11 @@ function loadLatestRoutingDecisionsByRunNodeId(
   return latestByRunNodeId;
 }
 
-function selectNextRunnableNode(
-  rows: RunNodeExecutionRow[],
+function buildRoutingSelection(
+  latestNodeAttempts: RunNodeExecutionRow[],
   edges: EdgeRow[],
   latestRoutingDecisionsByRunNodeId: Map<number, RoutingDecisionRow>,
-): NextRunnableSelection {
-  const latestNodeAttempts = getLatestRunNodeAttempts(rows);
+): RoutingSelection {
   const latestByTreeNodeId = new Map<number, RunNodeExecutionRow>(latestNodeAttempts.map(row => [row.treeNodeId, row]));
   const incomingEdgesByTargetNodeId = new Map<number, EdgeRow[]>();
   const outgoingEdgesBySourceNodeId = new Map<number, EdgeRow[]>();
@@ -326,32 +332,118 @@ function selectNextRunnableNode(
     hasNoRouteDecision = true;
   }
 
+  return {
+    latestByTreeNodeId,
+    incomingEdgesByTargetNodeId,
+    selectedEdgeIdBySourceNodeId,
+    hasNoRouteDecision,
+  };
+}
+
+function hasPotentialIncomingRoute(
+  incomingEdges: EdgeRow[],
+  latestByTreeNodeId: Map<number, RunNodeExecutionRow>,
+  selectedEdgeIdBySourceNodeId: Map<number, number>,
+): boolean {
+  return incomingEdges.some((edge) => {
+    const sourceNode = latestByTreeNodeId.get(edge.sourceNodeId);
+    if (!sourceNode) {
+      return false;
+    }
+
+    if (sourceNode.status === 'completed') {
+      return selectedEdgeIdBySourceNodeId.get(edge.sourceNodeId) === edge.edgeId;
+    }
+
+    return sourceNode.status === 'pending' || sourceNode.status === 'running' || sourceNode.status === 'failed';
+  });
+}
+
+function hasRunnableIncomingRoute(
+  incomingEdges: EdgeRow[],
+  latestByTreeNodeId: Map<number, RunNodeExecutionRow>,
+  selectedEdgeIdBySourceNodeId: Map<number, number>,
+): boolean {
+  return incomingEdges.some((edge) => {
+    const sourceNode = latestByTreeNodeId.get(edge.sourceNodeId);
+    if (sourceNode?.status !== 'completed') {
+      return false;
+    }
+
+    return selectedEdgeIdBySourceNodeId.get(edge.sourceNodeId) === edge.edgeId;
+  });
+}
+
+function selectNextRunnableNode(
+  rows: RunNodeExecutionRow[],
+  edges: EdgeRow[],
+  latestRoutingDecisionsByRunNodeId: Map<number, RoutingDecisionRow>,
+): NextRunnableSelection {
+  const latestNodeAttempts = getLatestRunNodeAttempts(rows);
+  const routingSelection = buildRoutingSelection(latestNodeAttempts, edges, latestRoutingDecisionsByRunNodeId);
+
   const nextRunnableNode =
     latestNodeAttempts.find((row) => {
       if (row.status !== 'pending') {
         return false;
       }
 
-      const incomingEdges = incomingEdgesByTargetNodeId.get(row.treeNodeId) ?? [];
+      const incomingEdges = routingSelection.incomingEdgesByTargetNodeId.get(row.treeNodeId) ?? [];
       if (incomingEdges.length === 0) {
         return true;
       }
 
-      return incomingEdges.some((edge) => {
-        const sourceNode = latestByTreeNodeId.get(edge.sourceNodeId);
-        if (sourceNode?.status !== 'completed') {
-          return false;
-        }
-
-        return selectedEdgeIdBySourceNodeId.get(edge.sourceNodeId) === edge.edgeId;
-      });
+      return hasRunnableIncomingRoute(
+        incomingEdges,
+        routingSelection.latestByTreeNodeId,
+        routingSelection.selectedEdgeIdBySourceNodeId,
+      );
     }) ?? null;
 
   return {
     nextRunnableNode,
     latestNodeAttempts,
-    hasNoRouteDecision,
+    hasNoRouteDecision: routingSelection.hasNoRouteDecision,
   };
+}
+
+function markUnreachablePendingNodesAsSkipped(
+  db: AlphredDatabase,
+  workflowRunId: number,
+  edgeRows: EdgeRow[],
+): void {
+  while (true) {
+    const latestNodeAttempts = getLatestRunNodeAttempts(loadRunNodeExecutionRows(db, workflowRunId));
+    const latestRoutingDecisionsByRunNodeId = loadLatestRoutingDecisionsByRunNodeId(db, workflowRunId);
+    const routingSelection = buildRoutingSelection(latestNodeAttempts, edgeRows, latestRoutingDecisionsByRunNodeId);
+
+    const unreachablePendingNode = latestNodeAttempts.find((node) => {
+      if (node.status !== 'pending') {
+        return false;
+      }
+
+      const incomingEdges = routingSelection.incomingEdgesByTargetNodeId.get(node.treeNodeId) ?? [];
+      if (incomingEdges.length === 0) {
+        return false;
+      }
+
+      return !hasPotentialIncomingRoute(
+        incomingEdges,
+        routingSelection.latestByTreeNodeId,
+        routingSelection.selectedEdgeIdBySourceNodeId,
+      );
+    });
+
+    if (!unreachablePendingNode) {
+      return;
+    }
+
+    transitionRunNodeStatus(db, {
+      runNodeId: unreachablePendingNode.runNodeId,
+      expectedFrom: 'pending',
+      to: 'skipped',
+    });
+  }
 }
 
 function toErrorMessage(error: unknown): string {
@@ -788,6 +880,7 @@ async function executeClaimedRunnableNode(
     if (routingDecision === 'no_route') {
       currentRunStatus = transitionRunTo(db, run.id, currentRunStatus, 'failed');
     } else {
+      markUnreachablePendingNodesAsSkipped(db, run.id, edgeRows);
       const latestAfterSuccess = getLatestRunNodeAttempts(loadRunNodeExecutionRows(db, run.id));
       const targetRunStatus = resolveRunStatusFromNodes(latestAfterSuccess);
       currentRunStatus = transitionRunTo(db, run.id, currentRunStatus, targetRunStatus);

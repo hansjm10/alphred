@@ -908,7 +908,7 @@ describe('createSqlWorkflowExecutor', () => {
       runNodeId: approvedRunNodeId,
       nodeKey: 'approved_target',
       runNodeStatus: 'completed',
-      runStatus: 'running',
+      runStatus: 'completed',
       artifactId: expect.any(Number),
     });
 
@@ -921,12 +921,26 @@ describe('createSqlWorkflowExecutor', () => {
       .get();
 
     expect(reviseStatus).toEqual({
-      status: 'pending',
+      status: 'skipped',
     });
+
+    const thirdStep = await executor.executeNextRunnableNode({
+      workflowRunId: runId,
+      options: {
+        workingDirectory: '/tmp/alphred-worktree',
+      },
+    });
+
+    expect(thirdStep).toEqual({
+      outcome: 'run_terminal',
+      workflowRunId: runId,
+      runStatus: 'completed',
+    });
+    expect(runInvocation).toBe(2);
   });
 
   it('routes to the revise branch and persists a changes_requested decision', async () => {
-    const { db, runId, reviewRunNodeId, reviseRunNodeId } = seedDecisionRoutingRun();
+    const { db, runId, reviewRunNodeId, approvedRunNodeId, reviseRunNodeId } = seedDecisionRoutingRun();
     let runInvocation = 0;
     const executor = createSqlWorkflowExecutor(db, {
       resolveProvider: () => ({
@@ -984,9 +998,35 @@ describe('createSqlWorkflowExecutor', () => {
       runNodeId: reviseRunNodeId,
       nodeKey: 'revise_target',
       runNodeStatus: 'completed',
-      runStatus: 'running',
+      runStatus: 'completed',
       artifactId: expect.any(Number),
     });
+
+    const approvedStatus = db
+      .select({
+        status: runNodes.status,
+      })
+      .from(runNodes)
+      .where(eq(runNodes.id, approvedRunNodeId))
+      .get();
+
+    expect(approvedStatus).toEqual({
+      status: 'skipped',
+    });
+
+    const thirdStep = await executor.executeNextRunnableNode({
+      workflowRunId: runId,
+      options: {
+        workingDirectory: '/tmp/alphred-worktree',
+      },
+    });
+
+    expect(thirdStep).toEqual({
+      outcome: 'run_terminal',
+      workflowRunId: runId,
+      runStatus: 'completed',
+    });
+    expect(runInvocation).toBe(2);
   });
 
   it('persists no_route and fails the run when no guarded edge matches', async () => {
