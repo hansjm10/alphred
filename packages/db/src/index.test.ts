@@ -5,8 +5,12 @@ describe('db index exports', () => {
   it('re-exports database setup and schema tables', () => {
     expect(typeof db.createDatabase).toBe('function');
     expect(typeof db.migrateDatabase).toBe('function');
-    expect(db.workflows).toBeDefined();
-    expect(db.runs).toBeDefined();
-    expect(db.phases).toBeDefined();
+    expect(typeof db.transitionRunNodeStatus).toBe('function');
+    expect(db.workflowTrees).toBeDefined();
+    expect(db.treeNodes).toBeDefined();
+    expect(db.treeEdges).toBeDefined();
+    expect(db.runNodes).toBeDefined();
+    expect(db.routingDecisions).toBeDefined();
+    expect(db.phaseArtifacts).toBeDefined();
   });
 });
