@@ -38,3 +38,10 @@ The SQL workflow executor parses routing intent from phase reports and resolves 
 
 - A persisted `no_route` for completed nodes with outgoing edges is treated as terminal failure (`runStatus = failed`).
 - Completed guarded nodes that have outgoing edges but no persisted routing decision are treated as unresolved routing state and also fail the run to avoid indefinite `running` + `blocked` deadlocks.
+
+## Retry and Iteration Limits
+
+- Node retries are enforced from `tree_nodes.max_retries`, using `run_nodes.attempt` as the persisted attempt counter.
+- Retry attempts use lifecycle-guarded transitions (`running -> failed -> running`) before re-running the same node.
+- Failed attempts persist `phase_artifacts` log rows with retry metadata, including whether a retry was scheduled or the retry limit was exhausted.
+- `executeRun` enforces a run-level `maxSteps` ceiling; when exceeded, the run is terminalized as `failed` and the limit-exceeded reason is persisted in artifact metadata.
