@@ -37,6 +37,8 @@ Each phase:
 - `failed` -> `running` (retry)
 - `completed` -> `pending` (loop backtrack re-queue)
 - `skipped` -> `pending` (branch reactivation)
+- `completed` -> `pending` increments `attempt` and clears `started_at`/`completed_at`
+- `skipped` -> `pending` keeps `attempt` unchanged until the node is claimed and run
 
 ### Transition Evaluation
 

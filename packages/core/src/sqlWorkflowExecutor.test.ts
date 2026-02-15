@@ -1,3 +1,6 @@
+import { access, mkdtemp, rename, rm } from 'node:fs/promises';
+import { resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { and, asc, eq, inArray, sql } from 'drizzle-orm';
 import type { ProviderEvent, ProviderRunOptions } from '@alphred/shared';
 import { describe, expect, it, vi } from 'vitest';
@@ -18,6 +21,48 @@ import {
   workflowTrees,
 } from '@alphred/db';
 import { createSqlWorkflowExecutor } from './sqlWorkflowExecutor.js';
+
+const coreSourceDirectory = fileURLToPath(new URL('.', import.meta.url));
+const corePackageRoot = resolve(coreSourceDirectory, '..');
+
+async function pathExists(path: string): Promise<boolean> {
+  try {
+    await access(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function withDistDirectoriesTemporarilyHidden<T>(
+  distDirectories: readonly string[],
+  run: () => Promise<T>,
+): Promise<T> {
+  const hiddenRootDirectory = await mkdtemp(resolve(corePackageRoot, '.tmp-no-dist-'));
+  const movedDirectories: { originalPath: string; hiddenPath: string }[] = [];
+
+  try {
+    for (const [index, distDirectory] of distDirectories.entries()) {
+      const originalPath = resolve(distDirectory);
+      if (!(await pathExists(originalPath))) {
+        continue;
+      }
+
+      const hiddenPath = resolve(hiddenRootDirectory, `hidden-${index}`);
+      await rename(originalPath, hiddenPath);
+      movedDirectories.push({ originalPath, hiddenPath });
+    }
+
+    return await run();
+  } finally {
+    for (const movedDirectory of [...movedDirectories].reverse()) {
+      if (await pathExists(movedDirectory.hiddenPath)) {
+        await rename(movedDirectory.hiddenPath, movedDirectory.originalPath);
+      }
+    }
+    await rm(hiddenRootDirectory, { recursive: true, force: true });
+  }
+}
 
 function createProvider(events: ProviderEvent[]) {
   return {
@@ -4030,6 +4075,56 @@ describe('createSqlWorkflowExecutor', () => {
       { nodeKey: 'review', artifactType: 'report' },
       { nodeKey: 'approved', artifactType: 'report' },
     ]);
+  });
+
+  it('covers design_tree execution in a clean checkout without prebuilt dist artifacts', async () => {
+    const { db, runId } = seedDesignTreeIntegrationRun();
+    let invocation = 0;
+    const executor = createSqlWorkflowExecutor(db, {
+      resolveProvider: () => ({
+        async *run(): AsyncIterable<ProviderEvent> {
+          invocation += 1;
+          if (invocation === 1) {
+            yield { type: 'result', content: 'Research findings', timestamp: 10 };
+            return;
+          }
+          if (invocation === 2) {
+            yield { type: 'result', content: 'Initial design draft', timestamp: 20 };
+            return;
+          }
+          if (invocation === 3) {
+            yield { type: 'result', content: 'decision: approved\nProceed to finalization.', timestamp: 30 };
+            return;
+          }
+          yield { type: 'result', content: 'Approval artifacts recorded.', timestamp: 40 };
+        },
+      }),
+    });
+
+    const distDirectories = [
+      resolve(corePackageRoot, 'dist'),
+      resolve(corePackageRoot, '../db/dist'),
+      resolve(corePackageRoot, '../shared/dist'),
+    ] as const;
+
+    const result = await withDistDirectoriesTemporarilyHidden(distDirectories, async () =>
+      executor.executeRun({
+        workflowRunId: runId,
+        options: {
+          workingDirectory: '/tmp/alphred-worktree',
+        },
+      }),
+    );
+
+    expect(result).toEqual({
+      workflowRunId: runId,
+      executedNodes: 4,
+      finalStep: {
+        outcome: 'run_terminal',
+        workflowRunId: runId,
+        runStatus: 'completed',
+      },
+    });
   });
 
   it('covers design_tree revise loop path by returning to creation and completing after later approval', async () => {
