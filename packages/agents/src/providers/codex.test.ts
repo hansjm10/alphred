@@ -142,6 +142,23 @@ describe('codex provider', () => {
     expect(events[1].metadata).toEqual({ tokens: 30 });
   });
 
+  it('preserves structured routingDecision metadata on result events', async () => {
+    const provider = createProvider(
+      createRunner([
+        {
+          type: 'result',
+          content: 'done',
+          metadata: { routingDecision: 'approved' },
+        },
+      ]),
+    );
+
+    const events = await collectEvents(provider);
+
+    expect(events.map((event) => event.type)).toEqual(['system', 'result']);
+    expect(events[1].metadata).toMatchObject({ routingDecision: 'approved' });
+  });
+
   it('preserves nested cumulative usage when top-level tokens metadata is incremental', async () => {
     const provider = createProvider(
       createRunner([

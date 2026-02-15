@@ -77,6 +77,8 @@ const provider = resolveProvider('codex');
 
 - Adapters emit shared `ProviderEvent` values with types:
   `system`, `assistant`, `result`, `tool_use`, `tool_result`, `usage`.
+- Providers can emit structured routing metadata on terminal results via
+  `result.metadata.routingDecision` (`approved`, `changes_requested`, `blocked`, `retry`).
 - Unknown provider names throw `UnknownAgentProviderError` with deterministic
   `availableProviders` ordering.
 - Adapter runs fail deterministically when:

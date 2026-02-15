@@ -1505,7 +1505,12 @@ describe('createSqlWorkflowExecutor', () => {
     const executor = createSqlWorkflowExecutor(db, {
       resolveProvider: () =>
         createProvider([
-          { type: 'result', content: 'decision: retry\nRe-run after updates.', timestamp: 10 },
+          {
+            type: 'result',
+            content: 'decision: retry\nRe-run after updates.',
+            timestamp: 10,
+            metadata: { routingDecision: 'retry' },
+          },
         ]),
     });
 
@@ -1534,7 +1539,7 @@ describe('createSqlWorkflowExecutor', () => {
     expect(persistedDecision).toEqual({
       decisionType: 'retry',
       rawOutput: {
-        source: 'phase_result',
+        source: 'provider_result_metadata',
         decision: 'retry',
         attempt: 1,
       },
@@ -1549,7 +1554,12 @@ describe('createSqlWorkflowExecutor', () => {
         async *run(): AsyncIterable<ProviderEvent> {
           runInvocation += 1;
           if (runInvocation === 1) {
-            yield { type: 'result', content: 'decision: approved\nShip it.', timestamp: 10 };
+            yield {
+              type: 'result',
+              content: 'decision: approved\nShip it.',
+              timestamp: 10,
+              metadata: { routingDecision: 'approved' },
+            };
             return;
           }
 
@@ -1631,7 +1641,7 @@ describe('createSqlWorkflowExecutor', () => {
     expect(runInvocation).toBe(2);
   });
 
-  it('parses decision directives case-insensitively with flexible ASCII whitespace', async () => {
+  it('routes using structured metadata even when report text resembles a decision directive', async () => {
     const { db, runId, reviewRunNodeId, approvedRunNodeId } = seedDecisionRoutingRun();
     const executor = createSqlWorkflowExecutor(db, {
       resolveProvider: () => ({
@@ -1640,6 +1650,7 @@ describe('createSqlWorkflowExecutor', () => {
             type: 'result',
             content: 'Model summary\r\n\tDeCiSion \t:\t ApPrOvEd  \r\nShip it.',
             timestamp: 10,
+            metadata: { routingDecision: 'approved' },
           };
         },
       }),
@@ -1692,7 +1703,7 @@ describe('createSqlWorkflowExecutor', () => {
     });
   });
 
-  it('parses routing decisions from large reports without truncating scan scope', async () => {
+  it('routes from structured metadata even when report content is very large', async () => {
     const { db, runId, reviewRunNodeId, reviseRunNodeId } = seedDecisionRoutingRun();
     const largePrefix = 'Context line without an explicit route.\n'.repeat(10_000);
     const executor = createSqlWorkflowExecutor(db, {
@@ -1700,8 +1711,9 @@ describe('createSqlWorkflowExecutor', () => {
         async *run(): AsyncIterable<ProviderEvent> {
           yield {
             type: 'result',
-            content: `${largePrefix}decision: changes_requested\nNeeds another pass.`,
+            content: `${largePrefix}Needs another pass.`,
             timestamp: 10,
+            metadata: { routingDecision: 'changes_requested' },
           };
         },
       }),
@@ -1754,7 +1766,7 @@ describe('createSqlWorkflowExecutor', () => {
     });
   });
 
-  it('persists no_route for large malformed reports without a valid decision directive', async () => {
+  it('persists no_route for large reports when structured routing metadata is missing', async () => {
     const { db, runId, reviewRunNodeId } = seedDecisionRoutingRun();
     const largeMalformedPrefix = '  decision:: blocked ???\n'.repeat(8_000);
     const executor = createSqlWorkflowExecutor(db, {
@@ -1798,8 +1810,8 @@ describe('createSqlWorkflowExecutor', () => {
     expect(persistedReviewDecision).toEqual({
       decisionType: 'no_route',
       rawOutput: {
-        source: 'phase_result',
-        parsedDecision: null,
+        source: 'provider_result_metadata',
+        routingDecision: null,
         outgoingEdgeIds: expect.arrayContaining([expect.any(Number)]),
         attempt: 1,
       },
@@ -1814,7 +1826,12 @@ describe('createSqlWorkflowExecutor', () => {
         async *run(): AsyncIterable<ProviderEvent> {
           runInvocation += 1;
           if (runInvocation === 1) {
-            yield { type: 'result', content: 'decision: changes_requested\nNeeds another pass.', timestamp: 10 };
+            yield {
+              type: 'result',
+              content: 'decision: changes_requested\nNeeds another pass.',
+              timestamp: 10,
+              metadata: { routingDecision: 'changes_requested' },
+            };
             return;
           }
 
@@ -1900,7 +1917,12 @@ describe('createSqlWorkflowExecutor', () => {
     const { db, runId, reviewRunNodeId } = seedDecisionRoutingRun();
     const resolveProvider = vi.fn(() => ({
       async *run(): AsyncIterable<ProviderEvent> {
-        yield { type: 'result', content: 'decision: blocked\nCannot proceed yet.', timestamp: 10 };
+        yield {
+          type: 'result',
+          content: 'decision: blocked\nCannot proceed yet.',
+          timestamp: 10,
+          metadata: { routingDecision: 'blocked' },
+        };
       },
     }));
     const executor = createSqlWorkflowExecutor(db, {
@@ -2015,11 +2037,16 @@ describe('createSqlWorkflowExecutor', () => {
     expect(resolveProvider).toHaveBeenCalledTimes(1);
   });
 
-  it('persists no_route with null parsedDecision when decision output is unrecognized', async () => {
+  it('persists no_route when routing decision metadata is unknown', async () => {
     const { db, runId, reviewRunNodeId } = seedDecisionRoutingRun();
     const resolveProvider = vi.fn(() => ({
       async *run(): AsyncIterable<ProviderEvent> {
-        yield { type: 'result', content: 'decision: unknown_signal\nNo matching route.', timestamp: 10 };
+        yield {
+          type: 'result',
+          content: 'decision: unknown_signal\nNo matching route.',
+          timestamp: 10,
+          metadata: { routing_decision: 'unknown_signal' },
+        };
       },
     }));
     const executor = createSqlWorkflowExecutor(db, {
@@ -2055,8 +2082,8 @@ describe('createSqlWorkflowExecutor', () => {
     expect(persistedReviewDecision).toEqual({
       decisionType: 'no_route',
       rawOutput: {
-        source: 'phase_result',
-        parsedDecision: null,
+        source: 'provider_result_metadata',
+        routingDecision: null,
         outgoingEdgeIds: expect.arrayContaining([expect.any(Number)]),
         attempt: 1,
       },
@@ -2255,7 +2282,12 @@ describe('createSqlWorkflowExecutor', () => {
 
     const resolveProvider = vi.fn(() => ({
       async *run(): AsyncIterable<ProviderEvent> {
-        yield { type: 'result', content: 'decision: approved\nAttempt route.', timestamp: 10 };
+        yield {
+          type: 'result',
+          content: 'decision: approved\nAttempt route.',
+          timestamp: 10,
+          metadata: { routingDecision: 'approved' },
+        };
       },
     }));
     const executor = createSqlWorkflowExecutor(db, {
@@ -2312,7 +2344,12 @@ describe('createSqlWorkflowExecutor', () => {
         async *run(): AsyncIterable<ProviderEvent> {
           runInvocation += 1;
           if (runInvocation === 1) {
-            yield { type: 'result', content: 'decision: approved\nBoth guards should match.', timestamp: 10 };
+            yield {
+              type: 'result',
+              content: 'decision: approved\nBoth guards should match.',
+              timestamp: 10,
+              metadata: { routingDecision: 'approved' },
+            };
             return;
           }
 
@@ -2406,7 +2443,12 @@ describe('createSqlWorkflowExecutor', () => {
         async *run(): AsyncIterable<ProviderEvent> {
           runInvocation += 1;
           if (runInvocation === 1) {
-            yield { type: 'result', content: 'decision: blocked\nUse fallback route.', timestamp: 10 };
+            yield {
+              type: 'result',
+              content: 'decision: blocked\nUse fallback route.',
+              timestamp: 10,
+              metadata: { routingDecision: 'blocked' },
+            };
             return;
           }
 
@@ -2444,7 +2486,7 @@ describe('createSqlWorkflowExecutor', () => {
     expect(persistedReviewDecision).toEqual({
       decisionType: 'blocked',
       rawOutput: {
-        source: 'phase_result',
+        source: 'provider_result_metadata',
         decision: 'blocked',
         selectedEdgeId: fallbackEdge.id,
         attempt: 1,
@@ -3746,7 +3788,12 @@ describe('createSqlWorkflowExecutor', () => {
     const executor = createSqlWorkflowExecutor(db, {
       resolveProvider: () =>
         createProvider([
-          { type: 'result', content: 'decision: approved\nRe-approve after source refresh.', timestamp: 10 },
+          {
+            type: 'result',
+            content: 'decision: approved\nRe-approve after source refresh.',
+            timestamp: 10,
+            metadata: { routingDecision: 'approved' },
+          },
         ]),
     });
 
@@ -4228,7 +4275,12 @@ describe('createSqlWorkflowExecutor', () => {
             return;
           }
           if (invocation === 3) {
-            yield { type: 'result', content: 'decision: approved\nProceed to finalization.', timestamp: 30 };
+            yield {
+              type: 'result',
+              content: 'decision: approved\nProceed to finalization.',
+              timestamp: 30,
+              metadata: { routingDecision: 'approved' },
+            };
             return;
           }
           yield { type: 'result', content: 'Approval artifacts recorded.', timestamp: 40 };
@@ -4359,7 +4411,12 @@ describe('createSqlWorkflowExecutor', () => {
             return;
           }
           if (invocation === 3) {
-            yield { type: 'result', content: 'decision: changes_requested\nRevise the draft.', timestamp: 30 };
+            yield {
+              type: 'result',
+              content: 'decision: changes_requested\nRevise the draft.',
+              timestamp: 30,
+              metadata: { routingDecision: 'changes_requested' },
+            };
             return;
           }
           if (invocation === 4) {
@@ -4367,7 +4424,12 @@ describe('createSqlWorkflowExecutor', () => {
             return;
           }
           if (invocation === 5) {
-            yield { type: 'result', content: 'decision: approved\nNow it is ready.', timestamp: 50 };
+            yield {
+              type: 'result',
+              content: 'decision: approved\nNow it is ready.',
+              timestamp: 50,
+              metadata: { routingDecision: 'approved' },
+            };
             return;
           }
           yield { type: 'result', content: 'Approved after revision cycle.', timestamp: 60 };
@@ -4458,7 +4520,12 @@ describe('createSqlWorkflowExecutor', () => {
         async *run(): AsyncIterable<ProviderEvent> {
           invocation += 1;
           if (invocation === 3 || invocation === 5 || invocation === 7) {
-            yield { type: 'result', content: 'decision: changes_requested\nKeep iterating.', timestamp: 30 + invocation };
+            yield {
+              type: 'result',
+              content: 'decision: changes_requested\nKeep iterating.',
+              timestamp: 30 + invocation,
+              metadata: { routingDecision: 'changes_requested' },
+            };
             return;
           }
           yield { type: 'result', content: `Loop execution ${invocation}`, timestamp: 10 + invocation };

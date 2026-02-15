@@ -59,6 +59,10 @@ export type WorkflowDefinition = {
   phases: PhaseDefinition[];
 };
 
+export const routingDecisionSignals = ['approved', 'changes_requested', 'blocked', 'retry'] as const;
+export type RoutingDecisionSignal = (typeof routingDecisionSignals)[number];
+export type RoutingDecisionType = RoutingDecisionSignal | 'no_route';
+
 // Agent provider event types
 export type ProviderEventType = 'system' | 'assistant' | 'result' | 'tool_use' | 'tool_result' | 'usage';
 
@@ -66,7 +70,9 @@ export type ProviderEvent = {
   type: ProviderEventType;
   content: string;
   timestamp: number;
-  metadata?: Record<string, unknown>;
+  metadata?: Record<string, unknown> & {
+    routingDecision?: RoutingDecisionSignal;
+  };
 };
 
 export type ProviderRunOptions = {

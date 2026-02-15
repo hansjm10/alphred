@@ -1,8 +1,15 @@
-import type { PhaseDefinition, ProviderEvent, ProviderRunOptions } from '@alphred/shared';
+import {
+  routingDecisionSignals,
+  type PhaseDefinition,
+  type ProviderEvent,
+  type ProviderRunOptions,
+  type RoutingDecisionSignal,
+} from '@alphred/shared';
 
 export type PhaseRunResult = {
   success: boolean;
   report: string;
+  routingDecision: RoutingDecisionSignal | null;
   events: ProviderEvent[];
   tokensUsed: number;
 };
@@ -16,6 +23,8 @@ export type PhaseProviderResolver = (providerName: string) => PhaseProvider;
 export type PhaseRunnerDependencies = {
   resolveProvider: PhaseProviderResolver;
 };
+
+const routingDecisionSignalSet: ReadonlySet<RoutingDecisionSignal> = new Set(routingDecisionSignals);
 
 type TokenUsage =
   | {
@@ -127,6 +136,26 @@ function extractTokenUsage(event: ProviderEvent): TokenUsage | undefined {
   return undefined;
 }
 
+function readRoutingDecision(event: ProviderEvent): RoutingDecisionSignal | null {
+  if (event.type !== 'result' || !event.metadata) {
+    return null;
+  }
+
+  const routingDecision = typeof event.metadata.routingDecision === 'string'
+    ? event.metadata.routingDecision
+    : (
+      typeof event.metadata.routing_decision === 'string'
+        ? event.metadata.routing_decision
+        : undefined
+    );
+
+  if (!routingDecision || !routingDecisionSignalSet.has(routingDecision as RoutingDecisionSignal)) {
+    return null;
+  }
+
+  return routingDecision as RoutingDecisionSignal;
+}
+
 export async function runPhase(
   phase: PhaseDefinition,
   options: ProviderRunOptions,
@@ -136,6 +165,7 @@ export async function runPhase(
     return {
       success: true,
       report: '',
+      routingDecision: null,
       events: [],
       tokensUsed: 0,
     };
@@ -148,6 +178,7 @@ export async function runPhase(
   const provider = dependencies.resolveProvider(phase.provider);
   const events: ProviderEvent[] = [];
   let report = '';
+  let routingDecision: RoutingDecisionSignal | null = null;
   let hasResultEvent = false;
   let incrementalTokensUsed = 0;
   let maxCumulativeTokensUsed = 0;
@@ -157,6 +188,7 @@ export async function runPhase(
     if (event.type === 'result') {
       hasResultEvent = true;
       report = event.content;
+      routingDecision = readRoutingDecision(event);
     }
 
     const tokenUsage = extractTokenUsage(event);
@@ -179,6 +211,7 @@ export async function runPhase(
   return {
     success: true,
     report,
+    routingDecision,
     events,
     tokensUsed: Math.max(incrementalTokensUsed, maxCumulativeTokensUsed),
   };

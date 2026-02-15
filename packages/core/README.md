@@ -4,20 +4,17 @@ Provider-agnostic workflow runtime behavior.
 
 ## SQL Workflow Executor Routing Contract
 
-The SQL workflow executor parses routing intent from phase reports and resolves outgoing edges deterministically.
+The SQL workflow executor reads routing intent from structured provider result metadata and resolves outgoing edges deterministically.
 
-### Decision Directive Grammar
+### Structured Routing Metadata
 
-- Accepted format: a full line containing `decision: <signal>`.
-- Keyword matching is ASCII case-insensitive (`decision`, `DeCiSion`, etc.).
-- Leading/trailing ASCII whitespace is allowed.
-- `<signal>` must be one of:
+- Terminal `result` events may include `metadata.routingDecision`.
+- Supported routing decision signals:
   - `approved`
   - `changes_requested`
   - `blocked`
   - `retry`
-- Extra non-whitespace tokens on the directive line are rejected.
-  - Example: `decision: approved.` is not accepted.
+- Missing or invalid routing metadata is treated as no structured decision signal.
 
 ### Edge Selection Semantics
 
@@ -31,7 +28,7 @@ The SQL workflow executor parses routing intent from phase reports and resolves 
 
 ### Routing Decision Persistence
 
-- A `routing_decisions` row is persisted for completed nodes when routing metadata is produced.
+- A `routing_decisions` row is persisted for completed nodes when a valid structured routing signal is produced.
 - If no outgoing edge matches, `decisionType = no_route` is persisted with rationale and raw output metadata.
 
 ### No-Route and Unresolved Behavior
