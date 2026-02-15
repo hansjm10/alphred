@@ -1167,7 +1167,6 @@ function reactivateSelectedTargetNode(
       expectedFrom: 'skipped',
       to: 'pending',
     });
-    return;
   }
 }
 
@@ -1335,6 +1334,191 @@ function claimRunnableNode(
   return null;
 }
 
+type ClaimedNodeSuccess = {
+  artifactId: number;
+  runStatus: WorkflowRunStatus;
+};
+
+type ClaimedNodeFailure = {
+  artifactId: number;
+  runStatus: WorkflowRunStatus;
+  runNodeStatus: 'completed' | 'failed';
+  nextAttempt: number | null;
+};
+
+type NodeFailureReason = 'post_completion_failure' | 'retry_scheduled' | 'retry_limit_exceeded';
+
+function buildExecutedNodeResult(
+  run: WorkflowRunRow,
+  node: RunNodeExecutionRow,
+  runNodeStatus: 'completed' | 'failed',
+  runStatus: WorkflowRunStatus,
+  artifactId: number,
+): ExecuteNextRunnableNodeResult {
+  return {
+    outcome: 'executed',
+    workflowRunId: run.id,
+    runNodeId: node.runNodeId,
+    nodeKey: node.nodeKey,
+    runNodeStatus,
+    runStatus,
+    artifactId,
+  };
+}
+
+function resolveFailureReason(persistedNodeStatus: RunNodeStatus, canRetry: boolean): NodeFailureReason {
+  if (persistedNodeStatus === 'completed') {
+    return 'post_completion_failure';
+  }
+
+  if (canRetry) {
+    return 'retry_scheduled';
+  }
+
+  return 'retry_limit_exceeded';
+}
+
+async function executeNodePhase(
+  node: RunNodeExecutionRow,
+  options: ProviderRunOptions,
+  dependencies: SqlWorkflowExecutorDependencies,
+): Promise<Awaited<ReturnType<typeof runPhase>>> {
+  const phase = createExecutionPhase(node);
+  return runPhase(phase, options, {
+    resolveProvider: dependencies.resolveProvider,
+  });
+}
+
+function handleClaimedNodeSuccess(
+  db: AlphredDatabase,
+  run: WorkflowRunRow,
+  node: RunNodeExecutionRow,
+  edgeRows: EdgeRow[],
+  currentAttempt: number,
+  currentRunStatus: WorkflowRunStatus,
+  phaseResult: Awaited<ReturnType<typeof runPhase>>,
+): ClaimedNodeSuccess {
+  const artifactId = persistSuccessArtifact(db, {
+    workflowRunId: run.id,
+    runNodeId: node.runNodeId,
+    content: phaseResult.report,
+    contentType: node.promptContentType,
+    metadata: {
+      success: true,
+      provider: node.provider,
+      nodeKey: node.nodeKey,
+      attempt: currentAttempt,
+      maxRetries: node.maxRetries,
+      retriesUsed: Math.max(currentAttempt - 1, 0),
+      tokensUsed: phaseResult.tokensUsed,
+      eventCount: phaseResult.events.length,
+    },
+  });
+
+  const routingOutcome = persistCompletedNodeRoutingDecision(db, {
+    workflowRunId: run.id,
+    runNodeId: node.runNodeId,
+    treeNodeId: node.treeNodeId,
+    attempt: currentAttempt,
+    report: phaseResult.report,
+    edgeRows,
+  });
+
+  transitionRunNodeStatus(db, {
+    runNodeId: node.runNodeId,
+    expectedFrom: 'running',
+    to: 'completed',
+  });
+
+  let runStatus = currentRunStatus;
+  if (routingOutcome.decisionType === 'no_route') {
+    runStatus = transitionRunTo(db, run.id, runStatus, 'failed');
+  } else {
+    reactivateSelectedTargetNode(db, {
+      workflowRunId: run.id,
+      selectedEdgeId: routingOutcome.selectedEdgeId,
+      edgeRows,
+    });
+    markUnreachablePendingNodesAsSkipped(db, run.id, edgeRows);
+    const latestAfterSuccess = getLatestRunNodeAttempts(loadRunNodeExecutionRows(db, run.id));
+    const targetRunStatus = resolveRunStatusFromNodes(latestAfterSuccess);
+    runStatus = transitionRunTo(db, run.id, runStatus, targetRunStatus);
+  }
+
+  return {
+    artifactId,
+    runStatus,
+  };
+}
+
+function handleClaimedNodeFailure(
+  db: AlphredDatabase,
+  run: WorkflowRunRow,
+  node: RunNodeExecutionRow,
+  currentAttempt: number,
+  currentRunStatus: WorkflowRunStatus,
+  error: unknown,
+): ClaimedNodeFailure {
+  const errorMessage = toErrorMessage(error);
+  const persistedNodeStatus = loadRunNodeExecutionRowById(db, run.id, node.runNodeId).status;
+  const canRetry = persistedNodeStatus === 'running' && shouldRetryNodeAttempt(currentAttempt, node.maxRetries);
+  const retriesRemaining = Math.max(node.maxRetries - currentAttempt, 0);
+  const failureReason = resolveFailureReason(persistedNodeStatus, canRetry);
+
+  const artifactId = persistFailureArtifact(db, {
+    workflowRunId: run.id,
+    runNodeId: node.runNodeId,
+    content: errorMessage,
+    metadata: {
+      success: false,
+      provider: node.provider,
+      nodeKey: node.nodeKey,
+      attempt: currentAttempt,
+      maxRetries: node.maxRetries,
+      retriesRemaining,
+      errorName: error instanceof Error ? error.name : 'Error',
+      failureReason,
+      nodeStatusAtFailure: persistedNodeStatus,
+    },
+  });
+
+  if (persistedNodeStatus === 'running') {
+    transitionRunNodeStatus(db, {
+      runNodeId: node.runNodeId,
+      expectedFrom: 'running',
+      to: 'failed',
+    });
+  }
+
+  if (canRetry) {
+    const nextAttempt = currentAttempt + 1;
+    transitionFailedRunNodeToRetryAttempt(db, {
+      runNodeId: node.runNodeId,
+      currentAttempt,
+      nextAttempt,
+    });
+    return {
+      artifactId,
+      runStatus: currentRunStatus,
+      runNodeStatus: 'failed',
+      nextAttempt,
+    };
+  }
+
+  const runStatus = transitionRunTo(db, run.id, currentRunStatus, 'failed');
+  let runNodeStatus: 'completed' | 'failed' = 'failed';
+  if (persistedNodeStatus === 'completed') {
+    runNodeStatus = 'completed';
+  }
+
+  return {
+    artifactId,
+    runStatus,
+    runNodeStatus,
+    nextAttempt: null,
+  };
+}
+
 async function executeClaimedRunnableNode(
   db: AlphredDatabase,
   dependencies: SqlWorkflowExecutorDependencies,
@@ -1349,136 +1533,27 @@ async function executeClaimedRunnableNode(
 
   while (true) {
     try {
-      const phase = createExecutionPhase(node);
-      const phaseResult = await runPhase(phase, options, {
-        resolveProvider: dependencies.resolveProvider,
-      });
-
-      const artifactId = persistSuccessArtifact(db, {
-        workflowRunId: run.id,
-        runNodeId: node.runNodeId,
-        content: phaseResult.report,
-        contentType: node.promptContentType,
-        metadata: {
-          success: true,
-          provider: node.provider,
-          nodeKey: node.nodeKey,
-          attempt: currentAttempt,
-          maxRetries: node.maxRetries,
-          retriesUsed: Math.max(currentAttempt - 1, 0),
-          tokensUsed: phaseResult.tokensUsed,
-          eventCount: phaseResult.events.length,
-        },
-      });
-
-      const routingOutcome = persistCompletedNodeRoutingDecision(db, {
-        workflowRunId: run.id,
-        runNodeId: node.runNodeId,
-        treeNodeId: node.treeNodeId,
-        attempt: currentAttempt,
-        report: phaseResult.report,
+      const phaseResult = await executeNodePhase(node, options, dependencies);
+      const success = handleClaimedNodeSuccess(
+        db,
+        run,
+        node,
         edgeRows,
-      });
-
-      transitionRunNodeStatus(db, {
-        runNodeId: node.runNodeId,
-        expectedFrom: 'running',
-        to: 'completed',
-      });
-
-      if (routingOutcome.decisionType === 'no_route') {
-        currentRunStatus = transitionRunTo(db, run.id, currentRunStatus, 'failed');
-      } else {
-        reactivateSelectedTargetNode(db, {
-          workflowRunId: run.id,
-          selectedEdgeId: routingOutcome.selectedEdgeId,
-          edgeRows,
-        });
-        markUnreachablePendingNodesAsSkipped(db, run.id, edgeRows);
-        const latestAfterSuccess = getLatestRunNodeAttempts(loadRunNodeExecutionRows(db, run.id));
-        const targetRunStatus = resolveRunStatusFromNodes(latestAfterSuccess);
-        currentRunStatus = transitionRunTo(db, run.id, currentRunStatus, targetRunStatus);
-      }
-
-      return {
-        outcome: 'executed',
-        workflowRunId: run.id,
-        runNodeId: node.runNodeId,
-        nodeKey: node.nodeKey,
-        runNodeStatus: 'completed',
-        runStatus: currentRunStatus,
-        artifactId,
-      };
+        currentAttempt,
+        currentRunStatus,
+        phaseResult,
+      );
+      currentRunStatus = success.runStatus;
+      return buildExecutedNodeResult(run, node, 'completed', currentRunStatus, success.artifactId);
     } catch (error) {
-      const errorMessage = toErrorMessage(error);
-      const persistedNodeStatus = loadRunNodeExecutionRowById(db, run.id, node.runNodeId).status;
-      const canRetry = persistedNodeStatus === 'running' && shouldRetryNodeAttempt(currentAttempt, node.maxRetries);
-      const retriesRemaining = Math.max(node.maxRetries - currentAttempt, 0);
-      const failureReason =
-        persistedNodeStatus === 'completed'
-          ? 'post_completion_failure'
-          : canRetry
-            ? 'retry_scheduled'
-            : 'retry_limit_exceeded';
-
-      const artifactId = persistFailureArtifact(db, {
-        workflowRunId: run.id,
-        runNodeId: node.runNodeId,
-        content: errorMessage,
-        metadata: {
-          success: false,
-          provider: node.provider,
-          nodeKey: node.nodeKey,
-          attempt: currentAttempt,
-          maxRetries: node.maxRetries,
-          retriesRemaining,
-          errorName: error instanceof Error ? error.name : 'Error',
-          failureReason,
-          nodeStatusAtFailure: persistedNodeStatus,
-        },
-      });
-
-      if (persistedNodeStatus === 'running') {
-        transitionRunNodeStatus(db, {
-          runNodeId: node.runNodeId,
-          expectedFrom: 'running',
-          to: 'failed',
-        });
-      }
-
-      if (canRetry) {
-        const nextAttempt = currentAttempt + 1;
-        transitionFailedRunNodeToRetryAttempt(db, {
-          runNodeId: node.runNodeId,
-          currentAttempt,
-          nextAttempt,
-        });
-        currentAttempt = nextAttempt;
+      const failure = handleClaimedNodeFailure(db, run, node, currentAttempt, currentRunStatus, error);
+      if (failure.nextAttempt !== null) {
+        currentAttempt = failure.nextAttempt;
         continue;
       }
 
-      currentRunStatus = transitionRunTo(db, run.id, currentRunStatus, 'failed');
-      if (persistedNodeStatus === 'completed') {
-        return {
-          outcome: 'executed',
-          workflowRunId: run.id,
-          runNodeId: node.runNodeId,
-          nodeKey: node.nodeKey,
-          runNodeStatus: 'completed',
-          runStatus: currentRunStatus,
-          artifactId,
-        };
-      }
-
-      return {
-        outcome: 'executed',
-        workflowRunId: run.id,
-        runNodeId: node.runNodeId,
-        nodeKey: node.nodeKey,
-        runNodeStatus: 'failed',
-        runStatus: currentRunStatus,
-        artifactId,
-      };
+      currentRunStatus = failure.runStatus;
+      return buildExecutedNodeResult(run, node, failure.runNodeStatus, currentRunStatus, failure.artifactId);
     }
   }
 }

@@ -35,13 +35,19 @@ export function transitionRunNodeStatus(
 
   const occurredAt = params.occurredAt ?? new Date().toISOString();
   const completedAt = terminalStatuses.has(params.to) ? occurredAt : null;
+  let startedAt: string | null | undefined;
+  if (params.to === 'running') {
+    startedAt = occurredAt;
+  } else if (params.to === 'pending') {
+    startedAt = null;
+  }
 
   const updated = db
     .update(runNodes)
     .set({
       status: params.to,
       updatedAt: occurredAt,
-      startedAt: params.to === 'running' ? occurredAt : params.to === 'pending' ? null : undefined,
+      startedAt,
       completedAt,
     })
     .where(and(eq(runNodes.id, params.runNodeId), eq(runNodes.status, params.expectedFrom)))
