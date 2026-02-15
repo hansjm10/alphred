@@ -62,6 +62,28 @@ type ParsedOptions =
       message: string;
     };
 
+type ParsedLongOptionToken =
+  | {
+      kind: 'positional';
+      value: string;
+    }
+  | {
+      kind: 'separator';
+    }
+  | {
+      kind: 'option-inline';
+      optionName: string;
+      optionValue: string;
+    }
+  | {
+      kind: 'option-next';
+      optionName: string;
+    }
+  | {
+      kind: 'error';
+      message: string;
+    };
+
 type ValidatedCommandOptions =
   | {
       ok: true;
@@ -144,35 +166,78 @@ function usageError(io: Pick<CliIo, 'stderr'>, message: string, usage: string): 
   return EXIT_USAGE_ERROR;
 }
 
+function parseLongOptionToken(arg: string): ParsedLongOptionToken {
+  if (!arg.startsWith('--')) {
+    return {
+      kind: 'positional',
+      value: arg,
+    };
+  }
+
+  if (arg === '--') {
+    return {
+      kind: 'separator',
+    };
+  }
+
+  const equalsIndex = arg.indexOf('=');
+  const hasInlineValue = equalsIndex >= 0;
+  const optionName = hasInlineValue ? arg.slice(2, equalsIndex) : arg.slice(2);
+  if (optionName.length === 0) {
+    return {
+      kind: 'error',
+      message: 'Option name cannot be empty.',
+    };
+  }
+
+  if (!hasInlineValue) {
+    return {
+      kind: 'option-next',
+      optionName,
+    };
+  }
+
+  const optionValue = arg.slice(equalsIndex + 1);
+  if (optionValue.length === 0) {
+    return {
+      kind: 'error',
+      message: `Option "--${optionName}" requires a value.`,
+    };
+  }
+
+  return {
+    kind: 'option-inline',
+    optionName,
+    optionValue,
+  };
+}
+
 function parseLongOptions(args: readonly string[]): ParsedOptions {
   const options = new Map<string, string>();
   const positionals: string[] = [];
 
-  for (let index = 0; index < args.length; index += 1) {
-    const arg = args[index];
-
-    if (!arg.startsWith('--')) {
-      positionals.push(arg);
-      continue;
-    }
-
-    if (arg === '--') {
-      for (let remainingIndex = index + 1; remainingIndex < args.length; remainingIndex += 1) {
-        positionals.push(args[remainingIndex]);
-      }
-      break;
-    }
-
-    const equalsIndex = arg.indexOf('=');
-    const hasInlineValue = equalsIndex >= 0;
-    const optionName = hasInlineValue ? arg.slice(2, equalsIndex) : arg.slice(2);
-    if (optionName.length === 0) {
+  let cursor = 0;
+  while (cursor < args.length) {
+    const parsedToken = parseLongOptionToken(args[cursor]);
+    if (parsedToken.kind === 'error') {
       return {
         ok: false,
-        message: 'Option name cannot be empty.',
+        message: parsedToken.message,
       };
     }
 
+    if (parsedToken.kind === 'separator') {
+      positionals.push(...args.slice(cursor + 1));
+      break;
+    }
+
+    if (parsedToken.kind === 'positional') {
+      positionals.push(parsedToken.value);
+      cursor += 1;
+      continue;
+    }
+
+    const { optionName } = parsedToken;
     if (options.has(optionName)) {
       return {
         ok: false,
@@ -180,27 +245,22 @@ function parseLongOptions(args: readonly string[]): ParsedOptions {
       };
     }
 
-    if (hasInlineValue) {
-      const optionValue = arg.slice(equalsIndex + 1);
-      if (optionValue.length === 0) {
-        return {
-          ok: false,
-          message: `Option "--${optionName}" requires a value.`,
-        };
-      }
-      options.set(optionName, optionValue);
+    if (parsedToken.kind === 'option-inline') {
+      options.set(optionName, parsedToken.optionValue);
+      cursor += 1;
       continue;
     }
 
-    const optionValue = args[index + 1];
+    const optionValue = args[cursor + 1];
     if (!optionValue || optionValue.startsWith('--')) {
       return {
         ok: false,
         message: `Option "--${optionName}" requires a value.`,
       };
     }
+
     options.set(optionName, optionValue);
-    index += 1;
+    cursor += 2;
   }
 
   return {
@@ -583,8 +643,10 @@ export async function main(args: string[] = process.argv.slice(2), options: Main
 }
 
 if (isExecutedAsScript()) {
-  runCliEntrypoint().catch((error: unknown) => {
+  try {
+    await runCliEntrypoint();
+  } catch (error: unknown) {
     console.error(`Fatal error: ${toErrorMessage(error)}`);
     process.exit(EXIT_RUNTIME_ERROR);
-  });
+  }
 }
