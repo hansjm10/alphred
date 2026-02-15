@@ -82,6 +82,11 @@ type RoutingSelection = {
   hasUnresolvedDecision: boolean;
 };
 
+type LatestArtifact = {
+  id: number;
+  createdAt: string;
+};
+
 type CompletedNodeRoutingOutcome = {
   decisionType: RoutingDecisionType | null;
   selectedEdgeId: number | null;
@@ -431,23 +436,27 @@ function loadLatestRoutingDecisionsByRunNodeId(
   return latestByRunNodeId;
 }
 
-function loadLatestArtifactIdByRunNodeId(
+function loadLatestArtifactsByRunNodeId(
   db: AlphredDatabase,
   workflowRunId: number,
-): Map<number, number> {
+): Map<number, LatestArtifact> {
   const rows = db
     .select({
       id: phaseArtifacts.id,
       runNodeId: phaseArtifacts.runNodeId,
+      createdAt: phaseArtifacts.createdAt,
     })
     .from(phaseArtifacts)
     .where(eq(phaseArtifacts.workflowRunId, workflowRunId))
     .orderBy(asc(phaseArtifacts.id))
     .all();
 
-  const latestByRunNodeId = new Map<number, number>();
+  const latestByRunNodeId = new Map<number, LatestArtifact>();
   for (const row of rows) {
-    latestByRunNodeId.set(row.runNodeId, row.id);
+    latestByRunNodeId.set(row.runNodeId, {
+      id: row.id,
+      createdAt: row.createdAt,
+    });
   }
 
   return latestByRunNodeId;
@@ -466,6 +475,7 @@ function buildRoutingSelection(
   latestNodeAttempts: RunNodeExecutionRow[],
   edges: EdgeRow[],
   latestRoutingDecisionsByRunNodeId: Map<number, RoutingDecisionRow>,
+  latestArtifactsByRunNodeId: Map<number, LatestArtifact>,
 ): RoutingSelection {
   const latestByTreeNodeId = new Map<number, RunNodeExecutionRow>(latestNodeAttempts.map(row => [row.treeNodeId, row]));
   const incomingEdgesByTargetNodeId = new Map<number, EdgeRow[]>();
@@ -488,7 +498,12 @@ function buildRoutingSelection(
       continue;
     }
 
-    const decision = latestRoutingDecisionsByRunNodeId.get(sourceNode.runNodeId) ?? null;
+    const persistedDecision = latestRoutingDecisionsByRunNodeId.get(sourceNode.runNodeId) ?? null;
+    const latestArtifact = latestArtifactsByRunNodeId.get(sourceNode.runNodeId) ?? null;
+    const decision =
+      persistedDecision && latestArtifact && persistedDecision.createdAt < latestArtifact.createdAt
+        ? null
+        : persistedDecision;
     const decisionType = decision?.decisionType ?? null;
     const matchingEdge = selectFirstMatchingOutgoingEdge(outgoingEdges, decisionType);
     if (matchingEdge) {
@@ -557,9 +572,9 @@ function hasRevisitableIncomingRoute(
   incomingEdges: EdgeRow[],
   latestByTreeNodeId: Map<number, RunNodeExecutionRow>,
   selectedEdgeIdBySourceNodeId: Map<number, number>,
-  latestArtifactIdByRunNodeId: Map<number, number>,
+  latestArtifactsByRunNodeId: Map<number, LatestArtifact>,
 ): boolean {
-  const targetArtifactId = latestArtifactIdByRunNodeId.get(targetNode.runNodeId) ?? Number.NEGATIVE_INFINITY;
+  const targetArtifactId = latestArtifactsByRunNodeId.get(targetNode.runNodeId)?.id ?? Number.NEGATIVE_INFINITY;
 
   return incomingEdges.some((edge) => {
     const sourceNode = latestByTreeNodeId.get(edge.sourceNodeId);
@@ -571,7 +586,7 @@ function hasRevisitableIncomingRoute(
       return false;
     }
 
-    const sourceArtifactId = latestArtifactIdByRunNodeId.get(sourceNode.runNodeId) ?? Number.NEGATIVE_INFINITY;
+    const sourceArtifactId = latestArtifactsByRunNodeId.get(sourceNode.runNodeId)?.id ?? Number.NEGATIVE_INFINITY;
     return sourceArtifactId > targetArtifactId;
   });
 }
@@ -580,10 +595,15 @@ function selectNextRunnableNode(
   rows: RunNodeExecutionRow[],
   edges: EdgeRow[],
   latestRoutingDecisionsByRunNodeId: Map<number, RoutingDecisionRow>,
-  latestArtifactIdByRunNodeId: Map<number, number>,
+  latestArtifactsByRunNodeId: Map<number, LatestArtifact>,
 ): NextRunnableSelection {
   const latestNodeAttempts = getLatestRunNodeAttempts(rows);
-  const routingSelection = buildRoutingSelection(latestNodeAttempts, edges, latestRoutingDecisionsByRunNodeId);
+  const routingSelection = buildRoutingSelection(
+    latestNodeAttempts,
+    edges,
+    latestRoutingDecisionsByRunNodeId,
+    latestArtifactsByRunNodeId,
+  );
 
   const nextRunnableNode =
     latestNodeAttempts.find((row) => {
@@ -610,7 +630,7 @@ function selectNextRunnableNode(
           incomingEdges,
           routingSelection.latestByTreeNodeId,
           routingSelection.selectedEdgeIdBySourceNodeId,
-          latestArtifactIdByRunNodeId,
+          latestArtifactsByRunNodeId,
         );
       }
 
@@ -633,7 +653,13 @@ function markUnreachablePendingNodesAsSkipped(
   while (true) {
     const latestNodeAttempts = getLatestRunNodeAttempts(loadRunNodeExecutionRows(db, workflowRunId));
     const latestRoutingDecisionsByRunNodeId = loadLatestRoutingDecisionsByRunNodeId(db, workflowRunId);
-    const routingSelection = buildRoutingSelection(latestNodeAttempts, edgeRows, latestRoutingDecisionsByRunNodeId);
+    const latestArtifactsByRunNodeId = loadLatestArtifactsByRunNodeId(db, workflowRunId);
+    const routingSelection = buildRoutingSelection(
+      latestNodeAttempts,
+      edgeRows,
+      latestRoutingDecisionsByRunNodeId,
+      latestArtifactsByRunNodeId,
+    );
 
     const unreachablePendingNode = latestNodeAttempts.find((node) => {
       if (node.status !== 'pending') {
@@ -1140,12 +1166,12 @@ function failRunOnIterationLimit(
   const runNodeRows = loadRunNodeExecutionRows(db, run.id);
   const edgeRows = loadEdgeRows(db, run.workflowTreeId);
   const latestRoutingDecisionsByRunNodeId = loadLatestRoutingDecisionsByRunNodeId(db, run.id);
-  const latestArtifactIdByRunNodeId = loadLatestArtifactIdByRunNodeId(db, run.id);
+  const latestArtifactsByRunNodeId = loadLatestArtifactsByRunNodeId(db, run.id);
   const { nextRunnableNode, latestNodeAttempts } = selectNextRunnableNode(
     runNodeRows,
     edgeRows,
     latestRoutingDecisionsByRunNodeId,
-    latestArtifactIdByRunNodeId,
+    latestArtifactsByRunNodeId,
   );
 
   const targetedNode =
@@ -1436,12 +1462,12 @@ export function createSqlWorkflowExecutor(
       const runNodeRows = loadRunNodeExecutionRows(db, run.id);
       const edgeRows = loadEdgeRows(db, run.workflowTreeId);
       const latestRoutingDecisionsByRunNodeId = loadLatestRoutingDecisionsByRunNodeId(db, run.id);
-      const latestArtifactIdByRunNodeId = loadLatestArtifactIdByRunNodeId(db, run.id);
+      const latestArtifactsByRunNodeId = loadLatestArtifactsByRunNodeId(db, run.id);
       const { nextRunnableNode, latestNodeAttempts, hasNoRouteDecision, hasUnresolvedDecision } = selectNextRunnableNode(
         runNodeRows,
         edgeRows,
         latestRoutingDecisionsByRunNodeId,
-        latestArtifactIdByRunNodeId,
+        latestArtifactsByRunNodeId,
       );
 
       if (!nextRunnableNode) {

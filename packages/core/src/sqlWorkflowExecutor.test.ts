@@ -232,6 +232,148 @@ function seedLinearAutoRun() {
   };
 }
 
+function seedMixedRoutingRevisitRun() {
+  const db = createDatabase(':memory:');
+  migrateDatabase(db);
+
+  const tree = db
+    .insert(workflowTrees)
+    .values({
+      treeKey: 'mixed_routing_revisit_tree',
+      version: 1,
+      name: 'Mixed Routing Revisit Tree',
+    })
+    .returning({ id: workflowTrees.id })
+    .get();
+
+  const prompt = db
+    .insert(promptTemplates)
+    .values({
+      templateKey: 'mixed_routing_revisit_prompt',
+      version: 1,
+      content: 'Generate workflow output',
+      contentType: 'markdown',
+    })
+    .returning({ id: promptTemplates.id })
+    .get();
+
+  const approvedGuard = db
+    .insert(guardDefinitions)
+    .values({
+      guardKey: 'mixed_routing_revisit_approved',
+      version: 1,
+      expression: {
+        field: 'decision',
+        operator: '==',
+        value: 'approved',
+      },
+    })
+    .returning({ id: guardDefinitions.id })
+    .get();
+
+  const sourceNode = db
+    .insert(treeNodes)
+    .values({
+      workflowTreeId: tree.id,
+      nodeKey: 'source',
+      nodeType: 'agent',
+      provider: 'codex',
+      promptTemplateId: prompt.id,
+      sequenceIndex: 10,
+    })
+    .returning({ id: treeNodes.id })
+    .get();
+
+  const reviewNode = db
+    .insert(treeNodes)
+    .values({
+      workflowTreeId: tree.id,
+      nodeKey: 'review',
+      nodeType: 'agent',
+      provider: 'codex',
+      promptTemplateId: prompt.id,
+      sequenceIndex: 20,
+    })
+    .returning({ id: treeNodes.id })
+    .get();
+
+  const approvedNode = db
+    .insert(treeNodes)
+    .values({
+      workflowTreeId: tree.id,
+      nodeKey: 'approved_target',
+      nodeType: 'agent',
+      provider: 'codex',
+      promptTemplateId: prompt.id,
+      sequenceIndex: 30,
+    })
+    .returning({ id: treeNodes.id })
+    .get();
+
+  const fallbackNode = db
+    .insert(treeNodes)
+    .values({
+      workflowTreeId: tree.id,
+      nodeKey: 'fallback_target',
+      nodeType: 'agent',
+      provider: 'codex',
+      promptTemplateId: prompt.id,
+      sequenceIndex: 40,
+    })
+    .returning({ id: treeNodes.id })
+    .get();
+
+  db.insert(treeEdges)
+    .values([
+      {
+        workflowTreeId: tree.id,
+        sourceNodeId: sourceNode.id,
+        targetNodeId: reviewNode.id,
+        priority: 0,
+        auto: 1,
+      },
+      {
+        workflowTreeId: tree.id,
+        sourceNodeId: reviewNode.id,
+        targetNodeId: approvedNode.id,
+        priority: 0,
+        auto: 0,
+        guardDefinitionId: approvedGuard.id,
+      },
+      {
+        workflowTreeId: tree.id,
+        sourceNodeId: reviewNode.id,
+        targetNodeId: fallbackNode.id,
+        priority: 1,
+        auto: 1,
+      },
+    ])
+    .run();
+
+  const materialized = materializeWorkflowRunFromTree(db, {
+    treeKey: 'mixed_routing_revisit_tree',
+  });
+
+  const runNodeRows = db
+    .select({
+      id: runNodes.id,
+      nodeKey: runNodes.nodeKey,
+    })
+    .from(runNodes)
+    .where(eq(runNodes.workflowRunId, materialized.run.id))
+    .all();
+
+  const runNodeIdByKey = new Map(runNodeRows.map(node => [node.nodeKey, node.id]));
+  return {
+    db,
+    runId: materialized.run.id,
+    sourceRunNodeId: runNodeIdByKey.get('source'),
+    reviewRunNodeId: runNodeIdByKey.get('review'),
+    approvedRunNodeId: runNodeIdByKey.get('approved_target'),
+    fallbackRunNodeId: runNodeIdByKey.get('fallback_target'),
+  };
+}
+
 function seedConvergingAutoRun() {
   const db = createDatabase(':memory:');
   migrateDatabase(db);
@@ -2533,6 +2675,171 @@ describe('createSqlWorkflowExecutor', () => {
     expect(targetNode).toEqual({
       status: 'completed',
       attempt: 2,
+    });
+  });
+
+  it('ignores stale routing decisions after revisiting a node without a new decision signal', async () => {
+    const {
+      db,
+      runId,
+      sourceRunNodeId,
+      reviewRunNodeId,
+      approvedRunNodeId,
+      fallbackRunNodeId,
+    } = seedMixedRoutingRevisitRun();
+
+    if (!sourceRunNodeId || !reviewRunNodeId || !approvedRunNodeId || !fallbackRunNodeId) {
+      throw new Error('Expected mixed routing run-nodes to be materialized.');
+    }
+
+    transitionWorkflowRunStatus(db, {
+      workflowRunId: runId,
+      expectedFrom: 'pending',
+      to: 'running',
+      occurredAt: '2026-01-01T00:00:00.000Z',
+    });
+    transitionRunNodeStatus(db, {
+      runNodeId: sourceRunNodeId,
+      expectedFrom: 'pending',
+      to: 'running',
+      occurredAt: '2026-01-01T00:01:00.000Z',
+    });
+    transitionRunNodeStatus(db, {
+      runNodeId: sourceRunNodeId,
+      expectedFrom: 'running',
+      to: 'completed',
+      occurredAt: '2026-01-01T00:02:00.000Z',
+    });
+    transitionRunNodeStatus(db, {
+      runNodeId: reviewRunNodeId,
+      expectedFrom: 'pending',
+      to: 'running',
+      occurredAt: '2026-01-01T00:03:00.000Z',
+    });
+    transitionRunNodeStatus(db, {
+      runNodeId: reviewRunNodeId,
+      expectedFrom: 'running',
+      to: 'completed',
+      occurredAt: '2026-01-01T00:04:00.000Z',
+    });
+    transitionRunNodeStatus(db, {
+      runNodeId: approvedRunNodeId,
+      expectedFrom: 'pending',
+      to: 'running',
+      occurredAt: '2026-01-01T00:05:00.000Z',
+    });
+    transitionRunNodeStatus(db, {
+      runNodeId: approvedRunNodeId,
+      expectedFrom: 'running',
+      to: 'completed',
+      occurredAt: '2026-01-01T00:06:00.000Z',
+    });
+    transitionRunNodeStatus(db, {
+      runNodeId: fallbackRunNodeId,
+      expectedFrom: 'pending',
+      to: 'skipped',
+      occurredAt: '2026-01-01T00:07:00.000Z',
+    });
+
+    db.insert(phaseArtifacts)
+      .values([
+        {
+          workflowRunId: runId,
+          runNodeId: sourceRunNodeId,
+          artifactType: 'report',
+          contentType: 'markdown',
+          content: 'source-v1',
+          metadata: { success: true },
+        },
+        {
+          workflowRunId: runId,
+          runNodeId: reviewRunNodeId,
+          artifactType: 'report',
+          contentType: 'markdown',
+          content: 'review-v1',
+          metadata: { success: true },
+        },
+        {
+          workflowRunId: runId,
+          runNodeId: approvedRunNodeId,
+          artifactType: 'report',
+          contentType: 'markdown',
+          content: 'approved-v1',
+          metadata: { success: true },
+        },
+      ])
+      .run();
+
+    db.insert(routingDecisions)
+      .values({
+        workflowRunId: runId,
+        runNodeId: reviewRunNodeId,
+        decisionType: 'approved',
+      })
+      .run();
+
+    db.insert(phaseArtifacts)
+      .values({
+        workflowRunId: runId,
+        runNodeId: sourceRunNodeId,
+        artifactType: 'report',
+        contentType: 'markdown',
+        content: 'source-v2',
+        metadata: { success: true },
+      })
+      .run();
+
+    const executor = createSqlWorkflowExecutor(db, {
+      resolveProvider: () =>
+        createProvider([
+          { type: 'result', content: 'review refreshed without explicit decision', timestamp: 10 },
+        ]),
+    });
+
+    const revisitResult = await executor.executeNextRunnableNode({
+      workflowRunId: runId,
+      options: {
+        workingDirectory: '/tmp/alphred-worktree',
+      },
+    });
+
+    expect(revisitResult).toEqual({
+      outcome: 'executed',
+      workflowRunId: runId,
+      runNodeId: reviewRunNodeId,
+      nodeKey: 'review',
+      runNodeStatus: 'completed',
+      runStatus: 'running',
+      artifactId: expect.any(Number),
+    });
+
+    const fallbackNode = db
+      .select({
+        status: runNodes.status,
+      })
+      .from(runNodes)
+      .where(eq(runNodes.id, fallbackRunNodeId))
+      .get();
+
+    expect(fallbackNode).toEqual({
+      status: 'pending',
+    });
+
+    const fallbackResult = await executor.executeNextRunnableNode({
+      workflowRunId: runId,
+      options: {
+        workingDirectory: '/tmp/alphred-worktree',
+      },
+    });
+
+    expect(fallbackResult).toEqual({
+      outcome: 'executed',
+      workflowRunId: runId,
+      runNodeId: fallbackRunNodeId,
+      nodeKey: 'fallback_target',
+      runNodeStatus: 'completed',
+      runStatus: 'completed',
+      artifactId: expect.any(Number),
     });
   });
 
