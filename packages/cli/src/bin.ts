@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import { realpathSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { eq } from 'drizzle-orm';
@@ -43,6 +44,11 @@ export type CliDependencies = {
 type MainOptions = {
   dependencies?: CliDependencies;
   io?: CliIo;
+};
+
+export type CliEntrypointRuntime = {
+  argv: string[];
+  exit: (code: number) => void;
 };
 
 type ParsedOptions =
@@ -442,13 +448,43 @@ async function handleListCommand(_rawArgs: readonly string[], io: Pick<CliIo, 's
   return EXIT_RUNTIME_ERROR;
 }
 
-function isExecutedAsScript(): boolean {
-  const entrypoint = process.argv[1];
+function normalizePathForComparison(path: string): string {
+  const absolutePath = resolve(path);
+  try {
+    return realpathSync(absolutePath);
+  } catch {
+    return absolutePath;
+  }
+}
+
+export function isExecutedAsScript(
+  entrypoint: string | undefined = process.argv[1],
+  moduleUrl: string = import.meta.url,
+): boolean {
   if (!entrypoint) {
     return false;
   }
 
-  return fileURLToPath(import.meta.url) === resolve(entrypoint);
+  const entrypointPath = normalizePathForComparison(entrypoint);
+  const modulePath = normalizePathForComparison(fileURLToPath(moduleUrl));
+  return modulePath === entrypointPath;
+}
+
+function createDefaultEntrypointRuntime(): CliEntrypointRuntime {
+  return {
+    argv: process.argv,
+    exit: code => process.exit(code),
+  };
+}
+
+export async function runCliEntrypoint(
+  runtime: CliEntrypointRuntime = createDefaultEntrypointRuntime(),
+  options: MainOptions = {},
+): Promise<void> {
+  const exitCode = await main(runtime.argv.slice(2), options);
+  if (exitCode !== EXIT_SUCCESS) {
+    runtime.exit(exitCode);
+  }
 }
 
 export async function main(args: string[] = process.argv.slice(2), options: MainOptions = {}): Promise<ExitCode> {
@@ -476,11 +512,7 @@ export async function main(args: string[] = process.argv.slice(2), options: Main
 }
 
 if (isExecutedAsScript()) {
-  main().then(exitCode => {
-    if (exitCode !== EXIT_SUCCESS) {
-      process.exit(exitCode);
-    }
-  }).catch((error: unknown) => {
+  runCliEntrypoint().catch((error: unknown) => {
     console.error(`Fatal error: ${toErrorMessage(error)}`);
     process.exit(EXIT_RUNTIME_ERROR);
   });

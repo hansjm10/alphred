@@ -1,3 +1,5 @@
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import type { ProviderEvent, ProviderRunOptions } from '@alphred/shared';
 import { describe, expect, it } from 'vitest';
 import {
@@ -10,7 +12,7 @@ import {
   workflowTrees,
   type AlphredDatabase,
 } from '@alphred/db';
-import { main, type CliDependencies } from './bin.js';
+import { isExecutedAsScript, main, runCliEntrypoint, type CliDependencies } from './bin.js';
 
 type CapturedIo = {
   stdout: string[];
@@ -23,7 +25,12 @@ type CapturedIo = {
   };
 };
 
-function createCapturedIo(): CapturedIo {
+function createCapturedIo(
+  options: {
+    cwd?: string;
+    env?: NodeJS.ProcessEnv;
+  } = {},
+): CapturedIo {
   const stdout: string[] = [];
   const stderr: string[] = [];
 
@@ -33,8 +40,8 @@ function createCapturedIo(): CapturedIo {
     io: {
       stdout: message => stdout.push(message),
       stderr: message => stderr.push(message),
-      cwd: '/work/alphred',
-      env: {},
+      cwd: options.cwd ?? '/work/alphred',
+      env: options.env ?? {},
     },
   };
 }
@@ -230,6 +237,87 @@ describe('CLI run/status commands', () => {
     expect(captured.stderr).toEqual(['Invalid run id "abc". Run id must be a positive integer.']);
   });
 
+  it('prints usage for help invocations and returns success', async () => {
+    const cases = [[], ['help'], ['--help'], ['-h']];
+
+    for (const args of cases) {
+      const captured = createCapturedIo();
+      const exitCode = await main(args, { io: captured.io });
+
+      expect(exitCode).toBe(0);
+      expect(captured.stderr).toEqual([]);
+      expect(captured.stdout).toContain('Usage: alphred <command> [options]');
+    }
+  });
+
+  it('returns usage error for unknown commands', async () => {
+    const captured = createCapturedIo();
+
+    const exitCode = await main(['unknown-command'], {
+      io: captured.io,
+    });
+
+    expect(exitCode).toBe(2);
+    expect(captured.stdout).toEqual([]);
+    expect(captured.stderr[0]).toBe('Unknown command "unknown-command".');
+    expect(captured.stderr).toContain('Usage: alphred <command> [options]');
+  });
+
+  it('resolves relative ALPHRED_DB_PATH from cwd before opening database', async () => {
+    const db = createDatabase(':memory:');
+    migrateDatabase(db);
+    const openedDatabasePaths: string[] = [];
+    const captured = createCapturedIo({
+      cwd: '/tmp/alphred-workdir',
+      env: {
+        ALPHRED_DB_PATH: 'data/test.sqlite',
+      },
+    });
+
+    const exitCode = await main(['status', '--run', '42'], {
+      dependencies: {
+        openDatabase: path => {
+          openedDatabasePaths.push(path);
+          return db;
+        },
+        migrateDatabase: database => migrateDatabase(database),
+        resolveProvider: createUnusedProviderResolver(),
+      },
+      io: captured.io,
+    });
+
+    expect(exitCode).toBe(3);
+    expect(openedDatabasePaths).toEqual([resolve('/tmp/alphred-workdir', 'data/test.sqlite')]);
+  });
+
+  it('passes absolute ALPHRED_DB_PATH through unchanged', async () => {
+    const db = createDatabase(':memory:');
+    migrateDatabase(db);
+    const openedDatabasePaths: string[] = [];
+    const absolutePath = '/var/tmp/alphred-cli-test.sqlite';
+    const captured = createCapturedIo({
+      cwd: '/tmp/alphred-workdir',
+      env: {
+        ALPHRED_DB_PATH: absolutePath,
+      },
+    });
+
+    const exitCode = await main(['status', '--run', '42'], {
+      dependencies: {
+        openDatabase: path => {
+          openedDatabasePaths.push(path);
+          return db;
+        },
+        migrateDatabase: database => migrateDatabase(database),
+        resolveProvider: createUnusedProviderResolver(),
+      },
+      io: captured.io,
+    });
+
+    expect(exitCode).toBe(3);
+    expect(openedDatabasePaths).toEqual([absolutePath]);
+  });
+
   it('returns usage exit code for invalid run command inputs', async () => {
     const cases: readonly {
       args: string[];
@@ -312,5 +400,46 @@ describe('CLI run/status commands', () => {
       expect(exitCode).toBe(2);
       expect(captured.stderr).toEqual(testCase.stderr);
     }
+  });
+});
+
+describe('CLI script entrypoint behavior', () => {
+  it('identifies matching script and module paths', () => {
+    const scriptPath = resolve(dirname(fileURLToPath(import.meta.url)), 'bin.ts');
+    expect(isExecutedAsScript(scriptPath, pathToFileURL(scriptPath).href)).toBe(true);
+    expect(isExecutedAsScript(undefined, pathToFileURL(scriptPath).href)).toBe(false);
+  });
+
+  it('calls runtime.exit for non-zero command results', async () => {
+    const exitCodes: number[] = [];
+    const captured = createCapturedIo();
+
+    await runCliEntrypoint(
+      {
+        argv: ['node', 'alphred', 'unknown-command'],
+        exit: code => exitCodes.push(code),
+      },
+      { io: captured.io },
+    );
+
+    expect(exitCodes).toEqual([2]);
+    expect(captured.stderr[0]).toBe('Unknown command "unknown-command".');
+  });
+
+  it('does not call runtime.exit for successful command results', async () => {
+    const exitCodes: number[] = [];
+    const captured = createCapturedIo();
+
+    await runCliEntrypoint(
+      {
+        argv: ['node', 'alphred', 'help'],
+        exit: code => exitCodes.push(code),
+      },
+      { io: captured.io },
+    );
+
+    expect(exitCodes).toEqual([]);
+    expect(captured.stderr).toEqual([]);
+    expect(captured.stdout).toContain('Usage: alphred <command> [options]');
   });
 });

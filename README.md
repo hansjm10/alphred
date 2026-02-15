@@ -56,6 +56,26 @@ pnpm test
 pnpm dev:dashboard
 ```
 
+## CLI Commands
+
+Current CLI command contract:
+
+```bash
+alphred run --tree <tree_key>
+alphred status --run <run_id>
+alphred list
+```
+
+Notes:
+- `alphred list` is not implemented yet and exits with code `4`.
+- Set `ALPHRED_DB_PATH` to override the database path; relative paths resolve from the current working directory.
+
+Exit codes:
+- `0`: success
+- `2`: usage/input error
+- `3`: requested tree/run not found
+- `4`: runtime failure
+
 ## Dashboard Fallback UX
 
 The dashboard uses App Router fallback states to keep route transitions and failures explicit:
