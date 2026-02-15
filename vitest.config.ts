@@ -7,6 +7,8 @@ export default defineConfig({
       // Keep tests independent from prebuilt package artifacts in clean checkouts.
       '@alphred/db': resolve(__dirname, 'packages/db/src/index.ts'),
       '@alphred/shared': resolve(__dirname, 'packages/shared/src/index.ts'),
+      '@alphred/core': resolve(__dirname, 'packages/core/src/index.ts'),
+      '@alphred/agents': resolve(__dirname, 'packages/agents/src/index.ts'),
     },
   },
   esbuild: {
