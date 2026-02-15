@@ -9,9 +9,11 @@ const terminalStatuses: ReadonlySet<RunNodeStatus> = new Set(['completed', 'fail
 const allowedTransitions: Readonly<Record<RunNodeStatus, readonly RunNodeStatus[]>> = {
   pending: ['running', 'skipped', 'cancelled'],
   running: ['completed', 'failed', 'cancelled'],
-  completed: [],
+  // Attempt increment semantics for completed-node requeue are enforced by
+  // executor-owned helpers, not this generic transition guard.
+  completed: ['pending'],
   failed: ['running'],
-  skipped: [],
+  skipped: ['pending'],
   cancelled: [],
 };
 
@@ -35,13 +37,19 @@ export function transitionRunNodeStatus(
 
   const occurredAt = params.occurredAt ?? new Date().toISOString();
   const completedAt = terminalStatuses.has(params.to) ? occurredAt : null;
+  let startedAt: string | null | undefined;
+  if (params.to === 'running') {
+    startedAt = occurredAt;
+  } else if (params.to === 'pending') {
+    startedAt = null;
+  }
 
   const updated = db
     .update(runNodes)
     .set({
       status: params.to,
       updatedAt: occurredAt,
-      startedAt: params.to === 'running' ? occurredAt : undefined,
+      startedAt,
       completedAt,
     })
     .where(and(eq(runNodes.id, params.runNodeId), eq(runNodes.status, params.expectedFrom)))

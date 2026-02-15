@@ -124,6 +124,104 @@ describe('database schema hardening', () => {
     expect(trees).toHaveLength(1);
   });
 
+  it('refreshes run-node transition trigger definitions on migration reruns', () => {
+    const db = createDatabase(':memory:');
+    migrateDatabase(db);
+    const seed = seedTreeState(db, 'trigger_refresh');
+
+    const completedNode = db
+      .insert(runNodes)
+      .values({
+        workflowRunId: seed.runId,
+        treeNodeId: seed.sourceNodeId,
+        nodeKey: seed.sourceNodeKey,
+        status: 'pending',
+        sequenceIndex: 1,
+      })
+      .returning({ id: runNodes.id })
+      .get();
+
+    const skippedNode = db
+      .insert(runNodes)
+      .values({
+        workflowRunId: seed.runId,
+        treeNodeId: seed.targetNodeId,
+        nodeKey: seed.targetNodeKey,
+        status: 'pending',
+        sequenceIndex: 2,
+      })
+      .returning({ id: runNodes.id })
+      .get();
+
+    db.run(sql`DROP TRIGGER IF EXISTS run_nodes_status_transition_update_ck`);
+    db.run(sql`CREATE TRIGGER run_nodes_status_transition_update_ck
+      BEFORE UPDATE OF status ON run_nodes
+      FOR EACH ROW
+      WHEN (
+        NEW.status <> OLD.status
+        AND NOT (
+          (OLD.status = 'pending' AND NEW.status IN ('running', 'skipped', 'cancelled'))
+          OR
+          (OLD.status = 'running' AND NEW.status IN ('completed', 'failed', 'cancelled'))
+          OR
+          (OLD.status = 'failed' AND NEW.status = 'running')
+        )
+      )
+      BEGIN
+        SELECT RAISE(ABORT, 'run_nodes status transition is not allowed');
+      END`);
+
+    db
+      .update(runNodes)
+      .set({ status: 'running', startedAt: '2026-01-01T00:00:00.000Z' })
+      .where(eq(runNodes.id, completedNode.id))
+      .run();
+    db
+      .update(runNodes)
+      .set({ status: 'completed', completedAt: '2026-01-01T00:01:00.000Z' })
+      .where(eq(runNodes.id, completedNode.id))
+      .run();
+    db
+      .update(runNodes)
+      .set({ status: 'skipped', completedAt: '2026-01-01T00:01:30.000Z' })
+      .where(eq(runNodes.id, skippedNode.id))
+      .run();
+
+    expect(() =>
+      db
+        .update(runNodes)
+        .set({ status: 'pending', startedAt: null, completedAt: null })
+        .where(eq(runNodes.id, completedNode.id))
+        .run(),
+    ).toThrow('run_nodes status transition is not allowed');
+
+    expect(() =>
+      db
+        .update(runNodes)
+        .set({ status: 'pending', startedAt: null, completedAt: null })
+        .where(eq(runNodes.id, skippedNode.id))
+        .run(),
+    ).toThrow('run_nodes status transition is not allowed');
+
+    expect(() => migrateDatabase(db)).not.toThrow();
+
+    expect(() =>
+      db
+        .update(runNodes)
+        .set({ status: 'pending', startedAt: null, completedAt: null })
+        .where(eq(runNodes.id, completedNode.id))
+        .run(),
+    ).not.toThrow();
+
+    expect(() =>
+      db
+        .update(runNodes)
+        .set({ status: 'pending', startedAt: null, completedAt: null })
+        .where(eq(runNodes.id, skippedNode.id))
+        .run(),
+    ).not.toThrow();
+  });
+
   it('supports a full SQL representation of a design tree and execution artifacts', () => {
     const db = createDatabase(':memory:');
     migrateDatabase(db);
