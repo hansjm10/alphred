@@ -1,6 +1,8 @@
+import { execFile } from 'node:child_process';
 import { access, mkdtemp, rename, rm } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { promisify } from 'node:util';
 import { and, asc, eq, inArray, sql } from 'drizzle-orm';
 import type { ProviderEvent, ProviderRunOptions } from '@alphred/shared';
 import { describe, expect, it, vi } from 'vitest';
@@ -24,6 +26,8 @@ import { createSqlWorkflowExecutor } from './sqlWorkflowExecutor.js';
 
 const coreSourceDirectory = fileURLToPath(new URL('.', import.meta.url));
 const corePackageRoot = resolve(coreSourceDirectory, '..');
+const workspaceRoot = resolve(corePackageRoot, '../..');
+const execFileAsync = promisify(execFile);
 
 async function pathExists(path: string): Promise<boolean> {
   try {
@@ -61,6 +65,30 @@ async function withDistDirectoriesTemporarilyHidden<T>(
       }
     }
     await rm(hiddenRootDirectory, { recursive: true, force: true });
+  }
+}
+
+async function runVitestSubprocess(args: readonly string[]): Promise<void> {
+  const vitestEntrypoint = resolve(workspaceRoot, 'node_modules/vitest/vitest.mjs');
+
+  try {
+    await execFileAsync(
+      process.execPath,
+      [vitestEntrypoint, 'run', ...args],
+      {
+        cwd: workspaceRoot,
+        maxBuffer: 10 * 1024 * 1024,
+      },
+    );
+  } catch (error) {
+    if (error instanceof Error && 'stdout' in error && 'stderr' in error) {
+      const stdout = String((error as { stdout?: unknown }).stdout ?? '').trim();
+      const stderr = String((error as { stderr?: unknown }).stderr ?? '').trim();
+      const output = [stdout, stderr].filter(part => part.length > 0).join('\n');
+      throw new Error(`Child vitest run failed while dist directories were hidden.\n${output}`);
+    }
+
+    throw error;
   }
 }
 
@@ -3383,6 +3411,194 @@ describe('createSqlWorkflowExecutor', () => {
     });
   });
 
+  it('ignores stale legacy routing decisions without attempt metadata when refreshed decision timestamps tie', async () => {
+    const {
+      db,
+      runId,
+      sourceRunNodeId,
+      reviewRunNodeId,
+      approvedRunNodeId,
+      fallbackRunNodeId,
+    } = seedMixedRoutingRevisitRun();
+
+    if (!sourceRunNodeId || !reviewRunNodeId || !approvedRunNodeId || !fallbackRunNodeId) {
+      throw new Error('Expected mixed routing run-nodes to be materialized.');
+    }
+
+    transitionWorkflowRunStatus(db, {
+      workflowRunId: runId,
+      expectedFrom: 'pending',
+      to: 'running',
+      occurredAt: '2026-01-01T00:00:00.000Z',
+    });
+    transitionRunNodeStatus(db, {
+      runNodeId: sourceRunNodeId,
+      expectedFrom: 'pending',
+      to: 'running',
+      occurredAt: '2026-01-01T00:01:00.000Z',
+    });
+    transitionRunNodeStatus(db, {
+      runNodeId: sourceRunNodeId,
+      expectedFrom: 'running',
+      to: 'completed',
+      occurredAt: '2026-01-01T00:02:00.000Z',
+    });
+    transitionRunNodeStatus(db, {
+      runNodeId: reviewRunNodeId,
+      expectedFrom: 'pending',
+      to: 'running',
+      occurredAt: '2026-01-01T00:03:00.000Z',
+    });
+    transitionRunNodeStatus(db, {
+      runNodeId: reviewRunNodeId,
+      expectedFrom: 'running',
+      to: 'completed',
+      occurredAt: '2026-01-01T00:04:00.000Z',
+    });
+    transitionRunNodeStatus(db, {
+      runNodeId: approvedRunNodeId,
+      expectedFrom: 'pending',
+      to: 'running',
+      occurredAt: '2026-01-01T00:05:00.000Z',
+    });
+    transitionRunNodeStatus(db, {
+      runNodeId: approvedRunNodeId,
+      expectedFrom: 'running',
+      to: 'completed',
+      occurredAt: '2026-01-01T00:06:00.000Z',
+    });
+    transitionRunNodeStatus(db, {
+      runNodeId: fallbackRunNodeId,
+      expectedFrom: 'pending',
+      to: 'skipped',
+      occurredAt: '2026-01-01T00:07:00.000Z',
+    });
+
+    db.insert(phaseArtifacts)
+      .values([
+        {
+          workflowRunId: runId,
+          runNodeId: sourceRunNodeId,
+          artifactType: 'report',
+          contentType: 'markdown',
+          content: 'source-v1',
+          metadata: { success: true },
+        },
+        {
+          workflowRunId: runId,
+          runNodeId: reviewRunNodeId,
+          artifactType: 'report',
+          contentType: 'markdown',
+          content: 'review-v1',
+          metadata: { success: true },
+        },
+        {
+          workflowRunId: runId,
+          runNodeId: approvedRunNodeId,
+          artifactType: 'report',
+          contentType: 'markdown',
+          content: 'approved-v1',
+          metadata: { success: true },
+        },
+      ])
+      .run();
+
+    db.insert(routingDecisions)
+      .values({
+        workflowRunId: runId,
+        runNodeId: reviewRunNodeId,
+        decisionType: 'approved',
+      })
+      .run();
+
+    const tiedTimestamp = '2026-01-01T00:08:00.000Z';
+    db
+      .update(routingDecisions)
+      .set({
+        createdAt: tiedTimestamp,
+      })
+      .where(eq(routingDecisions.runNodeId, reviewRunNodeId))
+      .run();
+
+    db.insert(phaseArtifacts)
+      .values({
+        workflowRunId: runId,
+        runNodeId: sourceRunNodeId,
+        artifactType: 'report',
+        contentType: 'markdown',
+        content: 'source-v2',
+        metadata: { success: true },
+      })
+      .run();
+
+    db.run(sql`DROP TRIGGER IF EXISTS phase_artifacts_test_legacy_review_refresh_tied_timestamp`);
+    db.run(
+      sql.raw(`CREATE TRIGGER phase_artifacts_test_legacy_review_refresh_tied_timestamp
+      AFTER INSERT ON phase_artifacts
+      FOR EACH ROW
+      WHEN NEW.workflow_run_id = ${runId}
+        AND NEW.run_node_id = ${reviewRunNodeId}
+      BEGIN
+        UPDATE phase_artifacts
+        SET created_at = '${tiedTimestamp}'
+        WHERE id = NEW.id;
+      END`),
+    );
+
+    const executor = createSqlWorkflowExecutor(db, {
+      resolveProvider: () =>
+        createProvider([
+          { type: 'result', content: 'review refreshed without explicit decision', timestamp: 10 },
+        ]),
+    });
+
+    const revisitResult = await executor.executeNextRunnableNode({
+      workflowRunId: runId,
+      options: {
+        workingDirectory: '/tmp/alphred-worktree',
+      },
+    });
+
+    expect(revisitResult).toEqual({
+      outcome: 'executed',
+      workflowRunId: runId,
+      runNodeId: reviewRunNodeId,
+      nodeKey: 'review',
+      runNodeStatus: 'completed',
+      runStatus: 'running',
+      artifactId: expect.any(Number),
+    });
+
+    const fallbackNode = db
+      .select({
+        status: runNodes.status,
+      })
+      .from(runNodes)
+      .where(eq(runNodes.id, fallbackRunNodeId))
+      .get();
+
+    expect(fallbackNode).toEqual({
+      status: 'pending',
+    });
+
+    const fallbackResult = await executor.executeNextRunnableNode({
+      workflowRunId: runId,
+      options: {
+        workingDirectory: '/tmp/alphred-worktree',
+      },
+    });
+
+    expect(fallbackResult).toEqual({
+      outcome: 'executed',
+      workflowRunId: runId,
+      runNodeId: fallbackRunNodeId,
+      nodeKey: 'fallback_target',
+      runNodeStatus: 'completed',
+      runStatus: 'completed',
+      artifactId: expect.any(Number),
+    });
+  });
+
   it('fails the run safely when post-completion target reactivation errors', async () => {
     const {
       db,
@@ -4078,54 +4294,21 @@ describe('createSqlWorkflowExecutor', () => {
   });
 
   it('covers design_tree execution in a clean checkout without prebuilt dist artifacts', async () => {
-    const { db, runId } = seedDesignTreeIntegrationRun();
-    let invocation = 0;
-    const executor = createSqlWorkflowExecutor(db, {
-      resolveProvider: () => ({
-        async *run(): AsyncIterable<ProviderEvent> {
-          invocation += 1;
-          if (invocation === 1) {
-            yield { type: 'result', content: 'Research findings', timestamp: 10 };
-            return;
-          }
-          if (invocation === 2) {
-            yield { type: 'result', content: 'Initial design draft', timestamp: 20 };
-            return;
-          }
-          if (invocation === 3) {
-            yield { type: 'result', content: 'decision: approved\nProceed to finalization.', timestamp: 30 };
-            return;
-          }
-          yield { type: 'result', content: 'Approval artifacts recorded.', timestamp: 40 };
-        },
-      }),
-    });
-
     const distDirectories = [
       resolve(corePackageRoot, 'dist'),
       resolve(corePackageRoot, '../db/dist'),
       resolve(corePackageRoot, '../shared/dist'),
     ] as const;
 
-    const result = await withDistDirectoriesTemporarilyHidden(distDirectories, async () =>
-      executor.executeRun({
-        workflowRunId: runId,
-        options: {
-          workingDirectory: '/tmp/alphred-worktree',
-        },
-      }),
-    );
-
-    expect(result).toEqual({
-      workflowRunId: runId,
-      executedNodes: 4,
-      finalStep: {
-        outcome: 'run_terminal',
-        workflowRunId: runId,
-        runStatus: 'completed',
-      },
+    await withDistDirectoriesTemporarilyHidden(distDirectories, async () => {
+      await runVitestSubprocess([
+        'packages/core/src/sqlWorkflowExecutor.test.ts',
+        '-t',
+        'covers design_tree approve path with deterministic persisted evidence across run tables',
+        '--reporter=dot',
+      ]);
     });
-  });
+  }, 30_000);
 
   it('covers design_tree revise loop path by returning to creation and completing after later approval', async () => {
     const { db, runId, runNodeIdByKey } = seedDesignTreeIntegrationRun();
