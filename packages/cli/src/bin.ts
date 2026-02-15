@@ -1,35 +1,652 @@
 #!/usr/bin/env node
 
-export async function main(args: string[] = process.argv.slice(2)): Promise<void> {
-  const command = args[0];
+import { realpathSync } from 'node:fs';
+import { resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { eq } from 'drizzle-orm';
+import { resolveAgentProvider } from '@alphred/agents';
+import {
+  createDatabase,
+  migrateDatabase,
+  runNodes,
+  workflowRuns,
+  workflowTrees,
+  type AlphredDatabase,
+  type RunNodeStatus,
+  type WorkflowRunStatus,
+} from '@alphred/db';
+import { createSqlWorkflowExecutor, createSqlWorkflowPlanner, type PhaseProviderResolver } from '@alphred/core';
 
-  switch (command) {
-    case 'run':
-      console.log('alphred run: Starting workflow execution...');
-      console.log('TODO: Implement workflow runner');
+const EXIT_SUCCESS = 0;
+const EXIT_USAGE_ERROR = 2;
+const EXIT_NOT_FOUND = 3;
+const EXIT_RUNTIME_ERROR = 4;
+
+type ExitCode =
+  | typeof EXIT_SUCCESS
+  | typeof EXIT_USAGE_ERROR
+  | typeof EXIT_NOT_FOUND
+  | typeof EXIT_RUNTIME_ERROR;
+
+type CliIo = {
+  stdout: (message: string) => void;
+  stderr: (message: string) => void;
+  cwd: string;
+  env: NodeJS.ProcessEnv;
+};
+
+export type CliDependencies = {
+  openDatabase: (path: string) => AlphredDatabase;
+  migrateDatabase: (db: AlphredDatabase) => void;
+  resolveProvider: PhaseProviderResolver;
+};
+
+type MainOptions = {
+  dependencies?: CliDependencies;
+  io?: CliIo;
+};
+
+export type CliEntrypointRuntime = {
+  argv: string[];
+  exit: (code: number) => void;
+};
+
+type ParsedOptions =
+  | {
+      ok: true;
+      options: Map<string, string>;
+      positionals: string[];
+    }
+  | {
+      ok: false;
+      message: string;
+    };
+
+type ParsedLongOptionToken =
+  | {
+      kind: 'positional';
+      value: string;
+    }
+  | {
+      kind: 'separator';
+    }
+  | {
+      kind: 'option-inline';
+      optionName: string;
+      optionValue: string;
+    }
+  | {
+      kind: 'option-next';
+      optionName: string;
+    }
+  | {
+      kind: 'error';
+      message: string;
+    };
+
+type ValidatedCommandOptions =
+  | {
+      ok: true;
+      options: Map<string, string>;
+    }
+  | {
+      ok: false;
+      exitCode: ExitCode;
+    };
+
+type CommandValidationConfig = {
+  commandName: string;
+  usage: string;
+  allowedOptions: readonly string[];
+};
+
+type DisplayRunNode = {
+  id: number;
+  nodeKey: string;
+  status: RunNodeStatus;
+  attempt: number;
+  sequenceIndex: number;
+};
+
+const orderedNodeStatuses: readonly RunNodeStatus[] = [
+  'pending',
+  'running',
+  'completed',
+  'failed',
+  'skipped',
+  'cancelled',
+];
+
+const defaultDependencies: CliDependencies = {
+  openDatabase: path => createDatabase(path),
+  migrateDatabase: db => migrateDatabase(db),
+  resolveProvider: providerName => resolveAgentProvider(providerName),
+};
+
+function createDefaultIo(): CliIo {
+  return {
+    stdout: message => console.log(message),
+    stderr: message => console.error(message),
+    cwd: process.cwd(),
+    env: process.env,
+  };
+}
+
+function toErrorMessage(error: unknown): string {
+  if (error instanceof Error) {
+    return error.message;
+  }
+
+  return String(error);
+}
+
+function hasErrorCode(error: unknown, expectedCode: string): boolean {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    'code' in error &&
+    (error as { code?: unknown }).code === expectedCode
+  );
+}
+
+function printGeneralUsage(io: Pick<CliIo, 'stdout'>): void {
+  io.stdout('Alphred - LLM Agent Orchestrator');
+  io.stdout('');
+  io.stdout('Usage: alphred <command> [options]');
+  io.stdout('');
+  io.stdout('Commands:');
+  io.stdout('  run --tree <tree_key>    Start and execute a workflow run');
+  io.stdout('  status --run <run_id>    Show workflow run and node status');
+  io.stdout('  list                     List available workflows (not implemented)');
+}
+
+function usageError(io: Pick<CliIo, 'stderr'>, message: string, usage: string): ExitCode {
+  io.stderr(message);
+  io.stderr(usage);
+  return EXIT_USAGE_ERROR;
+}
+
+function parseLongOptionToken(arg: string): ParsedLongOptionToken {
+  if (!arg.startsWith('--')) {
+    return {
+      kind: 'positional',
+      value: arg,
+    };
+  }
+
+  if (arg === '--') {
+    return {
+      kind: 'separator',
+    };
+  }
+
+  const equalsIndex = arg.indexOf('=');
+  const hasInlineValue = equalsIndex >= 0;
+  const optionName = hasInlineValue ? arg.slice(2, equalsIndex) : arg.slice(2);
+  if (optionName.length === 0) {
+    return {
+      kind: 'error',
+      message: 'Option name cannot be empty.',
+    };
+  }
+
+  if (!hasInlineValue) {
+    return {
+      kind: 'option-next',
+      optionName,
+    };
+  }
+
+  const optionValue = arg.slice(equalsIndex + 1);
+  if (optionValue.length === 0) {
+    return {
+      kind: 'error',
+      message: `Option "--${optionName}" requires a value.`,
+    };
+  }
+
+  return {
+    kind: 'option-inline',
+    optionName,
+    optionValue,
+  };
+}
+
+function parseLongOptions(args: readonly string[]): ParsedOptions {
+  const options = new Map<string, string>();
+  const positionals: string[] = [];
+
+  let cursor = 0;
+  while (cursor < args.length) {
+    const parsedToken = parseLongOptionToken(args[cursor]);
+    if (parsedToken.kind === 'error') {
+      return {
+        ok: false,
+        message: parsedToken.message,
+      };
+    }
+
+    if (parsedToken.kind === 'separator') {
+      positionals.push(...args.slice(cursor + 1));
       break;
-    case 'status':
-      console.log('alphred status: Checking run status...');
-      console.log('TODO: Implement status display');
-      break;
-    case 'list':
-      console.log('alphred list: Listing workflows...');
-      console.log('TODO: Implement workflow listing');
-      break;
-    default:
-      console.log('Alphred - LLM Agent Orchestrator');
-      console.log('');
-      console.log('Usage: alphred <command>');
-      console.log('');
-      console.log('Commands:');
-      console.log('  run      Start a workflow execution');
-      console.log('  status   Check status of a run');
-      console.log('  list     List available workflows');
-      break;
+    }
+
+    if (parsedToken.kind === 'positional') {
+      positionals.push(parsedToken.value);
+      cursor += 1;
+      continue;
+    }
+
+    const { optionName } = parsedToken;
+    if (options.has(optionName)) {
+      return {
+        ok: false,
+        message: `Option "--${optionName}" cannot be provided more than once.`,
+      };
+    }
+
+    if (parsedToken.kind === 'option-inline') {
+      options.set(optionName, parsedToken.optionValue);
+      cursor += 1;
+      continue;
+    }
+
+    const optionValue = args[cursor + 1];
+    if (!optionValue || optionValue.startsWith('--')) {
+      return {
+        ok: false,
+        message: `Option "--${optionName}" requires a value.`,
+      };
+    }
+
+    options.set(optionName, optionValue);
+    cursor += 2;
+  }
+
+  return {
+    ok: true,
+    options,
+    positionals,
+  };
+}
+
+function validateCommandOptions(
+  rawArgs: readonly string[],
+  config: CommandValidationConfig,
+  io: Pick<CliIo, 'stderr'>,
+): ValidatedCommandOptions {
+  const parsedOptions = parseLongOptions(rawArgs);
+  if (!parsedOptions.ok) {
+    return {
+      ok: false,
+      exitCode: usageError(io, parsedOptions.message, config.usage),
+    };
+  }
+
+  const { options, positionals } = parsedOptions;
+  if (positionals.length > 0) {
+    return {
+      ok: false,
+      exitCode: usageError(
+        io,
+        `Unexpected positional arguments for "${config.commandName}": ${positionals.join(' ')}`,
+        config.usage,
+      ),
+    };
+  }
+
+  const allowedOptions = new Set(config.allowedOptions);
+  for (const optionName of options.keys()) {
+    if (allowedOptions.has(optionName)) {
+      continue;
+    }
+    return {
+      ok: false,
+      exitCode: usageError(io, `Unknown option for "${config.commandName}": --${optionName}`, config.usage),
+    };
+  }
+
+  return {
+    ok: true,
+    options,
+  };
+}
+
+function getRequiredOption(
+  options: ReadonlyMap<string, string>,
+  optionName: string,
+  optionDescription: string,
+  usage: string,
+  io: Pick<CliIo, 'stderr'>,
+): string | null {
+  const value = options.get(optionName);
+  if (value) {
+    return value;
+  }
+
+  usageError(io, `Missing required option: --${optionName} <${optionDescription}>`, usage);
+  return null;
+}
+
+function parseStrictPositiveInteger(value: string): number | null {
+  if (!/^[1-9]\d*$/.test(value)) {
+    return null;
+  }
+
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed)) {
+    return null;
+  }
+
+  return parsed;
+}
+
+function resolveDatabasePath(io: CliIo): string {
+  const configuredPath = io.env.ALPHRED_DB_PATH?.trim();
+  if (configuredPath && configuredPath.length > 0) {
+    return resolve(io.cwd, configuredPath);
+  }
+
+  return resolve(io.cwd, 'alphred.db');
+}
+
+function openInitializedDatabase(dependencies: CliDependencies, io: CliIo): AlphredDatabase {
+  const db = dependencies.openDatabase(resolveDatabasePath(io));
+  dependencies.migrateDatabase(db);
+  return db;
+}
+
+function shouldTreatRunStatusAsFailure(status: WorkflowRunStatus): boolean {
+  return status === 'failed' || status === 'cancelled';
+}
+
+function formatNodeStatusSummary(nodes: readonly DisplayRunNode[]): string {
+  const countsByStatus = new Map<RunNodeStatus, number>(orderedNodeStatuses.map(status => [status, 0]));
+  for (const node of nodes) {
+    countsByStatus.set(node.status, (countsByStatus.get(node.status) ?? 0) + 1);
+  }
+
+  return orderedNodeStatuses
+    .map(status => `${status}=${countsByStatus.get(status) ?? 0}`)
+    .join(' ');
+}
+
+function selectLatestAttempts(rows: readonly DisplayRunNode[]): DisplayRunNode[] {
+  const latestByNodeKey = new Map<string, DisplayRunNode>();
+  for (const row of rows) {
+    const current = latestByNodeKey.get(row.nodeKey);
+    if (!current || row.attempt > current.attempt || (row.attempt === current.attempt && row.id > current.id)) {
+      latestByNodeKey.set(row.nodeKey, row);
+    }
+  }
+
+  return [...latestByNodeKey.values()].sort((left, right) => {
+    if (left.sequenceIndex !== right.sequenceIndex) {
+      return left.sequenceIndex - right.sequenceIndex;
+    }
+
+    if (left.nodeKey < right.nodeKey) {
+      return -1;
+    }
+
+    if (left.nodeKey > right.nodeKey) {
+      return 1;
+    }
+
+    return left.id - right.id;
+  });
+}
+
+async function handleRunCommand(rawArgs: readonly string[], dependencies: CliDependencies, io: CliIo): Promise<ExitCode> {
+  const parsedOptions = validateCommandOptions(
+    rawArgs,
+    {
+      commandName: 'run',
+      usage: 'Usage: alphred run --tree <tree_key>',
+      allowedOptions: ['tree'],
+    },
+    io,
+  );
+  if (!parsedOptions.ok) {
+    return parsedOptions.exitCode;
+  }
+
+  const treeKey = getRequiredOption(parsedOptions.options, 'tree', 'tree_key', 'Usage: alphred run --tree <tree_key>', io);
+  if (!treeKey) {
+    return EXIT_USAGE_ERROR;
+  }
+
+  try {
+    const db = openInitializedDatabase(dependencies, io);
+    const planner = createSqlWorkflowPlanner(db);
+    const materializedRun = planner.materializeRun({ treeKey });
+    io.stdout(`Started run id=${materializedRun.run.id} for tree "${treeKey}".`);
+
+    const executor = createSqlWorkflowExecutor(db, {
+      resolveProvider: dependencies.resolveProvider,
+    });
+
+    const execution = await executor.executeRun({
+      workflowRunId: materializedRun.run.id,
+      options: {
+        workingDirectory: io.cwd,
+      },
+    });
+
+    io.stdout(
+      `Run id=${execution.workflowRunId} outcome=${execution.finalStep.outcome} status=${execution.finalStep.runStatus} executed_nodes=${execution.executedNodes}.`,
+    );
+
+    if (shouldTreatRunStatusAsFailure(execution.finalStep.runStatus)) {
+      io.stderr(`Run id=${execution.workflowRunId} finished with status=${execution.finalStep.runStatus}.`);
+      return EXIT_RUNTIME_ERROR;
+    }
+
+    return EXIT_SUCCESS;
+  } catch (error) {
+    if (hasErrorCode(error, 'WORKFLOW_TREE_NOT_FOUND')) {
+      io.stderr(`Workflow tree not found for key "${treeKey}".`);
+      return EXIT_NOT_FOUND;
+    }
+
+    io.stderr(`Failed to execute run: ${toErrorMessage(error)}`);
+    return EXIT_RUNTIME_ERROR;
   }
 }
 
-main().catch((error: unknown) => {
-  console.error('Fatal error:', error);
-  process.exit(1);
-});
+async function handleStatusCommand(
+  rawArgs: readonly string[],
+  dependencies: CliDependencies,
+  io: CliIo,
+): Promise<ExitCode> {
+  const parsedOptions = validateCommandOptions(
+    rawArgs,
+    {
+      commandName: 'status',
+      usage: 'Usage: alphred status --run <run_id>',
+      allowedOptions: ['run'],
+    },
+    io,
+  );
+  if (!parsedOptions.ok) {
+    return parsedOptions.exitCode;
+  }
+
+  const runIdRaw = getRequiredOption(parsedOptions.options, 'run', 'run_id', 'Usage: alphred status --run <run_id>', io);
+  if (!runIdRaw) {
+    return EXIT_USAGE_ERROR;
+  }
+
+  const runId = parseStrictPositiveInteger(runIdRaw);
+  if (runId === null) {
+    io.stderr(`Invalid run id "${runIdRaw}". Run id must be a positive integer.`);
+    return EXIT_USAGE_ERROR;
+  }
+
+  try {
+    const db = openInitializedDatabase(dependencies, io);
+
+    const runRow = db
+      .select({
+        id: workflowRuns.id,
+        workflowTreeId: workflowRuns.workflowTreeId,
+        status: workflowRuns.status,
+        startedAt: workflowRuns.startedAt,
+        completedAt: workflowRuns.completedAt,
+      })
+      .from(workflowRuns)
+      .where(eq(workflowRuns.id, runId))
+      .get();
+
+    if (!runRow) {
+      io.stderr(`Workflow run id=${runId} was not found.`);
+      return EXIT_NOT_FOUND;
+    }
+
+    const treeRow = db
+      .select({
+        id: workflowTrees.id,
+        treeKey: workflowTrees.treeKey,
+        treeVersion: workflowTrees.version,
+      })
+      .from(workflowTrees)
+      .where(eq(workflowTrees.id, runRow.workflowTreeId))
+      .get();
+
+    if (!treeRow) {
+      io.stderr(`Workflow tree id=${runRow.workflowTreeId} referenced by run id=${runId} was not found.`);
+      return EXIT_RUNTIME_ERROR;
+    }
+
+    const latestNodes = selectLatestAttempts(
+      db
+        .select({
+          id: runNodes.id,
+          nodeKey: runNodes.nodeKey,
+          status: runNodes.status,
+          attempt: runNodes.attempt,
+          sequenceIndex: runNodes.sequenceIndex,
+        })
+        .from(runNodes)
+        .where(eq(runNodes.workflowRunId, runId))
+        .all()
+        .map(node => ({
+          id: node.id,
+          nodeKey: node.nodeKey,
+          status: node.status as RunNodeStatus,
+          attempt: node.attempt,
+          sequenceIndex: node.sequenceIndex,
+        })),
+    );
+
+    io.stdout(`Run id=${runRow.id} tree=${treeRow.treeKey}@${treeRow.treeVersion} status=${runRow.status}`);
+    io.stdout(`Started at: ${runRow.startedAt ?? '(not started)'}`);
+    io.stdout(`Completed at: ${runRow.completedAt ?? '(not completed)'}`);
+    io.stdout(`Node status summary: ${formatNodeStatusSummary(latestNodes)}`);
+
+    if (latestNodes.length === 0) {
+      io.stdout('Node details: (no run nodes materialized)');
+      return EXIT_SUCCESS;
+    }
+
+    io.stdout('Node details:');
+    for (const node of latestNodes) {
+      io.stdout(`  ${node.nodeKey}: status=${node.status} attempt=${node.attempt}`);
+    }
+
+    return EXIT_SUCCESS;
+  } catch (error) {
+    io.stderr(`Failed to read run status: ${toErrorMessage(error)}`);
+    return EXIT_RUNTIME_ERROR;
+  }
+}
+
+async function handleListCommand(rawArgs: readonly string[], io: Pick<CliIo, 'stderr'>): Promise<ExitCode> {
+  const parsedOptions = validateCommandOptions(
+    rawArgs,
+    {
+      commandName: 'list',
+      usage: 'Usage: alphred list',
+      allowedOptions: [],
+    },
+    io,
+  );
+  if (!parsedOptions.ok) {
+    return parsedOptions.exitCode;
+  }
+
+  io.stderr('The "list" command is not implemented yet.');
+  return EXIT_RUNTIME_ERROR;
+}
+
+function normalizePathForComparison(path: string): string {
+  const absolutePath = resolve(path);
+  try {
+    return realpathSync(absolutePath);
+  } catch {
+    return absolutePath;
+  }
+}
+
+export function isExecutedAsScript(
+  entrypoint: string | undefined = process.argv[1],
+  moduleUrl: string = import.meta.url,
+): boolean {
+  if (!entrypoint) {
+    return false;
+  }
+
+  const entrypointPath = normalizePathForComparison(entrypoint);
+  const modulePath = normalizePathForComparison(fileURLToPath(moduleUrl));
+  return modulePath === entrypointPath;
+}
+
+function createDefaultEntrypointRuntime(): CliEntrypointRuntime {
+  return {
+    argv: process.argv,
+    exit: code => process.exit(code),
+  };
+}
+
+export async function runCliEntrypoint(
+  runtime: CliEntrypointRuntime = createDefaultEntrypointRuntime(),
+  options: MainOptions = {},
+): Promise<void> {
+  const exitCode = await main(runtime.argv.slice(2), options);
+  if (exitCode !== EXIT_SUCCESS) {
+    runtime.exit(exitCode);
+  }
+}
+
+export async function main(args: string[] = process.argv.slice(2), options: MainOptions = {}): Promise<ExitCode> {
+  const dependencies = options.dependencies ?? defaultDependencies;
+  const io = options.io ?? createDefaultIo();
+  const command = args[0];
+
+  if (!command || command === 'help' || command === '--help' || command === '-h') {
+    printGeneralUsage(io);
+    return EXIT_SUCCESS;
+  }
+
+  switch (command) {
+    case 'run':
+      return handleRunCommand(args.slice(1), dependencies, io);
+    case 'status':
+      return handleStatusCommand(args.slice(1), dependencies, io);
+    case 'list':
+      return handleListCommand(args.slice(1), io);
+    default:
+      io.stderr(`Unknown command "${command}".`);
+      printGeneralUsage({ stdout: io.stderr });
+      return EXIT_USAGE_ERROR;
+  }
+}
+
+if (isExecutedAsScript()) {
+  try {
+    await runCliEntrypoint();
+  } catch (error: unknown) {
+    console.error(`Fatal error: ${toErrorMessage(error)}`);
+    process.exit(EXIT_RUNTIME_ERROR);
+  }
+}

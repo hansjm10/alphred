@@ -99,6 +99,9 @@ importers:
       '@alphred/shared':
         specifier: workspace:*
         version: link:../shared
+      drizzle-orm:
+        specifier: ^0.44.2
+        version: 0.44.7(@types/better-sqlite3@7.6.13)(better-sqlite3@11.10.0)
 
   packages/core:
     dependencies:
