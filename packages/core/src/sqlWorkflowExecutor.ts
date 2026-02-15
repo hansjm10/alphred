@@ -1120,6 +1120,8 @@ function transitionCompletedRunNodeToPendingAttempt(
     nextAttempt: number;
   },
 ): void {
+  // Requeue completed nodes through this helper so status reset and attempt
+  // increment remain coupled in one atomic update.
   const occurredAt = new Date().toISOString();
   const updated = db
     .update(runNodes)

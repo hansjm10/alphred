@@ -3154,13 +3154,27 @@ describe('createSqlWorkflowExecutor', () => {
       ])
       .run();
 
-    db.insert(routingDecisions)
+    const seededReviewDecision = db
+      .insert(routingDecisions)
       .values({
         workflowRunId: runId,
         runNodeId: reviewRunNodeId,
         decisionType: 'approved',
       })
-      .run();
+      .returning({ id: routingDecisions.id })
+      .get();
+
+    const seededDecisionRow = db
+      .select({
+        rawOutput: routingDecisions.rawOutput,
+      })
+      .from(routingDecisions)
+      .where(eq(routingDecisions.id, seededReviewDecision.id))
+      .get();
+
+    expect(seededDecisionRow).toEqual({
+      rawOutput: null,
+    });
 
     db.insert(phaseArtifacts)
       .values({
@@ -3392,6 +3406,23 @@ describe('createSqlWorkflowExecutor', () => {
     expect(fallbackNode).toEqual({
       status: 'pending',
     });
+
+    const persistedReviewDecisions = db
+      .select({
+        decisionType: routingDecisions.decisionType,
+        rawOutput: routingDecisions.rawOutput,
+      })
+      .from(routingDecisions)
+      .where(eq(routingDecisions.runNodeId, reviewRunNodeId))
+      .orderBy(asc(routingDecisions.id))
+      .all();
+
+    expect(persistedReviewDecisions).toEqual([
+      {
+        decisionType: 'approved',
+        rawOutput: null,
+      },
+    ]);
 
     const fallbackResult = await executor.executeNextRunnableNode({
       workflowRunId: runId,

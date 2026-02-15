@@ -129,7 +129,7 @@ describe('database schema hardening', () => {
     migrateDatabase(db);
     const seed = seedTreeState(db, 'trigger_refresh');
 
-    const runNode = db
+    const completedNode = db
       .insert(runNodes)
       .values({
         workflowRunId: seed.runId,
@@ -137,6 +137,18 @@ describe('database schema hardening', () => {
         nodeKey: seed.sourceNodeKey,
         status: 'pending',
         sequenceIndex: 1,
+      })
+      .returning({ id: runNodes.id })
+      .get();
+
+    const skippedNode = db
+      .insert(runNodes)
+      .values({
+        workflowRunId: seed.runId,
+        treeNodeId: seed.targetNodeId,
+        nodeKey: seed.targetNodeKey,
+        status: 'pending',
+        sequenceIndex: 2,
       })
       .returning({ id: runNodes.id })
       .get();
@@ -162,19 +174,32 @@ describe('database schema hardening', () => {
     db
       .update(runNodes)
       .set({ status: 'running', startedAt: '2026-01-01T00:00:00.000Z' })
-      .where(eq(runNodes.id, runNode.id))
+      .where(eq(runNodes.id, completedNode.id))
       .run();
     db
       .update(runNodes)
       .set({ status: 'completed', completedAt: '2026-01-01T00:01:00.000Z' })
-      .where(eq(runNodes.id, runNode.id))
+      .where(eq(runNodes.id, completedNode.id))
+      .run();
+    db
+      .update(runNodes)
+      .set({ status: 'skipped', completedAt: '2026-01-01T00:01:30.000Z' })
+      .where(eq(runNodes.id, skippedNode.id))
       .run();
 
     expect(() =>
       db
         .update(runNodes)
         .set({ status: 'pending', startedAt: null, completedAt: null })
-        .where(eq(runNodes.id, runNode.id))
+        .where(eq(runNodes.id, completedNode.id))
+        .run(),
+    ).toThrow('run_nodes status transition is not allowed');
+
+    expect(() =>
+      db
+        .update(runNodes)
+        .set({ status: 'pending', startedAt: null, completedAt: null })
+        .where(eq(runNodes.id, skippedNode.id))
         .run(),
     ).toThrow('run_nodes status transition is not allowed');
 
@@ -184,7 +209,15 @@ describe('database schema hardening', () => {
       db
         .update(runNodes)
         .set({ status: 'pending', startedAt: null, completedAt: null })
-        .where(eq(runNodes.id, runNode.id))
+        .where(eq(runNodes.id, completedNode.id))
+        .run(),
+    ).not.toThrow();
+
+    expect(() =>
+      db
+        .update(runNodes)
+        .set({ status: 'pending', startedAt: null, completedAt: null })
+        .where(eq(runNodes.id, skippedNode.id))
         .run(),
     ).not.toThrow();
   });

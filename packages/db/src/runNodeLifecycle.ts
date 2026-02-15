@@ -9,6 +9,8 @@ const terminalStatuses: ReadonlySet<RunNodeStatus> = new Set(['completed', 'fail
 const allowedTransitions: Readonly<Record<RunNodeStatus, readonly RunNodeStatus[]>> = {
   pending: ['running', 'skipped', 'cancelled'],
   running: ['completed', 'failed', 'cancelled'],
+  // Attempt increment semantics for completed-node requeue are enforced by
+  // executor-owned helpers, not this generic transition guard.
   completed: ['pending'],
   failed: ['running'],
   skipped: ['pending'],
