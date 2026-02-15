@@ -7,6 +7,7 @@ import {
   materializeWorkflowRunFromTree,
   migrateDatabase,
   promptTemplates,
+  runNodes,
   treeNodes,
   workflowRuns,
   workflowTrees,
@@ -126,6 +127,61 @@ function seedSingleNodeTree(db: AlphredDatabase, treeKey = 'design_tree'): void 
     .run();
 }
 
+function seedTwoNodeTree(db: AlphredDatabase, treeKey = 'design_tree'): void {
+  const tree = db
+    .insert(workflowTrees)
+    .values({
+      treeKey,
+      version: 1,
+      name: 'Design tree',
+    })
+    .returning({ id: workflowTrees.id })
+    .get();
+
+  const designPrompt = db
+    .insert(promptTemplates)
+    .values({
+      templateKey: `${treeKey}_design_prompt`,
+      version: 1,
+      content: 'Produce a design report',
+      contentType: 'markdown',
+    })
+    .returning({ id: promptTemplates.id })
+    .get();
+
+  const reviewPrompt = db
+    .insert(promptTemplates)
+    .values({
+      templateKey: `${treeKey}_review_prompt`,
+      version: 1,
+      content: 'Review the design report',
+      contentType: 'markdown',
+    })
+    .returning({ id: promptTemplates.id })
+    .get();
+
+  db.insert(treeNodes)
+    .values([
+      {
+        workflowTreeId: tree.id,
+        nodeKey: 'design',
+        nodeType: 'agent',
+        provider: 'codex',
+        promptTemplateId: designPrompt.id,
+        sequenceIndex: 1,
+      },
+      {
+        workflowTreeId: tree.id,
+        nodeKey: 'review',
+        nodeType: 'agent',
+        provider: 'codex',
+        promptTemplateId: reviewPrompt.id,
+        sequenceIndex: 2,
+      },
+    ])
+    .run();
+}
+
 describe('CLI run/status commands', () => {
   it('executes "run --tree" and reports completed status for a successful run', async () => {
     const db = createDatabase(':memory:');
@@ -207,6 +263,84 @@ describe('CLI run/status commands', () => {
     expect(captured.stdout.some(line => line.includes(`Run id=${materialized.run.id}`))).toBe(true);
     expect(captured.stdout.some(line => line.includes('Node status summary: pending=1 running=0 completed=0 failed=0 skipped=0 cancelled=0'))).toBe(true);
     expect(captured.stdout.some(line => line.includes('design: status=pending attempt=1'))).toBe(true);
+  });
+
+  it('accepts inline long-option values for run and status', async () => {
+    const db = createDatabase(':memory:');
+    migrateDatabase(db);
+    seedSingleNodeTree(db, 'design_tree');
+    const runCaptured = createCapturedIo();
+
+    const runExitCode = await main(['run', '--tree=design_tree'], {
+      dependencies: createDependencies(db, createSuccessfulProviderResolver()),
+      io: runCaptured.io,
+    });
+
+    expect(runExitCode).toBe(0);
+    expect(runCaptured.stderr).toEqual([]);
+
+    const persistedRun = db
+      .select({
+        id: workflowRuns.id,
+      })
+      .from(workflowRuns)
+      .all()[0];
+
+    expect(persistedRun?.id).toBeTypeOf('number');
+
+    const statusCaptured = createCapturedIo();
+    const statusExitCode = await main(['status', `--run=${persistedRun?.id}`], {
+      dependencies: createDependencies(db, createUnusedProviderResolver()),
+      io: statusCaptured.io,
+    });
+
+    expect(statusExitCode).toBe(0);
+    expect(statusCaptured.stderr).toEqual([]);
+    expect(statusCaptured.stdout.some(line => line.includes(`Run id=${persistedRun?.id}`))).toBe(true);
+  });
+
+  it('shows latest attempt per node key in status output', async () => {
+    const db = createDatabase(':memory:');
+    migrateDatabase(db);
+    seedTwoNodeTree(db, 'retry_tree');
+    const materialized = materializeWorkflowRunFromTree(db, { treeKey: 'retry_tree' });
+    const designTreeNode = db
+      .select({
+        id: treeNodes.id,
+        nodeKey: treeNodes.nodeKey,
+      })
+      .from(treeNodes)
+      .all()
+      .find(node => node.nodeKey === 'design');
+
+    expect(designTreeNode).toBeDefined();
+    if (!designTreeNode) {
+      return;
+    }
+
+    db.insert(runNodes)
+      .values({
+        workflowRunId: materialized.run.id,
+        treeNodeId: designTreeNode.id,
+        nodeKey: 'design',
+        status: 'pending',
+        sequenceIndex: 3,
+        attempt: 2,
+      })
+      .run();
+
+    const captured = createCapturedIo();
+    const exitCode = await main(['status', '--run', String(materialized.run.id)], {
+      dependencies: createDependencies(db, createUnusedProviderResolver()),
+      io: captured.io,
+    });
+
+    expect(exitCode).toBe(0);
+    expect(captured.stderr).toEqual([]);
+    expect(captured.stdout.some(line => line.includes('Node status summary: pending=2 running=0 completed=0 failed=0 skipped=0 cancelled=0'))).toBe(true);
+    expect(captured.stdout.some(line => line.includes('design: status=pending attempt=2'))).toBe(true);
+    expect(captured.stdout.some(line => line.includes('review: status=pending attempt=1'))).toBe(true);
+    expect(captured.stdout.some(line => line.includes('design: status=pending attempt=1'))).toBe(false);
   });
 
   it('returns not-found exit code for unknown status run id', async () => {
@@ -343,6 +477,10 @@ describe('CLI run/status commands', () => {
         args: ['run', '--tree', 'design_tree', '--tree', 'design_tree'],
         stderr: ['Option "--tree" cannot be provided more than once.', 'Usage: alphred run --tree <tree_key>'],
       },
+      {
+        args: ['run', '--tree='],
+        stderr: ['Option "--tree" requires a value.', 'Usage: alphred run --tree <tree_key>'],
+      },
     ];
 
     for (const testCase of cases) {
@@ -385,6 +523,14 @@ describe('CLI run/status commands', () => {
         args: ['status', '--run', '1', '--run', '2'],
         stderr: ['Option "--run" cannot be provided more than once.', 'Usage: alphred status --run <run_id>'],
       },
+      {
+        args: ['status', '--run='],
+        stderr: ['Option "--run" requires a value.', 'Usage: alphred status --run <run_id>'],
+      },
+      {
+        args: ['status', '--run=abc'],
+        stderr: ['Invalid run id "abc". Run id must be a positive integer.'],
+      },
     ];
 
     for (const testCase of cases) {
@@ -394,6 +540,48 @@ describe('CLI run/status commands', () => {
 
       const exitCode = await main(testCase.args, {
         dependencies: createDependencies(db, createUnusedProviderResolver()),
+        io: captured.io,
+      });
+
+      expect(exitCode).toBe(2);
+      expect(captured.stderr).toEqual(testCase.stderr);
+    }
+  });
+
+  it('returns runtime failure for "list" without arguments', async () => {
+    const captured = createCapturedIo();
+
+    const exitCode = await main(['list'], {
+      io: captured.io,
+    });
+
+    expect(exitCode).toBe(4);
+    expect(captured.stderr).toEqual(['The "list" command is not implemented yet.']);
+  });
+
+  it('returns usage exit code for invalid list command inputs', async () => {
+    const cases: readonly {
+      args: string[];
+      stderr: string[];
+    }[] = [
+      {
+        args: ['list', 'extra'],
+        stderr: ['Unexpected positional arguments for "list": extra', 'Usage: alphred list'],
+      },
+      {
+        args: ['list', '--tree', 'design_tree'],
+        stderr: ['Unknown option for "list": --tree', 'Usage: alphred list'],
+      },
+      {
+        args: ['list', '--tree'],
+        stderr: ['Option "--tree" requires a value.', 'Usage: alphred list'],
+      },
+    ];
+
+    for (const testCase of cases) {
+      const captured = createCapturedIo();
+
+      const exitCode = await main(testCase.args, {
         io: captured.io,
       });
 

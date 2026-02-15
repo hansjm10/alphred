@@ -443,7 +443,27 @@ async function handleStatusCommand(
   }
 }
 
-async function handleListCommand(_rawArgs: readonly string[], io: Pick<CliIo, 'stderr'>): Promise<ExitCode> {
+async function handleListCommand(rawArgs: readonly string[], io: Pick<CliIo, 'stderr'>): Promise<ExitCode> {
+  const parsedOptions = parseLongOptions(rawArgs);
+  if (!parsedOptions.ok) {
+    io.stderr(parsedOptions.message);
+    io.stderr('Usage: alphred list');
+    return EXIT_USAGE_ERROR;
+  }
+
+  const { options, positionals } = parsedOptions;
+  if (positionals.length > 0) {
+    io.stderr(`Unexpected positional arguments for "list": ${positionals.join(' ')}`);
+    io.stderr('Usage: alphred list');
+    return EXIT_USAGE_ERROR;
+  }
+
+  for (const optionName of options.keys()) {
+    io.stderr(`Unknown option for "list": --${optionName}`);
+    io.stderr('Usage: alphred list');
+    return EXIT_USAGE_ERROR;
+  }
+
   io.stderr('The "list" command is not implemented yet.');
   return EXIT_RUNTIME_ERROR;
 }

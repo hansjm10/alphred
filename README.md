@@ -68,6 +68,8 @@ alphred list
 
 Notes:
 - `alphred list` is not implemented yet and exits with code `4`.
+- `alphred list` accepts no options or positional arguments; invalid list input exits with code `2`.
+- `alphred status` currently requires `--run <run_id>` and does not default to a latest run.
 - Set `ALPHRED_DB_PATH` to override the database path; relative paths resolve from the current working directory.
 
 Exit codes:
