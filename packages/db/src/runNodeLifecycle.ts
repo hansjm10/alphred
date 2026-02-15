@@ -9,9 +9,9 @@ const terminalStatuses: ReadonlySet<RunNodeStatus> = new Set(['completed', 'fail
 const allowedTransitions: Readonly<Record<RunNodeStatus, readonly RunNodeStatus[]>> = {
   pending: ['running', 'skipped', 'cancelled'],
   running: ['completed', 'failed', 'cancelled'],
-  completed: [],
+  completed: ['pending'],
   failed: ['running'],
-  skipped: [],
+  skipped: ['pending'],
   cancelled: [],
 };
 
@@ -41,7 +41,7 @@ export function transitionRunNodeStatus(
     .set({
       status: params.to,
       updatedAt: occurredAt,
-      startedAt: params.to === 'running' ? occurredAt : undefined,
+      startedAt: params.to === 'running' ? occurredAt : params.to === 'pending' ? null : undefined,
       completedAt,
     })
     .where(and(eq(runNodes.id, params.runNodeId), eq(runNodes.status, params.expectedFrom)))

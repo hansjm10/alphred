@@ -1,4 +1,4 @@
-import { asc, eq, inArray } from 'drizzle-orm';
+import { and, asc, eq, inArray } from 'drizzle-orm';
 import type { ProviderEvent, ProviderRunOptions } from '@alphred/shared';
 import { describe, expect, it, vi } from 'vitest';
 import {
@@ -649,6 +649,200 @@ function seedDecisionRoutingRun(
     reviewRunNodeId: reviewRunNode.id,
     approvedRunNodeId: approvedRunNode.id,
     reviseRunNodeId: reviseRunNode.id,
+  };
+}
+
+function seedDesignTreeIntegrationRun() {
+  const db = createDatabase(':memory:');
+  migrateDatabase(db);
+
+  const tree = db
+    .insert(workflowTrees)
+    .values({
+      treeKey: 'design_tree',
+      version: 1,
+      name: 'Design Tree Integration',
+    })
+    .returning({ id: workflowTrees.id })
+    .get();
+
+  const researchPrompt = db
+    .insert(promptTemplates)
+    .values({
+      templateKey: 'research_prompt',
+      version: 1,
+      content: 'Research the problem space.',
+      contentType: 'markdown',
+    })
+    .returning({ id: promptTemplates.id })
+    .get();
+
+  const creationPrompt = db
+    .insert(promptTemplates)
+    .values({
+      templateKey: 'creation_prompt',
+      version: 1,
+      content: 'Create an initial design.',
+      contentType: 'markdown',
+    })
+    .returning({ id: promptTemplates.id })
+    .get();
+
+  const reviewPrompt = db
+    .insert(promptTemplates)
+    .values({
+      templateKey: 'review_prompt',
+      version: 1,
+      content: 'Review and route with a decision directive.',
+      contentType: 'markdown',
+    })
+    .returning({ id: promptTemplates.id })
+    .get();
+
+  const approvalPrompt = db
+    .insert(promptTemplates)
+    .values({
+      templateKey: 'approval_prompt',
+      version: 1,
+      content: 'Record final approval.',
+      contentType: 'markdown',
+    })
+    .returning({ id: promptTemplates.id })
+    .get();
+
+  const approvedGuard = db
+    .insert(guardDefinitions)
+    .values({
+      guardKey: 'design_tree_approved',
+      version: 1,
+      expression: {
+        field: 'decision',
+        operator: '==',
+        value: 'approved',
+      },
+    })
+    .returning({ id: guardDefinitions.id })
+    .get();
+
+  const reviseGuard = db
+    .insert(guardDefinitions)
+    .values({
+      guardKey: 'design_tree_revise',
+      version: 1,
+      expression: {
+        field: 'decision',
+        operator: '==',
+        value: 'changes_requested',
+      },
+    })
+    .returning({ id: guardDefinitions.id })
+    .get();
+
+  const researchNode = db
+    .insert(treeNodes)
+    .values({
+      workflowTreeId: tree.id,
+      nodeKey: 'research',
+      nodeType: 'agent',
+      provider: 'codex',
+      promptTemplateId: researchPrompt.id,
+      sequenceIndex: 10,
+    })
+    .returning({ id: treeNodes.id })
+    .get();
+
+  const creationNode = db
+    .insert(treeNodes)
+    .values({
+      workflowTreeId: tree.id,
+      nodeKey: 'creation',
+      nodeType: 'agent',
+      provider: 'codex',
+      promptTemplateId: creationPrompt.id,
+      sequenceIndex: 20,
+    })
+    .returning({ id: treeNodes.id })
+    .get();
+
+  const reviewNode = db
+    .insert(treeNodes)
+    .values({
+      workflowTreeId: tree.id,
+      nodeKey: 'review',
+      nodeType: 'agent',
+      provider: 'codex',
+      promptTemplateId: reviewPrompt.id,
+      sequenceIndex: 30,
+    })
+    .returning({ id: treeNodes.id })
+    .get();
+
+  const approvedNode = db
+    .insert(treeNodes)
+    .values({
+      workflowTreeId: tree.id,
+      nodeKey: 'approved',
+      nodeType: 'agent',
+      provider: 'codex',
+      promptTemplateId: approvalPrompt.id,
+      sequenceIndex: 40,
+    })
+    .returning({ id: treeNodes.id })
+    .get();
+
+  db.insert(treeEdges)
+    .values([
+      {
+        workflowTreeId: tree.id,
+        sourceNodeId: researchNode.id,
+        targetNodeId: creationNode.id,
+        priority: 0,
+        auto: 1,
+      },
+      {
+        workflowTreeId: tree.id,
+        sourceNodeId: creationNode.id,
+        targetNodeId: reviewNode.id,
+        priority: 0,
+        auto: 1,
+      },
+      {
+        workflowTreeId: tree.id,
+        sourceNodeId: reviewNode.id,
+        targetNodeId: approvedNode.id,
+        priority: 0,
+        auto: 0,
+        guardDefinitionId: approvedGuard.id,
+      },
+      {
+        workflowTreeId: tree.id,
+        sourceNodeId: reviewNode.id,
+        targetNodeId: creationNode.id,
+        priority: 1,
+        auto: 0,
+        guardDefinitionId: reviseGuard.id,
+      },
+    ])
+    .run();
+
+  const materialized = materializeWorkflowRunFromTree(db, {
+    treeKey: 'design_tree',
+  });
+
+  const runNodeRows = db
+    .select({
+      id: runNodes.id,
+      nodeKey: runNodes.nodeKey,
+    })
+    .from(runNodes)
+    .where(eq(runNodes.workflowRunId, materialized.run.id))
+    .all();
+
+  const runNodeIdByKey = new Map(runNodeRows.map(node => [node.nodeKey, node.id]));
+  return {
+    db,
+    runId: materialized.run.id,
+    runNodeIdByKey,
   };
 }
 
@@ -2651,6 +2845,328 @@ describe('createSqlWorkflowExecutor', () => {
       .filter((reason): reason is string => reason !== null);
 
     expect(failureReasons).not.toContain('iteration_limit_exceeded');
+  });
+
+  it('covers design_tree approve path with deterministic persisted evidence across run tables', async () => {
+    const { db, runId, runNodeIdByKey } = seedDesignTreeIntegrationRun();
+    let invocation = 0;
+    const executor = createSqlWorkflowExecutor(db, {
+      resolveProvider: () => ({
+        async *run(): AsyncIterable<ProviderEvent> {
+          invocation += 1;
+          if (invocation === 1) {
+            yield { type: 'result', content: 'Research findings', timestamp: 10 };
+            return;
+          }
+          if (invocation === 2) {
+            yield { type: 'result', content: 'Initial design draft', timestamp: 20 };
+            return;
+          }
+          if (invocation === 3) {
+            yield { type: 'result', content: 'decision: approved\nProceed to finalization.', timestamp: 30 };
+            return;
+          }
+          yield { type: 'result', content: 'Approval artifacts recorded.', timestamp: 40 };
+        },
+      }),
+    });
+
+    const result = await executor.executeRun({
+      workflowRunId: runId,
+      options: {
+        workingDirectory: '/tmp/alphred-worktree',
+      },
+    });
+
+    expect(result).toEqual({
+      workflowRunId: runId,
+      executedNodes: 4,
+      finalStep: {
+        outcome: 'run_terminal',
+        workflowRunId: runId,
+        runStatus: 'completed',
+      },
+    });
+
+    const persistedRun = db
+      .select({
+        status: workflowRuns.status,
+      })
+      .from(workflowRuns)
+      .where(eq(workflowRuns.id, runId))
+      .get();
+
+    expect(persistedRun).toEqual({
+      status: 'completed',
+    });
+
+    const nodeStates = db
+      .select({
+        nodeKey: runNodes.nodeKey,
+        status: runNodes.status,
+        attempt: runNodes.attempt,
+      })
+      .from(runNodes)
+      .where(eq(runNodes.workflowRunId, runId))
+      .orderBy(asc(runNodes.sequenceIndex))
+      .all();
+
+    expect(nodeStates).toEqual([
+      { nodeKey: 'research', status: 'completed', attempt: 1 },
+      { nodeKey: 'creation', status: 'completed', attempt: 1 },
+      { nodeKey: 'review', status: 'completed', attempt: 1 },
+      { nodeKey: 'approved', status: 'completed', attempt: 1 },
+    ]);
+
+    const reviewRunNodeId = runNodeIdByKey.get('review');
+    if (!reviewRunNodeId) {
+      throw new Error('Expected design_tree review run node.');
+    }
+
+    const decisions = db
+      .select({
+        decisionType: routingDecisions.decisionType,
+        runNodeId: routingDecisions.runNodeId,
+      })
+      .from(routingDecisions)
+      .where(eq(routingDecisions.workflowRunId, runId))
+      .orderBy(asc(routingDecisions.id))
+      .all();
+
+    expect(decisions).toEqual([
+      {
+        decisionType: 'approved',
+        runNodeId: reviewRunNodeId,
+      },
+    ]);
+
+    const artifactTimeline = db
+      .select({
+        nodeKey: runNodes.nodeKey,
+        artifactType: phaseArtifacts.artifactType,
+      })
+      .from(phaseArtifacts)
+      .innerJoin(runNodes, eq(phaseArtifacts.runNodeId, runNodes.id))
+      .where(eq(phaseArtifacts.workflowRunId, runId))
+      .orderBy(asc(phaseArtifacts.id))
+      .all();
+
+    expect(artifactTimeline).toEqual([
+      { nodeKey: 'research', artifactType: 'report' },
+      { nodeKey: 'creation', artifactType: 'report' },
+      { nodeKey: 'review', artifactType: 'report' },
+      { nodeKey: 'approved', artifactType: 'report' },
+    ]);
+  });
+
+  it('covers design_tree revise loop path by returning to creation and completing after later approval', async () => {
+    const { db, runId, runNodeIdByKey } = seedDesignTreeIntegrationRun();
+    let invocation = 0;
+    const executor = createSqlWorkflowExecutor(db, {
+      resolveProvider: () => ({
+        async *run(): AsyncIterable<ProviderEvent> {
+          invocation += 1;
+          if (invocation === 1) {
+            yield { type: 'result', content: 'Research findings', timestamp: 10 };
+            return;
+          }
+          if (invocation === 2) {
+            yield { type: 'result', content: 'Draft v1', timestamp: 20 };
+            return;
+          }
+          if (invocation === 3) {
+            yield { type: 'result', content: 'decision: changes_requested\nRevise the draft.', timestamp: 30 };
+            return;
+          }
+          if (invocation === 4) {
+            yield { type: 'result', content: 'Draft v2 after revisions', timestamp: 40 };
+            return;
+          }
+          if (invocation === 5) {
+            yield { type: 'result', content: 'decision: approved\nNow it is ready.', timestamp: 50 };
+            return;
+          }
+          yield { type: 'result', content: 'Approved after revision cycle.', timestamp: 60 };
+        },
+      }),
+    });
+
+    const result = await executor.executeRun({
+      workflowRunId: runId,
+      options: {
+        workingDirectory: '/tmp/alphred-worktree',
+      },
+      maxSteps: 20,
+    });
+
+    expect(result).toEqual({
+      workflowRunId: runId,
+      executedNodes: 6,
+      finalStep: {
+        outcome: 'run_terminal',
+        workflowRunId: runId,
+        runStatus: 'completed',
+      },
+    });
+
+    const nodeStates = db
+      .select({
+        nodeKey: runNodes.nodeKey,
+        status: runNodes.status,
+        attempt: runNodes.attempt,
+      })
+      .from(runNodes)
+      .where(eq(runNodes.workflowRunId, runId))
+      .orderBy(asc(runNodes.sequenceIndex))
+      .all();
+
+    expect(nodeStates).toEqual([
+      { nodeKey: 'research', status: 'completed', attempt: 1 },
+      { nodeKey: 'creation', status: 'completed', attempt: 2 },
+      { nodeKey: 'review', status: 'completed', attempt: 2 },
+      { nodeKey: 'approved', status: 'completed', attempt: 1 },
+    ]);
+
+    const reviewRunNodeId = runNodeIdByKey.get('review');
+    if (!reviewRunNodeId) {
+      throw new Error('Expected design_tree review run node.');
+    }
+
+    const decisions = db
+      .select({
+        decisionType: routingDecisions.decisionType,
+      })
+      .from(routingDecisions)
+      .where(eq(routingDecisions.runNodeId, reviewRunNodeId))
+      .orderBy(asc(routingDecisions.id))
+      .all();
+
+    expect(decisions).toEqual([
+      { decisionType: 'changes_requested' },
+      { decisionType: 'approved' },
+    ]);
+
+    const artifactTimeline = db
+      .select({
+        nodeKey: runNodes.nodeKey,
+      })
+      .from(phaseArtifacts)
+      .innerJoin(runNodes, eq(phaseArtifacts.runNodeId, runNodes.id))
+      .where(eq(phaseArtifacts.workflowRunId, runId))
+      .orderBy(asc(phaseArtifacts.id))
+      .all();
+
+    expect(artifactTimeline.map(artifact => artifact.nodeKey)).toEqual([
+      'research',
+      'creation',
+      'review',
+      'creation',
+      'review',
+      'approved',
+    ]);
+  });
+
+  it('covers design_tree loop limit safety by failing with explicit iteration-limit metadata', async () => {
+    const { db, runId, runNodeIdByKey } = seedDesignTreeIntegrationRun();
+    let invocation = 0;
+    const executor = createSqlWorkflowExecutor(db, {
+      resolveProvider: () => ({
+        async *run(): AsyncIterable<ProviderEvent> {
+          invocation += 1;
+          if (invocation === 3 || invocation === 5 || invocation === 7) {
+            yield { type: 'result', content: 'decision: changes_requested\nKeep iterating.', timestamp: 30 + invocation };
+            return;
+          }
+          yield { type: 'result', content: `Loop execution ${invocation}`, timestamp: 10 + invocation };
+        },
+      }),
+    });
+
+    const result = await executor.executeRun({
+      workflowRunId: runId,
+      options: {
+        workingDirectory: '/tmp/alphred-worktree',
+      },
+      maxSteps: 5,
+    });
+
+    expect(result).toEqual({
+      workflowRunId: runId,
+      executedNodes: 5,
+      finalStep: {
+        outcome: 'run_terminal',
+        workflowRunId: runId,
+        runStatus: 'failed',
+      },
+    });
+
+    const persistedRun = db
+      .select({
+        status: workflowRuns.status,
+      })
+      .from(workflowRuns)
+      .where(eq(workflowRuns.id, runId))
+      .get();
+
+    expect(persistedRun).toEqual({
+      status: 'failed',
+    });
+
+    const decisions = db
+      .select({
+        decisionType: routingDecisions.decisionType,
+      })
+      .from(routingDecisions)
+      .where(eq(routingDecisions.workflowRunId, runId))
+      .orderBy(asc(routingDecisions.id))
+      .all();
+
+    expect(decisions).toEqual([
+      { decisionType: 'changes_requested' },
+      { decisionType: 'changes_requested' },
+    ]);
+
+    const creationRunNodeId = runNodeIdByKey.get('creation');
+    if (!creationRunNodeId) {
+      throw new Error('Expected design_tree creation run node.');
+    }
+
+    const failedCreationNode = db
+      .select({
+        status: runNodes.status,
+      })
+      .from(runNodes)
+      .where(eq(runNodes.id, creationRunNodeId))
+      .get();
+
+    expect(failedCreationNode).toEqual({
+      status: 'failed',
+    });
+
+    const iterationLimitArtifact = db
+      .select({
+        artifactType: phaseArtifacts.artifactType,
+        content: phaseArtifacts.content,
+        metadata: phaseArtifacts.metadata,
+      })
+      .from(phaseArtifacts)
+      .where(and(eq(phaseArtifacts.workflowRunId, runId), eq(phaseArtifacts.artifactType, 'log')))
+      .orderBy(asc(phaseArtifacts.id))
+      .all()
+      .find(
+        artifact =>
+          (artifact.metadata as { failureReason?: string } | null)?.failureReason === 'iteration_limit_exceeded',
+      );
+
+    expect(iterationLimitArtifact).toEqual({
+      artifactType: 'log',
+      content: expect.stringContaining('maxSteps=5'),
+      metadata: expect.objectContaining({
+        failureReason: 'iteration_limit_exceeded',
+        maxSteps: 5,
+        executedNodes: 5,
+      }),
+    });
   });
 
   it('throws when the workflow run id does not exist', async () => {

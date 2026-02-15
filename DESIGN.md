@@ -35,6 +35,8 @@ Each phase:
 - `pending` -> `running` -> `completed` | `failed`
 - `pending` -> `skipped`
 - `failed` -> `running` (retry)
+- `completed` -> `pending` (loop backtrack re-queue)
+- `skipped` -> `pending` (branch reactivation)
 
 ### Transition Evaluation
 
@@ -223,7 +225,7 @@ FK behavior is explicit:
   - `tree_edges.workflow_tree_id` must match both endpoint node tree IDs.
   - `run_nodes.workflow_run_id` and `run_nodes.tree_node_id` must resolve to the same tree.
 
-Run-node state transitions are additionally guarded in the DB package write path to reject invalid status moves (`pending -> running/skipped/cancelled`, `running -> completed/failed/cancelled`, `failed -> running`).
+Run-node state transitions are additionally guarded in the DB package write path to reject invalid status moves (`pending -> running/skipped/cancelled`, `running -> completed/failed/cancelled`, `failed -> running`, `completed -> pending`, `skipped -> pending`).
 
 Schema migration reruns are idempotent (`CREATE ... IF NOT EXISTS`), so repeated runs do not drop previously persisted rows in the migrated schema.
 For this transition, treat any optional one-time legacy-schema replacement during initial adoption as a destructive cutover decision; rerunning the current migration after that cutover is non-destructive.

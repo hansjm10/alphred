@@ -32,6 +32,8 @@ type RunNodeExecutionRow = {
   status: RunNodeStatus;
   sequenceIndex: number;
   attempt: number;
+  startedAt: string | null;
+  completedAt: string | null;
   maxRetries: number;
   nodeType: string;
   provider: string | null;
@@ -78,6 +80,11 @@ type RoutingSelection = {
   unresolvedDecisionSourceNodeIds: Set<number>;
   hasNoRouteDecision: boolean;
   hasUnresolvedDecision: boolean;
+};
+
+type CompletedNodeRoutingOutcome = {
+  decisionType: RoutingDecisionType | null;
+  selectedEdgeId: number | null;
 };
 
 export type ExecuteWorkflowRunParams = {
@@ -424,6 +431,28 @@ function loadLatestRoutingDecisionsByRunNodeId(
   return latestByRunNodeId;
 }
 
+function loadLatestArtifactIdByRunNodeId(
+  db: AlphredDatabase,
+  workflowRunId: number,
+): Map<number, number> {
+  const rows = db
+    .select({
+      id: phaseArtifacts.id,
+      runNodeId: phaseArtifacts.runNodeId,
+    })
+    .from(phaseArtifacts)
+    .where(eq(phaseArtifacts.workflowRunId, workflowRunId))
+    .orderBy(asc(phaseArtifacts.id))
+    .all();
+
+  const latestByRunNodeId = new Map<number, number>();
+  for (const row of rows) {
+    latestByRunNodeId.set(row.runNodeId, row.id);
+  }
+
+  return latestByRunNodeId;
+}
+
 function appendEdgeToNodeMap(edgesByNodeId: Map<number, EdgeRow[]>, nodeId: number, edge: EdgeRow): void {
   const edges = edgesByNodeId.get(nodeId);
   if (edges) {
@@ -523,10 +552,35 @@ function hasRunnableIncomingRoute(
   });
 }
 
+function hasRevisitableIncomingRoute(
+  targetNode: RunNodeExecutionRow,
+  incomingEdges: EdgeRow[],
+  latestByTreeNodeId: Map<number, RunNodeExecutionRow>,
+  selectedEdgeIdBySourceNodeId: Map<number, number>,
+  latestArtifactIdByRunNodeId: Map<number, number>,
+): boolean {
+  const targetArtifactId = latestArtifactIdByRunNodeId.get(targetNode.runNodeId) ?? Number.NEGATIVE_INFINITY;
+
+  return incomingEdges.some((edge) => {
+    const sourceNode = latestByTreeNodeId.get(edge.sourceNodeId);
+    if (sourceNode?.status !== 'completed') {
+      return false;
+    }
+
+    if (selectedEdgeIdBySourceNodeId.get(edge.sourceNodeId) !== edge.edgeId) {
+      return false;
+    }
+
+    const sourceArtifactId = latestArtifactIdByRunNodeId.get(sourceNode.runNodeId) ?? Number.NEGATIVE_INFINITY;
+    return sourceArtifactId > targetArtifactId;
+  });
+}
+
 function selectNextRunnableNode(
   rows: RunNodeExecutionRow[],
   edges: EdgeRow[],
   latestRoutingDecisionsByRunNodeId: Map<number, RoutingDecisionRow>,
+  latestArtifactIdByRunNodeId: Map<number, number>,
 ): NextRunnableSelection {
   const latestNodeAttempts = getLatestRunNodeAttempts(rows);
   const routingSelection = buildRoutingSelection(latestNodeAttempts, edges, latestRoutingDecisionsByRunNodeId);
@@ -542,11 +596,25 @@ function selectNextRunnableNode(
         return true;
       }
 
-      return hasRunnableIncomingRoute(
-        incomingEdges,
-        routingSelection.latestByTreeNodeId,
-        routingSelection.selectedEdgeIdBySourceNodeId,
-      );
+      if (row.status === 'pending') {
+        return hasRunnableIncomingRoute(
+          incomingEdges,
+          routingSelection.latestByTreeNodeId,
+          routingSelection.selectedEdgeIdBySourceNodeId,
+        );
+      }
+
+      if (row.status === 'completed') {
+        return hasRevisitableIncomingRoute(
+          row,
+          incomingEdges,
+          routingSelection.latestByTreeNodeId,
+          routingSelection.selectedEdgeIdBySourceNodeId,
+          latestArtifactIdByRunNodeId,
+        );
+      }
+
+      return false;
     }) ?? null;
 
   return {
@@ -724,6 +792,8 @@ function loadRunNodeExecutionRows(db: AlphredDatabase, workflowRunId: number): R
       status: runNodes.status,
       sequenceIndex: runNodes.sequenceIndex,
       attempt: runNodes.attempt,
+      startedAt: runNodes.startedAt,
+      completedAt: runNodes.completedAt,
       maxRetries: treeNodes.maxRetries,
       nodeType: treeNodes.nodeType,
       provider: treeNodes.provider,
@@ -744,12 +814,27 @@ function loadRunNodeExecutionRows(db: AlphredDatabase, workflowRunId: number): R
     status: toRunNodeStatus(row.status),
     sequenceIndex: row.sequenceIndex,
     attempt: row.attempt,
+    startedAt: row.startedAt,
+    completedAt: row.completedAt,
     maxRetries: row.maxRetries,
     nodeType: row.nodeType,
     provider: row.provider,
     prompt: row.prompt,
     promptContentType: row.promptContentType,
   }));
+}
+
+function loadRunNodeExecutionRowById(
+  db: AlphredDatabase,
+  workflowRunId: number,
+  runNodeId: number,
+): RunNodeExecutionRow {
+  const row = loadRunNodeExecutionRows(db, workflowRunId).find(node => node.runNodeId === runNodeId);
+  if (!row) {
+    throw new Error(`Run node id=${runNodeId} was not found for workflow run id=${workflowRunId}.`);
+  }
+
+  return row;
 }
 
 function loadEdgeRows(db: AlphredDatabase, workflowTreeId: number): EdgeRow[] {
@@ -799,13 +884,16 @@ function persistCompletedNodeRoutingDecision(
     report: string;
     edgeRows: EdgeRow[];
   },
-): RoutingDecisionType | null {
+): CompletedNodeRoutingOutcome {
   const decisionSignal = parseRouteDecisionSignal(params.report);
   const outgoingEdges = params.edgeRows.filter(edge => edge.sourceNodeId === params.treeNodeId);
 
   if (outgoingEdges.length === 0) {
     if (!decisionSignal) {
-      return null;
+      return {
+        decisionType: null,
+        selectedEdgeId: null,
+      };
     }
 
     persistRoutingDecision(db, {
@@ -817,13 +905,19 @@ function persistCompletedNodeRoutingDecision(
         decision: decisionSignal,
       },
     });
-    return decisionSignal;
+    return {
+      decisionType: decisionSignal,
+      selectedEdgeId: null,
+    };
   }
 
   const matchingEdge = selectFirstMatchingOutgoingEdge(outgoingEdges, decisionSignal);
   if (matchingEdge) {
     if (!decisionSignal) {
-      return null;
+      return {
+        decisionType: null,
+        selectedEdgeId: matchingEdge.edgeId,
+      };
     }
 
     persistRoutingDecision(db, {
@@ -836,7 +930,10 @@ function persistCompletedNodeRoutingDecision(
         selectedEdgeId: matchingEdge.edgeId,
       },
     });
-    return decisionSignal;
+    return {
+      decisionType: decisionSignal,
+      selectedEdgeId: matchingEdge.edgeId,
+    };
   }
 
   persistRoutingDecision(db, {
@@ -851,7 +948,10 @@ function persistCompletedNodeRoutingDecision(
     },
   });
 
-  return 'no_route';
+  return {
+    decisionType: 'no_route',
+    selectedEdgeId: null,
+  };
 }
 
 function persistSuccessArtifact(
@@ -947,6 +1047,87 @@ function transitionFailedRunNodeToRetryAttempt(
   }
 }
 
+function transitionCompletedRunNodeToPendingAttempt(
+  db: AlphredDatabase,
+  params: {
+    runNodeId: number;
+    currentAttempt: number;
+    nextAttempt: number;
+  },
+): void {
+  transitionRunNodeStatus(db, {
+    runNodeId: params.runNodeId,
+    expectedFrom: 'completed',
+    to: 'pending',
+  });
+
+  const occurredAt = new Date().toISOString();
+  const updated = db
+    .update(runNodes)
+    .set({
+      attempt: params.nextAttempt,
+      updatedAt: occurredAt,
+    })
+    .where(
+      and(
+        eq(runNodes.id, params.runNodeId),
+        eq(runNodes.status, 'pending'),
+        eq(runNodes.attempt, params.currentAttempt),
+      ),
+    )
+    .run();
+
+  if (updated.changes !== 1) {
+    throw new Error(
+      `Run-node revisit attempt update precondition failed for id=${params.runNodeId}; expected attempt=${params.currentAttempt}.`,
+    );
+  }
+}
+
+function reactivateSelectedTargetNode(
+  db: AlphredDatabase,
+  params: {
+    workflowRunId: number;
+    selectedEdgeId: number | null;
+    edgeRows: EdgeRow[];
+  },
+): void {
+  if (params.selectedEdgeId === null) {
+    return;
+  }
+
+  const selectedEdge = params.edgeRows.find(edge => edge.edgeId === params.selectedEdgeId);
+  if (!selectedEdge) {
+    throw new Error(`Selected edge id=${params.selectedEdgeId} was not found in workflow topology.`);
+  }
+
+  const targetNode = getLatestRunNodeAttempts(loadRunNodeExecutionRows(db, params.workflowRunId)).find(
+    node => node.treeNodeId === selectedEdge.targetNodeId,
+  );
+
+  if (!targetNode || targetNode.status === 'pending' || targetNode.status === 'running') {
+    return;
+  }
+
+  if (targetNode.status === 'completed') {
+    transitionCompletedRunNodeToPendingAttempt(db, {
+      runNodeId: targetNode.runNodeId,
+      currentAttempt: targetNode.attempt,
+      nextAttempt: targetNode.attempt + 1,
+    });
+    return;
+  }
+
+  if (targetNode.status === 'skipped') {
+    transitionRunNodeStatus(db, {
+      runNodeId: targetNode.runNodeId,
+      expectedFrom: 'skipped',
+      to: 'pending',
+    });
+    return;
+  }
+}
+
 function failRunOnIterationLimit(
   db: AlphredDatabase,
   run: WorkflowRunRow,
@@ -959,10 +1140,12 @@ function failRunOnIterationLimit(
   const runNodeRows = loadRunNodeExecutionRows(db, run.id);
   const edgeRows = loadEdgeRows(db, run.workflowTreeId);
   const latestRoutingDecisionsByRunNodeId = loadLatestRoutingDecisionsByRunNodeId(db, run.id);
+  const latestArtifactIdByRunNodeId = loadLatestArtifactIdByRunNodeId(db, run.id);
   const { nextRunnableNode, latestNodeAttempts } = selectNextRunnableNode(
     runNodeRows,
     edgeRows,
     latestRoutingDecisionsByRunNodeId,
+    latestArtifactIdByRunNodeId,
   );
 
   const targetedNode =
@@ -1069,14 +1252,31 @@ function ensureRunIsRunning(db: AlphredDatabase, run: WorkflowRunRow): WorkflowR
 function claimRunnableNode(
   db: AlphredDatabase,
   run: WorkflowRunRow,
-  runNodeId: number,
+  node: RunNodeExecutionRow,
 ): ExecuteNextRunnableNodeResult | null {
   try {
-    transitionRunNodeStatus(db, {
-      runNodeId,
-      expectedFrom: 'pending',
-      to: 'running',
-    });
+    if (node.status === 'pending') {
+      transitionRunNodeStatus(db, {
+        runNodeId: node.runNodeId,
+        expectedFrom: 'pending',
+        to: 'running',
+      });
+    } else if (node.status === 'completed') {
+      transitionCompletedRunNodeToPendingAttempt(db, {
+        runNodeId: node.runNodeId,
+        currentAttempt: node.attempt,
+        nextAttempt: node.attempt + 1,
+      });
+      transitionRunNodeStatus(db, {
+        runNodeId: node.runNodeId,
+        expectedFrom: 'pending',
+        to: 'running',
+      });
+    } else {
+      throw new Error(
+        `Run node id=${node.runNodeId} is not claimable from status "${node.status}".`,
+      );
+    }
   } catch (error) {
     if (isRunNodeTransitionPreconditionFailure(error)) {
       const refreshedRun = loadWorkflowRunRow(db, run.id);
@@ -1128,7 +1328,7 @@ async function executeClaimedRunnableNode(
         },
       });
 
-      const routingDecision = persistCompletedNodeRoutingDecision(db, {
+      const routingOutcome = persistCompletedNodeRoutingDecision(db, {
         workflowRunId: run.id,
         runNodeId: node.runNodeId,
         treeNodeId: node.treeNodeId,
@@ -1142,9 +1342,14 @@ async function executeClaimedRunnableNode(
         to: 'completed',
       });
 
-      if (routingDecision === 'no_route') {
+      if (routingOutcome.decisionType === 'no_route') {
         currentRunStatus = transitionRunTo(db, run.id, currentRunStatus, 'failed');
       } else {
+        reactivateSelectedTargetNode(db, {
+          workflowRunId: run.id,
+          selectedEdgeId: routingOutcome.selectedEdgeId,
+          edgeRows,
+        });
         markUnreachablePendingNodesAsSkipped(db, run.id, edgeRows);
         const latestAfterSuccess = getLatestRunNodeAttempts(loadRunNodeExecutionRows(db, run.id));
         const targetRunStatus = resolveRunStatusFromNodes(latestAfterSuccess);
@@ -1231,10 +1436,12 @@ export function createSqlWorkflowExecutor(
       const runNodeRows = loadRunNodeExecutionRows(db, run.id);
       const edgeRows = loadEdgeRows(db, run.workflowTreeId);
       const latestRoutingDecisionsByRunNodeId = loadLatestRoutingDecisionsByRunNodeId(db, run.id);
+      const latestArtifactIdByRunNodeId = loadLatestArtifactIdByRunNodeId(db, run.id);
       const { nextRunnableNode, latestNodeAttempts, hasNoRouteDecision, hasUnresolvedDecision } = selectNextRunnableNode(
         runNodeRows,
         edgeRows,
         latestRoutingDecisionsByRunNodeId,
+        latestArtifactIdByRunNodeId,
       );
 
       if (!nextRunnableNode) {
@@ -1242,12 +1449,12 @@ export function createSqlWorkflowExecutor(
       }
 
       const runStatus = ensureRunIsRunning(db, run);
-      const claimResult = claimRunnableNode(db, run, nextRunnableNode.runNodeId);
+      const claimResult = claimRunnableNode(db, run, nextRunnableNode);
       if (claimResult) {
         return claimResult;
       }
-
-      return executeClaimedRunnableNode(db, dependencies, run, nextRunnableNode, edgeRows, params.options, runStatus);
+      const claimedNode = loadRunNodeExecutionRowById(db, run.id, nextRunnableNode.runNodeId);
+      return executeClaimedRunnableNode(db, dependencies, run, claimedNode, edgeRows, params.options, runStatus);
     },
 
     async executeRun(params: ExecuteWorkflowRunParams): Promise<ExecuteWorkflowRunResult> {

@@ -43,6 +43,7 @@ The SQL workflow executor parses routing intent from phase reports and resolves 
 
 - Node retries are enforced from `tree_nodes.max_retries`, using `run_nodes.attempt` as the persisted attempt counter.
 - Retry attempts use lifecycle-guarded transitions (`running -> failed -> running`) before re-running the same node.
+- Backtracking routes can re-queue already terminalized nodes with lifecycle-guarded transitions (`completed -> pending`, `skipped -> pending`).
 - Failed attempts persist `phase_artifacts` log rows with retry metadata, including whether a retry was scheduled or the retry limit was exhausted.
 - `maxSteps` counts `executeRun` loop iterations (claimed node executions), not per-attempt retries inside a single node execution.
 - `executeRun` enforces a run-level `maxSteps` ceiling; when exceeded, the run is terminalized as `failed` and the limit-exceeded reason is persisted in artifact metadata.
