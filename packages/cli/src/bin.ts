@@ -2,6 +2,7 @@
 
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { eq } from 'drizzle-orm';
 import { resolveAgentProvider } from '@alphred/agents';
 import {
   createDatabase,
@@ -370,8 +371,8 @@ async function handleStatusCommand(
         completedAt: workflowRuns.completedAt,
       })
       .from(workflowRuns)
-      .all()
-      .find(candidate => candidate.id === runId);
+      .where(eq(workflowRuns.id, runId))
+      .get();
 
     if (!runRow) {
       io.stderr(`Workflow run id=${runId} was not found.`);
@@ -385,8 +386,8 @@ async function handleStatusCommand(
         treeVersion: workflowTrees.version,
       })
       .from(workflowTrees)
-      .all()
-      .find(candidate => candidate.id === runRow.workflowTreeId);
+      .where(eq(workflowTrees.id, runRow.workflowTreeId))
+      .get();
 
     if (!treeRow) {
       io.stderr(`Workflow tree id=${runRow.workflowTreeId} referenced by run id=${runId} was not found.`);
@@ -397,15 +398,14 @@ async function handleStatusCommand(
       db
         .select({
           id: runNodes.id,
-          workflowRunId: runNodes.workflowRunId,
           nodeKey: runNodes.nodeKey,
           status: runNodes.status,
           attempt: runNodes.attempt,
           sequenceIndex: runNodes.sequenceIndex,
         })
         .from(runNodes)
+        .where(eq(runNodes.workflowRunId, runId))
         .all()
-        .filter(node => node.workflowRunId === runId)
         .map(node => ({
           id: node.id,
           nodeKey: node.nodeKey,

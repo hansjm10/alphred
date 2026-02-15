@@ -229,4 +229,88 @@ describe('CLI run/status commands', () => {
     expect(exitCode).toBe(2);
     expect(captured.stderr).toEqual(['Invalid run id "abc". Run id must be a positive integer.']);
   });
+
+  it('returns usage exit code for invalid run command inputs', async () => {
+    const cases: readonly {
+      args: string[];
+      stderr: string[];
+    }[] = [
+      {
+        args: ['run'],
+        stderr: ['Missing required option: --tree <tree_key>', 'Usage: alphred run --tree <tree_key>'],
+      },
+      {
+        args: ['run', '--tree'],
+        stderr: ['Option "--tree" requires a value.', 'Usage: alphred run --tree <tree_key>'],
+      },
+      {
+        args: ['run', '--tree', 'design_tree', 'extra'],
+        stderr: ['Unexpected positional arguments for "run": extra', 'Usage: alphred run --tree <tree_key>'],
+      },
+      {
+        args: ['run', '--run', '1'],
+        stderr: ['Unknown option for "run": --run', 'Usage: alphred run --tree <tree_key>'],
+      },
+      {
+        args: ['run', '--tree', 'design_tree', '--tree', 'design_tree'],
+        stderr: ['Option "--tree" cannot be provided more than once.', 'Usage: alphred run --tree <tree_key>'],
+      },
+    ];
+
+    for (const testCase of cases) {
+      const db = createDatabase(':memory:');
+      migrateDatabase(db);
+      const captured = createCapturedIo();
+
+      const exitCode = await main(testCase.args, {
+        dependencies: createDependencies(db, createUnusedProviderResolver()),
+        io: captured.io,
+      });
+
+      expect(exitCode).toBe(2);
+      expect(captured.stderr).toEqual(testCase.stderr);
+    }
+  });
+
+  it('returns usage exit code for invalid status command inputs', async () => {
+    const cases: readonly {
+      args: string[];
+      stderr: string[];
+    }[] = [
+      {
+        args: ['status'],
+        stderr: ['Missing required option: --run <run_id>', 'Usage: alphred status --run <run_id>'],
+      },
+      {
+        args: ['status', '--run'],
+        stderr: ['Option "--run" requires a value.', 'Usage: alphred status --run <run_id>'],
+      },
+      {
+        args: ['status', '--run', '1', 'extra'],
+        stderr: ['Unexpected positional arguments for "status": extra', 'Usage: alphred status --run <run_id>'],
+      },
+      {
+        args: ['status', '--tree', 'design_tree'],
+        stderr: ['Unknown option for "status": --tree', 'Usage: alphred status --run <run_id>'],
+      },
+      {
+        args: ['status', '--run', '1', '--run', '2'],
+        stderr: ['Option "--run" cannot be provided more than once.', 'Usage: alphred status --run <run_id>'],
+      },
+    ];
+
+    for (const testCase of cases) {
+      const db = createDatabase(':memory:');
+      migrateDatabase(db);
+      const captured = createCapturedIo();
+
+      const exitCode = await main(testCase.args, {
+        dependencies: createDependencies(db, createUnusedProviderResolver()),
+        io: captured.io,
+      });
+
+      expect(exitCode).toBe(2);
+      expect(captured.stderr).toEqual(testCase.stderr);
+    }
+  });
 });

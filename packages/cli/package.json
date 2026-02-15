@@ -13,6 +13,7 @@
     "@alphred/db": "workspace:*",
     "@alphred/core": "workspace:*",
     "@alphred/agents": "workspace:*",
-    "@alphred/git": "workspace:*"
+    "@alphred/git": "workspace:*",
+    "drizzle-orm": "^0.44.2"
   }
 }
