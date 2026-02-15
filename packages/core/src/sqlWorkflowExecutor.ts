@@ -64,6 +64,7 @@ type RoutingDecisionRow = {
   runNodeId: number;
   decisionType: RoutingDecisionType;
   createdAt: string;
+  attempt: number | null;
 };
 
 type NextRunnableSelection = {
@@ -204,6 +205,15 @@ function getLatestRunNodeAttempts(rows: RunNodeExecutionRow[]): RunNodeExecution
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function readRoutingDecisionAttempt(rawOutput: unknown): number | null {
+  if (!isRecord(rawOutput)) {
+    return null;
+  }
+
+  const attempt = rawOutput.attempt;
+  return typeof attempt === 'number' && Number.isInteger(attempt) && attempt > 0 ? attempt : null;
 }
 
 function isGuardExpression(value: unknown): value is GuardExpression {
@@ -417,6 +427,7 @@ function loadLatestRoutingDecisionsByRunNodeId(
       runNodeId: routingDecisions.runNodeId,
       decisionType: routingDecisions.decisionType,
       createdAt: routingDecisions.createdAt,
+      rawOutput: routingDecisions.rawOutput,
     })
     .from(routingDecisions)
     .where(eq(routingDecisions.workflowRunId, workflowRunId))
@@ -430,6 +441,7 @@ function loadLatestRoutingDecisionsByRunNodeId(
       runNodeId: row.runNodeId,
       decisionType: row.decisionType as RoutingDecisionType,
       createdAt: row.createdAt,
+      attempt: readRoutingDecisionAttempt(row.rawOutput),
     });
   }
 
@@ -500,10 +512,13 @@ function buildRoutingSelection(
 
     const persistedDecision = latestRoutingDecisionsByRunNodeId.get(sourceNode.runNodeId) ?? null;
     const latestArtifact = latestArtifactsByRunNodeId.get(sourceNode.runNodeId) ?? null;
+    const hasStaleAttempt = persistedDecision !== null && persistedDecision.attempt !== null && persistedDecision.attempt < sourceNode.attempt;
+    const hasStaleTimestamp =
+      persistedDecision !== null &&
+      latestArtifact !== null &&
+      persistedDecision.createdAt < latestArtifact.createdAt;
     const decision =
-      persistedDecision && latestArtifact && persistedDecision.createdAt < latestArtifact.createdAt
-        ? null
-        : persistedDecision;
+      persistedDecision && (hasStaleAttempt || hasStaleTimestamp) ? null : persistedDecision;
     const decisionType = decision?.decisionType ?? null;
     const matchingEdge = selectFirstMatchingOutgoingEdge(outgoingEdges, decisionType);
     if (matchingEdge) {
@@ -908,6 +923,7 @@ function persistCompletedNodeRoutingDecision(
     workflowRunId: number;
     runNodeId: number;
     treeNodeId: number;
+    attempt: number;
     report: string;
     edgeRows: EdgeRow[];
   },
@@ -930,6 +946,7 @@ function persistCompletedNodeRoutingDecision(
       rawOutput: {
         source: 'phase_result',
         decision: decisionSignal,
+        attempt: params.attempt,
       },
     });
     return {
@@ -955,6 +972,7 @@ function persistCompletedNodeRoutingDecision(
         source: 'phase_result',
         decision: decisionSignal,
         selectedEdgeId: matchingEdge.edgeId,
+        attempt: params.attempt,
       },
     });
     return {
@@ -972,6 +990,7 @@ function persistCompletedNodeRoutingDecision(
       source: 'phase_result',
       parsedDecision: decisionSignal,
       outgoingEdgeIds: outgoingEdges.map(edge => edge.edgeId),
+      attempt: params.attempt,
     },
   });
 
@@ -1356,6 +1375,7 @@ async function executeClaimedRunnableNode(
         workflowRunId: run.id,
         runNodeId: node.runNodeId,
         treeNodeId: node.treeNodeId,
+        attempt: currentAttempt,
         report: phaseResult.report,
         edgeRows,
       });
