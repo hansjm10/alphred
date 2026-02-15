@@ -699,10 +699,11 @@ function toErrorMessage(error: unknown): string {
   return String(error);
 }
 
-function isRunNodeTransitionPreconditionFailure(error: unknown): boolean {
+function isRunNodeClaimPreconditionFailure(error: unknown): boolean {
   return (
     error instanceof Error &&
-    error.message.startsWith('Run-node transition precondition failed')
+    (error.message.startsWith('Run-node transition precondition failed') ||
+      error.message.startsWith('Run-node revisit claim precondition failed'))
   );
 }
 
@@ -1081,23 +1082,20 @@ function transitionCompletedRunNodeToPendingAttempt(
     nextAttempt: number;
   },
 ): void {
-  transitionRunNodeStatus(db, {
-    runNodeId: params.runNodeId,
-    expectedFrom: 'completed',
-    to: 'pending',
-  });
-
   const occurredAt = new Date().toISOString();
   const updated = db
     .update(runNodes)
     .set({
+      status: 'pending',
       attempt: params.nextAttempt,
+      startedAt: null,
+      completedAt: null,
       updatedAt: occurredAt,
     })
     .where(
       and(
         eq(runNodes.id, params.runNodeId),
-        eq(runNodes.status, 'pending'),
+        eq(runNodes.status, 'completed'),
         eq(runNodes.attempt, params.currentAttempt),
       ),
     )
@@ -1105,7 +1103,7 @@ function transitionCompletedRunNodeToPendingAttempt(
 
   if (updated.changes !== 1) {
     throw new Error(
-      `Run-node revisit attempt update precondition failed for id=${params.runNodeId}; expected attempt=${params.currentAttempt}.`,
+      `Run-node revisit claim precondition failed for id=${params.runNodeId}; expected status "completed" and attempt=${params.currentAttempt}.`,
     );
   }
 }
@@ -1304,7 +1302,7 @@ function claimRunnableNode(
       );
     }
   } catch (error) {
-    if (isRunNodeTransitionPreconditionFailure(error)) {
+    if (isRunNodeClaimPreconditionFailure(error)) {
       const refreshedRun = loadWorkflowRunRow(db, run.id);
       return {
         outcome: 'blocked',
@@ -1393,8 +1391,15 @@ async function executeClaimedRunnableNode(
       };
     } catch (error) {
       const errorMessage = toErrorMessage(error);
-      const canRetry = shouldRetryNodeAttempt(currentAttempt, node.maxRetries);
+      const persistedNodeStatus = loadRunNodeExecutionRowById(db, run.id, node.runNodeId).status;
+      const canRetry = persistedNodeStatus === 'running' && shouldRetryNodeAttempt(currentAttempt, node.maxRetries);
       const retriesRemaining = Math.max(node.maxRetries - currentAttempt, 0);
+      const failureReason =
+        persistedNodeStatus === 'completed'
+          ? 'post_completion_failure'
+          : canRetry
+            ? 'retry_scheduled'
+            : 'retry_limit_exceeded';
 
       const artifactId = persistFailureArtifact(db, {
         workflowRunId: run.id,
@@ -1408,15 +1413,18 @@ async function executeClaimedRunnableNode(
           maxRetries: node.maxRetries,
           retriesRemaining,
           errorName: error instanceof Error ? error.name : 'Error',
-          failureReason: canRetry ? 'retry_scheduled' : 'retry_limit_exceeded',
+          failureReason,
+          nodeStatusAtFailure: persistedNodeStatus,
         },
       });
 
-      transitionRunNodeStatus(db, {
-        runNodeId: node.runNodeId,
-        expectedFrom: 'running',
-        to: 'failed',
-      });
+      if (persistedNodeStatus === 'running') {
+        transitionRunNodeStatus(db, {
+          runNodeId: node.runNodeId,
+          expectedFrom: 'running',
+          to: 'failed',
+        });
+      }
 
       if (canRetry) {
         const nextAttempt = currentAttempt + 1;
@@ -1430,6 +1438,17 @@ async function executeClaimedRunnableNode(
       }
 
       currentRunStatus = transitionRunTo(db, run.id, currentRunStatus, 'failed');
+      if (persistedNodeStatus === 'completed') {
+        return {
+          outcome: 'executed',
+          workflowRunId: run.id,
+          runNodeId: node.runNodeId,
+          nodeKey: node.nodeKey,
+          runNodeStatus: 'completed',
+          runStatus: currentRunStatus,
+          artifactId,
+        };
+      }
 
       return {
         outcome: 'executed',

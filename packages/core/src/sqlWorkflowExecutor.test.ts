@@ -1,4 +1,4 @@
-import { and, asc, eq, inArray } from 'drizzle-orm';
+import { and, asc, eq, inArray, sql } from 'drizzle-orm';
 import type { ProviderEvent, ProviderRunOptions } from '@alphred/shared';
 import { describe, expect, it, vi } from 'vitest';
 import {
@@ -2678,6 +2678,120 @@ describe('createSqlWorkflowExecutor', () => {
     });
   });
 
+  it('returns blocked when a revisited completed-node claim loses a post-requeue race', async () => {
+    const { db, runId, sourceRunNodeId, targetRunNodeId } = seedLinearAutoRun();
+    transitionWorkflowRunStatus(db, {
+      workflowRunId: runId,
+      expectedFrom: 'pending',
+      to: 'running',
+      occurredAt: '2026-01-01T00:00:00.000Z',
+    });
+    transitionRunNodeStatus(db, {
+      runNodeId: sourceRunNodeId,
+      expectedFrom: 'pending',
+      to: 'running',
+      occurredAt: '2026-01-01T00:01:00.000Z',
+    });
+    transitionRunNodeStatus(db, {
+      runNodeId: sourceRunNodeId,
+      expectedFrom: 'running',
+      to: 'completed',
+      occurredAt: '2026-01-01T00:02:00.000Z',
+    });
+    transitionRunNodeStatus(db, {
+      runNodeId: targetRunNodeId,
+      expectedFrom: 'pending',
+      to: 'running',
+      occurredAt: '2026-01-01T00:03:00.000Z',
+    });
+    transitionRunNodeStatus(db, {
+      runNodeId: targetRunNodeId,
+      expectedFrom: 'running',
+      to: 'completed',
+      occurredAt: '2026-01-01T00:04:00.000Z',
+    });
+
+    db.insert(phaseArtifacts)
+      .values([
+        {
+          workflowRunId: runId,
+          runNodeId: sourceRunNodeId,
+          artifactType: 'report',
+          contentType: 'markdown',
+          content: 'source-v1',
+          metadata: { success: true },
+        },
+        {
+          workflowRunId: runId,
+          runNodeId: targetRunNodeId,
+          artifactType: 'report',
+          contentType: 'markdown',
+          content: 'target-v1',
+          metadata: { success: true },
+        },
+        {
+          workflowRunId: runId,
+          runNodeId: sourceRunNodeId,
+          artifactType: 'report',
+          contentType: 'markdown',
+          content: 'source-v2',
+          metadata: { success: true },
+        },
+      ])
+      .run();
+
+    db.run(sql`DROP TRIGGER IF EXISTS run_nodes_test_revisit_claim_race`);
+    db.run(
+      sql.raw(`CREATE TRIGGER run_nodes_test_revisit_claim_race
+      AFTER UPDATE OF status ON run_nodes
+      FOR EACH ROW
+      WHEN OLD.id = ${targetRunNodeId}
+        AND OLD.status = 'completed'
+        AND NEW.status = 'pending'
+      BEGIN
+        UPDATE run_nodes
+        SET status = 'running',
+            started_at = '2026-01-01T00:05:30.000Z',
+            completed_at = NULL,
+            updated_at = '2026-01-01T00:05:30.000Z'
+        WHERE id = OLD.id;
+      END`),
+    );
+
+    const resolveProvider = vi.fn(() => createProvider([]));
+    const executor = createSqlWorkflowExecutor(db, {
+      resolveProvider,
+    });
+
+    const result = await executor.executeNextRunnableNode({
+      workflowRunId: runId,
+      options: {
+        workingDirectory: '/tmp/alphred-worktree',
+      },
+    });
+
+    expect(result).toEqual({
+      outcome: 'blocked',
+      workflowRunId: runId,
+      runStatus: 'running',
+    });
+    expect(resolveProvider).not.toHaveBeenCalled();
+
+    const targetNode = db
+      .select({
+        status: runNodes.status,
+        attempt: runNodes.attempt,
+      })
+      .from(runNodes)
+      .where(eq(runNodes.id, targetRunNodeId))
+      .get();
+
+    expect(targetNode).toEqual({
+      status: 'running',
+      attempt: 2,
+    });
+  });
+
   it('ignores stale routing decisions after revisiting a node without a new decision signal', async () => {
     const {
       db,
@@ -2840,6 +2954,176 @@ describe('createSqlWorkflowExecutor', () => {
       runNodeStatus: 'completed',
       runStatus: 'completed',
       artifactId: expect.any(Number),
+    });
+  });
+
+  it('fails the run safely when post-completion target reactivation errors', async () => {
+    const {
+      db,
+      runId,
+      sourceRunNodeId,
+      reviewRunNodeId,
+      approvedRunNodeId,
+      fallbackRunNodeId,
+    } = seedMixedRoutingRevisitRun();
+
+    if (!sourceRunNodeId || !reviewRunNodeId || !approvedRunNodeId || !fallbackRunNodeId) {
+      throw new Error('Expected mixed routing run-nodes to be materialized.');
+    }
+
+    transitionWorkflowRunStatus(db, {
+      workflowRunId: runId,
+      expectedFrom: 'pending',
+      to: 'running',
+      occurredAt: '2026-01-01T00:00:00.000Z',
+    });
+    transitionRunNodeStatus(db, {
+      runNodeId: sourceRunNodeId,
+      expectedFrom: 'pending',
+      to: 'running',
+      occurredAt: '2026-01-01T00:01:00.000Z',
+    });
+    transitionRunNodeStatus(db, {
+      runNodeId: sourceRunNodeId,
+      expectedFrom: 'running',
+      to: 'completed',
+      occurredAt: '2026-01-01T00:02:00.000Z',
+    });
+    transitionRunNodeStatus(db, {
+      runNodeId: reviewRunNodeId,
+      expectedFrom: 'pending',
+      to: 'running',
+      occurredAt: '2026-01-01T00:03:00.000Z',
+    });
+    transitionRunNodeStatus(db, {
+      runNodeId: reviewRunNodeId,
+      expectedFrom: 'running',
+      to: 'completed',
+      occurredAt: '2026-01-01T00:04:00.000Z',
+    });
+    transitionRunNodeStatus(db, {
+      runNodeId: approvedRunNodeId,
+      expectedFrom: 'pending',
+      to: 'running',
+      occurredAt: '2026-01-01T00:05:00.000Z',
+    });
+    transitionRunNodeStatus(db, {
+      runNodeId: approvedRunNodeId,
+      expectedFrom: 'running',
+      to: 'completed',
+      occurredAt: '2026-01-01T00:06:00.000Z',
+    });
+    transitionRunNodeStatus(db, {
+      runNodeId: fallbackRunNodeId,
+      expectedFrom: 'pending',
+      to: 'skipped',
+      occurredAt: '2026-01-01T00:07:00.000Z',
+    });
+
+    db.insert(phaseArtifacts)
+      .values([
+        {
+          workflowRunId: runId,
+          runNodeId: sourceRunNodeId,
+          artifactType: 'report',
+          contentType: 'markdown',
+          content: 'source-v1',
+          metadata: { success: true },
+        },
+        {
+          workflowRunId: runId,
+          runNodeId: reviewRunNodeId,
+          artifactType: 'report',
+          contentType: 'markdown',
+          content: 'review-v1',
+          metadata: { success: true },
+        },
+        {
+          workflowRunId: runId,
+          runNodeId: approvedRunNodeId,
+          artifactType: 'report',
+          contentType: 'markdown',
+          content: 'approved-v1',
+          metadata: { success: true },
+        },
+        {
+          workflowRunId: runId,
+          runNodeId: sourceRunNodeId,
+          artifactType: 'report',
+          contentType: 'markdown',
+          content: 'source-v2',
+          metadata: { success: true },
+        },
+      ])
+      .run();
+
+    db.run(sql`DROP TRIGGER IF EXISTS run_nodes_test_post_completion_reactivation_error`);
+    db.run(
+      sql.raw(`CREATE TRIGGER run_nodes_test_post_completion_reactivation_error
+      BEFORE UPDATE OF status ON run_nodes
+      FOR EACH ROW
+      WHEN OLD.id = ${approvedRunNodeId}
+        AND OLD.status = 'completed'
+        AND NEW.status = 'pending'
+      BEGIN
+        SELECT RAISE(IGNORE);
+      END`),
+    );
+
+    const executor = createSqlWorkflowExecutor(db, {
+      resolveProvider: () =>
+        createProvider([
+          { type: 'result', content: 'decision: approved\nRe-approve after source refresh.', timestamp: 10 },
+        ]),
+    });
+
+    const result = await executor.executeNextRunnableNode({
+      workflowRunId: runId,
+      options: {
+        workingDirectory: '/tmp/alphred-worktree',
+      },
+    });
+
+    expect(result).toEqual({
+      outcome: 'executed',
+      workflowRunId: runId,
+      runNodeId: reviewRunNodeId,
+      nodeKey: 'review',
+      runNodeStatus: 'completed',
+      runStatus: 'failed',
+      artifactId: expect.any(Number),
+    });
+
+    const persistedRun = db
+      .select({
+        status: workflowRuns.status,
+      })
+      .from(workflowRuns)
+      .where(eq(workflowRuns.id, runId))
+      .get();
+
+    expect(persistedRun).toEqual({
+      status: 'failed',
+    });
+
+    const failureArtifacts = db
+      .select({
+        artifactType: phaseArtifacts.artifactType,
+        metadata: phaseArtifacts.metadata,
+      })
+      .from(phaseArtifacts)
+      .where(and(eq(phaseArtifacts.workflowRunId, runId), eq(phaseArtifacts.runNodeId, reviewRunNodeId)))
+      .orderBy(asc(phaseArtifacts.id))
+      .all()
+      .filter(artifact => artifact.artifactType === 'log');
+
+    expect(failureArtifacts).toHaveLength(1);
+    expect(failureArtifacts[0]).toEqual({
+      artifactType: 'log',
+      metadata: expect.objectContaining({
+        failureReason: 'post_completion_failure',
+        nodeStatusAtFailure: 'completed',
+      }),
     });
   });
 
