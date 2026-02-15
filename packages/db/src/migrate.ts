@@ -223,7 +223,10 @@ export function migrateDatabase(db: AlphredDatabase): void {
   tx.run(sql`CREATE INDEX IF NOT EXISTS run_nodes_created_at_idx
     ON run_nodes(created_at)`);
 
-  tx.run(sql`CREATE TRIGGER IF NOT EXISTS run_nodes_status_transition_update_ck
+  // Refresh this trigger on every migration run so upgraded databases pick up
+  // newly allowed status transitions.
+  tx.run(sql`DROP TRIGGER IF EXISTS run_nodes_status_transition_update_ck`);
+  tx.run(sql`CREATE TRIGGER run_nodes_status_transition_update_ck
     BEFORE UPDATE OF status ON run_nodes
     FOR EACH ROW
     WHEN (

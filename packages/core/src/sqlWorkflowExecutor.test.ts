@@ -2435,6 +2435,107 @@ describe('createSqlWorkflowExecutor', () => {
     });
   });
 
+  it('revisits a completed node when selected upstream evidence is newer', async () => {
+    const { db, runId, sourceRunNodeId, targetRunNodeId } = seedLinearAutoRun();
+    transitionWorkflowRunStatus(db, {
+      workflowRunId: runId,
+      expectedFrom: 'pending',
+      to: 'running',
+      occurredAt: '2026-01-01T00:00:00.000Z',
+    });
+    transitionRunNodeStatus(db, {
+      runNodeId: sourceRunNodeId,
+      expectedFrom: 'pending',
+      to: 'running',
+      occurredAt: '2026-01-01T00:01:00.000Z',
+    });
+    transitionRunNodeStatus(db, {
+      runNodeId: sourceRunNodeId,
+      expectedFrom: 'running',
+      to: 'completed',
+      occurredAt: '2026-01-01T00:02:00.000Z',
+    });
+    transitionRunNodeStatus(db, {
+      runNodeId: targetRunNodeId,
+      expectedFrom: 'pending',
+      to: 'running',
+      occurredAt: '2026-01-01T00:03:00.000Z',
+    });
+    transitionRunNodeStatus(db, {
+      runNodeId: targetRunNodeId,
+      expectedFrom: 'running',
+      to: 'completed',
+      occurredAt: '2026-01-01T00:04:00.000Z',
+    });
+
+    db.insert(phaseArtifacts)
+      .values([
+        {
+          workflowRunId: runId,
+          runNodeId: sourceRunNodeId,
+          artifactType: 'report',
+          contentType: 'markdown',
+          content: 'source-v1',
+          metadata: { success: true },
+        },
+        {
+          workflowRunId: runId,
+          runNodeId: targetRunNodeId,
+          artifactType: 'report',
+          contentType: 'markdown',
+          content: 'target-v1',
+          metadata: { success: true },
+        },
+        {
+          workflowRunId: runId,
+          runNodeId: sourceRunNodeId,
+          artifactType: 'report',
+          contentType: 'markdown',
+          content: 'source-v2',
+          metadata: { success: true },
+        },
+      ])
+      .run();
+
+    const executor = createSqlWorkflowExecutor(db, {
+      resolveProvider: () =>
+        createProvider([
+          { type: 'result', content: 'target refreshed from newer source evidence', timestamp: 10 },
+        ]),
+    });
+
+    const result = await executor.executeNextRunnableNode({
+      workflowRunId: runId,
+      options: {
+        workingDirectory: '/tmp/alphred-worktree',
+      },
+    });
+
+    expect(result).toEqual({
+      outcome: 'executed',
+      workflowRunId: runId,
+      runNodeId: targetRunNodeId,
+      nodeKey: 'target',
+      runNodeStatus: 'completed',
+      runStatus: 'completed',
+      artifactId: expect.any(Number),
+    });
+
+    const targetNode = db
+      .select({
+        status: runNodes.status,
+        attempt: runNodes.attempt,
+      })
+      .from(runNodes)
+      .where(eq(runNodes.id, targetRunNodeId))
+      .get();
+
+    expect(targetNode).toEqual({
+      status: 'completed',
+      attempt: 2,
+    });
+  });
+
   it('returns blocked and fails the run when failures exist but pending nodes are not runnable', async () => {
     const { db, runId, sourceRunNodeId } = seedLinearAutoRun();
     transitionRunNodeStatus(db, {

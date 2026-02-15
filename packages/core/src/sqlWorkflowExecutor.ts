@@ -587,13 +587,13 @@ function selectNextRunnableNode(
 
   const nextRunnableNode =
     latestNodeAttempts.find((row) => {
-      if (row.status !== 'pending') {
+      if (row.status !== 'pending' && row.status !== 'completed') {
         return false;
       }
 
       const incomingEdges = routingSelection.incomingEdgesByTargetNodeId.get(row.treeNodeId) ?? [];
       if (incomingEdges.length === 0) {
-        return true;
+        return row.status === 'pending';
       }
 
       if (row.status === 'pending') {
