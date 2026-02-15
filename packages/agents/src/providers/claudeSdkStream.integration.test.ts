@@ -90,6 +90,9 @@ const sdkStreamFixtures = {
       type: 'result',
       subtype: 'success',
       result: 'All required changes are complete.',
+      metadata: {
+        routingDecision: 'approved',
+      },
       usage: {
         input_tokens: 20,
         output_tokens: 8,
@@ -343,6 +346,9 @@ describe('claude provider sdk stream integration fixtures', () => {
     expect(events[2]?.content).toBe('pnpm test exited 0');
     expect(events[3]?.content).toBe('All required changes are complete.');
     expect(events[5]?.content).toBe('All required changes are complete.');
+    expect(events[5]?.metadata).toMatchObject({
+      routingDecision: 'approved',
+    });
     expect(events[4]?.metadata).toMatchObject({
       input_tokens: 20,
       output_tokens: 8,

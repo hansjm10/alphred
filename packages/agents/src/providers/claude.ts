@@ -1,5 +1,5 @@
 import { query, type Options as ClaudeQueryOptions } from '@anthropic-ai/claude-agent-sdk';
-import type { ProviderEvent, ProviderRunOptions } from '@alphred/shared';
+import { routingDecisionSignals, type ProviderEvent, type ProviderRunOptions, type RoutingDecisionSignal } from '@alphred/shared';
 import type { AgentProvider } from '../provider.js';
 import {
   type AdapterProviderConfig,
@@ -94,6 +94,8 @@ type ClaudeStreamState = {
   toolUseIds: Set<string>;
 };
 
+const routingDecisionSignalSet: ReadonlySet<RoutingDecisionSignal> = new Set(routingDecisionSignals);
+
 function toRecord(value: unknown): Record<string, unknown> | undefined {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     return undefined;
@@ -134,6 +136,53 @@ function toTrimmedString(value: unknown): string | undefined {
 
   const trimmed = stringValue.trim();
   return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function toRoutingDecisionSignal(value: unknown): RoutingDecisionSignal | undefined {
+  if (typeof value !== 'string') {
+    return undefined;
+  }
+
+  if (!routingDecisionSignalSet.has(value as RoutingDecisionSignal)) {
+    return undefined;
+  }
+
+  return value as RoutingDecisionSignal;
+}
+
+function extractRoutingDecisionSignal(sdkMessage: Record<string, unknown>): RoutingDecisionSignal | undefined {
+  const resultRecord = toRecord(sdkMessage.result);
+  const metadataRecords: (Record<string, unknown> | undefined)[] = [
+    sdkMessage,
+    toRecord(sdkMessage.metadata),
+    toRecord(sdkMessage.result_metadata),
+    toRecord(sdkMessage.resultMetadata),
+    resultRecord,
+    resultRecord ? toRecord(resultRecord.metadata) : undefined,
+  ];
+
+  for (const metadataRecord of metadataRecords) {
+    if (!metadataRecord) {
+      continue;
+    }
+
+    const routingDecision = toRoutingDecisionSignal(metadataRecord.routingDecision)
+      ?? toRoutingDecisionSignal(metadataRecord.routing_decision);
+    if (routingDecision) {
+      return routingDecision;
+    }
+  }
+
+  return undefined;
+}
+
+function createResultMetadata(sdkMessage: Record<string, unknown>): Record<string, unknown> | undefined {
+  const routingDecision = extractRoutingDecisionSignal(sdkMessage);
+  if (!routingDecision) {
+    return undefined;
+  }
+
+  return { routingDecision };
 }
 
 function toStringOrThrow(value: unknown, eventIndex: number, fieldPath: string): string {
@@ -743,6 +792,7 @@ function mapResultMessage(sdkMessage: Record<string, unknown>, state: ClaudeStre
   const usage = toRecordOrThrow(sdkMessage.usage, eventIndex, 'event.usage');
   const usageMetadata = createUsageMetadata(usage, eventIndex);
   const result = toString(sdkMessage.result) ?? state.lastAssistantMessage;
+  const resultMetadata = createResultMetadata(sdkMessage);
 
   return [
     {
@@ -752,6 +802,7 @@ function mapResultMessage(sdkMessage: Record<string, unknown>, state: ClaudeStre
     {
       type: 'result',
       content: result,
+      metadata: resultMetadata,
     },
   ];
 }

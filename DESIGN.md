@@ -144,6 +144,7 @@ Runtime semantics:
 - Events after `result` are rejected by adapter runtime as invalid ordering.
 - If no `result` is emitted, adapter/provider run fails deterministically.
 - SQL executor routing consumes structured `result.metadata.routingDecision` only; report text is display/log output and not parsed for route selection.
+- Rollout note: providers that participate in guarded routing must emit terminal `result.metadata.routingDecision`; missing metadata may yield persisted `no_route` outcomes.
 - Phase runner token accounting:
   - Sums incremental `tokens` values.
   - Tracks max cumulative values (`tokensUsed`, `totalTokens`, `total_tokens`, `input+output` variants).

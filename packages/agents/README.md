@@ -79,6 +79,8 @@ const provider = resolveProvider('codex');
   `system`, `assistant`, `result`, `tool_use`, `tool_result`, `usage`.
 - Providers can emit structured routing metadata on terminal results via
   `result.metadata.routingDecision` (`approved`, `changes_requested`, `blocked`, `retry`).
+- Providers that are used by guarded workflow routes should emit terminal
+  `result.metadata.routingDecision`; legacy report text is not used by core routing.
 - Unknown provider names throw `UnknownAgentProviderError` with deterministic
   `availableProviders` ordering.
 - Adapter runs fail deterministically when:

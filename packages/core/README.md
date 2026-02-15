@@ -15,6 +15,8 @@ The SQL workflow executor reads routing intent from structured provider result m
   - `blocked`
   - `retry`
 - Missing or invalid routing metadata is treated as no structured decision signal.
+- Legacy report text directives (for example, `decision: approved`) are not parsed for routing.
+- During rollout, providers that drive guarded routing must emit terminal `result.metadata.routingDecision`; otherwise guarded paths can persist `no_route` outcomes.
 
 ### Edge Selection Semantics
 

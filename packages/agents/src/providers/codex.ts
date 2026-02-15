@@ -1,4 +1,4 @@
-import type { ProviderRunOptions } from '@alphred/shared';
+import { routingDecisionSignals, type ProviderRunOptions, type RoutingDecisionSignal } from '@alphred/shared';
 import type { ThreadOptions, TurnOptions } from '@openai/codex-sdk';
 import type { AgentProvider } from '../provider.js';
 import {
@@ -81,6 +81,8 @@ type CodexStreamState = {
   lastAssistantMessage: string;
 };
 
+const routingDecisionSignalSet: ReadonlySet<RoutingDecisionSignal> = new Set(routingDecisionSignals);
+
 function toRecord(value: unknown): Record<string, unknown> | undefined {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     return undefined;
@@ -111,6 +113,53 @@ function toTrimmedString(value: unknown): string | undefined {
 
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function toRoutingDecisionSignal(value: unknown): RoutingDecisionSignal | undefined {
+  if (typeof value !== 'string') {
+    return undefined;
+  }
+
+  if (!routingDecisionSignalSet.has(value as RoutingDecisionSignal)) {
+    return undefined;
+  }
+
+  return value as RoutingDecisionSignal;
+}
+
+function extractRoutingDecisionSignal(sdkEvent: Record<string, unknown>): RoutingDecisionSignal | undefined {
+  const resultRecord = toRecord(sdkEvent.result);
+  const metadataRecords: (Record<string, unknown> | undefined)[] = [
+    sdkEvent,
+    toRecord(sdkEvent.metadata),
+    toRecord(sdkEvent.result_metadata),
+    toRecord(sdkEvent.resultMetadata),
+    resultRecord,
+    resultRecord ? toRecord(resultRecord.metadata) : undefined,
+  ];
+
+  for (const metadataRecord of metadataRecords) {
+    if (!metadataRecord) {
+      continue;
+    }
+
+    const routingDecision = toRoutingDecisionSignal(metadataRecord.routingDecision)
+      ?? toRoutingDecisionSignal(metadataRecord.routing_decision);
+    if (routingDecision) {
+      return routingDecision;
+    }
+  }
+
+  return undefined;
+}
+
+function createResultMetadata(sdkEvent: Record<string, unknown>): Record<string, unknown> | undefined {
+  const routingDecision = extractRoutingDecisionSignal(sdkEvent);
+  if (!routingDecision) {
+    return undefined;
+  }
+
+  return { routingDecision };
 }
 
 function collectFailureRecords(source: unknown): Record<string, unknown>[] {
@@ -639,6 +688,7 @@ function mapSdkStreamEvent(
         eventIndex,
         'event.usage.cached_input_tokens',
       );
+      const resultMetadata = createResultMetadata(sdkEvent);
 
       return [
         {
@@ -652,6 +702,7 @@ function mapSdkStreamEvent(
         {
           type: 'result',
           content: state.lastAssistantMessage,
+          metadata: resultMetadata,
         },
       ];
     }

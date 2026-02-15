@@ -101,6 +101,9 @@ const sdkStreamFixtures = {
         cached_input_tokens: 0,
         output_tokens: 8,
       },
+      metadata: {
+        routingDecision: 'approved',
+      },
     },
   ] as const,
   partial: [
@@ -172,6 +175,9 @@ describe('codex provider sdk stream integration fixtures', () => {
     });
     expect(events[3].content).toBe('All required changes are complete.');
     expect(events[5].content).toBe('All required changes are complete.');
+    expect(events[5].metadata).toMatchObject({
+      routingDecision: 'approved',
+    });
     expect(events[4].metadata).toMatchObject({
       input_tokens: 20,
       output_tokens: 8,
