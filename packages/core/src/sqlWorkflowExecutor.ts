@@ -494,6 +494,75 @@ function appendEdgeToNodeMap(edgesByNodeId: Map<number, EdgeRow[]>, nodeId: numb
   edgesByNodeId.set(nodeId, [edge]);
 }
 
+function resolveApplicableRoutingDecision(
+  sourceNode: RunNodeExecutionRow,
+  latestRoutingDecisionsByRunNodeId: Map<number, RoutingDecisionRow>,
+  routingDecisionCountByRunNodeId: Map<number, number>,
+  latestArtifactsByRunNodeId: Map<number, LatestArtifact>,
+): RoutingDecisionRow | null {
+  const persistedDecision = latestRoutingDecisionsByRunNodeId.get(sourceNode.runNodeId) ?? null;
+  if (!persistedDecision) {
+    return null;
+  }
+
+  const decisionCount = routingDecisionCountByRunNodeId.get(sourceNode.runNodeId) ?? 0;
+  const latestArtifact = latestArtifactsByRunNodeId.get(sourceNode.runNodeId) ?? null;
+  const hasStaleAttempt =
+    (persistedDecision.attempt !== null && persistedDecision.attempt < sourceNode.attempt) ||
+    (persistedDecision.attempt === null && decisionCount < sourceNode.attempt);
+  const hasStaleTimestamp = latestArtifact !== null && persistedDecision.createdAt < latestArtifact.createdAt;
+  return hasStaleAttempt || hasStaleTimestamp ? null : persistedDecision;
+}
+
+function resolveCompletedSourceNodeRouting(
+  sourceNode: RunNodeExecutionRow,
+  outgoingEdges: EdgeRow[],
+  latestRoutingDecisionsByRunNodeId: Map<number, RoutingDecisionRow>,
+  routingDecisionCountByRunNodeId: Map<number, number>,
+  latestArtifactsByRunNodeId: Map<number, LatestArtifact>,
+): {
+  selectedEdgeId: number | null;
+  hasNoRouteDecision: boolean;
+  hasUnresolvedDecision: boolean;
+} {
+  if (outgoingEdges.length === 0) {
+    return {
+      selectedEdgeId: null,
+      hasNoRouteDecision: false,
+      hasUnresolvedDecision: false,
+    };
+  }
+
+  const decision = resolveApplicableRoutingDecision(
+    sourceNode,
+    latestRoutingDecisionsByRunNodeId,
+    routingDecisionCountByRunNodeId,
+    latestArtifactsByRunNodeId,
+  );
+  const matchingEdge = selectFirstMatchingOutgoingEdge(outgoingEdges, decision?.decisionType ?? null);
+  if (matchingEdge) {
+    return {
+      selectedEdgeId: matchingEdge.edgeId,
+      hasNoRouteDecision: false,
+      hasUnresolvedDecision: false,
+    };
+  }
+
+  if (decision) {
+    return {
+      selectedEdgeId: null,
+      hasNoRouteDecision: true,
+      hasUnresolvedDecision: false,
+    };
+  }
+
+  return {
+    selectedEdgeId: null,
+    hasNoRouteDecision: false,
+    hasUnresolvedDecision: true,
+  };
+}
+
 function buildRoutingSelection(
   latestNodeAttempts: RunNodeExecutionRow[],
   edges: EdgeRow[],
@@ -518,36 +587,22 @@ function buildRoutingSelection(
     }
 
     const outgoingEdges = outgoingEdgesBySourceNodeId.get(sourceNode.treeNodeId) ?? [];
-    if (outgoingEdges.length === 0) {
-      continue;
+    const routing = resolveCompletedSourceNodeRouting(
+      sourceNode,
+      outgoingEdges,
+      latestRoutingDecisionsByRunNodeId,
+      routingDecisionCountByRunNodeId,
+      latestArtifactsByRunNodeId,
+    );
+    if (routing.selectedEdgeId !== null) {
+      selectedEdgeIdBySourceNodeId.set(sourceNode.treeNodeId, routing.selectedEdgeId);
     }
-
-    const persistedDecision = latestRoutingDecisionsByRunNodeId.get(sourceNode.runNodeId) ?? null;
-    const decisionCount = routingDecisionCountByRunNodeId.get(sourceNode.runNodeId) ?? 0;
-    const latestArtifact = latestArtifactsByRunNodeId.get(sourceNode.runNodeId) ?? null;
-    const hasStaleAttempt =
-      persistedDecision !== null &&
-      ((persistedDecision.attempt !== null && persistedDecision.attempt < sourceNode.attempt) ||
-        (persistedDecision.attempt === null && decisionCount < sourceNode.attempt));
-    const hasStaleTimestamp =
-      persistedDecision !== null &&
-      latestArtifact !== null &&
-      persistedDecision.createdAt < latestArtifact.createdAt;
-    const decision =
-      persistedDecision && (hasStaleAttempt || hasStaleTimestamp) ? null : persistedDecision;
-    const decisionType = decision?.decisionType ?? null;
-    const matchingEdge = selectFirstMatchingOutgoingEdge(outgoingEdges, decisionType);
-    if (matchingEdge) {
-      selectedEdgeIdBySourceNodeId.set(sourceNode.treeNodeId, matchingEdge.edgeId);
-      continue;
-    }
-
-    if (decision) {
+    if (routing.hasNoRouteDecision) {
       hasNoRouteDecision = true;
-      continue;
     }
-
-    unresolvedDecisionSourceNodeIds.add(sourceNode.treeNodeId);
+    if (routing.hasUnresolvedDecision) {
+      unresolvedDecisionSourceNodeIds.add(sourceNode.treeNodeId);
+    }
   }
 
   return {

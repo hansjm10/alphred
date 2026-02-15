@@ -4331,14 +4331,16 @@ describe('createSqlWorkflowExecutor', () => {
       resolve(corePackageRoot, '../shared/dist'),
     ] as const;
 
-    await withDistDirectoriesTemporarilyHidden(distDirectories, async () => {
-      await runVitestSubprocess([
-        'packages/core/src/sqlWorkflowExecutor.test.ts',
-        '-t',
-        'covers design_tree approve path with deterministic persisted evidence across run tables',
-        '--reporter=dot',
-      ]);
-    });
+    await expect(
+      withDistDirectoriesTemporarilyHidden(distDirectories, async () => {
+        await runVitestSubprocess([
+          'packages/core/src/sqlWorkflowExecutor.test.ts',
+          '-t',
+          'covers design_tree approve path with deterministic persisted evidence across run tables',
+          '--reporter=dot',
+        ]);
+      }),
+    ).resolves.toBeUndefined();
   }, 30_000);
 
   it('covers design_tree revise loop path by returning to creation and completing after later approval', async () => {
