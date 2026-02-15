@@ -62,6 +62,22 @@ type ParsedOptions =
       message: string;
     };
 
+type ValidatedCommandOptions =
+  | {
+      ok: true;
+      options: Map<string, string>;
+    }
+  | {
+      ok: false;
+      exitCode: ExitCode;
+    };
+
+type CommandValidationConfig = {
+  commandName: string;
+  usage: string;
+  allowedOptions: readonly string[];
+};
+
 type DisplayRunNode = {
   id: number;
   nodeKey: string;
@@ -120,6 +136,12 @@ function printGeneralUsage(io: Pick<CliIo, 'stdout'>): void {
   io.stdout('  run --tree <tree_key>    Start and execute a workflow run');
   io.stdout('  status --run <run_id>    Show workflow run and node status');
   io.stdout('  list                     List available workflows (not implemented)');
+}
+
+function usageError(io: Pick<CliIo, 'stderr'>, message: string, usage: string): ExitCode {
+  io.stderr(message);
+  io.stderr(usage);
+  return EXIT_USAGE_ERROR;
 }
 
 function parseLongOptions(args: readonly string[]): ParsedOptions {
@@ -186,6 +208,64 @@ function parseLongOptions(args: readonly string[]): ParsedOptions {
     options,
     positionals,
   };
+}
+
+function validateCommandOptions(
+  rawArgs: readonly string[],
+  config: CommandValidationConfig,
+  io: Pick<CliIo, 'stderr'>,
+): ValidatedCommandOptions {
+  const parsedOptions = parseLongOptions(rawArgs);
+  if (!parsedOptions.ok) {
+    return {
+      ok: false,
+      exitCode: usageError(io, parsedOptions.message, config.usage),
+    };
+  }
+
+  const { options, positionals } = parsedOptions;
+  if (positionals.length > 0) {
+    return {
+      ok: false,
+      exitCode: usageError(
+        io,
+        `Unexpected positional arguments for "${config.commandName}": ${positionals.join(' ')}`,
+        config.usage,
+      ),
+    };
+  }
+
+  const allowedOptions = new Set(config.allowedOptions);
+  for (const optionName of options.keys()) {
+    if (allowedOptions.has(optionName)) {
+      continue;
+    }
+    return {
+      ok: false,
+      exitCode: usageError(io, `Unknown option for "${config.commandName}": --${optionName}`, config.usage),
+    };
+  }
+
+  return {
+    ok: true,
+    options,
+  };
+}
+
+function getRequiredOption(
+  options: ReadonlyMap<string, string>,
+  optionName: string,
+  optionDescription: string,
+  usage: string,
+  io: Pick<CliIo, 'stderr'>,
+): string | null {
+  const value = options.get(optionName);
+  if (value) {
+    return value;
+  }
+
+  usageError(io, `Missing required option: --${optionName} <${optionDescription}>`, usage);
+  return null;
 }
 
 function parseStrictPositiveInteger(value: string): number | null {
@@ -258,32 +338,21 @@ function selectLatestAttempts(rows: readonly DisplayRunNode[]): DisplayRunNode[]
 }
 
 async function handleRunCommand(rawArgs: readonly string[], dependencies: CliDependencies, io: CliIo): Promise<ExitCode> {
-  const parsedOptions = parseLongOptions(rawArgs);
+  const parsedOptions = validateCommandOptions(
+    rawArgs,
+    {
+      commandName: 'run',
+      usage: 'Usage: alphred run --tree <tree_key>',
+      allowedOptions: ['tree'],
+    },
+    io,
+  );
   if (!parsedOptions.ok) {
-    io.stderr(parsedOptions.message);
-    io.stderr('Usage: alphred run --tree <tree_key>');
-    return EXIT_USAGE_ERROR;
+    return parsedOptions.exitCode;
   }
 
-  const { options, positionals } = parsedOptions;
-  if (positionals.length > 0) {
-    io.stderr(`Unexpected positional arguments for "run": ${positionals.join(' ')}`);
-    io.stderr('Usage: alphred run --tree <tree_key>');
-    return EXIT_USAGE_ERROR;
-  }
-
-  for (const optionName of options.keys()) {
-    if (optionName !== 'tree') {
-      io.stderr(`Unknown option for "run": --${optionName}`);
-      io.stderr('Usage: alphred run --tree <tree_key>');
-      return EXIT_USAGE_ERROR;
-    }
-  }
-
-  const treeKey = options.get('tree');
+  const treeKey = getRequiredOption(parsedOptions.options, 'tree', 'tree_key', 'Usage: alphred run --tree <tree_key>', io);
   if (!treeKey) {
-    io.stderr('Missing required option: --tree <tree_key>');
-    io.stderr('Usage: alphred run --tree <tree_key>');
     return EXIT_USAGE_ERROR;
   }
 
@@ -330,32 +399,21 @@ async function handleStatusCommand(
   dependencies: CliDependencies,
   io: CliIo,
 ): Promise<ExitCode> {
-  const parsedOptions = parseLongOptions(rawArgs);
+  const parsedOptions = validateCommandOptions(
+    rawArgs,
+    {
+      commandName: 'status',
+      usage: 'Usage: alphred status --run <run_id>',
+      allowedOptions: ['run'],
+    },
+    io,
+  );
   if (!parsedOptions.ok) {
-    io.stderr(parsedOptions.message);
-    io.stderr('Usage: alphred status --run <run_id>');
-    return EXIT_USAGE_ERROR;
+    return parsedOptions.exitCode;
   }
 
-  const { options, positionals } = parsedOptions;
-  if (positionals.length > 0) {
-    io.stderr(`Unexpected positional arguments for "status": ${positionals.join(' ')}`);
-    io.stderr('Usage: alphred status --run <run_id>');
-    return EXIT_USAGE_ERROR;
-  }
-
-  for (const optionName of options.keys()) {
-    if (optionName !== 'run') {
-      io.stderr(`Unknown option for "status": --${optionName}`);
-      io.stderr('Usage: alphred status --run <run_id>');
-      return EXIT_USAGE_ERROR;
-    }
-  }
-
-  const runIdRaw = options.get('run');
+  const runIdRaw = getRequiredOption(parsedOptions.options, 'run', 'run_id', 'Usage: alphred status --run <run_id>', io);
   if (!runIdRaw) {
-    io.stderr('Missing required option: --run <run_id>');
-    io.stderr('Usage: alphred status --run <run_id>');
     return EXIT_USAGE_ERROR;
   }
 
@@ -444,24 +502,17 @@ async function handleStatusCommand(
 }
 
 async function handleListCommand(rawArgs: readonly string[], io: Pick<CliIo, 'stderr'>): Promise<ExitCode> {
-  const parsedOptions = parseLongOptions(rawArgs);
+  const parsedOptions = validateCommandOptions(
+    rawArgs,
+    {
+      commandName: 'list',
+      usage: 'Usage: alphred list',
+      allowedOptions: [],
+    },
+    io,
+  );
   if (!parsedOptions.ok) {
-    io.stderr(parsedOptions.message);
-    io.stderr('Usage: alphred list');
-    return EXIT_USAGE_ERROR;
-  }
-
-  const { options, positionals } = parsedOptions;
-  if (positionals.length > 0) {
-    io.stderr(`Unexpected positional arguments for "list": ${positionals.join(' ')}`);
-    io.stderr('Usage: alphred list');
-    return EXIT_USAGE_ERROR;
-  }
-
-  for (const optionName of options.keys()) {
-    io.stderr(`Unknown option for "list": --${optionName}`);
-    io.stderr('Usage: alphred list');
-    return EXIT_USAGE_ERROR;
+    return parsedOptions.exitCode;
   }
 
   io.stderr('The "list" command is not implemented yet.');
