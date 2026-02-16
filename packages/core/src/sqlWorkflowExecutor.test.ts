@@ -4395,6 +4395,32 @@ describe('createSqlWorkflowExecutor', () => {
     ).resolves.toBeUndefined();
   }, 30_000);
 
+  it.skip('covers design_tree routing paths end-to-end in a clean checkout without prebuilt dist artifacts', async () => {
+    const distDirectories = [
+      resolve(corePackageRoot, 'dist'),
+      resolve(corePackageRoot, '../db/dist'),
+      resolve(corePackageRoot, '../shared/dist'),
+    ] as const;
+
+    await expect(
+      withDistDirectoriesTemporarilyHidden(distDirectories, async () => {
+        await runVitestSubprocess([
+          'packages/core/src/sqlWorkflowExecutor.test.ts',
+          '-t',
+          'covers design_tree approve path with deterministic persisted evidence across run tables',
+          '--reporter=dot',
+        ]);
+
+        await runVitestSubprocess([
+          'packages/core/src/sqlWorkflowExecutor.test.ts',
+          '-t',
+          'covers design_tree revise loop path by returning to creation and completing after later approval',
+          '--reporter=dot',
+        ]);
+      }),
+    ).resolves.toBeUndefined();
+  }, 60_000);
+
   it('covers design_tree revise loop path by returning to creation and completing after later approval', async () => {
     const { db, runId, runNodeIdByKey } = seedDesignTreeIntegrationRun();
     let invocation = 0;
