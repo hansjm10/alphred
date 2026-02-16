@@ -150,8 +150,27 @@ function parseScopes(raw: string | undefined): string[] {
 
   return raw
     .split(',')
-    .map(scope => scope.trim().replace(/^['"]+|['"]+$/g, ''))
+    .map(scope => trimOuterQuotes(scope.trim()))
     .filter(scope => scope.length > 0);
+}
+
+function trimOuterQuotes(value: string): string {
+  let start = 0;
+  let end = value.length;
+
+  while (start < end && isQuote(value[start])) {
+    start += 1;
+  }
+
+  while (start < end && isQuote(value[end - 1])) {
+    end -= 1;
+  }
+
+  return value.slice(start, end);
+}
+
+function isQuote(char: string | undefined): boolean {
+  return char === '"' || char === '\'';
 }
 
 function createGitHubAuthError(error: unknown, hostname: string): string {

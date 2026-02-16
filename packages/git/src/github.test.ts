@@ -221,6 +221,23 @@ github.com
     );
   });
 
+  it('parses scopes with repeated quote characters', async () => {
+    execFileAsyncMock.mockResolvedValueOnce({
+      stdout: `
+github.com
+  ✓ Logged in to github.com account hansjm10 (keyring)
+  - Token scopes: ""repo"", '''read:org''', ""
+`,
+      stderr: '',
+    });
+
+    await expect(checkAuth()).resolves.toEqual({
+      authenticated: true,
+      user: 'hansjm10',
+      scopes: ['repo', 'read:org'],
+    });
+  });
+
   it('returns remediation guidance when not authenticated', async () => {
     execFileAsyncMock.mockRejectedValueOnce({
       stdout: '',
