@@ -49,6 +49,8 @@ function toRepositoryConfig(row: RepositoryRow): RepositoryConfig {
 
 export function insertRepository(db: AlphredDatabase, params: InsertRepositoryParams): RepositoryConfig {
   assertKnownProvider(params.provider);
+  const cloneStatus = params.cloneStatus ?? 'pending';
+  assertKnownCloneStatus(cloneStatus);
 
   const occurredAt = params.occurredAt ?? new Date().toISOString();
   const inserted = db
@@ -60,7 +62,7 @@ export function insertRepository(db: AlphredDatabase, params: InsertRepositoryPa
       remoteRef: params.remoteRef,
       defaultBranch: params.defaultBranch ?? 'main',
       localPath: params.localPath ?? null,
-      cloneStatus: params.cloneStatus ?? 'pending',
+      cloneStatus,
       createdAt: occurredAt,
       updatedAt: occurredAt,
     })

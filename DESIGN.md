@@ -194,7 +194,10 @@ SQL-first workflow topology and execution state are modeled with normalized tabl
     - Unique `name` prevents ambiguous repository aliases.
     - `provider` check enforces known SCM kinds (`github`, `azure-devops`).
     - `clone_status` check enforces lifecycle enum (`pending`, `cloned`, `error`).
-    - `name` and `created_at` indexes support lookup and listing hot paths.
+    - `created_at` index supports chronological listing hot paths.
+  - Write semantics:
+    - `remote_ref` is stored as a provider-scoped opaque identifier. Provider-specific shape validation is deferred to SCM adapter layers.
+    - Clone-status updates preserve `local_path` unless an explicit `local_path` value is supplied with the update.
 - `tree_nodes`
   - Phase template nodes (`node_key`, `node_type`, `provider`, `prompt_template_id`, retry policy).
   - Constraint/index rationale:

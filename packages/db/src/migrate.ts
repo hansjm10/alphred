@@ -66,8 +66,7 @@ export function migrateDatabase(db: AlphredDatabase): void {
   )`);
   tx.run(sql`CREATE UNIQUE INDEX IF NOT EXISTS repositories_name_uq
     ON repositories(name)`);
-  tx.run(sql`CREATE INDEX IF NOT EXISTS repositories_name_idx
-    ON repositories(name)`);
+  tx.run(sql`DROP INDEX IF EXISTS repositories_name_idx`);
   tx.run(sql`CREATE INDEX IF NOT EXISTS repositories_created_at_idx
     ON repositories(created_at)`);
 

@@ -1,4 +1,4 @@
-import type { ScmProviderKind } from '@alphred/shared';
+import type { CloneStatus, ScmProviderKind } from '@alphred/shared';
 import { describe, expect, it } from 'vitest';
 import { createDatabase } from './connection.js';
 import { migrateDatabase } from './migrate.js';
@@ -154,5 +154,44 @@ describe('repository registry CRUD helpers', () => {
         })
         .run(),
     ).toThrow('repositories_provider_ck');
+  });
+
+  it('validates clone-status kinds in helper and at DB level', () => {
+    const db = createMigratedDb();
+    const invalidCloneStatus = 'stuck' as CloneStatus;
+
+    expect(() =>
+      insertRepository(db, {
+        name: 'invalid-clone-status-helper',
+        provider: 'github',
+        remoteUrl: 'https://example.com/repo.git',
+        remoteRef: 'acme/repo',
+        cloneStatus: invalidCloneStatus,
+      }),
+    ).toThrow('Unknown clone status: stuck');
+
+    expect(() =>
+      db
+        .insert(repositories)
+        .values({
+          name: 'invalid-clone-status-db',
+          provider: 'github',
+          remoteUrl: 'https://example.com/repo.git',
+          remoteRef: 'acme/repo',
+          defaultBranch: 'main',
+          localPath: null,
+          cloneStatus: 'stuck' as never,
+          createdAt: '2026-01-01T00:00:00.000Z',
+          updatedAt: '2026-01-01T00:00:00.000Z',
+        })
+        .run(),
+    ).toThrow('repositories_clone_status_ck');
+  });
+
+  it('returns null for missing repositories by id and name', () => {
+    const db = createMigratedDb();
+
+    expect(getRepositoryById(db, 999)).toBeNull();
+    expect(getRepositoryByName(db, 'missing-repository')).toBeNull();
   });
 });

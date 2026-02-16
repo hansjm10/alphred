@@ -77,7 +77,6 @@ export const repositories = sqliteTable(
     nameUnique: uniqueIndex('repositories_name_uq').on(table.name),
     providerCheck: check('repositories_provider_ck', sql`${table.provider} in ('github', 'azure-devops')`),
     cloneStatusCheck: check('repositories_clone_status_ck', sql`${table.cloneStatus} in ('pending', 'cloned', 'error')`),
-    nameIdx: index('repositories_name_idx').on(table.name),
     createdAtIdx: index('repositories_created_at_idx').on(table.createdAt),
   }),
 );
