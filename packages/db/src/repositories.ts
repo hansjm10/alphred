@@ -5,8 +5,8 @@ import { repositories } from './schema.js';
 
 type RepositoryRow = typeof repositories.$inferSelect;
 
-const providerKinds: readonly ScmProviderKind[] = ['github', 'azure-devops'];
-const cloneStatuses: readonly CloneStatus[] = ['pending', 'cloned', 'error'];
+const providerKinds: ReadonlySet<ScmProviderKind> = new Set(['github', 'azure-devops']);
+const cloneStatuses: ReadonlySet<CloneStatus> = new Set(['pending', 'cloned', 'error']);
 
 export type InsertRepositoryParams = {
   name: string;
@@ -20,13 +20,13 @@ export type InsertRepositoryParams = {
 };
 
 function assertKnownProvider(provider: string): asserts provider is ScmProviderKind {
-  if (!providerKinds.includes(provider as ScmProviderKind)) {
+  if (!providerKinds.has(provider as ScmProviderKind)) {
     throw new Error(`Unknown SCM provider: ${provider}`);
   }
 }
 
 function assertKnownCloneStatus(cloneStatus: string): asserts cloneStatus is CloneStatus {
-  if (!cloneStatuses.includes(cloneStatus as CloneStatus)) {
+  if (!cloneStatuses.has(cloneStatus as CloneStatus)) {
     throw new Error(`Unknown clone status: ${cloneStatus}`);
   }
 }
