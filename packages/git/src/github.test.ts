@@ -278,4 +278,13 @@ github.example.com
     expect(status.error).toContain('Run: gh auth login --hostname github.example.com');
     expect(status.error).toContain('not logged in to github.example.com');
   });
+
+  it('returns a format error for malformed repo inputs', async () => {
+    const status = await checkAuthForRepo('https://github.com/owner/repo');
+
+    expect(status.authenticated).toBe(false);
+    expect(status.error).toContain('Invalid GitHub repo format');
+    expect(status.error).toContain('OWNER/REPO');
+    expect(execFileAsyncMock).not.toHaveBeenCalled();
+  });
 });

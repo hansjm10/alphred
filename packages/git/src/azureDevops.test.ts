@@ -262,8 +262,24 @@ describe('azure devops adapter', () => {
 
     expect(status.authenticated).toBe(false);
     expect(status.error).toContain('Run: az login');
-    expect(status.error).toContain('ALPHRED_AZURE_DEVOPS_PAT');
+    expect(status.error).not.toContain('ALPHRED_AZURE_DEVOPS_PAT');
     expect(status.error).toContain('az login required');
+  });
+
+  it('returns account-login guidance even when a PAT is present but account auth fails', async () => {
+    execFileAsyncMock.mockRejectedValueOnce({
+      stdout: '',
+      stderr: 'az login required',
+    });
+
+    const status = await checkAuth('org', {
+      ALPHRED_AZURE_DEVOPS_PAT: 'alphred-pat',
+    });
+
+    expect(status.authenticated).toBe(false);
+    expect(status.error).toContain('Run: az login');
+    expect(status.error).not.toContain('ALPHRED_AZURE_DEVOPS_PAT');
+    expect(execFileAsyncMock).toHaveBeenCalledTimes(1);
   });
 
   it('returns remediation guidance when devops auth is missing', async () => {

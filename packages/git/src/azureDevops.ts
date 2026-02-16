@@ -147,10 +147,7 @@ function parseAzureAccountUser(stdout: string): string | undefined {
 
 function createAzureLoginError(error: unknown): string {
   const details = extractErrorDetail(error);
-  const guidance = [
-    'Run: az login',
-    'Or set: ALPHRED_AZURE_DEVOPS_PAT=<your-pat> (or AZURE_DEVOPS_EXT_PAT)',
-  ].join(' | ');
+  const guidance = 'Run: az login';
 
   if (!details) {
     return `Azure CLI auth is not configured. ${guidance}`;

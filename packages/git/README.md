@@ -43,11 +43,14 @@ auth validation.
   because the current Azure adapter payload does not provide labels.
 - `checkAuth()` behavior:
   - GitHub runs `gh auth status --hostname <host>` where `<host>` is derived
-    from repo config (`[HOST/]OWNER/REPO`, default `github.com`)
+    from repo config (`OWNER/REPO` or `[HOST/]OWNER/REPO`, default
+    `github.com` for `OWNER/REPO` only). URL-style repo values (for example
+    `https://github.com/owner/repo`) are rejected as invalid config.
   - Azure runs `az account show` and
     `az devops project list --organization https://dev.azure.com/<org>`
+    after account auth succeeds.
   - On failure, auth status is returned with remediation text (login command or
-    env var guidance); no secrets are persisted by Alphred.
+    env var guidance where applicable); no secrets are persisted by Alphred.
   - Consumers are expected to invoke `checkAuth()` in their own pre-flight
     command flows.
 

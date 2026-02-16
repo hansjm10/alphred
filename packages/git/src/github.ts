@@ -85,7 +85,14 @@ export async function checkAuthForRepo(
   environment: NodeJS.ProcessEnv = process.env,
 ): Promise<AuthStatus> {
   const env = resolveGitHubEnvironment(environment);
-  const hostname = resolveGitHubHostname(repo);
+  const resolvedRepo = resolveGitHubHostname(repo);
+  if ('error' in resolvedRepo) {
+    return {
+      authenticated: false,
+      error: resolvedRepo.error,
+    };
+  }
+  const hostname = resolvedRepo.hostname;
 
   try {
     const { stdout, stderr } = await execFileAsync('gh', [
@@ -162,19 +169,28 @@ function createGitHubAuthError(error: unknown, hostname: string): string {
   return `GitHub auth is not configured. ${guidance}. CLI output: ${details}`;
 }
 
-function resolveGitHubHostname(repo: string): string {
+function resolveGitHubHostname(repo: string): { hostname: string } | { error: string } {
   const trimmedRepo = repo.trim();
   if (trimmedRepo.length === 0) {
-    return GITHUB_HOSTNAME;
+    return {
+      error: 'Invalid GitHub repo format. Expected OWNER/REPO or [HOST/]OWNER/REPO.',
+    };
   }
 
-  // gh supports [HOST/]OWNER/REPO. If HOST is omitted, default to github.com.
-  const segments = trimmedRepo.split('/');
-  if (segments.length === 3 && segments[0]?.trim().length) {
-    return segments[0].trim();
+  const segments = trimmedRepo.split('/').map(segment => segment.trim());
+
+  // gh supports OWNER/REPO and [HOST/]OWNER/REPO.
+  if (segments.length === 2 && segments.every(segment => segment.length > 0)) {
+    return { hostname: GITHUB_HOSTNAME };
   }
 
-  return GITHUB_HOSTNAME;
+  if (segments.length === 3 && segments.every(segment => segment.length > 0)) {
+    return { hostname: segments[0] };
+  }
+
+  return {
+    error: `Invalid GitHub repo format: ${repo}. Expected OWNER/REPO or [HOST/]OWNER/REPO.`,
+  };
 }
 
 function extractErrorDetail(error: unknown): string | undefined {
