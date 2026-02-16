@@ -273,7 +273,7 @@ describe('runPhase', () => {
         type: 'result',
         content: 'final report',
         timestamp: 100,
-        metadata: { routing_decision: 'unknown_signal' },
+        metadata: { routingDecision: 'unknown_signal' } as unknown as ProviderEvent['metadata'],
       },
     ];
 
@@ -284,17 +284,14 @@ describe('runPhase', () => {
     expect(result.routingDecision).toBeNull();
   });
 
-  it('falls back to routing_decision when routingDecision is present but unknown', async () => {
+  it('ignores legacy routing_decision metadata when canonical metadata is missing', async () => {
     const phase = createAgentPhase();
     const emittedEvents: ProviderEvent[] = [
       {
         type: 'result',
         content: 'final report',
         timestamp: 100,
-        metadata: {
-          routingDecision: 'unknown_signal',
-          routing_decision: 'approved',
-        } as unknown as ProviderEvent['metadata'],
+        metadata: { routing_decision: 'approved' } as unknown as ProviderEvent['metadata'],
       },
     ];
 
@@ -302,10 +299,10 @@ describe('runPhase', () => {
       resolveProvider: () => createProvider(emittedEvents),
     });
 
-    expect(result.routingDecision).toBe('approved');
+    expect(result.routingDecision).toBeNull();
   });
 
-  it('prefers routingDecision when both routing metadata keys are valid and conflicting', async () => {
+  it('uses canonical routingDecision when both canonical and legacy routing metadata keys are present', async () => {
     const phase = createAgentPhase();
     const emittedEvents: ProviderEvent[] = [
       {

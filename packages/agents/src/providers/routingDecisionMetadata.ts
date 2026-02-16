@@ -18,7 +18,7 @@ function toRoutingDecisionSignal(value: unknown): RoutingDecisionSignal | undefi
 
 function readRoutingDecisionFromMetadataRecords(
   metadataRecords: readonly (Record<string, unknown> | undefined)[],
-  key: 'routingDecision' | 'routing_decision',
+  key: 'routingDecision',
 ): RoutingDecisionSignal | undefined {
   for (const metadataRecord of metadataRecords) {
     if (!metadataRecord) {
@@ -54,8 +54,7 @@ export function createRoutingResultMetadata(
   readRecord: RecordReader,
 ): Record<string, unknown> | undefined {
   const metadataRecords = collectMetadataRecords(sdkPayload, readRecord);
-  const routingDecision = readRoutingDecisionFromMetadataRecords(metadataRecords, 'routingDecision')
-    ?? readRoutingDecisionFromMetadataRecords(metadataRecords, 'routing_decision');
+  const routingDecision = readRoutingDecisionFromMetadataRecords(metadataRecords, 'routingDecision');
 
   if (!routingDecision) {
     return undefined;

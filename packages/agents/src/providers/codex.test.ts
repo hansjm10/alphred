@@ -160,18 +160,18 @@ describe('codex provider', () => {
   });
 
   it('extracts routing decisions from supported codex sdk metadata locations', async () => {
-    const cases: { name: string; turnCompletedEvent: Record<string, unknown>; expectedRoutingDecision: RoutingDecisionSignal }[] = [
+    const cases: { name: string; turnCompletedEvent: Record<string, unknown>; expectedRoutingDecision: RoutingDecisionSignal | null }[] = [
       {
-        name: 'top-level routing_decision',
+        name: 'top-level routingDecision',
         turnCompletedEvent: {
-          routing_decision: 'approved',
+          routingDecision: 'approved',
         },
         expectedRoutingDecision: 'approved',
       },
       {
-        name: 'metadata.routing_decision',
+        name: 'metadata.routingDecision',
         turnCompletedEvent: {
-          metadata: { routing_decision: 'approved' },
+          metadata: { routingDecision: 'approved' },
         },
         expectedRoutingDecision: 'approved',
       },
@@ -183,9 +183,9 @@ describe('codex provider', () => {
         expectedRoutingDecision: 'approved',
       },
       {
-        name: 'resultMetadata.routing_decision',
+        name: 'resultMetadata.routingDecision',
         turnCompletedEvent: {
-          resultMetadata: { routing_decision: 'approved' },
+          resultMetadata: { routingDecision: 'approved' },
         },
         expectedRoutingDecision: 'approved',
       },
@@ -205,12 +205,12 @@ describe('codex provider', () => {
         expectedRoutingDecision: 'changes_requested',
       },
       {
-        name: 'falls back to legacy routing_decision when canonical value is unknown',
+        name: 'ignores legacy routing_decision when canonical value is unknown',
         turnCompletedEvent: {
           routingDecision: 'unknown_signal',
           resultMetadata: { routing_decision: 'blocked' },
         },
-        expectedRoutingDecision: 'blocked',
+        expectedRoutingDecision: null,
       },
     ];
 
@@ -243,7 +243,11 @@ describe('codex provider', () => {
       const events = await collectEvents(provider);
 
       expect(events.map((event) => event.type)).toEqual(['system', 'assistant', 'usage', 'result']);
-      expect(events[3].metadata).toMatchObject({ routingDecision: testCase.expectedRoutingDecision });
+      if (testCase.expectedRoutingDecision === null) {
+        expect(events[3].metadata).toBeUndefined();
+      } else {
+        expect(events[3].metadata).toMatchObject({ routingDecision: testCase.expectedRoutingDecision });
+      }
     }
   });
 
