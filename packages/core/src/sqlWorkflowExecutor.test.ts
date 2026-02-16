@@ -2091,6 +2091,78 @@ describe('createSqlWorkflowExecutor', () => {
     expect(resolveProvider).toHaveBeenCalledTimes(1);
   });
 
+  it('routes using a valid routing_decision when routingDecision is present but unknown', async () => {
+    const { db, runId, reviewRunNodeId, approvedRunNodeId } = seedDecisionRoutingRun();
+    const executor = createSqlWorkflowExecutor(db, {
+      resolveProvider: () => ({
+        async *run(): AsyncIterable<ProviderEvent> {
+          yield {
+            type: 'result',
+            content: 'Route using mixed metadata keys.',
+            timestamp: 10,
+            metadata: {
+              routingDecision: 'unknown_signal',
+              routing_decision: 'approved',
+            } as unknown as ProviderEvent['metadata'],
+          };
+        },
+      }),
+    });
+
+    const firstStep = await executor.executeNextRunnableNode({
+      workflowRunId: runId,
+      options: {
+        workingDirectory: '/tmp/alphred-worktree',
+      },
+    });
+
+    expect(firstStep).toEqual({
+      outcome: 'executed',
+      workflowRunId: runId,
+      runNodeId: reviewRunNodeId,
+      nodeKey: 'review',
+      runNodeStatus: 'completed',
+      runStatus: 'running',
+      artifactId: expect.any(Number),
+    });
+
+    const persistedReviewDecision = db
+      .select({
+        decisionType: routingDecisions.decisionType,
+        rawOutput: routingDecisions.rawOutput,
+      })
+      .from(routingDecisions)
+      .where(eq(routingDecisions.runNodeId, reviewRunNodeId))
+      .get();
+
+    expect(persistedReviewDecision).toEqual({
+      decisionType: 'approved',
+      rawOutput: {
+        source: 'provider_result_metadata',
+        routingDecision: 'approved',
+        selectedEdgeId: expect.any(Number),
+        attempt: 1,
+      },
+    });
+
+    const secondStep = await executor.executeNextRunnableNode({
+      workflowRunId: runId,
+      options: {
+        workingDirectory: '/tmp/alphred-worktree',
+      },
+    });
+
+    expect(secondStep).toEqual({
+      outcome: 'executed',
+      workflowRunId: runId,
+      runNodeId: approvedRunNodeId,
+      nodeKey: 'approved_target',
+      runNodeStatus: 'completed',
+      runStatus: 'completed',
+      artifactId: expect.any(Number),
+    });
+  });
+
   it('routes across auto edges without persisting a decision when no decision line is present', async () => {
     const { db, runId, sourceRunNodeId, targetRunNodeId } = seedLinearAutoRun();
     let runInvocation = 0;

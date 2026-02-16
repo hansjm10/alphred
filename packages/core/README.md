@@ -14,6 +14,11 @@ The SQL workflow executor reads routing intent from structured provider result m
   - `changes_requested`
   - `blocked`
   - `retry`
+- Canonical routing metadata contract is `metadata.routingDecision` with one of
+  the supported lowercase signal values above.
+- Runtime compatibility parsing may accept legacy key variants (for example,
+  `metadata.routing_decision`), but canonical metadata remains the preferred
+  provider output format.
 - Missing or invalid routing metadata is treated as no structured decision signal.
 - Legacy report text directives (for example, `decision: approved`) are not parsed for routing.
 - During rollout, providers that drive guarded routing must emit terminal `result.metadata.routingDecision`; otherwise guarded paths can persist `no_route` outcomes.
@@ -32,6 +37,8 @@ The SQL workflow executor reads routing intent from structured provider result m
 
 - A `routing_decisions` row is persisted for completed nodes when a valid structured routing signal is produced.
 - If no outgoing edge matches, `decisionType = no_route` is persisted with rationale and raw output metadata.
+- Missing or invalid routing metadata follows the same deterministic path by
+  persisting `decisionType = no_route` when guarded routing cannot be evaluated.
 - For metadata-derived rows, `rawOutput.source = provider_result_metadata` and `rawOutput.routingDecision` stores the structured signal (or `null` for `no_route`).
 - `rawOutput.attempt` is persisted for all metadata-derived decisions.
 - `rawOutput.selectedEdgeId` is included when a matching edge is selected.

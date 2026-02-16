@@ -141,19 +141,22 @@ function readRoutingDecision(event: ProviderEvent): RoutingDecisionSignal | null
     return null;
   }
 
-  const routingDecision = typeof event.metadata.routingDecision === 'string'
-    ? event.metadata.routingDecision
-    : (
-      typeof event.metadata.routing_decision === 'string'
-        ? event.metadata.routing_decision
-        : undefined
-    );
+  const routingDecisionCandidates = [
+    event.metadata.routingDecision,
+    event.metadata.routing_decision,
+  ];
 
-  if (!routingDecision || !routingDecisionSignalSet.has(routingDecision as RoutingDecisionSignal)) {
-    return null;
+  for (const candidate of routingDecisionCandidates) {
+    if (typeof candidate !== 'string') {
+      continue;
+    }
+
+    if (routingDecisionSignalSet.has(candidate as RoutingDecisionSignal)) {
+      return candidate as RoutingDecisionSignal;
+    }
   }
 
-  return routingDecision as RoutingDecisionSignal;
+  return null;
 }
 
 export async function runPhase(

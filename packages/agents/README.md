@@ -79,6 +79,12 @@ const provider = resolveProvider('codex');
   `system`, `assistant`, `result`, `tool_use`, `tool_result`, `usage`.
 - Providers can emit structured routing metadata on terminal results via
   `result.metadata.routingDecision` (`approved`, `changes_requested`, `blocked`, `retry`).
+- Canonical provider output contract for guarded routing is:
+  - key: `result.metadata.routingDecision`
+  - value: one of `approved`, `changes_requested`, `blocked`, `retry`
+- Compatibility parsing may accept legacy key variants (for example,
+  `routing_decision`) as input, but providers should emit canonical
+  `routingDecision`.
 - Providers that are used by guarded workflow routes should emit terminal
   `result.metadata.routingDecision`; legacy report text is not used by core routing.
 - Unknown provider names throw `UnknownAgentProviderError` with deterministic

@@ -284,6 +284,27 @@ describe('runPhase', () => {
     expect(result.routingDecision).toBeNull();
   });
 
+  it('falls back to routing_decision when routingDecision is present but unknown', async () => {
+    const phase = createAgentPhase();
+    const emittedEvents: ProviderEvent[] = [
+      {
+        type: 'result',
+        content: 'final report',
+        timestamp: 100,
+        metadata: {
+          routingDecision: 'unknown_signal',
+          routing_decision: 'approved',
+        } as unknown as ProviderEvent['metadata'],
+      },
+    ];
+
+    const result = await runPhase(phase, defaultOptions, {
+      resolveProvider: () => createProvider(emittedEvents),
+    });
+
+    expect(result.routingDecision).toBe('approved');
+  });
+
   it('throws when an agent phase is missing provider configuration', async () => {
     const phase: PhaseDefinition = {
       name: 'draft',
