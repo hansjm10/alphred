@@ -42,7 +42,7 @@ export class AzureDevOpsScmProvider implements ScmProvider {
       title: params.title,
       description: params.body,
       sourceBranch: params.sourceBranch,
-      ...(params.targetBranch !== undefined ? { targetBranch: params.targetBranch } : {}),
+      ...(params.targetBranch === undefined ? {} : { targetBranch: params.targetBranch }),
     });
 
     return {
