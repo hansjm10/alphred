@@ -136,8 +136,8 @@ export function updateRepositoryCloneStatus(
     updatedAt: occurredAt,
   };
 
-  if ('localPath' in params) {
-    updateValues.localPath = params.localPath ?? null;
+  if (params.localPath !== undefined) {
+    updateValues.localPath = params.localPath;
   }
 
   const updated = db

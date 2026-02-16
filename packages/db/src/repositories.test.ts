@@ -95,6 +95,27 @@ describe('repository registry CRUD helpers', () => {
     expect(updated.localPath).toBe('/tmp/alphred/mobile');
   });
 
+  it('preserves existing local path when clone-status update receives localPath as undefined', () => {
+    const db = createMigratedDb();
+    const inserted = insertRepository(db, {
+      name: 'api',
+      provider: 'github',
+      remoteUrl: 'https://github.com/acme/api.git',
+      remoteRef: 'acme/api',
+      localPath: '/tmp/alphred/api',
+      cloneStatus: 'cloned',
+    });
+
+    const updated = updateRepositoryCloneStatus(db, {
+      repositoryId: inserted.id,
+      cloneStatus: 'error',
+      localPath: undefined,
+    });
+
+    expect(updated.cloneStatus).toBe('error');
+    expect(updated.localPath).toBe('/tmp/alphred/api');
+  });
+
   it('throws when updating clone status for a missing repository id', () => {
     const db = createMigratedDb();
 
