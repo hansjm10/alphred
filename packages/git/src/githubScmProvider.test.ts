@@ -64,11 +64,39 @@ describe('GitHubScmProvider', () => {
     );
   });
 
+  it('passes undefined base branch when targetBranch is omitted', async () => {
+    createPullRequestMock.mockResolvedValueOnce('https://github.com/owner/repo/pull/456');
+
+    await expect(
+      provider.createPullRequest({
+        title: 'Add feature',
+        body: 'Body text',
+        sourceBranch: 'feat/branch',
+      }),
+    ).resolves.toEqual({
+      id: '456',
+      url: 'https://github.com/owner/repo/pull/456',
+      provider: 'github',
+    });
+
+    expect(createPullRequestMock).toHaveBeenCalledWith(
+      'owner/repo',
+      'Add feature',
+      'Body text',
+      'feat/branch',
+      undefined,
+    );
+  });
+
   it('rejects invalid issue ids', async () => {
     await expect(provider.getWorkItem('abc')).rejects.toThrow('Invalid GitHub issue id');
   });
 
-  it('leaves url as id when pull request id cannot be parsed', async () => {
+  it.each([0, -1, 1.5])('rejects non-positive or non-integer numeric issue id: %s', async (invalidId) => {
+    await expect(provider.getWorkItem(invalidId)).rejects.toThrow('Invalid GitHub issue id');
+  });
+
+  it('uses returned url as fallback id when pull request id cannot be parsed', async () => {
     createPullRequestMock.mockResolvedValueOnce('https://github.com/owner/repo/pulls');
 
     await expect(

@@ -54,5 +54,11 @@ function parsePositiveIntegerId(id: number | string, entityName: string): number
 
 function extractGitHubPullRequestId(url: string): string {
   const match = /\/pull\/(\d+)(?:[/?#]|$)/.exec(url);
-  return match?.[1] ?? url;
+  if (match?.[1]) {
+    return match[1];
+  }
+
+  // Keep id populated for callers even when the URL is not in the expected
+  // /pull/<number> form.
+  return url;
 }

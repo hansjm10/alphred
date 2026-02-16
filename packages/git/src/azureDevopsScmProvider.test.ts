@@ -70,8 +70,37 @@ describe('AzureDevOpsScmProvider', () => {
     );
   });
 
+  it('passes undefined target branch when targetBranch is omitted', async () => {
+    createPullRequestMock.mockResolvedValueOnce(88);
+
+    await expect(
+      provider.createPullRequest({
+        title: 'PR title',
+        body: 'PR description',
+        sourceBranch: 'feat/source',
+      }),
+    ).resolves.toEqual({
+      id: '88',
+      provider: 'azure-devops',
+    });
+
+    expect(createPullRequestMock).toHaveBeenCalledWith(
+      'org',
+      'proj',
+      'repo',
+      'PR title',
+      'PR description',
+      'feat/source',
+      undefined,
+    );
+  });
+
   it('rejects invalid work item ids', async () => {
     await expect(provider.getWorkItem('abc')).rejects.toThrow('Invalid Azure DevOps work item id');
+  });
+
+  it.each([0, -1, 1.5])('rejects non-positive or non-integer numeric work item id: %s', async (invalidId) => {
+    await expect(provider.getWorkItem(invalidId)).rejects.toThrow('Invalid Azure DevOps work item id');
   });
 
   it('exposes cloneRepo as a stub until clone support lands', async () => {
