@@ -127,6 +127,62 @@ const sdkStreamFixtures = {
       },
     },
   ] as const,
+  canonicalRoutingDecisionAcrossLocations: [
+    {
+      type: 'assistant',
+      message: {
+        content: [
+          {
+            type: 'text',
+            text: 'Canonical routing metadata should win across locations.',
+          },
+        ],
+      },
+      parent_tool_use_id: null,
+    },
+    {
+      type: 'result',
+      subtype: 'success',
+      result: 'Canonical routing metadata should win across locations.',
+      routing_decision: 'approved',
+      result_metadata: {
+        routingDecision: 'changes_requested',
+      },
+      usage: {
+        input_tokens: 16,
+        output_tokens: 6,
+        cache_read_input_tokens: 0,
+      },
+    },
+  ] as const,
+  invalidCanonicalRoutingDecisionFallbackAcrossLocations: [
+    {
+      type: 'assistant',
+      message: {
+        content: [
+          {
+            type: 'text',
+            text: 'Legacy routing metadata should be used as fallback.',
+          },
+        ],
+      },
+      parent_tool_use_id: null,
+    },
+    {
+      type: 'result',
+      subtype: 'success',
+      result: 'Legacy routing metadata should be used as fallback.',
+      routingDecision: 'unknown_signal',
+      resultMetadata: {
+        routing_decision: 'blocked',
+      },
+      usage: {
+        input_tokens: 14,
+        output_tokens: 5,
+        cache_read_input_tokens: 0,
+      },
+    },
+  ] as const,
   invalidRoutingDecision: [
     {
       type: 'assistant',
@@ -446,6 +502,30 @@ describe('claude provider sdk stream integration fixtures', () => {
     expect(events[3]?.content).toBe('Completed using legacy routing key metadata.');
     expect(events[3]?.metadata).toMatchObject({
       routingDecision: 'approved',
+    });
+  });
+
+  it('prefers canonical routingDecision across metadata locations when legacy key appears earlier', async () => {
+    const provider = createProviderForFixture(sdkStreamFixtures.canonicalRoutingDecisionAcrossLocations);
+
+    const events = await collectEvents(provider, 'Apply integration fixture tests.');
+
+    expect(events.map((event) => event.type)).toEqual(['system', 'assistant', 'usage', 'result']);
+    expect(events[3]?.content).toBe('Canonical routing metadata should win across locations.');
+    expect(events[3]?.metadata).toMatchObject({
+      routingDecision: 'changes_requested',
+    });
+  });
+
+  it('falls back to legacy routing_decision across metadata locations when canonical value is unsupported', async () => {
+    const provider = createProviderForFixture(sdkStreamFixtures.invalidCanonicalRoutingDecisionFallbackAcrossLocations);
+
+    const events = await collectEvents(provider, 'Apply integration fixture tests.');
+
+    expect(events.map((event) => event.type)).toEqual(['system', 'assistant', 'usage', 'result']);
+    expect(events[3]?.content).toBe('Legacy routing metadata should be used as fallback.');
+    expect(events[3]?.metadata).toMatchObject({
+      routingDecision: 'blocked',
     });
   });
 

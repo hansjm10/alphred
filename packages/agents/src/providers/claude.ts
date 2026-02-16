@@ -150,6 +150,24 @@ function toRoutingDecisionSignal(value: unknown): RoutingDecisionSignal | undefi
   return value as RoutingDecisionSignal;
 }
 
+function readRoutingDecisionFromMetadataRecords(
+  metadataRecords: readonly (Record<string, unknown> | undefined)[],
+  key: 'routingDecision' | 'routing_decision',
+): RoutingDecisionSignal | undefined {
+  for (const metadataRecord of metadataRecords) {
+    if (!metadataRecord) {
+      continue;
+    }
+
+    const routingDecision = toRoutingDecisionSignal(metadataRecord[key]);
+    if (routingDecision) {
+      return routingDecision;
+    }
+  }
+
+  return undefined;
+}
+
 function extractRoutingDecisionSignal(sdkMessage: Record<string, unknown>): RoutingDecisionSignal | undefined {
   const resultRecord = toRecord(sdkMessage.result);
   const metadataRecords: (Record<string, unknown> | undefined)[] = [
@@ -161,19 +179,8 @@ function extractRoutingDecisionSignal(sdkMessage: Record<string, unknown>): Rout
     resultRecord ? toRecord(resultRecord.metadata) : undefined,
   ];
 
-  for (const metadataRecord of metadataRecords) {
-    if (!metadataRecord) {
-      continue;
-    }
-
-    const routingDecision = toRoutingDecisionSignal(metadataRecord.routingDecision)
-      ?? toRoutingDecisionSignal(metadataRecord.routing_decision);
-    if (routingDecision) {
-      return routingDecision;
-    }
-  }
-
-  return undefined;
+  return readRoutingDecisionFromMetadataRecords(metadataRecords, 'routingDecision')
+    ?? readRoutingDecisionFromMetadataRecords(metadataRecords, 'routing_decision');
 }
 
 function createResultMetadata(sdkMessage: Record<string, unknown>): Record<string, unknown> | undefined {

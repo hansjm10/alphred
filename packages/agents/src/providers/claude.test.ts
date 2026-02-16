@@ -1,4 +1,4 @@
-import type { ProviderEvent, ProviderRunOptions } from '@alphred/shared';
+import type { ProviderEvent, ProviderRunOptions, RoutingDecisionSignal } from '@alphred/shared';
 import { describe, expect, it } from 'vitest';
 import {
   ClaudeProvider,
@@ -129,13 +129,14 @@ describe('claude provider', () => {
   });
 
   it('extracts routing decisions from supported claude sdk metadata locations', async () => {
-    const cases: { name: string; resultMessage: Record<string, unknown> }[] = [
+    const cases: { name: string; resultMessage: Record<string, unknown>; expectedRoutingDecision: RoutingDecisionSignal }[] = [
       {
         name: 'top-level routing_decision',
         resultMessage: {
           routing_decision: 'approved',
           result: 'done',
         },
+        expectedRoutingDecision: 'approved',
       },
       {
         name: 'metadata.routing_decision',
@@ -143,6 +144,7 @@ describe('claude provider', () => {
           metadata: { routing_decision: 'approved' },
           result: 'done',
         },
+        expectedRoutingDecision: 'approved',
       },
       {
         name: 'result_metadata.routingDecision',
@@ -150,6 +152,7 @@ describe('claude provider', () => {
           result_metadata: { routingDecision: 'approved' },
           result: 'done',
         },
+        expectedRoutingDecision: 'approved',
       },
       {
         name: 'resultMetadata.routing_decision',
@@ -157,12 +160,32 @@ describe('claude provider', () => {
           resultMetadata: { routing_decision: 'approved' },
           result: 'done',
         },
+        expectedRoutingDecision: 'approved',
       },
       {
         name: 'result.metadata.routingDecision',
         resultMessage: {
           result: { metadata: { routingDecision: 'approved' } },
         },
+        expectedRoutingDecision: 'approved',
+      },
+      {
+        name: 'prefers canonical routingDecision from later metadata locations',
+        resultMessage: {
+          routing_decision: 'approved',
+          result_metadata: { routingDecision: 'changes_requested' },
+          result: 'done',
+        },
+        expectedRoutingDecision: 'changes_requested',
+      },
+      {
+        name: 'falls back to legacy routing_decision when canonical value is unknown',
+        resultMessage: {
+          routingDecision: 'unknown_signal',
+          resultMetadata: { routing_decision: 'blocked' },
+          result: 'done',
+        },
+        expectedRoutingDecision: 'blocked',
       },
     ];
 
@@ -194,7 +217,7 @@ describe('claude provider', () => {
       const events = await collectEvents(provider);
 
       expect(events.map((event) => event.type)).toEqual(['system', 'assistant', 'usage', 'result']);
-      expect(events[3].metadata).toMatchObject({ routingDecision: 'approved' });
+      expect(events[3].metadata).toMatchObject({ routingDecision: testCase.expectedRoutingDecision });
     }
   });
 

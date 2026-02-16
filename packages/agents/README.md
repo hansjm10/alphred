@@ -85,9 +85,10 @@ const provider = resolveProvider('codex');
 - Compatibility parsing may accept legacy key variants (for example,
   `routing_decision`) as input, but providers should emit canonical
   `routingDecision`.
-- If both keys are present, providers prefer canonical `routingDecision` when it
-  contains a supported signal; legacy `routing_decision` is used only as
-  fallback when canonical metadata is missing or invalid.
+- If both keys are present across any supported metadata locations, providers
+  prefer canonical `routingDecision` when it contains a supported signal;
+  legacy `routing_decision` is used only as fallback when canonical metadata is
+  missing or invalid.
 - Unsupported routing metadata values are not emitted on terminal `result`
   events.
 - Providers that are used by guarded workflow routes should emit terminal

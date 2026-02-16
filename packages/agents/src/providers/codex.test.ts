@@ -1,4 +1,4 @@
-import type { ProviderEvent, ProviderRunOptions } from '@alphred/shared';
+import type { ProviderEvent, ProviderRunOptions, RoutingDecisionSignal } from '@alphred/shared';
 import type { Codex } from '@openai/codex-sdk';
 import { describe, expect, it } from 'vitest';
 import {
@@ -160,36 +160,57 @@ describe('codex provider', () => {
   });
 
   it('extracts routing decisions from supported codex sdk metadata locations', async () => {
-    const cases: { name: string; turnCompletedEvent: Record<string, unknown> }[] = [
+    const cases: { name: string; turnCompletedEvent: Record<string, unknown>; expectedRoutingDecision: RoutingDecisionSignal }[] = [
       {
         name: 'top-level routing_decision',
         turnCompletedEvent: {
           routing_decision: 'approved',
         },
+        expectedRoutingDecision: 'approved',
       },
       {
         name: 'metadata.routing_decision',
         turnCompletedEvent: {
           metadata: { routing_decision: 'approved' },
         },
+        expectedRoutingDecision: 'approved',
       },
       {
         name: 'result_metadata.routingDecision',
         turnCompletedEvent: {
           result_metadata: { routingDecision: 'approved' },
         },
+        expectedRoutingDecision: 'approved',
       },
       {
         name: 'resultMetadata.routing_decision',
         turnCompletedEvent: {
           resultMetadata: { routing_decision: 'approved' },
         },
+        expectedRoutingDecision: 'approved',
       },
       {
         name: 'result.metadata.routingDecision',
         turnCompletedEvent: {
           result: { metadata: { routingDecision: 'approved' } },
         },
+        expectedRoutingDecision: 'approved',
+      },
+      {
+        name: 'prefers canonical routingDecision from later metadata locations',
+        turnCompletedEvent: {
+          routing_decision: 'approved',
+          result_metadata: { routingDecision: 'changes_requested' },
+        },
+        expectedRoutingDecision: 'changes_requested',
+      },
+      {
+        name: 'falls back to legacy routing_decision when canonical value is unknown',
+        turnCompletedEvent: {
+          routingDecision: 'unknown_signal',
+          resultMetadata: { routing_decision: 'blocked' },
+        },
+        expectedRoutingDecision: 'blocked',
       },
     ];
 
@@ -222,7 +243,7 @@ describe('codex provider', () => {
       const events = await collectEvents(provider);
 
       expect(events.map((event) => event.type)).toEqual(['system', 'assistant', 'usage', 'result']);
-      expect(events[3].metadata).toMatchObject({ routingDecision: 'approved' });
+      expect(events[3].metadata).toMatchObject({ routingDecision: testCase.expectedRoutingDecision });
     }
   });
 
