@@ -23,16 +23,30 @@ Returned shapes are normalized via `@alphred/shared`:
 
 - `WorkItem`: `{ id, title, body, labels, provider }`
 - `PullRequestResult`: `{ id, url?, provider }`
+- `AuthStatus`: `{ authenticated, user?, scopes?, error? }`
+
+All provider implementations also support `checkAuth()` for pre-flight CLI
+auth validation.
 
 ## Behavior Notes
 
 - `cloneRepo(...)` is a placeholder in both providers and currently throws:
   `cloneRepo is not implemented yet. Tracked in the repo-clone issue.`
+- Credential env precedence for subprocess calls:
+  - GitHub: `ALPHRED_GH_TOKEN` over `GH_TOKEN`
+  - GitHub Enterprise: `ALPHRED_GH_ENTERPRISE_TOKEN` over `GH_ENTERPRISE_TOKEN`
+  - Azure DevOps: `ALPHRED_AZURE_DEVOPS_PAT` over `AZURE_DEVOPS_EXT_PAT`
 - `GitHubScmProvider.createPullRequest(...)` extracts a numeric PR id from URLs
   matching `/pull/<number>`. If parsing fails, it falls back to using the full
   URL as `PullRequestResult.id`.
 - `AzureDevOpsScmProvider.getWorkItem(...)` currently maps `labels` to `[]`
   because the current Azure adapter payload does not provide labels.
+- `checkAuth()` behavior:
+  - GitHub runs `gh auth status --hostname github.com`
+  - Azure runs `az account show` and
+    `az devops project list --organization https://dev.azure.com/<org>`
+  - On failure, auth status is returned with remediation text (login command or
+    env var guidance); no secrets are persisted by Alphred.
 
 ## Backward Compatibility
 

@@ -1,7 +1,9 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import type { AuthStatus } from '@alphred/shared';
 
 const execFileAsync = promisify(execFile);
+const AZURE_DEVOPS_BASE_URL = 'https://dev.azure.com';
 
 export type AzureWorkItem = {
   id: number;
@@ -14,14 +16,16 @@ export async function getWorkItem(
   organization: string,
   project: string,
   workItemId: number,
+  environment: NodeJS.ProcessEnv = process.env,
 ): Promise<AzureWorkItem> {
+  const env = resolveAzureEnvironment(environment);
   const { stdout } = await execFileAsync('az', [
     'boards', 'work-item', 'show',
     '--id', String(workItemId),
-    '--org', `https://dev.azure.com/${organization}`,
+    '--org', `${AZURE_DEVOPS_BASE_URL}/${organization}`,
     '--project', project,
     '--output', 'json',
-  ]);
+  ], { env });
 
   const data = JSON.parse(stdout) as { id: number; fields: Record<string, string> };
   return {
@@ -40,10 +44,12 @@ export async function createPullRequest(
   description: string,
   sourceBranch: string,
   targetBranch = 'main',
+  environment: NodeJS.ProcessEnv = process.env,
 ): Promise<number> {
+  const env = resolveAzureEnvironment(environment);
   const { stdout } = await execFileAsync('az', [
     'repos', 'pr', 'create',
-    '--org', `https://dev.azure.com/${organization}`,
+    '--org', `${AZURE_DEVOPS_BASE_URL}/${organization}`,
     '--project', project,
     '--repository', repository,
     '--title', title,
@@ -51,8 +57,142 @@ export async function createPullRequest(
     '--source-branch', sourceBranch,
     '--target-branch', targetBranch,
     '--output', 'json',
-  ]);
+  ], { env });
 
   const data = JSON.parse(stdout) as { pullRequestId: number };
   return data.pullRequestId;
+}
+
+export async function checkAuth(
+  organization: string,
+  environment: NodeJS.ProcessEnv = process.env,
+): Promise<AuthStatus> {
+  const env = resolveAzureEnvironment(environment);
+
+  const account = await checkAzureAccountAuth(env);
+  if (!account.ok) {
+    return {
+      authenticated: false,
+      error: account.error,
+    };
+  }
+
+  const organizationUrl = `${AZURE_DEVOPS_BASE_URL}/${organization}`;
+  try {
+    await execFileAsync('az', [
+      'devops',
+      'project',
+      'list',
+      '--organization',
+      organizationUrl,
+      '--output',
+      'json',
+    ], { env });
+  } catch (error) {
+    return {
+      authenticated: false,
+      error: createAzureDevOpsLoginError(error, organizationUrl),
+    };
+  }
+
+  return {
+    authenticated: true,
+    user: account.user,
+  };
+}
+
+function resolveAzureEnvironment(environment: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const env = { ...environment };
+  const azureDevopsPat = environment.ALPHRED_AZURE_DEVOPS_PAT ?? environment.AZURE_DEVOPS_EXT_PAT;
+  if (azureDevopsPat !== undefined) {
+    env.AZURE_DEVOPS_EXT_PAT = azureDevopsPat;
+  }
+
+  return env;
+}
+
+async function checkAzureAccountAuth(
+  env: NodeJS.ProcessEnv,
+): Promise<{ ok: true; user?: string } | { ok: false; error: string }> {
+  try {
+    const { stdout } = await execFileAsync('az', ['account', 'show', '--output', 'json'], { env });
+    const user = parseAzureAccountUser(stdout);
+
+    return {
+      ok: true,
+      user,
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      error: createAzureLoginError(error),
+    };
+  }
+}
+
+function parseAzureAccountUser(stdout: string): string | undefined {
+  try {
+    const parsed = JSON.parse(stdout) as {
+      user?: {
+        name?: string;
+      };
+    };
+
+    const userName = parsed.user?.name;
+    return typeof userName === 'string' && userName.trim().length > 0 ? userName : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function createAzureLoginError(error: unknown): string {
+  const details = extractErrorDetail(error);
+  const guidance = [
+    'Run: az login',
+    'Or set: ALPHRED_AZURE_DEVOPS_PAT=<your-pat> (or AZURE_DEVOPS_EXT_PAT)',
+  ].join(' | ');
+
+  if (!details) {
+    return `Azure CLI auth is not configured. ${guidance}`;
+  }
+
+  return `Azure CLI auth is not configured. ${guidance}. CLI output: ${details}`;
+}
+
+function createAzureDevOpsLoginError(error: unknown, organizationUrl: string): string {
+  const details = extractErrorDetail(error);
+  const guidance = [
+    `Run: az devops login --organization ${organizationUrl}`,
+    'Or set: ALPHRED_AZURE_DEVOPS_PAT=<your-pat> (or AZURE_DEVOPS_EXT_PAT)',
+  ].join(' | ');
+
+  if (!details) {
+    return `Azure DevOps auth is not configured. ${guidance}`;
+  }
+
+  return `Azure DevOps auth is not configured. ${guidance}. CLI output: ${details}`;
+}
+
+function extractErrorDetail(error: unknown): string | undefined {
+  if (typeof error === 'object' && error !== null) {
+    const maybeStdout = (error as { stdout?: unknown }).stdout;
+    const maybeStderr = (error as { stderr?: unknown }).stderr;
+    const stdout = typeof maybeStdout === 'string' ? maybeStdout : '';
+    const stderr = typeof maybeStderr === 'string' ? maybeStderr : '';
+    const combined = `${stdout}\n${stderr}`
+      .split('\n')
+      .map(line => line.trim())
+      .filter(Boolean)
+      .join(' ');
+
+    if (combined.length > 0) {
+      return combined;
+    }
+  }
+
+  if (error instanceof Error && error.message.trim().length > 0) {
+    return error.message.trim();
+  }
+
+  return undefined;
 }

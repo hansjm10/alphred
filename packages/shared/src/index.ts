@@ -46,6 +46,14 @@ export type PullRequestResult = {
   provider: ScmProviderKind;
 };
 
+// SCM auth status
+export type AuthStatus = {
+  authenticated: boolean;
+  user?: string;
+  scopes?: string[];
+  error?: string;
+};
+
 // Guard operator types
 export type GuardOperator = '==' | '!=' | '>' | '<' | '>=' | '<=';
 export type GuardLogical = 'and' | 'or';

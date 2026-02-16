@@ -1,5 +1,5 @@
-import type { CreatePrParams, PullRequestResult, WorkItem } from '@alphred/shared';
-import { createPullRequest as createGitHubPullRequest, getIssue } from './github.js';
+import type { AuthStatus, CreatePrParams, PullRequestResult, WorkItem } from '@alphred/shared';
+import { checkAuth as checkGitHubAuth, createPullRequest as createGitHubPullRequest, getIssue } from './github.js';
 import type { GitHubScmProviderConfig, ScmProvider } from './scmProvider.js';
 
 const CLONE_STUB_MESSAGE = 'cloneRepo is not implemented yet. Tracked in the repo-clone issue.';
@@ -8,6 +8,10 @@ export class GitHubScmProvider implements ScmProvider {
   readonly kind = 'github';
 
   constructor(private readonly config: GitHubScmProviderConfig) {}
+
+  async checkAuth(): Promise<AuthStatus> {
+    return checkGitHubAuth();
+  }
 
   async cloneRepo(_remote: string, _localPath: string): Promise<void> {
     throw new Error(CLONE_STUB_MESSAGE);

@@ -1,11 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { createPullRequestMock, getWorkItemMock } = vi.hoisted(() => ({
+const { checkAuthMock, createPullRequestMock, getWorkItemMock } = vi.hoisted(() => ({
+  checkAuthMock: vi.fn(),
   createPullRequestMock: vi.fn(),
   getWorkItemMock: vi.fn(),
 }));
 
 vi.mock('./azureDevops.js', () => ({
+  checkAuth: checkAuthMock,
   createPullRequest: createPullRequestMock,
   getWorkItem: getWorkItemMock,
 }));
@@ -21,8 +23,23 @@ describe('AzureDevOpsScmProvider', () => {
   });
 
   beforeEach(() => {
+    checkAuthMock.mockReset();
     createPullRequestMock.mockReset();
     getWorkItemMock.mockReset();
+  });
+
+  it('delegates auth checks to the azure devops adapter', async () => {
+    checkAuthMock.mockResolvedValueOnce({
+      authenticated: true,
+      user: 'jordan@example.com',
+    });
+
+    await expect(provider.checkAuth()).resolves.toEqual({
+      authenticated: true,
+      user: 'jordan@example.com',
+    });
+
+    expect(checkAuthMock).toHaveBeenCalledWith('org');
   });
 
   it('normalizes azure devops work item responses', async () => {

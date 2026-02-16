@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   compareStringsByCodeUnit,
+  type AuthStatus,
   type CreatePrParams,
   type PullRequestResult,
   type RunStatus,
@@ -85,5 +86,21 @@ describe('shared types', () => {
     expect(workItem.labels).toContain('bug');
     expect(prParams.targetBranch).toBe('main');
     expect(prResult.id).toBe('123');
+  });
+
+  it('should type-check scm auth status', () => {
+    const ok: AuthStatus = {
+      authenticated: true,
+      user: 'hansjm10',
+      scopes: ['repo', 'read:org'],
+    };
+
+    const notOk: AuthStatus = {
+      authenticated: false,
+      error: 'GitHub auth is not configured.',
+    };
+
+    expect(ok.authenticated).toBe(true);
+    expect(notOk.error).toContain('not configured');
   });
 });

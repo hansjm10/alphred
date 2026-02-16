@@ -1,5 +1,9 @@
-import type { CreatePrParams, PullRequestResult, WorkItem } from '@alphred/shared';
-import { createPullRequest as createAzurePullRequest, getWorkItem as getAzureWorkItem } from './azureDevops.js';
+import type { AuthStatus, CreatePrParams, PullRequestResult, WorkItem } from '@alphred/shared';
+import {
+  checkAuth as checkAzureDevOpsAuth,
+  createPullRequest as createAzurePullRequest,
+  getWorkItem as getAzureWorkItem,
+} from './azureDevops.js';
 import type { AzureDevOpsScmProviderConfig, ScmProvider } from './scmProvider.js';
 
 const CLONE_STUB_MESSAGE = 'cloneRepo is not implemented yet. Tracked in the repo-clone issue.';
@@ -8,6 +12,10 @@ export class AzureDevOpsScmProvider implements ScmProvider {
   readonly kind = 'azure-devops';
 
   constructor(private readonly config: AzureDevOpsScmProviderConfig) {}
+
+  async checkAuth(): Promise<AuthStatus> {
+    return checkAzureDevOpsAuth(this.config.organization);
+  }
 
   async cloneRepo(_remote: string, _localPath: string): Promise<void> {
     throw new Error(CLONE_STUB_MESSAGE);
