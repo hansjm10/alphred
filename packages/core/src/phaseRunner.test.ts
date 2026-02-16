@@ -57,6 +57,7 @@ describe('runPhase', () => {
     expect(result).toEqual({
       success: true,
       report: 'final report',
+      routingDecision: null,
       events: emittedEvents,
       tokensUsed: 13,
     });
@@ -247,6 +248,84 @@ describe('runPhase', () => {
     expect(result.tokensUsed).toBe(40);
   });
 
+  it('extracts a structured routing decision from result metadata', async () => {
+    const phase = createAgentPhase();
+    const emittedEvents: ProviderEvent[] = [
+      {
+        type: 'result',
+        content: 'final report',
+        timestamp: 100,
+        metadata: { routingDecision: 'approved' },
+      },
+    ];
+
+    const result = await runPhase(phase, defaultOptions, {
+      resolveProvider: () => createProvider(emittedEvents),
+    });
+
+    expect(result.routingDecision).toBe('approved');
+  });
+
+  it('treats unknown routing decision metadata as missing', async () => {
+    const phase = createAgentPhase();
+    const emittedEvents: ProviderEvent[] = [
+      {
+        type: 'result',
+        content: 'final report',
+        timestamp: 100,
+        metadata: { routing_decision: 'unknown_signal' },
+      },
+    ];
+
+    const result = await runPhase(phase, defaultOptions, {
+      resolveProvider: () => createProvider(emittedEvents),
+    });
+
+    expect(result.routingDecision).toBeNull();
+  });
+
+  it('falls back to routing_decision when routingDecision is present but unknown', async () => {
+    const phase = createAgentPhase();
+    const emittedEvents: ProviderEvent[] = [
+      {
+        type: 'result',
+        content: 'final report',
+        timestamp: 100,
+        metadata: {
+          routingDecision: 'unknown_signal',
+          routing_decision: 'approved',
+        } as unknown as ProviderEvent['metadata'],
+      },
+    ];
+
+    const result = await runPhase(phase, defaultOptions, {
+      resolveProvider: () => createProvider(emittedEvents),
+    });
+
+    expect(result.routingDecision).toBe('approved');
+  });
+
+  it('prefers routingDecision when both routing metadata keys are valid and conflicting', async () => {
+    const phase = createAgentPhase();
+    const emittedEvents: ProviderEvent[] = [
+      {
+        type: 'result',
+        content: 'final report',
+        timestamp: 100,
+        metadata: {
+          routingDecision: 'changes_requested',
+          routing_decision: 'approved',
+        } as unknown as ProviderEvent['metadata'],
+      },
+    ];
+
+    const result = await runPhase(phase, defaultOptions, {
+      resolveProvider: () => createProvider(emittedEvents),
+    });
+
+    expect(result.routingDecision).toBe('changes_requested');
+  });
+
   it('throws when an agent phase is missing provider configuration', async () => {
     const phase: PhaseDefinition = {
       name: 'draft',
@@ -305,6 +384,7 @@ describe('runPhase', () => {
     expect(result).toEqual({
       success: true,
       report: '',
+      routingDecision: null,
       events: [],
       tokensUsed: 0,
     });

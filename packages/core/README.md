@@ -4,20 +4,29 @@ Provider-agnostic workflow runtime behavior.
 
 ## SQL Workflow Executor Routing Contract
 
-The SQL workflow executor parses routing intent from phase reports and resolves outgoing edges deterministically.
+The SQL workflow executor reads routing intent from structured provider result metadata and resolves outgoing edges deterministically.
 
-### Decision Directive Grammar
+### Structured Routing Metadata
 
-- Accepted format: a full line containing `decision: <signal>`.
-- Keyword matching is ASCII case-insensitive (`decision`, `DeCiSion`, etc.).
-- Leading/trailing ASCII whitespace is allowed.
-- `<signal>` must be one of:
+- Terminal `result` events may include `metadata.routingDecision`.
+- Supported routing decision signals:
   - `approved`
   - `changes_requested`
   - `blocked`
   - `retry`
-- Extra non-whitespace tokens on the directive line are rejected.
-  - Example: `decision: approved.` is not accepted.
+- Canonical routing metadata contract is `metadata.routingDecision` with one of
+  the supported lowercase signal values above.
+- Runtime compatibility parsing may accept legacy key variants (for example,
+  `metadata.routing_decision`), but canonical metadata remains the preferred
+  provider output format.
+- When both keys are present, canonical `metadata.routingDecision` is used when
+  it is valid; `metadata.routing_decision` is only a fallback when canonical
+  metadata is missing or invalid.
+- Missing or invalid routing metadata is treated as no structured decision signal.
+- Unsupported routing signal values are treated as invalid metadata and follow
+  the same `no_route` behavior.
+- Legacy report text directives (for example, `decision: approved`) are not parsed for routing.
+- During rollout, providers that drive guarded routing must emit terminal `result.metadata.routingDecision`; otherwise guarded paths can persist `no_route` outcomes.
 
 ### Edge Selection Semantics
 
@@ -31,8 +40,14 @@ The SQL workflow executor parses routing intent from phase reports and resolves 
 
 ### Routing Decision Persistence
 
-- A `routing_decisions` row is persisted for completed nodes when routing metadata is produced.
+- A `routing_decisions` row is persisted for completed nodes when a valid structured routing signal is produced.
 - If no outgoing edge matches, `decisionType = no_route` is persisted with rationale and raw output metadata.
+- Missing or invalid routing metadata follows the same deterministic path by
+  persisting `decisionType = no_route` when guarded routing cannot be evaluated.
+- For metadata-derived rows, `rawOutput.source = provider_result_metadata` and `rawOutput.routingDecision` stores the structured signal (or `null` for `no_route`).
+- `rawOutput.attempt` is persisted for all metadata-derived decisions.
+- `rawOutput.selectedEdgeId` is included when a matching edge is selected.
+- `rawOutput.outgoingEdgeIds` is included for `no_route` rows to record evaluated candidates.
 
 ### No-Route and Unresolved Behavior
 

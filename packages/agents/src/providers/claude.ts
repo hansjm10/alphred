@@ -13,6 +13,7 @@ import {
   type ClaudeSdkBootstrap,
   initializeClaudeSdkBootstrap,
 } from './claudeSdkBootstrap.js';
+import { createRoutingResultMetadata } from './routingDecisionMetadata.js';
 
 const claudeEventTypeAliases: Readonly<Record<string, ProviderEvent['type']>> = Object.freeze({
   text: 'assistant',
@@ -134,6 +135,10 @@ function toTrimmedString(value: unknown): string | undefined {
 
   const trimmed = stringValue.trim();
   return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function createResultMetadata(sdkMessage: Record<string, unknown>): Record<string, unknown> | undefined {
+  return createRoutingResultMetadata(sdkMessage, toRecord);
 }
 
 function toStringOrThrow(value: unknown, eventIndex: number, fieldPath: string): string {
@@ -743,6 +748,7 @@ function mapResultMessage(sdkMessage: Record<string, unknown>, state: ClaudeStre
   const usage = toRecordOrThrow(sdkMessage.usage, eventIndex, 'event.usage');
   const usageMetadata = createUsageMetadata(usage, eventIndex);
   const result = toString(sdkMessage.result) ?? state.lastAssistantMessage;
+  const resultMetadata = createResultMetadata(sdkMessage);
 
   return [
     {
@@ -752,6 +758,7 @@ function mapResultMessage(sdkMessage: Record<string, unknown>, state: ClaudeStre
     {
       type: 'result',
       content: result,
+      metadata: resultMetadata,
     },
   ];
 }

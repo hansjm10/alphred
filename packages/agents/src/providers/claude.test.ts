@@ -1,9 +1,10 @@
-import type { ProviderEvent, ProviderRunOptions } from '@alphred/shared';
+import type { ProviderEvent, ProviderRunOptions, RoutingDecisionSignal } from '@alphred/shared';
 import { describe, expect, it } from 'vitest';
 import {
   ClaudeProvider,
   ClaudeProviderError,
   type ClaudeBootstrapper,
+  type ClaudeSdkQuery,
   type ClaudeRawEvent,
   type ClaudeRunRequest,
 } from './claude.js';
@@ -32,6 +33,21 @@ function createNoopBootstrap(): ReturnType<ClaudeBootstrapper> {
 
 function createProvider(runner: (request: ClaudeRunRequest) => AsyncIterable<ClaudeRawEvent>): ClaudeProvider {
   return new ClaudeProvider(runner, () => createNoopBootstrap());
+}
+
+function createQueryProvider(messages: readonly unknown[]): ClaudeProvider {
+  return new ClaudeProvider(
+    undefined,
+    () => createNoopBootstrap(),
+    ((params: { prompt: string | AsyncIterable<unknown>; options?: unknown }) => {
+      void params;
+      return (async function* () {
+        for (const message of messages) {
+          yield message;
+        }
+      })();
+    }) as unknown as ClaudeSdkQuery,
+  );
 }
 
 async function collectEvents(
@@ -93,6 +109,116 @@ describe('claude provider', () => {
 
     expect(events.map((event) => event.type)).toEqual(['system', 'usage', 'result']);
     expect(events[1].metadata).toEqual({ tokens: 30 });
+  });
+
+  it('preserves structured routingDecision metadata on result events', async () => {
+    const provider = createProvider(
+      createRunner([
+        {
+          type: 'result',
+          content: 'done',
+          metadata: { routingDecision: 'approved' },
+        },
+      ]),
+    );
+
+    const events = await collectEvents(provider);
+
+    expect(events.map((event) => event.type)).toEqual(['system', 'result']);
+    expect(events[1].metadata).toMatchObject({ routingDecision: 'approved' });
+  });
+
+  it('extracts routing decisions from supported claude sdk metadata locations', async () => {
+    const cases: { name: string; resultMessage: Record<string, unknown>; expectedRoutingDecision: RoutingDecisionSignal }[] = [
+      {
+        name: 'top-level routing_decision',
+        resultMessage: {
+          routing_decision: 'approved',
+          result: 'done',
+        },
+        expectedRoutingDecision: 'approved',
+      },
+      {
+        name: 'metadata.routing_decision',
+        resultMessage: {
+          metadata: { routing_decision: 'approved' },
+          result: 'done',
+        },
+        expectedRoutingDecision: 'approved',
+      },
+      {
+        name: 'result_metadata.routingDecision',
+        resultMessage: {
+          result_metadata: { routingDecision: 'approved' },
+          result: 'done',
+        },
+        expectedRoutingDecision: 'approved',
+      },
+      {
+        name: 'resultMetadata.routing_decision',
+        resultMessage: {
+          resultMetadata: { routing_decision: 'approved' },
+          result: 'done',
+        },
+        expectedRoutingDecision: 'approved',
+      },
+      {
+        name: 'result.metadata.routingDecision',
+        resultMessage: {
+          result: { metadata: { routingDecision: 'approved' } },
+        },
+        expectedRoutingDecision: 'approved',
+      },
+      {
+        name: 'prefers canonical routingDecision from later metadata locations',
+        resultMessage: {
+          routing_decision: 'approved',
+          result_metadata: { routingDecision: 'changes_requested' },
+          result: 'done',
+        },
+        expectedRoutingDecision: 'changes_requested',
+      },
+      {
+        name: 'falls back to legacy routing_decision when canonical value is unknown',
+        resultMessage: {
+          routingDecision: 'unknown_signal',
+          resultMetadata: { routing_decision: 'blocked' },
+          result: 'done',
+        },
+        expectedRoutingDecision: 'blocked',
+      },
+    ];
+
+    for (const testCase of cases) {
+      const provider = createQueryProvider([
+        {
+          type: 'assistant',
+          message: {
+            content: [
+              {
+                type: 'text',
+                text: 'Fallback assistant content.',
+              },
+            ],
+          },
+          parent_tool_use_id: null,
+        },
+        {
+          type: 'result',
+          subtype: 'success',
+          usage: {
+            input_tokens: 4,
+            output_tokens: 2,
+          },
+          ...testCase.resultMessage,
+        },
+      ]);
+
+      const events = await collectEvents(provider);
+
+      expect(events.map((event) => event.type)).toEqual(['system', 'assistant', 'usage', 'result']);
+      expect(events[3].metadata).toMatchObject({ routingDecision: testCase.expectedRoutingDecision });
+    }
   });
 
   it('bridges working directory and prompt options into the claude runner request', async () => {

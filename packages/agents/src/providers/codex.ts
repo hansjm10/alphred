@@ -9,6 +9,7 @@ import {
   runAdapterProvider,
 } from './adapterProviderCore.js';
 import { CodexBootstrapError, type CodexSdkBootstrap, initializeCodexSdkBootstrap } from './codexSdkBootstrap.js';
+import { createRoutingResultMetadata } from './routingDecisionMetadata.js';
 
 export type CodexProviderErrorCode =
   | 'CODEX_AUTH_ERROR'
@@ -111,6 +112,10 @@ function toTrimmedString(value: unknown): string | undefined {
 
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function createResultMetadata(sdkEvent: Record<string, unknown>): Record<string, unknown> | undefined {
+  return createRoutingResultMetadata(sdkEvent, toRecord);
 }
 
 function collectFailureRecords(source: unknown): Record<string, unknown>[] {
@@ -639,6 +644,7 @@ function mapSdkStreamEvent(
         eventIndex,
         'event.usage.cached_input_tokens',
       );
+      const resultMetadata = createResultMetadata(sdkEvent);
 
       return [
         {
@@ -652,6 +658,7 @@ function mapSdkStreamEvent(
         {
           type: 'result',
           content: state.lastAssistantMessage,
+          metadata: resultMetadata,
         },
       ];
     }

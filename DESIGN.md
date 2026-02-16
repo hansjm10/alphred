@@ -131,6 +131,7 @@ Constraint:
 Current event contract (`@alphred/shared`):
 - Event types: `system`, `assistant`, `result`, `tool_use`, `tool_result`, `usage`
 - Each event carries `content`, `timestamp`, and optional `metadata`
+- `result` metadata may include typed routing intent (`routingDecision`: `approved` | `changes_requested` | `blocked` | `retry`)
 
 Runtime semantics:
 - Agent phase missing `provider` -> phase runner throws immediately.
@@ -142,6 +143,10 @@ Runtime semantics:
 - Adapter/provider stream must include exactly one terminal `result` event for success.
 - Events after `result` are rejected by adapter runtime as invalid ordering.
 - If no `result` is emitted, adapter/provider run fails deterministically.
+- SQL executor routing consumes structured `result.metadata.routingDecision` only; report text is display/log output and not parsed for route selection.
+- When both metadata keys are present, canonical `routingDecision` takes precedence when valid; `routing_decision` is fallback-only when canonical metadata is missing or invalid.
+- Unsupported routing metadata signals are dropped by provider adapters and treated as missing by core routing, which can persist `no_route` outcomes.
+- Rollout note: providers that participate in guarded routing must emit terminal `result.metadata.routingDecision`; missing metadata may yield persisted `no_route` outcomes.
 - Phase runner token accounting:
   - Sums incremental `tokens` values.
   - Tracks max cumulative values (`tokensUsed`, `totalTokens`, `total_tokens`, `input+output` variants).

@@ -77,6 +77,22 @@ const provider = resolveProvider('codex');
 
 - Adapters emit shared `ProviderEvent` values with types:
   `system`, `assistant`, `result`, `tool_use`, `tool_result`, `usage`.
+- Providers can emit structured routing metadata on terminal results via
+  `result.metadata.routingDecision` (`approved`, `changes_requested`, `blocked`, `retry`).
+- Canonical provider output contract for guarded routing is:
+  - key: `result.metadata.routingDecision`
+  - value: one of `approved`, `changes_requested`, `blocked`, `retry`
+- Compatibility parsing may accept legacy key variants (for example,
+  `routing_decision`) as input, but providers should emit canonical
+  `routingDecision`.
+- If both keys are present across any supported metadata locations, providers
+  prefer canonical `routingDecision` when it contains a supported signal;
+  legacy `routing_decision` is used only as fallback when canonical metadata is
+  missing or invalid.
+- Unsupported routing metadata values are not emitted on terminal `result`
+  events.
+- Providers that are used by guarded workflow routes should emit terminal
+  `result.metadata.routingDecision`; legacy report text is not used by core routing.
 - Unknown provider names throw `UnknownAgentProviderError` with deterministic
   `availableProviders` ordering.
 - Adapter runs fail deterministically when:

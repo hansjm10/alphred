@@ -21,6 +21,7 @@ import {
   type GuardExpression,
   type PhaseDefinition,
   type ProviderRunOptions,
+  type RoutingDecisionSignal,
 } from '@alphred/shared';
 import { evaluateGuard } from './guards.js';
 import { runPhase, type PhaseProviderResolver } from './phaseRunner.js';
@@ -56,8 +57,8 @@ type EdgeRow = {
   guardExpression: unknown;
 };
 
-type RoutingDecisionType = 'approved' | 'changes_requested' | 'blocked' | 'retry' | 'no_route';
-type RouteDecisionSignal = Exclude<RoutingDecisionType, 'no_route'>;
+type RoutingDecisionType = RoutingDecisionSignal | 'no_route';
+type RouteDecisionSignal = RoutingDecisionSignal;
 
 type RoutingDecisionRow = {
   id: number;
@@ -152,14 +153,7 @@ export type SqlWorkflowExecutor = {
 
 const artifactContentTypes = new Set(['text', 'markdown', 'json', 'diff']);
 const runTerminalStatuses = new Set<WorkflowRunStatus>(['completed', 'failed', 'cancelled']);
-const routeDecisionSignals: ReadonlySet<RouteDecisionSignal> = new Set([
-  'approved',
-  'changes_requested',
-  'blocked',
-  'retry',
-]);
 const guardOperators: ReadonlySet<GuardCondition['operator']> = new Set(['==', '!=', '>', '<', '>=', '<=']);
-const decisionKeyword = 'decision';
 
 function toRunNodeStatus(value: string): RunNodeStatus {
   return value as RunNodeStatus;
@@ -167,6 +161,19 @@ function toRunNodeStatus(value: string): RunNodeStatus {
 
 function toWorkflowRunStatus(value: string): WorkflowRunStatus {
   return value as WorkflowRunStatus;
+}
+
+function toRoutingDecisionType(value: string): RoutingDecisionType {
+  switch (value) {
+    case 'approved':
+    case 'changes_requested':
+    case 'blocked':
+    case 'retry':
+    case 'no_route':
+      return value;
+    default:
+      throw new Error(`Unsupported routing decision type '${value}'.`);
+  }
 }
 
 function normalizeArtifactContentType(value: string | null): 'text' | 'markdown' | 'json' | 'diff' {
@@ -249,155 +256,12 @@ function isGuardExpression(value: unknown): value is GuardExpression {
   return ['string', 'number', 'boolean'].includes(typeof value.value);
 }
 
-function isAsciiWhitespace(codeUnit: number): boolean {
-  return codeUnit === 0x20 || codeUnit === 0x09 || codeUnit === 0x0b || codeUnit === 0x0c || codeUnit === 0x0d;
-}
-
-function toLowerAscii(codeUnit: number): number {
-  if (codeUnit >= 0x41 && codeUnit <= 0x5a) {
-    return codeUnit + 0x20;
-  }
-
-  return codeUnit;
-}
-
-function isAsciiLetterOrUnderscore(codeUnit: number): boolean {
-  return (
-    codeUnit === 0x5f ||
-    (codeUnit >= 0x41 && codeUnit <= 0x5a) ||
-    (codeUnit >= 0x61 && codeUnit <= 0x7a)
-  );
-}
-
-function codePointAtOrNegativeOne(value: string, index: number): number {
-  return value.codePointAt(index) ?? -1;
-}
-
-function skipAsciiWhitespace(value: string, start: number): number {
-  let index = start;
-  while (index < value.length && isAsciiWhitespace(codePointAtOrNegativeOne(value, index))) {
-    index += 1;
-  }
-
-  return index;
-}
-
-function consumeDecisionKeyword(line: string, start: number): number | null {
-  for (let keywordIndex = 0; keywordIndex < decisionKeyword.length; keywordIndex += 1) {
-    const lineIndex = start + keywordIndex;
-    if (lineIndex >= line.length) {
-      return null;
-    }
-
-    const actual = toLowerAscii(codePointAtOrNegativeOne(line, lineIndex));
-    const expected = codePointAtOrNegativeOne(decisionKeyword, keywordIndex);
-    if (actual !== expected) {
-      return null;
-    }
-  }
-
-  return start + decisionKeyword.length;
-}
-
-function readDecisionToken(
-  line: string,
-  start: number,
-): {
-  token: string;
-  nextIndex: number;
-} | null {
-  let index = start;
-  while (index < line.length && isAsciiLetterOrUnderscore(codePointAtOrNegativeOne(line, index))) {
-    index += 1;
-  }
-
-  if (index === start) {
-    return null;
-  }
-
-  return {
-    token: line.slice(start, index),
-    nextIndex: index,
-  };
-}
-
-function parseRouteDecisionLine(line: string): RouteDecisionSignal | null {
-  const keywordStart = skipAsciiWhitespace(line, 0);
-  const afterKeyword = consumeDecisionKeyword(line, keywordStart);
-  if (afterKeyword === null) {
-    return null;
-  }
-
-  let index = skipAsciiWhitespace(line, afterKeyword);
-  if (index >= line.length || codePointAtOrNegativeOne(line, index) !== 0x3a) {
-    return null;
-  }
-  index = skipAsciiWhitespace(line, index + 1);
-
-  const token = readDecisionToken(line, index);
-  if (!token) {
-    return null;
-  }
-  index = skipAsciiWhitespace(line, token.nextIndex);
-
-  if (index !== line.length) {
-    return null;
-  }
-
-  const candidate = token.token.toLowerCase();
-  if (!routeDecisionSignals.has(candidate as RouteDecisionSignal)) {
-    return null;
-  }
-
-  return candidate as RouteDecisionSignal;
-}
-
-function findLineBreakIndex(report: string, start: number): number {
-  for (let index = start; index < report.length; index += 1) {
-    const codePoint = codePointAtOrNegativeOne(report, index);
-    if (codePoint === 0x0a || codePoint === 0x0d) {
-      return index;
-    }
-  }
-
-  return report.length;
-}
-
-function moveToNextLineStart(report: string, lineBreakIndex: number): number {
-  const current = codePointAtOrNegativeOne(report, lineBreakIndex);
-  if (current === 0x0d && codePointAtOrNegativeOne(report, lineBreakIndex + 1) === 0x0a) {
-    return lineBreakIndex + 2;
-  }
-
-  return lineBreakIndex + 1;
-}
-
-function parseRouteDecisionSignal(report: string): RouteDecisionSignal | null {
-  let lineStart = 0;
-
-  while (lineStart <= report.length) {
-    const lineEnd = findLineBreakIndex(report, lineStart);
-    const parsed = parseRouteDecisionLine(report.slice(lineStart, lineEnd));
-    if (parsed) {
-      return parsed;
-    }
-
-    if (lineEnd >= report.length) {
-      break;
-    }
-
-    lineStart = moveToNextLineStart(report, lineEnd);
-  }
-
-  return null;
-}
-
 function doesEdgeMatchDecision(edge: EdgeRow, decisionType: RoutingDecisionType | null): boolean {
   if (edge.auto === 1) {
     return true;
   }
 
-  // Guarded routes require a concrete decision signal from the phase output.
+  // Guarded routes require a concrete structured decision signal.
   if (decisionType === null || decisionType === 'no_route') {
     return false;
   }
@@ -447,7 +311,7 @@ function loadLatestRoutingDecisionsByRunNodeId(
     latestByRunNodeId.set(row.runNodeId, {
       id: row.id,
       runNodeId: row.runNodeId,
-      decisionType: row.decisionType as RoutingDecisionType,
+      decisionType: toRoutingDecisionType(row.decisionType),
       createdAt: row.createdAt,
       attempt: readRoutingDecisionAttempt(row.rawOutput),
     });
@@ -998,11 +862,11 @@ function persistCompletedNodeRoutingDecision(
     runNodeId: number;
     treeNodeId: number;
     attempt: number;
-    report: string;
+    routingDecision: RouteDecisionSignal | null;
     edgeRows: EdgeRow[];
   },
 ): CompletedNodeRoutingOutcome {
-  const decisionSignal = parseRouteDecisionSignal(params.report);
+  const decisionSignal = params.routingDecision;
   const outgoingEdges = params.edgeRows.filter(edge => edge.sourceNodeId === params.treeNodeId);
 
   if (outgoingEdges.length === 0) {
@@ -1018,8 +882,8 @@ function persistCompletedNodeRoutingDecision(
       runNodeId: params.runNodeId,
       decisionType: decisionSignal,
       rawOutput: {
-        source: 'phase_result',
-        decision: decisionSignal,
+        source: 'provider_result_metadata',
+        routingDecision: decisionSignal,
         attempt: params.attempt,
       },
     });
@@ -1043,8 +907,8 @@ function persistCompletedNodeRoutingDecision(
       runNodeId: params.runNodeId,
       decisionType: decisionSignal,
       rawOutput: {
-        source: 'phase_result',
-        decision: decisionSignal,
+        source: 'provider_result_metadata',
+        routingDecision: decisionSignal,
         selectedEdgeId: matchingEdge.edgeId,
         attempt: params.attempt,
       },
@@ -1061,8 +925,8 @@ function persistCompletedNodeRoutingDecision(
     decisionType: 'no_route',
     rationale: `No outgoing edge matched for tree_node_id=${params.treeNodeId}.`,
     rawOutput: {
-      source: 'phase_result',
-      parsedDecision: decisionSignal,
+      source: 'provider_result_metadata',
+      routingDecision: decisionSignal,
       outgoingEdgeIds: outgoingEdges.map(edge => edge.edgeId),
       attempt: params.attempt,
     },
@@ -1497,7 +1361,7 @@ function handleClaimedNodeSuccess(
     runNodeId: node.runNodeId,
     treeNodeId: node.treeNodeId,
     attempt: currentAttempt,
-    report: phaseResult.report,
+    routingDecision: phaseResult.routingDecision,
     edgeRows,
   });
 

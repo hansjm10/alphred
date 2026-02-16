@@ -1,4 +1,4 @@
-import type { ProviderEvent, ProviderRunOptions } from '@alphred/shared';
+import type { ProviderEvent, ProviderRunOptions, RoutingDecisionSignal } from '@alphred/shared';
 import type { Codex } from '@openai/codex-sdk';
 import { describe, expect, it } from 'vitest';
 import {
@@ -140,6 +140,111 @@ describe('codex provider', () => {
 
     expect(events.map((event) => event.type)).toEqual(['system', 'usage', 'result']);
     expect(events[1].metadata).toEqual({ tokens: 30 });
+  });
+
+  it('preserves structured routingDecision metadata on result events', async () => {
+    const provider = createProvider(
+      createRunner([
+        {
+          type: 'result',
+          content: 'done',
+          metadata: { routingDecision: 'approved' },
+        },
+      ]),
+    );
+
+    const events = await collectEvents(provider);
+
+    expect(events.map((event) => event.type)).toEqual(['system', 'result']);
+    expect(events[1].metadata).toMatchObject({ routingDecision: 'approved' });
+  });
+
+  it('extracts routing decisions from supported codex sdk metadata locations', async () => {
+    const cases: { name: string; turnCompletedEvent: Record<string, unknown>; expectedRoutingDecision: RoutingDecisionSignal }[] = [
+      {
+        name: 'top-level routing_decision',
+        turnCompletedEvent: {
+          routing_decision: 'approved',
+        },
+        expectedRoutingDecision: 'approved',
+      },
+      {
+        name: 'metadata.routing_decision',
+        turnCompletedEvent: {
+          metadata: { routing_decision: 'approved' },
+        },
+        expectedRoutingDecision: 'approved',
+      },
+      {
+        name: 'result_metadata.routingDecision',
+        turnCompletedEvent: {
+          result_metadata: { routingDecision: 'approved' },
+        },
+        expectedRoutingDecision: 'approved',
+      },
+      {
+        name: 'resultMetadata.routing_decision',
+        turnCompletedEvent: {
+          resultMetadata: { routing_decision: 'approved' },
+        },
+        expectedRoutingDecision: 'approved',
+      },
+      {
+        name: 'result.metadata.routingDecision',
+        turnCompletedEvent: {
+          result: { metadata: { routingDecision: 'approved' } },
+        },
+        expectedRoutingDecision: 'approved',
+      },
+      {
+        name: 'prefers canonical routingDecision from later metadata locations',
+        turnCompletedEvent: {
+          routing_decision: 'approved',
+          result_metadata: { routingDecision: 'changes_requested' },
+        },
+        expectedRoutingDecision: 'changes_requested',
+      },
+      {
+        name: 'falls back to legacy routing_decision when canonical value is unknown',
+        turnCompletedEvent: {
+          routingDecision: 'unknown_signal',
+          resultMetadata: { routing_decision: 'blocked' },
+        },
+        expectedRoutingDecision: 'blocked',
+      },
+    ];
+
+    for (const testCase of cases) {
+      const provider = new CodexProvider(
+        undefined,
+        () => createStreamingBootstrap([
+          { type: 'thread.started', thread_id: `thread-routing-${testCase.name}` },
+          { type: 'turn.started' },
+          {
+            type: 'item.completed',
+            item: {
+              id: 'msg-1',
+              type: 'agent_message',
+              text: 'Routing metadata extracted from sdk event.',
+            },
+          },
+          {
+            type: 'turn.completed',
+            usage: {
+              input_tokens: 4,
+              cached_input_tokens: 0,
+              output_tokens: 2,
+            },
+            ...testCase.turnCompletedEvent,
+          },
+        ]),
+      );
+
+      const events = await collectEvents(provider);
+
+      expect(events.map((event) => event.type)).toEqual(['system', 'assistant', 'usage', 'result']);
+      expect(events[3].metadata).toMatchObject({ routingDecision: testCase.expectedRoutingDecision });
+    }
   });
 
   it('preserves nested cumulative usage when top-level tokens metadata is incremental', async () => {
