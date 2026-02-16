@@ -4,6 +4,7 @@ import {
   createPullRequest as createGitHubPullRequest,
   getIssue,
 } from './github.js';
+import { parsePositiveIntegerId } from './scmProviderUtils.js';
 import type { GitHubScmProviderConfig, ScmProvider } from './scmProvider.js';
 
 const CLONE_STUB_MESSAGE = 'cloneRepo is not implemented yet. Tracked in the repo-clone issue.';
@@ -49,15 +50,6 @@ export class GitHubScmProvider implements ScmProvider {
       provider: this.kind,
     };
   }
-}
-
-function parsePositiveIntegerId(id: number | string, entityName: string): number {
-  const parsed = typeof id === 'number' ? id : Number(id);
-  if (!Number.isInteger(parsed) || parsed <= 0) {
-    throw new Error(`Invalid ${entityName} id: ${id}`);
-  }
-
-  return parsed;
 }
 
 function extractGitHubPullRequestId(url: string): string {

@@ -1,6 +1,7 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import type { AuthStatus } from '@alphred/shared';
+import { createAuthErrorMessage } from './authUtils.js';
 
 const execFileAsync = promisify(execFile);
 const AZURE_DEVOPS_BASE_URL = 'https://dev.azure.com';
@@ -159,50 +160,12 @@ function parseAzureAccountUser(stdout: string): string | undefined {
 }
 
 function createAzureLoginError(error: unknown): string {
-  const details = extractErrorDetail(error);
-  const guidance = 'Run: az login';
-
-  if (!details) {
-    return `Azure CLI auth is not configured. ${guidance}`;
-  }
-
-  return `Azure CLI auth is not configured. ${guidance}. CLI output: ${details}`;
+  return createAuthErrorMessage('Azure CLI auth is not configured', 'Run: az login', error);
 }
 
 function createAzureDevOpsLoginError(error: unknown, organizationUrl: string): string {
-  const details = extractErrorDetail(error);
-  const guidance = [
+  return createAuthErrorMessage('Azure DevOps auth is not configured', [
     `Run: az devops login --organization ${organizationUrl}`,
     'Or set: ALPHRED_AZURE_DEVOPS_PAT=<your-pat> (or AZURE_DEVOPS_EXT_PAT)',
-  ].join(' | ');
-
-  if (!details) {
-    return `Azure DevOps auth is not configured. ${guidance}`;
-  }
-
-  return `Azure DevOps auth is not configured. ${guidance}. CLI output: ${details}`;
-}
-
-function extractErrorDetail(error: unknown): string | undefined {
-  if (typeof error === 'object' && error !== null) {
-    const maybeStdout = (error as { stdout?: unknown }).stdout;
-    const maybeStderr = (error as { stderr?: unknown }).stderr;
-    const stdout = typeof maybeStdout === 'string' ? maybeStdout : '';
-    const stderr = typeof maybeStderr === 'string' ? maybeStderr : '';
-    const combined = `${stdout}\n${stderr}`
-      .split('\n')
-      .map(line => line.trim())
-      .filter(Boolean)
-      .join(' ');
-
-    if (combined.length > 0) {
-      return combined;
-    }
-  }
-
-  if (error instanceof Error && error.message.trim().length > 0) {
-    return error.message.trim();
-  }
-
-  return undefined;
+  ], error);
 }

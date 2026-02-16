@@ -1,6 +1,7 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import type { AuthStatus } from '@alphred/shared';
+import { createAuthErrorMessage } from './authUtils.js';
 
 const execFileAsync = promisify(execFile);
 const GITHUB_HOSTNAME = 'github.com';
@@ -56,36 +57,13 @@ export async function createPullRequest(
 
 export async function checkAuth(environment: NodeJS.ProcessEnv = process.env): Promise<AuthStatus> {
   const env = resolveGitHubEnvironment(environment);
-  const hostname = GITHUB_HOSTNAME;
-
-  try {
-    const { stdout, stderr } = await execFileAsync('gh', [
-      'auth',
-      'status',
-      '--hostname',
-      hostname,
-    ], { env });
-
-    const { user, scopes } = parseGitHubAuthStatus(`${stdout}\n${stderr}`);
-
-    return {
-      authenticated: true,
-      user,
-      scopes: scopes.length > 0 ? scopes : undefined,
-    };
-  } catch (error) {
-    return {
-      authenticated: false,
-      error: createGitHubAuthError(error, hostname),
-    };
-  }
+  return checkGitHubAuthByHostname(GITHUB_HOSTNAME, env);
 }
 
 export async function checkAuthForRepo(
   repo: string,
   environment: NodeJS.ProcessEnv = process.env,
 ): Promise<AuthStatus> {
-  const env = resolveGitHubEnvironment(environment);
   const resolvedRepo = resolveGitHubHostname(repo);
   if ('error' in resolvedRepo) {
     return {
@@ -93,29 +71,9 @@ export async function checkAuthForRepo(
       error: resolvedRepo.error,
     };
   }
-  const hostname = resolvedRepo.hostname;
 
-  try {
-    const { stdout, stderr } = await execFileAsync('gh', [
-      'auth',
-      'status',
-      '--hostname',
-      hostname,
-    ], { env });
-
-    const { user, scopes } = parseGitHubAuthStatus(`${stdout}\n${stderr}`);
-
-    return {
-      authenticated: true,
-      user,
-      scopes: scopes.length > 0 ? scopes : undefined,
-    };
-  } catch (error) {
-    return {
-      authenticated: false,
-      error: createGitHubAuthError(error, hostname),
-    };
-  }
+  const env = resolveGitHubEnvironment(environment);
+  return checkGitHubAuthByHostname(resolvedRepo.hostname, env);
 }
 
 function resolveGitHubEnvironment(environment: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
@@ -156,18 +114,11 @@ function parseScopes(raw: string | undefined): string[] {
 }
 
 function createGitHubAuthError(error: unknown, hostname: string): string {
-  const details = extractErrorDetail(error);
-  const guidance = [
+  return createAuthErrorMessage('GitHub auth is not configured', [
     `Run: gh auth login --hostname ${hostname}`,
     'Or set: ALPHRED_GH_TOKEN=<your-pat> (or GH_TOKEN)',
     'For GitHub Enterprise: ALPHRED_GH_ENTERPRISE_TOKEN=<your-pat> (or GH_ENTERPRISE_TOKEN)',
-  ].join(' | ');
-
-  if (!details) {
-    return `GitHub auth is not configured. ${guidance}`;
-  }
-
-  return `GitHub auth is not configured. ${guidance}. CLI output: ${details}`;
+  ], error);
 }
 
 function resolveGitHubHostname(repo: string): { hostname: string } | { error: string } {
@@ -194,26 +145,26 @@ function resolveGitHubHostname(repo: string): { hostname: string } | { error: st
   };
 }
 
-function extractErrorDetail(error: unknown): string | undefined {
-  if (typeof error === 'object' && error !== null) {
-    const maybeStdout = (error as { stdout?: unknown }).stdout;
-    const maybeStderr = (error as { stderr?: unknown }).stderr;
-    const stdout = typeof maybeStdout === 'string' ? maybeStdout : '';
-    const stderr = typeof maybeStderr === 'string' ? maybeStderr : '';
-    const combined = `${stdout}\n${stderr}`
-      .split('\n')
-      .map(line => line.trim())
-      .filter(Boolean)
-      .join(' ');
+async function checkGitHubAuthByHostname(hostname: string, env: NodeJS.ProcessEnv): Promise<AuthStatus> {
+  try {
+    const { stdout, stderr } = await execFileAsync('gh', [
+      'auth',
+      'status',
+      '--hostname',
+      hostname,
+    ], { env });
 
-    if (combined.length > 0) {
-      return combined;
-    }
+    const { user, scopes } = parseGitHubAuthStatus(`${stdout}\n${stderr}`);
+
+    return {
+      authenticated: true,
+      user,
+      scopes: scopes.length > 0 ? scopes : undefined,
+    };
+  } catch (error) {
+    return {
+      authenticated: false,
+      error: createGitHubAuthError(error, hostname),
+    };
   }
-
-  if (error instanceof Error && error.message.trim().length > 0) {
-    return error.message.trim();
-  }
-
-  return undefined;
 }
