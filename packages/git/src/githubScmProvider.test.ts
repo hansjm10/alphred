@@ -7,7 +7,7 @@ const { checkAuthMock, createPullRequestMock, getIssueMock } = vi.hoisted(() => 
 }));
 
 vi.mock('./github.js', () => ({
-  checkAuth: checkAuthMock,
+  checkAuthForRepo: checkAuthMock,
   createPullRequest: createPullRequestMock,
   getIssue: getIssueMock,
 }));
@@ -36,7 +36,7 @@ describe('GitHubScmProvider', () => {
       scopes: ['repo', 'read:org'],
     });
 
-    expect(checkAuthMock).toHaveBeenCalledWith();
+    expect(checkAuthMock).toHaveBeenCalledWith('owner/repo');
   });
 
   it('normalizes github issue responses into work items', async () => {

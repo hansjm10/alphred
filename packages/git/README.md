@@ -42,11 +42,14 @@ auth validation.
 - `AzureDevOpsScmProvider.getWorkItem(...)` currently maps `labels` to `[]`
   because the current Azure adapter payload does not provide labels.
 - `checkAuth()` behavior:
-  - GitHub runs `gh auth status --hostname github.com`
+  - GitHub runs `gh auth status --hostname <host>` where `<host>` is derived
+    from repo config (`[HOST/]OWNER/REPO`, default `github.com`)
   - Azure runs `az account show` and
     `az devops project list --organization https://dev.azure.com/<org>`
   - On failure, auth status is returned with remediation text (login command or
     env var guidance); no secrets are persisted by Alphred.
+  - Consumers are expected to invoke `checkAuth()` in their own pre-flight
+    command flows.
 
 ## Backward Compatibility
 

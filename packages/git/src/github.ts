@@ -55,13 +55,14 @@ export async function createPullRequest(
 
 export async function checkAuth(environment: NodeJS.ProcessEnv = process.env): Promise<AuthStatus> {
   const env = resolveGitHubEnvironment(environment);
+  const hostname = GITHUB_HOSTNAME;
 
   try {
     const { stdout, stderr } = await execFileAsync('gh', [
       'auth',
       'status',
       '--hostname',
-      GITHUB_HOSTNAME,
+      hostname,
     ], { env });
 
     const { user, scopes } = parseGitHubAuthStatus(`${stdout}\n${stderr}`);
@@ -74,7 +75,37 @@ export async function checkAuth(environment: NodeJS.ProcessEnv = process.env): P
   } catch (error) {
     return {
       authenticated: false,
-      error: createGitHubAuthError(error),
+      error: createGitHubAuthError(error, hostname),
+    };
+  }
+}
+
+export async function checkAuthForRepo(
+  repo: string,
+  environment: NodeJS.ProcessEnv = process.env,
+): Promise<AuthStatus> {
+  const env = resolveGitHubEnvironment(environment);
+  const hostname = resolveGitHubHostname(repo);
+
+  try {
+    const { stdout, stderr } = await execFileAsync('gh', [
+      'auth',
+      'status',
+      '--hostname',
+      hostname,
+    ], { env });
+
+    const { user, scopes } = parseGitHubAuthStatus(`${stdout}\n${stderr}`);
+
+    return {
+      authenticated: true,
+      user,
+      scopes: scopes.length > 0 ? scopes : undefined,
+    };
+  } catch (error) {
+    return {
+      authenticated: false,
+      error: createGitHubAuthError(error, hostname),
     };
   }
 }
@@ -116,10 +147,10 @@ function parseScopes(raw: string | undefined): string[] {
     .filter(scope => scope.length > 0);
 }
 
-function createGitHubAuthError(error: unknown): string {
+function createGitHubAuthError(error: unknown, hostname: string): string {
   const details = extractErrorDetail(error);
   const guidance = [
-    `Run: gh auth login --hostname ${GITHUB_HOSTNAME}`,
+    `Run: gh auth login --hostname ${hostname}`,
     'Or set: ALPHRED_GH_TOKEN=<your-pat> (or GH_TOKEN)',
     'For GitHub Enterprise: ALPHRED_GH_ENTERPRISE_TOKEN=<your-pat> (or GH_ENTERPRISE_TOKEN)',
   ].join(' | ');
@@ -129,6 +160,21 @@ function createGitHubAuthError(error: unknown): string {
   }
 
   return `GitHub auth is not configured. ${guidance}. CLI output: ${details}`;
+}
+
+function resolveGitHubHostname(repo: string): string {
+  const trimmedRepo = repo.trim();
+  if (trimmedRepo.length === 0) {
+    return GITHUB_HOSTNAME;
+  }
+
+  // gh supports [HOST/]OWNER/REPO. If HOST is omitted, default to github.com.
+  const segments = trimmedRepo.split('/');
+  if (segments.length === 3 && segments[0]?.trim().length) {
+    return segments[0].trim();
+  }
+
+  return GITHUB_HOSTNAME;
 }
 
 function extractErrorDetail(error: unknown): string | undefined {
