@@ -12,6 +12,16 @@ export type AzureWorkItem = {
   type: string;
 };
 
+export type CreateAzurePullRequestParams = {
+  organization: string;
+  project: string;
+  repository: string;
+  title: string;
+  description: string;
+  sourceBranch: string;
+  targetBranch?: string;
+};
+
 export async function getWorkItem(
   organization: string,
   project: string,
@@ -37,15 +47,18 @@ export async function getWorkItem(
 }
 
 export async function createPullRequest(
-  organization: string,
-  project: string,
-  repository: string,
-  title: string,
-  description: string,
-  sourceBranch: string,
-  targetBranch = 'main',
+  params: CreateAzurePullRequestParams,
   environment: NodeJS.ProcessEnv = process.env,
 ): Promise<number> {
+  const {
+    organization,
+    project,
+    repository,
+    title,
+    description,
+    sourceBranch,
+    targetBranch = 'main',
+  } = params;
   const env = resolveAzureEnvironment(environment);
   const { stdout } = await execFileAsync('az', [
     'repos', 'pr', 'create',

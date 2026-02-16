@@ -77,13 +77,15 @@ describe('AzureDevOpsScmProvider', () => {
     });
 
     expect(createPullRequestMock).toHaveBeenCalledWith(
-      'org',
-      'proj',
-      'repo',
-      'PR title',
-      'PR description',
-      'feat/source',
-      'develop',
+      {
+        organization: 'org',
+        project: 'proj',
+        repository: 'repo',
+        title: 'PR title',
+        description: 'PR description',
+        sourceBranch: 'feat/source',
+        targetBranch: 'develop',
+      },
     );
   });
 
@@ -102,13 +104,14 @@ describe('AzureDevOpsScmProvider', () => {
     });
 
     expect(createPullRequestMock).toHaveBeenCalledWith(
-      'org',
-      'proj',
-      'repo',
-      'PR title',
-      'PR description',
-      'feat/source',
-      undefined,
+      {
+        organization: 'org',
+        project: 'proj',
+        repository: 'repo',
+        title: 'PR title',
+        description: 'PR description',
+        sourceBranch: 'feat/source',
+      },
     );
   });
 

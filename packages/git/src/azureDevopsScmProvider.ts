@@ -35,15 +35,15 @@ export class AzureDevOpsScmProvider implements ScmProvider {
   }
 
   async createPullRequest(params: CreatePrParams): Promise<PullRequestResult> {
-    const pullRequestId = await createAzurePullRequest(
-      this.config.organization,
-      this.config.project,
-      this.config.repository,
-      params.title,
-      params.body,
-      params.sourceBranch,
-      params.targetBranch,
-    );
+    const pullRequestId = await createAzurePullRequest({
+      organization: this.config.organization,
+      project: this.config.project,
+      repository: this.config.repository,
+      title: params.title,
+      description: params.body,
+      sourceBranch: params.sourceBranch,
+      ...(params.targetBranch !== undefined ? { targetBranch: params.targetBranch } : {}),
+    });
 
     return {
       id: String(pullRequestId),

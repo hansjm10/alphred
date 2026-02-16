@@ -122,13 +122,15 @@ describe('azure devops adapter', () => {
 
     await expect(
       createPullRequest(
-        'org',
-        'proj',
-        'repo',
-        'PR title',
-        'PR description',
-        'feat/source',
-        'main',
+        {
+          organization: 'org',
+          project: 'proj',
+          repository: 'repo',
+          title: 'PR title',
+          description: 'PR description',
+          sourceBranch: 'feat/source',
+          targetBranch: 'main',
+        },
         {
           AZURE_DEVOPS_EXT_PAT: 'host-pat',
         },
