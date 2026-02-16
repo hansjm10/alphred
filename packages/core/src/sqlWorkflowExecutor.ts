@@ -163,6 +163,19 @@ function toWorkflowRunStatus(value: string): WorkflowRunStatus {
   return value as WorkflowRunStatus;
 }
 
+function toRoutingDecisionType(value: string): RoutingDecisionType {
+  switch (value) {
+    case 'approved':
+    case 'changes_requested':
+    case 'blocked':
+    case 'retry':
+    case 'no_route':
+      return value;
+    default:
+      throw new Error(`Unsupported routing decision type '${value}'.`);
+  }
+}
+
 function normalizeArtifactContentType(value: string | null): 'text' | 'markdown' | 'json' | 'diff' {
   if (value && artifactContentTypes.has(value)) {
     return value as 'text' | 'markdown' | 'json' | 'diff';
@@ -298,7 +311,7 @@ function loadLatestRoutingDecisionsByRunNodeId(
     latestByRunNodeId.set(row.runNodeId, {
       id: row.id,
       runNodeId: row.runNodeId,
-      decisionType: row.decisionType as RoutingDecisionType,
+      decisionType: toRoutingDecisionType(row.decisionType),
       createdAt: row.createdAt,
       attempt: readRoutingDecisionAttempt(row.rawOutput),
     });
