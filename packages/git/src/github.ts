@@ -5,7 +5,9 @@ import { createAuthErrorMessage } from './authUtils.js';
 
 const execFileAsync = promisify(execFile);
 const GITHUB_HOSTNAME = 'github.com';
-const OUTER_SCOPE_QUOTE_PATTERN = /(?:^['"]+|['"]+$)/g;
+const TOKEN_SCOPES_PREFIX = 'Token scopes:';
+const LOGGED_IN_PREFIX = 'logged in to ';
+const ACCOUNT_MARKER = ' account ';
 
 export type GitHubIssue = {
   number: number;
@@ -93,12 +95,26 @@ function resolveGitHubEnvironment(environment: NodeJS.ProcessEnv): NodeJS.Proces
 }
 
 function parseGitHubAuthStatus(output: string): { user?: string; scopes: string[] } {
-  const userMatch = /Logged in to [^\s]+ account ([^\s(]+)/i.exec(output);
-  const scopesMatch = /Token scopes:\s*(.+)$/im.exec(output);
+  let user: string | undefined;
+  let rawScopes: string | undefined;
+
+  for (const line of output.split('\n')) {
+    if (user === undefined) {
+      user = parseGitHubAuthUser(line);
+    }
+
+    if (rawScopes === undefined) {
+      rawScopes = parseGitHubAuthScopes(line);
+    }
+
+    if (user !== undefined && rawScopes !== undefined) {
+      break;
+    }
+  }
 
   return {
-    user: userMatch?.[1],
-    scopes: parseScopes(scopesMatch?.[1]),
+    user,
+    scopes: parseScopes(rawScopes),
   };
 }
 
@@ -109,8 +125,60 @@ function parseScopes(raw: string | undefined): string[] {
 
   return raw
     .split(',')
-    .map(scope => scope.trim().replaceAll(OUTER_SCOPE_QUOTE_PATTERN, ''))
+    .map(scope => trimOuterQuotes(scope.trim()))
     .filter(scope => scope.length > 0);
+}
+
+function parseGitHubAuthUser(line: string): string | undefined {
+  const normalizedLine = line.trim();
+  const lowerLine = normalizedLine.toLowerCase();
+
+  const loggedInIndex = lowerLine.indexOf(LOGGED_IN_PREFIX);
+  if (loggedInIndex === -1) {
+    return undefined;
+  }
+
+  const userStartIndex = lowerLine.indexOf(
+    ACCOUNT_MARKER,
+    loggedInIndex + LOGGED_IN_PREFIX.length,
+  );
+  if (userStartIndex === -1) {
+    return undefined;
+  }
+
+  const start = userStartIndex + ACCOUNT_MARKER.length;
+  let end = normalizedLine.indexOf(' (', start);
+  if (end === -1) {
+    end = normalizedLine.length;
+  }
+
+  const user = normalizedLine.slice(start, end).trim();
+  return user.length > 0 ? user : undefined;
+}
+
+function parseGitHubAuthScopes(line: string): string | undefined {
+  const scopePrefixIndex = line.indexOf(TOKEN_SCOPES_PREFIX);
+  if (scopePrefixIndex === -1) {
+    return undefined;
+  }
+
+  const rawScopes = line.slice(scopePrefixIndex + TOKEN_SCOPES_PREFIX.length).trim();
+  return rawScopes.length > 0 ? rawScopes : undefined;
+}
+
+function trimOuterQuotes(value: string): string {
+  let start = 0;
+  let end = value.length;
+
+  while (start < end && (value[start] === '\'' || value[start] === '"')) {
+    start += 1;
+  }
+
+  while (end > start && (value[end - 1] === '\'' || value[end - 1] === '"')) {
+    end -= 1;
+  }
+
+  return value.slice(start, end);
 }
 
 function createGitHubAuthError(error: unknown, hostname: string): string {
