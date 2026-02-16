@@ -48,6 +48,28 @@ export function migrateDatabase(db: AlphredDatabase): void {
   tx.run(sql`CREATE INDEX IF NOT EXISTS guard_definitions_created_at_idx
     ON guard_definitions(created_at)`);
 
+  tx.run(sql`CREATE TABLE IF NOT EXISTS repositories (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    provider TEXT NOT NULL,
+    remote_url TEXT NOT NULL,
+    remote_ref TEXT NOT NULL,
+    default_branch TEXT NOT NULL DEFAULT 'main',
+    local_path TEXT,
+    clone_status TEXT NOT NULL DEFAULT 'pending',
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    CONSTRAINT repositories_provider_ck
+      CHECK (provider IN ('github', 'azure-devops')),
+    CONSTRAINT repositories_clone_status_ck
+      CHECK (clone_status IN ('pending', 'cloned', 'error'))
+  )`);
+  tx.run(sql`CREATE UNIQUE INDEX IF NOT EXISTS repositories_name_uq
+    ON repositories(name)`);
+  tx.run(sql`DROP INDEX IF EXISTS repositories_name_idx`);
+  tx.run(sql`CREATE INDEX IF NOT EXISTS repositories_created_at_idx
+    ON repositories(created_at)`);
+
   tx.run(sql`CREATE TABLE IF NOT EXISTS workflow_runs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     workflow_tree_id INTEGER NOT NULL REFERENCES workflow_trees(id) ON DELETE RESTRICT,

@@ -22,6 +22,21 @@ export type TriggerSource = 'manual' | 'github' | 'azure-devops' | 'schedule';
 // SCM providers
 export type ScmProviderKind = 'github' | 'azure-devops';
 
+// Repository clone lifecycle
+export type CloneStatus = 'pending' | 'cloned' | 'error';
+
+// Repository registry record
+export type RepositoryConfig = {
+  id: number;
+  name: string;
+  provider: ScmProviderKind;
+  remoteUrl: string;
+  remoteRef: string;
+  defaultBranch: string;
+  localPath: string | null;
+  cloneStatus: CloneStatus;
+};
+
 // Normalized SCM work item
 export type WorkItem = {
   id: string;

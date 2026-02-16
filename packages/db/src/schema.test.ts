@@ -691,6 +691,9 @@ describe('database schema hardening', () => {
     expect(names.has('run_nodes_node_key_idx')).toBe(true);
     expect(names.has('run_nodes_created_at_idx')).toBe(true);
     expect(names.has('tree_nodes_node_key_idx')).toBe(true);
+    expect(names.has('repositories_name_uq')).toBe(true);
+    expect(names.has('repositories_name_idx')).toBe(false);
+    expect(names.has('repositories_created_at_idx')).toBe(true);
     expect(names.has('phase_artifacts_created_at_idx')).toBe(true);
     expect(names.has('routing_decisions_created_at_idx')).toBe(true);
   });

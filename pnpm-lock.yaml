@@ -117,6 +117,9 @@ importers:
 
   packages/db:
     dependencies:
+      '@alphred/shared':
+        specifier: workspace:*
+        version: link:../shared
       better-sqlite3:
         specifier: ^11.9.1
         version: 11.10.0
