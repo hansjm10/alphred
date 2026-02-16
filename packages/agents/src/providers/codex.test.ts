@@ -159,6 +159,73 @@ describe('codex provider', () => {
     expect(events[1].metadata).toMatchObject({ routingDecision: 'approved' });
   });
 
+  it('extracts routing decisions from supported codex sdk metadata locations', async () => {
+    const cases: { name: string; turnCompletedEvent: Record<string, unknown> }[] = [
+      {
+        name: 'top-level routing_decision',
+        turnCompletedEvent: {
+          routing_decision: 'approved',
+        },
+      },
+      {
+        name: 'metadata.routing_decision',
+        turnCompletedEvent: {
+          metadata: { routing_decision: 'approved' },
+        },
+      },
+      {
+        name: 'result_metadata.routingDecision',
+        turnCompletedEvent: {
+          result_metadata: { routingDecision: 'approved' },
+        },
+      },
+      {
+        name: 'resultMetadata.routing_decision',
+        turnCompletedEvent: {
+          resultMetadata: { routing_decision: 'approved' },
+        },
+      },
+      {
+        name: 'result.metadata.routingDecision',
+        turnCompletedEvent: {
+          result: { metadata: { routingDecision: 'approved' } },
+        },
+      },
+    ];
+
+    for (const testCase of cases) {
+      const provider = new CodexProvider(
+        undefined,
+        () => createStreamingBootstrap([
+          { type: 'thread.started', thread_id: `thread-routing-${testCase.name}` },
+          { type: 'turn.started' },
+          {
+            type: 'item.completed',
+            item: {
+              id: 'msg-1',
+              type: 'agent_message',
+              text: 'Routing metadata extracted from sdk event.',
+            },
+          },
+          {
+            type: 'turn.completed',
+            usage: {
+              input_tokens: 4,
+              cached_input_tokens: 0,
+              output_tokens: 2,
+            },
+            ...testCase.turnCompletedEvent,
+          },
+        ]),
+      );
+
+      const events = await collectEvents(provider);
+
+      expect(events.map((event) => event.type)).toEqual(['system', 'assistant', 'usage', 'result']);
+      expect(events[3].metadata).toMatchObject({ routingDecision: 'approved' });
+    }
+  });
+
   it('preserves nested cumulative usage when top-level tokens metadata is incremental', async () => {
     const provider = createProvider(
       createRunner([

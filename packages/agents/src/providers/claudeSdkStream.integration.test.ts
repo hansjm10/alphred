@@ -100,6 +100,33 @@ const sdkStreamFixtures = {
       },
     },
   ] as const,
+  invalidRoutingDecision: [
+    {
+      type: 'assistant',
+      message: {
+        content: [
+          {
+            type: 'text',
+            text: 'Completed with unsupported routing decision.',
+          },
+        ],
+      },
+      parent_tool_use_id: null,
+    },
+    {
+      type: 'result',
+      subtype: 'success',
+      result: 'Completed with unsupported routing decision.',
+      metadata: {
+        routingDecision: 'unsupported_signal',
+      },
+      usage: {
+        input_tokens: 20,
+        output_tokens: 8,
+        cache_read_input_tokens: 0,
+      },
+    },
+  ] as const,
   mixedToolUseAssistantThenProgress: [
     {
       type: 'assistant',
@@ -371,6 +398,16 @@ describe('claude provider sdk stream integration fixtures', () => {
         ANTHROPIC_API_KEY: 'sk-test',
       },
     });
+  });
+
+  it('drops unsupported routing decision metadata from terminal result events', async () => {
+    const provider = createProviderForFixture(sdkStreamFixtures.invalidRoutingDecision);
+
+    const events = await collectEvents(provider, 'Apply integration fixture tests.');
+
+    expect(events.map((event) => event.type)).toEqual(['system', 'assistant', 'usage', 'result']);
+    expect(events[3]?.content).toBe('Completed with unsupported routing decision.');
+    expect(events[3]?.metadata).toBeUndefined();
   });
 
   it('passes an abort controller when timeout is configured', async () => {

@@ -4,6 +4,7 @@ import {
   ClaudeProvider,
   ClaudeProviderError,
   type ClaudeBootstrapper,
+  type ClaudeSdkQuery,
   type ClaudeRawEvent,
   type ClaudeRunRequest,
 } from './claude.js';
@@ -32,6 +33,21 @@ function createNoopBootstrap(): ReturnType<ClaudeBootstrapper> {
 
 function createProvider(runner: (request: ClaudeRunRequest) => AsyncIterable<ClaudeRawEvent>): ClaudeProvider {
   return new ClaudeProvider(runner, () => createNoopBootstrap());
+}
+
+function createQueryProvider(messages: readonly unknown[]): ClaudeProvider {
+  return new ClaudeProvider(
+    undefined,
+    () => createNoopBootstrap(),
+    ((params: { prompt: string | AsyncIterable<unknown>; options?: unknown }) => {
+      void params;
+      return (async function* () {
+        for (const message of messages) {
+          yield message;
+        }
+      })();
+    }) as unknown as ClaudeSdkQuery,
+  );
 }
 
 async function collectEvents(
@@ -110,6 +126,76 @@ describe('claude provider', () => {
 
     expect(events.map((event) => event.type)).toEqual(['system', 'result']);
     expect(events[1].metadata).toMatchObject({ routingDecision: 'approved' });
+  });
+
+  it('extracts routing decisions from supported claude sdk metadata locations', async () => {
+    const cases: { name: string; resultMessage: Record<string, unknown> }[] = [
+      {
+        name: 'top-level routing_decision',
+        resultMessage: {
+          routing_decision: 'approved',
+          result: 'done',
+        },
+      },
+      {
+        name: 'metadata.routing_decision',
+        resultMessage: {
+          metadata: { routing_decision: 'approved' },
+          result: 'done',
+        },
+      },
+      {
+        name: 'result_metadata.routingDecision',
+        resultMessage: {
+          result_metadata: { routingDecision: 'approved' },
+          result: 'done',
+        },
+      },
+      {
+        name: 'resultMetadata.routing_decision',
+        resultMessage: {
+          resultMetadata: { routing_decision: 'approved' },
+          result: 'done',
+        },
+      },
+      {
+        name: 'result.metadata.routingDecision',
+        resultMessage: {
+          result: { metadata: { routingDecision: 'approved' } },
+        },
+      },
+    ];
+
+    for (const testCase of cases) {
+      const provider = createQueryProvider([
+        {
+          type: 'assistant',
+          message: {
+            content: [
+              {
+                type: 'text',
+                text: 'Fallback assistant content.',
+              },
+            ],
+          },
+          parent_tool_use_id: null,
+        },
+        {
+          type: 'result',
+          subtype: 'success',
+          usage: {
+            input_tokens: 4,
+            output_tokens: 2,
+          },
+          ...testCase.resultMessage,
+        },
+      ]);
+
+      const events = await collectEvents(provider);
+
+      expect(events.map((event) => event.type)).toEqual(['system', 'assistant', 'usage', 'result']);
+      expect(events[3].metadata).toMatchObject({ routingDecision: 'approved' });
+    }
   });
 
   it('bridges working directory and prompt options into the claude runner request', async () => {

@@ -106,6 +106,29 @@ const sdkStreamFixtures = {
       },
     },
   ] as const,
+  invalidRoutingDecision: [
+    { type: 'thread.started', thread_id: 'thread-invalid-routing-1' },
+    { type: 'turn.started' },
+    {
+      type: 'item.completed',
+      item: {
+        id: 'msg-1',
+        type: 'agent_message',
+        text: 'Completed with unsupported routing decision.',
+      },
+    },
+    {
+      type: 'turn.completed',
+      usage: {
+        input_tokens: 20,
+        cached_input_tokens: 0,
+        output_tokens: 8,
+      },
+      metadata: {
+        routingDecision: 'unsupported_signal',
+      },
+    },
+  ] as const,
   partial: [
     { type: 'thread.started', thread_id: 'thread-partial-1' },
     { type: 'turn.started' },
@@ -194,6 +217,16 @@ describe('codex provider sdk stream integration fixtures', () => {
     });
     expect(capture.input).toBe('Apply integration fixture tests.');
     expect(capture.turnOptions).toBeUndefined();
+  });
+
+  it('drops unsupported routing decision metadata from terminal result events', async () => {
+    const provider = createProviderForFixture(sdkStreamFixtures.invalidRoutingDecision);
+
+    const events = await collectEvents(provider, 'Apply integration fixture tests.');
+
+    expect(events.map((event) => event.type)).toEqual(['system', 'assistant', 'usage', 'result']);
+    expect(events[3].content).toBe('Completed with unsupported routing decision.');
+    expect(events[3].metadata).toBeUndefined();
   });
 
   it('passes an abort signal to sdk turn options when timeout is configured', async () => {
