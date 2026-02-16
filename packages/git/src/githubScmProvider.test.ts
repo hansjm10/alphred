@@ -1,11 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { createPullRequestMock, getIssueMock } = vi.hoisted(() => ({
+const { checkAuthMock, createPullRequestMock, getIssueMock } = vi.hoisted(() => ({
+  checkAuthMock: vi.fn(),
   createPullRequestMock: vi.fn(),
   getIssueMock: vi.fn(),
 }));
 
 vi.mock('./github.js', () => ({
+  checkAuthForRepo: checkAuthMock,
   createPullRequest: createPullRequestMock,
   getIssue: getIssueMock,
 }));
@@ -16,8 +18,25 @@ describe('GitHubScmProvider', () => {
   const provider = new GitHubScmProvider({ kind: 'github', repo: 'owner/repo' });
 
   beforeEach(() => {
+    checkAuthMock.mockReset();
     createPullRequestMock.mockReset();
     getIssueMock.mockReset();
+  });
+
+  it('delegates auth checks to the github adapter', async () => {
+    checkAuthMock.mockResolvedValueOnce({
+      authenticated: true,
+      user: 'hansjm10',
+      scopes: ['repo', 'read:org'],
+    });
+
+    await expect(provider.checkAuth()).resolves.toEqual({
+      authenticated: true,
+      user: 'hansjm10',
+      scopes: ['repo', 'read:org'],
+    });
+
+    expect(checkAuthMock).toHaveBeenCalledWith('owner/repo');
   });
 
   it('normalizes github issue responses into work items', async () => {

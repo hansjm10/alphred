@@ -1,5 +1,10 @@
-import type { CreatePrParams, PullRequestResult, WorkItem } from '@alphred/shared';
-import { createPullRequest as createGitHubPullRequest, getIssue } from './github.js';
+import type { AuthStatus, CreatePrParams, PullRequestResult, WorkItem } from '@alphred/shared';
+import {
+  checkAuthForRepo as checkGitHubAuthForRepo,
+  createPullRequest as createGitHubPullRequest,
+  getIssue,
+} from './github.js';
+import { parsePositiveIntegerId } from './scmProviderUtils.js';
 import type { GitHubScmProviderConfig, ScmProvider } from './scmProvider.js';
 
 const CLONE_STUB_MESSAGE = 'cloneRepo is not implemented yet. Tracked in the repo-clone issue.';
@@ -8,6 +13,10 @@ export class GitHubScmProvider implements ScmProvider {
   readonly kind = 'github';
 
   constructor(private readonly config: GitHubScmProviderConfig) {}
+
+  async checkAuth(): Promise<AuthStatus> {
+    return checkGitHubAuthForRepo(this.config.repo);
+  }
 
   async cloneRepo(_remote: string, _localPath: string): Promise<void> {
     throw new Error(CLONE_STUB_MESSAGE);
@@ -41,15 +50,6 @@ export class GitHubScmProvider implements ScmProvider {
       provider: this.kind,
     };
   }
-}
-
-function parsePositiveIntegerId(id: number | string, entityName: string): number {
-  const parsed = typeof id === 'number' ? id : Number(id);
-  if (!Number.isInteger(parsed) || parsed <= 0) {
-    throw new Error(`Invalid ${entityName} id: ${id}`);
-  }
-
-  return parsed;
 }
 
 function extractGitHubPullRequestId(url: string): string {

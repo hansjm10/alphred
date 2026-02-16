@@ -1,9 +1,10 @@
 import { AzureDevOpsScmProvider } from './azureDevopsScmProvider.js';
 import { GitHubScmProvider } from './githubScmProvider.js';
-import type { CreatePrParams, PullRequestResult, ScmProviderKind, WorkItem } from '@alphred/shared';
+import type { AuthStatus, CreatePrParams, PullRequestResult, ScmProviderKind, WorkItem } from '@alphred/shared';
 
 export type ScmProvider = {
   readonly kind: ScmProviderKind;
+  checkAuth(): Promise<AuthStatus>;
   cloneRepo(remote: string, localPath: string): Promise<void>;
   getWorkItem(id: number | string): Promise<WorkItem>;
   createPullRequest(params: CreatePrParams): Promise<PullRequestResult>;
