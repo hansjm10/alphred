@@ -1,5 +1,5 @@
 import { query, type Options as ClaudeQueryOptions } from '@anthropic-ai/claude-agent-sdk';
-import { routingDecisionSignals, type ProviderEvent, type ProviderRunOptions, type RoutingDecisionSignal } from '@alphred/shared';
+import type { ProviderEvent, ProviderRunOptions } from '@alphred/shared';
 import type { AgentProvider } from '../provider.js';
 import {
   type AdapterProviderConfig,
@@ -13,6 +13,7 @@ import {
   type ClaudeSdkBootstrap,
   initializeClaudeSdkBootstrap,
 } from './claudeSdkBootstrap.js';
+import { createRoutingResultMetadata } from './routingDecisionMetadata.js';
 
 const claudeEventTypeAliases: Readonly<Record<string, ProviderEvent['type']>> = Object.freeze({
   text: 'assistant',
@@ -94,8 +95,6 @@ type ClaudeStreamState = {
   toolUseIds: Set<string>;
 };
 
-const routingDecisionSignalSet: ReadonlySet<RoutingDecisionSignal> = new Set(routingDecisionSignals);
-
 function toRecord(value: unknown): Record<string, unknown> | undefined {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     return undefined;
@@ -138,58 +137,8 @@ function toTrimmedString(value: unknown): string | undefined {
   return trimmed.length > 0 ? trimmed : undefined;
 }
 
-function toRoutingDecisionSignal(value: unknown): RoutingDecisionSignal | undefined {
-  if (typeof value !== 'string') {
-    return undefined;
-  }
-
-  if (!routingDecisionSignalSet.has(value as RoutingDecisionSignal)) {
-    return undefined;
-  }
-
-  return value as RoutingDecisionSignal;
-}
-
-function readRoutingDecisionFromMetadataRecords(
-  metadataRecords: readonly (Record<string, unknown> | undefined)[],
-  key: 'routingDecision' | 'routing_decision',
-): RoutingDecisionSignal | undefined {
-  for (const metadataRecord of metadataRecords) {
-    if (!metadataRecord) {
-      continue;
-    }
-
-    const routingDecision = toRoutingDecisionSignal(metadataRecord[key]);
-    if (routingDecision) {
-      return routingDecision;
-    }
-  }
-
-  return undefined;
-}
-
-function extractRoutingDecisionSignal(sdkMessage: Record<string, unknown>): RoutingDecisionSignal | undefined {
-  const resultRecord = toRecord(sdkMessage.result);
-  const metadataRecords: (Record<string, unknown> | undefined)[] = [
-    sdkMessage,
-    toRecord(sdkMessage.metadata),
-    toRecord(sdkMessage.result_metadata),
-    toRecord(sdkMessage.resultMetadata),
-    resultRecord,
-    resultRecord ? toRecord(resultRecord.metadata) : undefined,
-  ];
-
-  return readRoutingDecisionFromMetadataRecords(metadataRecords, 'routingDecision')
-    ?? readRoutingDecisionFromMetadataRecords(metadataRecords, 'routing_decision');
-}
-
 function createResultMetadata(sdkMessage: Record<string, unknown>): Record<string, unknown> | undefined {
-  const routingDecision = extractRoutingDecisionSignal(sdkMessage);
-  if (!routingDecision) {
-    return undefined;
-  }
-
-  return { routingDecision };
+  return createRoutingResultMetadata(sdkMessage, toRecord);
 }
 
 function toStringOrThrow(value: unknown, eventIndex: number, fieldPath: string): string {
