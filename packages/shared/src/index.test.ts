@@ -2,7 +2,9 @@ import { describe, it, expect } from 'vitest';
 import {
   compareStringsByCodeUnit,
   type AuthStatus,
+  type CloneStatus,
   type CreatePrParams,
+  type RepositoryConfig,
   type PullRequestResult,
   type RunStatus,
   type ScmProviderKind,
@@ -86,6 +88,23 @@ describe('shared types', () => {
     expect(workItem.labels).toContain('bug');
     expect(prParams.targetBranch).toBe('main');
     expect(prResult.id).toBe('123');
+  });
+
+  it('should type-check repository registry types', () => {
+    const cloneStatus: CloneStatus = 'pending';
+    const repository: RepositoryConfig = {
+      id: 1,
+      name: 'frontend',
+      provider: 'github',
+      remoteUrl: 'https://github.com/owner/repo.git',
+      remoteRef: 'owner/repo',
+      defaultBranch: 'main',
+      localPath: null,
+      cloneStatus,
+    };
+
+    expect(repository.cloneStatus).toBe('pending');
+    expect(repository.provider).toBe('github');
   });
 
   it('should type-check scm auth status', () => {

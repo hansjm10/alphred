@@ -59,6 +59,29 @@ export const guardDefinitions = sqliteTable(
   }),
 );
 
+export const repositories = sqliteTable(
+  'repositories',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    name: text('name').notNull(),
+    provider: text('provider').notNull(),
+    remoteUrl: text('remote_url').notNull(),
+    remoteRef: text('remote_ref').notNull(),
+    defaultBranch: text('default_branch').notNull().default('main'),
+    localPath: text('local_path'),
+    cloneStatus: text('clone_status').notNull().default('pending'),
+    createdAt: text('created_at').notNull().default(utcNow),
+    updatedAt: text('updated_at').notNull().default(utcNow),
+  },
+  table => ({
+    nameUnique: uniqueIndex('repositories_name_uq').on(table.name),
+    providerCheck: check('repositories_provider_ck', sql`${table.provider} in ('github', 'azure-devops')`),
+    cloneStatusCheck: check('repositories_clone_status_ck', sql`${table.cloneStatus} in ('pending', 'cloned', 'error')`),
+    nameIdx: index('repositories_name_idx').on(table.name),
+    createdAtIdx: index('repositories_created_at_idx').on(table.createdAt),
+  }),
+);
+
 export const workflowRuns = sqliteTable(
   'workflow_runs',
   {

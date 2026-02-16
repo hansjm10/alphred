@@ -188,6 +188,13 @@ SQL-first workflow topology and execution state are modeled with normalized tabl
   - Reusable guard references (stored as JSON text expressions).
   - Constraint/index rationale:
     - Unique `(guard_key, version)` provides deterministic guard lookup.
+- `repositories`
+  - Managed repository registry (`name`, `provider`, `remote_url`, `remote_ref`, `default_branch`, `local_path`, `clone_status`).
+  - Constraint/index rationale:
+    - Unique `name` prevents ambiguous repository aliases.
+    - `provider` check enforces known SCM kinds (`github`, `azure-devops`).
+    - `clone_status` check enforces lifecycle enum (`pending`, `cloned`, `error`).
+    - `name` and `created_at` indexes support lookup and listing hot paths.
 - `tree_nodes`
   - Phase template nodes (`node_key`, `node_type`, `provider`, `prompt_template_id`, retry policy).
   - Constraint/index rationale:
