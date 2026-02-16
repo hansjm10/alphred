@@ -106,6 +106,29 @@ const sdkStreamFixtures = {
       },
     },
   ] as const,
+  legacyRoutingDecisionKey: [
+    { type: 'thread.started', thread_id: 'thread-legacy-routing-key-1' },
+    { type: 'turn.started' },
+    {
+      type: 'item.completed',
+      item: {
+        id: 'msg-1',
+        type: 'agent_message',
+        text: 'Completed using legacy routing key metadata.',
+      },
+    },
+    {
+      type: 'turn.completed',
+      usage: {
+        input_tokens: 12,
+        cached_input_tokens: 0,
+        output_tokens: 4,
+      },
+      metadata: {
+        routing_decision: 'approved',
+      },
+    },
+  ] as const,
   invalidRoutingDecision: [
     { type: 'thread.started', thread_id: 'thread-invalid-routing-1' },
     { type: 'turn.started' },
@@ -227,6 +250,18 @@ describe('codex provider sdk stream integration fixtures', () => {
     expect(events.map((event) => event.type)).toEqual(['system', 'assistant', 'usage', 'result']);
     expect(events[3].content).toBe('Completed with unsupported routing decision.');
     expect(events[3].metadata).toBeUndefined();
+  });
+
+  it('maps legacy routing_decision metadata into canonical routingDecision output', async () => {
+    const provider = createProviderForFixture(sdkStreamFixtures.legacyRoutingDecisionKey);
+
+    const events = await collectEvents(provider, 'Apply integration fixture tests.');
+
+    expect(events.map((event) => event.type)).toEqual(['system', 'assistant', 'usage', 'result']);
+    expect(events[3].content).toBe('Completed using legacy routing key metadata.');
+    expect(events[3].metadata).toMatchObject({
+      routingDecision: 'approved',
+    });
   });
 
   it('passes an abort signal to sdk turn options when timeout is configured', async () => {

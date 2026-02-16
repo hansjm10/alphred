@@ -19,7 +19,12 @@ The SQL workflow executor reads routing intent from structured provider result m
 - Runtime compatibility parsing may accept legacy key variants (for example,
   `metadata.routing_decision`), but canonical metadata remains the preferred
   provider output format.
+- When both keys are present, canonical `metadata.routingDecision` is used when
+  it is valid; `metadata.routing_decision` is only a fallback when canonical
+  metadata is missing or invalid.
 - Missing or invalid routing metadata is treated as no structured decision signal.
+- Unsupported routing signal values are treated as invalid metadata and follow
+  the same `no_route` behavior.
 - Legacy report text directives (for example, `decision: approved`) are not parsed for routing.
 - During rollout, providers that drive guarded routing must emit terminal `result.metadata.routingDecision`; otherwise guarded paths can persist `no_route` outcomes.
 

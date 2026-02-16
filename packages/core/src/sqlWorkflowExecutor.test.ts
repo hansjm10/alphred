@@ -2163,6 +2163,78 @@ describe('createSqlWorkflowExecutor', () => {
     });
   });
 
+  it('prefers routingDecision when both routing metadata keys are valid and conflicting', async () => {
+    const { db, runId, reviewRunNodeId, reviseRunNodeId } = seedDecisionRoutingRun();
+    const executor = createSqlWorkflowExecutor(db, {
+      resolveProvider: () => ({
+        async *run(): AsyncIterable<ProviderEvent> {
+          yield {
+            type: 'result',
+            content: 'Route using conflicting mixed metadata keys.',
+            timestamp: 10,
+            metadata: {
+              routingDecision: 'changes_requested',
+              routing_decision: 'approved',
+            } as unknown as ProviderEvent['metadata'],
+          };
+        },
+      }),
+    });
+
+    const firstStep = await executor.executeNextRunnableNode({
+      workflowRunId: runId,
+      options: {
+        workingDirectory: '/tmp/alphred-worktree',
+      },
+    });
+
+    expect(firstStep).toEqual({
+      outcome: 'executed',
+      workflowRunId: runId,
+      runNodeId: reviewRunNodeId,
+      nodeKey: 'review',
+      runNodeStatus: 'completed',
+      runStatus: 'running',
+      artifactId: expect.any(Number),
+    });
+
+    const persistedReviewDecision = db
+      .select({
+        decisionType: routingDecisions.decisionType,
+        rawOutput: routingDecisions.rawOutput,
+      })
+      .from(routingDecisions)
+      .where(eq(routingDecisions.runNodeId, reviewRunNodeId))
+      .get();
+
+    expect(persistedReviewDecision).toEqual({
+      decisionType: 'changes_requested',
+      rawOutput: {
+        source: 'provider_result_metadata',
+        routingDecision: 'changes_requested',
+        selectedEdgeId: expect.any(Number),
+        attempt: 1,
+      },
+    });
+
+    const secondStep = await executor.executeNextRunnableNode({
+      workflowRunId: runId,
+      options: {
+        workingDirectory: '/tmp/alphred-worktree',
+      },
+    });
+
+    expect(secondStep).toEqual({
+      outcome: 'executed',
+      workflowRunId: runId,
+      runNodeId: reviseRunNodeId,
+      nodeKey: 'revise_target',
+      runNodeStatus: 'completed',
+      runStatus: 'completed',
+      artifactId: expect.any(Number),
+    });
+  });
+
   it('routes across auto edges without persisting a decision when no decision line is present', async () => {
     const { db, runId, sourceRunNodeId, targetRunNodeId } = seedLinearAutoRun();
     let runInvocation = 0;
@@ -4467,7 +4539,7 @@ describe('createSqlWorkflowExecutor', () => {
     ).resolves.toBeUndefined();
   }, 30_000);
 
-  it.skip('covers design_tree routing paths end-to-end in a clean checkout without prebuilt dist artifacts', async () => {
+  it('covers design_tree revise loop path in a clean checkout without prebuilt dist artifacts', async () => {
     const distDirectories = [
       resolve(corePackageRoot, 'dist'),
       resolve(corePackageRoot, '../db/dist'),
@@ -4479,19 +4551,12 @@ describe('createSqlWorkflowExecutor', () => {
         await runVitestSubprocess([
           'packages/core/src/sqlWorkflowExecutor.test.ts',
           '-t',
-          'covers design_tree approve path with deterministic persisted evidence across run tables',
-          '--reporter=dot',
-        ]);
-
-        await runVitestSubprocess([
-          'packages/core/src/sqlWorkflowExecutor.test.ts',
-          '-t',
           'covers design_tree revise loop path by returning to creation and completing after later approval',
           '--reporter=dot',
         ]);
       }),
     ).resolves.toBeUndefined();
-  }, 60_000);
+  }, 45_000);
 
   it('covers design_tree revise loop path by returning to creation and completing after later approval', async () => {
     const { db, runId, runNodeIdByKey } = seedDesignTreeIntegrationRun();

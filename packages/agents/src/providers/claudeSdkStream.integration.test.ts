@@ -100,6 +100,33 @@ const sdkStreamFixtures = {
       },
     },
   ] as const,
+  legacyRoutingDecisionKey: [
+    {
+      type: 'assistant',
+      message: {
+        content: [
+          {
+            type: 'text',
+            text: 'Completed using legacy routing key metadata.',
+          },
+        ],
+      },
+      parent_tool_use_id: null,
+    },
+    {
+      type: 'result',
+      subtype: 'success',
+      result: 'Completed using legacy routing key metadata.',
+      metadata: {
+        routing_decision: 'approved',
+      },
+      usage: {
+        input_tokens: 12,
+        output_tokens: 4,
+        cache_read_input_tokens: 0,
+      },
+    },
+  ] as const,
   invalidRoutingDecision: [
     {
       type: 'assistant',
@@ -408,6 +435,18 @@ describe('claude provider sdk stream integration fixtures', () => {
     expect(events.map((event) => event.type)).toEqual(['system', 'assistant', 'usage', 'result']);
     expect(events[3]?.content).toBe('Completed with unsupported routing decision.');
     expect(events[3]?.metadata).toBeUndefined();
+  });
+
+  it('maps legacy routing_decision metadata into canonical routingDecision output', async () => {
+    const provider = createProviderForFixture(sdkStreamFixtures.legacyRoutingDecisionKey);
+
+    const events = await collectEvents(provider, 'Apply integration fixture tests.');
+
+    expect(events.map((event) => event.type)).toEqual(['system', 'assistant', 'usage', 'result']);
+    expect(events[3]?.content).toBe('Completed using legacy routing key metadata.');
+    expect(events[3]?.metadata).toMatchObject({
+      routingDecision: 'approved',
+    });
   });
 
   it('passes an abort controller when timeout is configured', async () => {
