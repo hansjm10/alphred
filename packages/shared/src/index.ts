@@ -19,6 +19,33 @@ export type LogLevel = 'debug' | 'info' | 'warn' | 'error';
 // Trigger sources
 export type TriggerSource = 'manual' | 'github' | 'azure-devops' | 'schedule';
 
+// SCM providers
+export type ScmProviderKind = 'github' | 'azure-devops';
+
+// Normalized SCM work item
+export type WorkItem = {
+  id: string;
+  title: string;
+  body: string;
+  labels: string[];
+  provider: ScmProviderKind;
+};
+
+// Normalized pull request creation params
+export type CreatePrParams = {
+  title: string;
+  body: string;
+  sourceBranch: string;
+  targetBranch?: string;
+};
+
+// Normalized pull request creation result
+export type PullRequestResult = {
+  id: string;
+  url?: string;
+  provider: ScmProviderKind;
+};
+
 // Guard operator types
 export type GuardOperator = '==' | '!=' | '>' | '<' | '>=' | '<=';
 export type GuardLogical = 'and' | 'or';
