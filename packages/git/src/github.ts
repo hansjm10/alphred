@@ -99,13 +99,8 @@ function parseGitHubAuthStatus(output: string): { user?: string; scopes: string[
   let rawScopes: string | undefined;
 
   for (const line of output.split('\n')) {
-    if (user === undefined) {
-      user = parseGitHubAuthUser(line);
-    }
-
-    if (rawScopes === undefined) {
-      rawScopes = parseGitHubAuthScopes(line);
-    }
+    user ??= parseGitHubAuthUser(line);
+    rawScopes ??= parseGitHubAuthScopes(line);
 
     if (user !== undefined && rawScopes !== undefined) {
       break;
