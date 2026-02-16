@@ -2045,7 +2045,7 @@ describe('createSqlWorkflowExecutor', () => {
           type: 'result',
           content: 'decision: unknown_signal\nNo matching route.',
           timestamp: 10,
-          metadata: { routing_decision: 'unknown_signal' },
+          metadata: { routingDecision: 'unknown_signal' } as unknown as ProviderEvent['metadata'],
         };
       },
     }));
@@ -2091,8 +2091,8 @@ describe('createSqlWorkflowExecutor', () => {
     expect(resolveProvider).toHaveBeenCalledTimes(1);
   });
 
-  it('routes using a valid routing_decision when routingDecision is present but unknown', async () => {
-    const { db, runId, reviewRunNodeId, approvedRunNodeId } = seedDecisionRoutingRun();
+  it('does not route using legacy routing_decision when canonical routingDecision is unknown', async () => {
+    const { db, runId, reviewRunNodeId } = seedDecisionRoutingRun();
     const executor = createSqlWorkflowExecutor(db, {
       resolveProvider: () => ({
         async *run(): AsyncIterable<ProviderEvent> {
@@ -2122,7 +2122,7 @@ describe('createSqlWorkflowExecutor', () => {
       runNodeId: reviewRunNodeId,
       nodeKey: 'review',
       runNodeStatus: 'completed',
-      runStatus: 'running',
+      runStatus: 'failed',
       artifactId: expect.any(Number),
     });
 
@@ -2136,11 +2136,11 @@ describe('createSqlWorkflowExecutor', () => {
       .get();
 
     expect(persistedReviewDecision).toEqual({
-      decisionType: 'approved',
+      decisionType: 'no_route',
       rawOutput: {
         source: 'provider_result_metadata',
-        routingDecision: 'approved',
-        selectedEdgeId: expect.any(Number),
+        routingDecision: null,
+        outgoingEdgeIds: expect.arrayContaining([expect.any(Number)]),
         attempt: 1,
       },
     });
@@ -2153,17 +2153,13 @@ describe('createSqlWorkflowExecutor', () => {
     });
 
     expect(secondStep).toEqual({
-      outcome: 'executed',
+      outcome: 'run_terminal',
       workflowRunId: runId,
-      runNodeId: approvedRunNodeId,
-      nodeKey: 'approved_target',
-      runNodeStatus: 'completed',
-      runStatus: 'completed',
-      artifactId: expect.any(Number),
+      runStatus: 'failed',
     });
   });
 
-  it('prefers routingDecision when both routing metadata keys are valid and conflicting', async () => {
+  it('uses canonical routingDecision when both canonical and legacy keys are present', async () => {
     const { db, runId, reviewRunNodeId, reviseRunNodeId } = seedDecisionRoutingRun();
     const executor = createSqlWorkflowExecutor(db, {
       resolveProvider: () => ({
@@ -3628,7 +3624,7 @@ describe('createSqlWorkflowExecutor', () => {
     });
   });
 
-  it('ignores stale legacy routing decisions without attempt metadata when refreshed decision timestamps tie', async () => {
+  it('ignores stale routing decisions without attempt metadata when refreshed decision timestamps tie', async () => {
     const {
       db,
       runId,
@@ -3748,9 +3744,9 @@ describe('createSqlWorkflowExecutor', () => {
       })
       .run();
 
-    db.run(sql`DROP TRIGGER IF EXISTS phase_artifacts_test_legacy_review_refresh_tied_timestamp`);
+    db.run(sql`DROP TRIGGER IF EXISTS phase_artifacts_test_review_refresh_tied_timestamp`);
     db.run(
-      sql.raw(`CREATE TRIGGER phase_artifacts_test_legacy_review_refresh_tied_timestamp
+      sql.raw(`CREATE TRIGGER phase_artifacts_test_review_refresh_tied_timestamp
       AFTER INSERT ON phase_artifacts
       FOR EACH ROW
       WHEN NEW.workflow_run_id = ${runId}

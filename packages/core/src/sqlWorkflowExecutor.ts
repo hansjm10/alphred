@@ -70,7 +70,6 @@ type RoutingDecisionRow = {
 
 type RoutingDecisionSelection = {
   latestByRunNodeId: Map<number, RoutingDecisionRow>;
-  decisionCountByRunNodeId: Map<number, number>;
 };
 
 type NextRunnableSelection = {
@@ -304,10 +303,7 @@ function loadLatestRoutingDecisionsByRunNodeId(
     .all();
 
   const latestByRunNodeId = new Map<number, RoutingDecisionRow>();
-  const decisionCountByRunNodeId = new Map<number, number>();
   for (const row of rows) {
-    const currentCount = decisionCountByRunNodeId.get(row.runNodeId) ?? 0;
-    decisionCountByRunNodeId.set(row.runNodeId, currentCount + 1);
     latestByRunNodeId.set(row.runNodeId, {
       id: row.id,
       runNodeId: row.runNodeId,
@@ -319,7 +315,6 @@ function loadLatestRoutingDecisionsByRunNodeId(
 
   return {
     latestByRunNodeId,
-    decisionCountByRunNodeId,
   };
 }
 
@@ -361,7 +356,6 @@ function appendEdgeToNodeMap(edgesByNodeId: Map<number, EdgeRow[]>, nodeId: numb
 function resolveApplicableRoutingDecision(
   sourceNode: RunNodeExecutionRow,
   latestRoutingDecisionsByRunNodeId: Map<number, RoutingDecisionRow>,
-  routingDecisionCountByRunNodeId: Map<number, number>,
   latestArtifactsByRunNodeId: Map<number, LatestArtifact>,
 ): RoutingDecisionRow | null {
   const persistedDecision = latestRoutingDecisionsByRunNodeId.get(sourceNode.runNodeId) ?? null;
@@ -369,11 +363,8 @@ function resolveApplicableRoutingDecision(
     return null;
   }
 
-  const decisionCount = routingDecisionCountByRunNodeId.get(sourceNode.runNodeId) ?? 0;
   const latestArtifact = latestArtifactsByRunNodeId.get(sourceNode.runNodeId) ?? null;
-  const hasStaleAttempt =
-    (persistedDecision.attempt !== null && persistedDecision.attempt < sourceNode.attempt) ||
-    (persistedDecision.attempt === null && decisionCount < sourceNode.attempt);
+  const hasStaleAttempt = persistedDecision.attempt === null || persistedDecision.attempt < sourceNode.attempt;
   const hasStaleTimestamp = latestArtifact !== null && persistedDecision.createdAt < latestArtifact.createdAt;
   return hasStaleAttempt || hasStaleTimestamp ? null : persistedDecision;
 }
@@ -382,7 +373,6 @@ function resolveCompletedSourceNodeRouting(
   sourceNode: RunNodeExecutionRow,
   outgoingEdges: EdgeRow[],
   latestRoutingDecisionsByRunNodeId: Map<number, RoutingDecisionRow>,
-  routingDecisionCountByRunNodeId: Map<number, number>,
   latestArtifactsByRunNodeId: Map<number, LatestArtifact>,
 ): {
   selectedEdgeId: number | null;
@@ -400,7 +390,6 @@ function resolveCompletedSourceNodeRouting(
   const decision = resolveApplicableRoutingDecision(
     sourceNode,
     latestRoutingDecisionsByRunNodeId,
-    routingDecisionCountByRunNodeId,
     latestArtifactsByRunNodeId,
   );
   const matchingEdge = selectFirstMatchingOutgoingEdge(outgoingEdges, decision?.decisionType ?? null);
@@ -431,7 +420,6 @@ function buildRoutingSelection(
   latestNodeAttempts: RunNodeExecutionRow[],
   edges: EdgeRow[],
   latestRoutingDecisionsByRunNodeId: Map<number, RoutingDecisionRow>,
-  routingDecisionCountByRunNodeId: Map<number, number>,
   latestArtifactsByRunNodeId: Map<number, LatestArtifact>,
 ): RoutingSelection {
   const latestByTreeNodeId = new Map<number, RunNodeExecutionRow>(latestNodeAttempts.map(row => [row.treeNodeId, row]));
@@ -455,7 +443,6 @@ function buildRoutingSelection(
       sourceNode,
       outgoingEdges,
       latestRoutingDecisionsByRunNodeId,
-      routingDecisionCountByRunNodeId,
       latestArtifactsByRunNodeId,
     );
     if (routing.selectedEdgeId !== null) {
@@ -545,7 +532,6 @@ function selectNextRunnableNode(
   rows: RunNodeExecutionRow[],
   edges: EdgeRow[],
   latestRoutingDecisionsByRunNodeId: Map<number, RoutingDecisionRow>,
-  routingDecisionCountByRunNodeId: Map<number, number>,
   latestArtifactsByRunNodeId: Map<number, LatestArtifact>,
 ): NextRunnableSelection {
   const latestNodeAttempts = getLatestRunNodeAttempts(rows);
@@ -553,7 +539,6 @@ function selectNextRunnableNode(
     latestNodeAttempts,
     edges,
     latestRoutingDecisionsByRunNodeId,
-    routingDecisionCountByRunNodeId,
     latestArtifactsByRunNodeId,
   );
 
@@ -610,7 +595,6 @@ function markUnreachablePendingNodesAsSkipped(
       latestNodeAttempts,
       edgeRows,
       routingDecisionSelection.latestByRunNodeId,
-      routingDecisionSelection.decisionCountByRunNodeId,
       latestArtifactsByRunNodeId,
     );
 
@@ -1127,7 +1111,6 @@ function failRunOnIterationLimit(
     runNodeRows,
     edgeRows,
     routingDecisionSelection.latestByRunNodeId,
-    routingDecisionSelection.decisionCountByRunNodeId,
     latestArtifactsByRunNodeId,
   );
 
@@ -1522,7 +1505,6 @@ export function createSqlWorkflowExecutor(
         runNodeRows,
         edgeRows,
         routingDecisionSelection.latestByRunNodeId,
-        routingDecisionSelection.decisionCountByRunNodeId,
         latestArtifactsByRunNodeId,
       );
 

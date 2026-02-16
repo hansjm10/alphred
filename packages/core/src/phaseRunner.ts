@@ -141,19 +141,9 @@ function readRoutingDecision(event: ProviderEvent): RoutingDecisionSignal | null
     return null;
   }
 
-  const routingDecisionCandidates = [
-    event.metadata.routingDecision,
-    event.metadata.routing_decision,
-  ];
-
-  for (const candidate of routingDecisionCandidates) {
-    if (typeof candidate !== 'string') {
-      continue;
-    }
-
-    if (routingDecisionSignalSet.has(candidate as RoutingDecisionSignal)) {
-      return candidate as RoutingDecisionSignal;
-    }
+  const routingDecision = event.metadata.routingDecision;
+  if (typeof routingDecision === 'string' && routingDecisionSignalSet.has(routingDecision as RoutingDecisionSignal)) {
+    return routingDecision as RoutingDecisionSignal;
   }
 
   return null;
