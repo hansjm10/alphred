@@ -1540,7 +1540,7 @@ describe('createSqlWorkflowExecutor', () => {
       decisionType: 'retry',
       rawOutput: {
         source: 'provider_result_metadata',
-        decision: 'retry',
+        routingDecision: 'retry',
         attempt: 1,
       },
     });
@@ -2487,7 +2487,7 @@ describe('createSqlWorkflowExecutor', () => {
       decisionType: 'blocked',
       rawOutput: {
         source: 'provider_result_metadata',
-        decision: 'blocked',
+        routingDecision: 'blocked',
         selectedEdgeId: fallbackEdge.id,
         attempt: 1,
       },

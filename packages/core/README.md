@@ -32,6 +32,10 @@ The SQL workflow executor reads routing intent from structured provider result m
 
 - A `routing_decisions` row is persisted for completed nodes when a valid structured routing signal is produced.
 - If no outgoing edge matches, `decisionType = no_route` is persisted with rationale and raw output metadata.
+- For metadata-derived rows, `rawOutput.source = provider_result_metadata` and `rawOutput.routingDecision` stores the structured signal (or `null` for `no_route`).
+- `rawOutput.attempt` is persisted for all metadata-derived decisions.
+- `rawOutput.selectedEdgeId` is included when a matching edge is selected.
+- `rawOutput.outgoingEdgeIds` is included for `no_route` rows to record evaluated candidates.
 
 ### No-Route and Unresolved Behavior
 

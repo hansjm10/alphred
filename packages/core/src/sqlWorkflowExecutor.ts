@@ -870,7 +870,7 @@ function persistCompletedNodeRoutingDecision(
       decisionType: decisionSignal,
       rawOutput: {
         source: 'provider_result_metadata',
-        decision: decisionSignal,
+        routingDecision: decisionSignal,
         attempt: params.attempt,
       },
     });
@@ -895,7 +895,7 @@ function persistCompletedNodeRoutingDecision(
       decisionType: decisionSignal,
       rawOutput: {
         source: 'provider_result_metadata',
-        decision: decisionSignal,
+        routingDecision: decisionSignal,
         selectedEdgeId: matchingEdge.edgeId,
         attempt: params.attempt,
       },
