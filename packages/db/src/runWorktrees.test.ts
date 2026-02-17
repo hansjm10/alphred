@@ -1,3 +1,4 @@
+import { sql } from 'drizzle-orm';
 import { describe, expect, it } from 'vitest';
 import { createDatabase } from './connection.js';
 import { migrateDatabase } from './migrate.js';
@@ -131,5 +132,108 @@ describe('run_worktrees lifecycle helpers', () => {
     ).toThrow('Run-worktree removal precondition failed');
 
     expect(getRunWorktreeById(db, inserted.id)?.status).toBe('removed');
+  });
+
+  it('defaults commitHash to null, returns null for missing ids, and lists all statuses when unfiltered', () => {
+    const db = createMigratedDb();
+    const runId = seedWorkflowRun(db);
+    const repository = insertRepository(db, {
+      name: 'ops',
+      provider: 'github',
+      remoteUrl: 'https://github.com/acme/ops.git',
+      remoteRef: 'acme/ops',
+      localPath: '/tmp/alphred/repos/github/acme/ops',
+      cloneStatus: 'cloned',
+    });
+
+    const first = insertRunWorktree(db, {
+      workflowRunId: runId,
+      repositoryId: repository.id,
+      worktreePath: '/tmp/alphred/worktrees/ops-first',
+      branch: 'alphred/design_tree/ops-first',
+      occurredAt: '2026-01-01T00:00:00.000Z',
+    });
+    const second = insertRunWorktree(db, {
+      workflowRunId: runId,
+      repositoryId: repository.id,
+      worktreePath: '/tmp/alphred/worktrees/ops-second',
+      branch: 'alphred/design_tree/ops-second',
+      commitHash: 'xyz123',
+      occurredAt: '2026-01-01T00:01:00.000Z',
+    });
+
+    const removed = markRunWorktreeRemoved(db, {
+      runWorktreeId: second.id,
+      occurredAt: '2026-01-01T00:02:00.000Z',
+    });
+
+    expect(first.commitHash).toBeNull();
+    expect(getRunWorktreeById(db, 9_999_999)).toBeNull();
+    expect(listRunWorktreesForRun(db, runId)).toEqual([first, removed]);
+  });
+
+  it('throws when an inserted row is deleted before readback', () => {
+    const db = createMigratedDb();
+    const runId = seedWorkflowRun(db);
+    const repository = insertRepository(db, {
+      name: 'cleanup',
+      provider: 'github',
+      remoteUrl: 'https://github.com/acme/cleanup.git',
+      remoteRef: 'acme/cleanup',
+      localPath: '/tmp/alphred/repos/github/acme/cleanup',
+      cloneStatus: 'cloned',
+    });
+
+    db.run(sql`DROP TRIGGER IF EXISTS run_worktrees_test_delete_after_insert`);
+    db.run(sql`CREATE TRIGGER run_worktrees_test_delete_after_insert
+      AFTER INSERT ON run_worktrees
+      FOR EACH ROW
+      BEGIN
+        DELETE FROM run_worktrees WHERE id = NEW.id;
+      END`);
+
+    expect(() =>
+      insertRunWorktree(db, {
+        workflowRunId: runId,
+        repositoryId: repository.id,
+        worktreePath: '/tmp/alphred/worktrees/cleanup',
+        branch: 'alphred/design_tree/cleanup',
+      }),
+    ).toThrow('Run-worktree insert did not return a row');
+  });
+
+  it('throws when a removed row is deleted before readback', () => {
+    const db = createMigratedDb();
+    const runId = seedWorkflowRun(db);
+    const repository = insertRepository(db, {
+      name: 'mobile-web',
+      provider: 'github',
+      remoteUrl: 'https://github.com/acme/mobile-web.git',
+      remoteRef: 'acme/mobile-web',
+      localPath: '/tmp/alphred/repos/github/acme/mobile-web',
+      cloneStatus: 'cloned',
+    });
+
+    const inserted = insertRunWorktree(db, {
+      workflowRunId: runId,
+      repositoryId: repository.id,
+      worktreePath: '/tmp/alphred/worktrees/mobile-web',
+      branch: 'alphred/design_tree/mobile-web',
+    });
+
+    db.run(sql`DROP TRIGGER IF EXISTS run_worktrees_test_delete_after_remove`);
+    db.run(sql`CREATE TRIGGER run_worktrees_test_delete_after_remove
+      AFTER UPDATE OF status ON run_worktrees
+      FOR EACH ROW
+      WHEN NEW.status = 'removed'
+      BEGIN
+        DELETE FROM run_worktrees WHERE id = NEW.id;
+      END`);
+
+    expect(() =>
+      markRunWorktreeRemoved(db, {
+        runWorktreeId: inserted.id,
+      }),
+    ).toThrow('Run-worktree disappeared after removal update');
   });
 });
