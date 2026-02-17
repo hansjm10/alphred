@@ -90,7 +90,7 @@ function removeHyphenRunsAdjacentToSlash(value: string): string {
   return result;
 }
 
-function normalizeTokenValue(value: unknown): string {
+function normalizeTokenValue(value: string | number | null | undefined): string {
   if (value === undefined || value === null) {
     return '';
   }
@@ -98,16 +98,16 @@ function normalizeTokenValue(value: unknown): string {
   const normalized = String(value)
     .trim()
     .toLowerCase()
-    .replace(/[\\/]+/g, '-')
-    .replace(/[\s_]+/g, '-')
-    .replace(/[^a-z0-9.-]+/g, '-');
+    .replaceAll(/[\\/]+/g, '-')
+    .replaceAll(/[\s_]+/g, '-')
+    .replaceAll(/[^a-z0-9.-]+/g, '-');
 
   return trimDotAndDashEdges(collapseRepeatedCharacter(normalized, '-'));
 }
 
 function sanitizeBranchSegment(segment: string): string {
   const withoutControls = Array.from(segment, character => {
-    const codePoint = character.charCodeAt(0);
+    const codePoint = character.codePointAt(0) ?? 0;
     if (codePoint <= 0x1f || codePoint === 0x7f) {
       return '-';
     }
@@ -115,9 +115,9 @@ function sanitizeBranchSegment(segment: string): string {
     return character;
   })
     .join('')
-    .replace(/[[ ~^:\\?*]+/g, '-')
-    .replace(/\.\.+/g, '.')
-    .replace(/@\{/g, '-');
+    .replaceAll(/[[ ~^:\\?*]+/g, '-')
+    .replaceAll(/\.\.+/g, '.')
+    .replaceAll(/@\{/g, '-');
 
   let value = trimDotAndDashEdges(collapseRepeatedCharacter(withoutControls, '-'));
 
@@ -131,7 +131,7 @@ function sanitizeBranchSegment(segment: string): string {
 function sanitizeBranchName(rawBranchName: string): string {
   const rawSegments = rawBranchName
     .replaceAll('\\', '-')
-    .replace(/\/+/g, '/')
+    .replaceAll(/\/+/g, '/')
     .split('/');
 
   const segments: string[] = [];
@@ -188,7 +188,7 @@ export function generateBranchName(
   const date = new Date(timestamp * 1000).toISOString().slice(0, 10);
 
   const normalizedTemplate = resolveBranchTemplate(template);
-  const interpolated = normalizedTemplate.replace(tokenPattern, (_match, token: string) => {
+  const interpolated = normalizedTemplate.replaceAll(tokenPattern, (_match, token: string) => {
     if (token === 'tree-key') {
       return normalizeTokenValue(context.treeKey);
     }
