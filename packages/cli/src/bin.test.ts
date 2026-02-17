@@ -6,6 +6,7 @@ import {
   createDatabase,
   getRepositoryByName,
   insertRepository,
+  insertRunWorktree,
   materializeWorkflowRunFromTree,
   migrateDatabase,
   promptTemplates,
@@ -356,6 +357,69 @@ describe('CLI run/status commands', () => {
     });
     expect(cleanupRun).toHaveBeenCalledWith(expect.any(Number));
     expect(observedWorkingDirectory).toBe('/tmp/alphred/worktrees/fix-auth-bug');
+  });
+
+  it('returns runtime failure without materializing a run when --repo names an unknown repository', async () => {
+    const db = createDatabase(':memory:');
+    migrateDatabase(db);
+    seedSingleNodeTree(db, 'design_tree');
+    const captured = createCapturedIo();
+
+    const exitCode = await main(['run', '--tree', 'design_tree', '--repo', 'missing'], {
+      dependencies: createDependencies(db, createUnusedProviderResolver()),
+      io: captured.io,
+    });
+
+    expect(exitCode).toBe(4);
+    expect(captured.stderr).toEqual(['Failed to execute run: Repository "missing" was not found.']);
+    expect(
+      db.select({ id: workflowRuns.id })
+        .from(workflowRuns)
+        .all(),
+    ).toEqual([]);
+  });
+
+  it('marks run cancelled when repository setup fails after run materialization', async () => {
+    const db = createDatabase(':memory:');
+    migrateDatabase(db);
+    seedSingleNodeTree(db, 'design_tree');
+    insertRepository(db, {
+      name: 'frontend',
+      provider: 'github',
+      remoteUrl: 'https://github.com/acme/frontend.git',
+      remoteRef: 'acme/frontend',
+      defaultBranch: 'main',
+      cloneStatus: 'cloned',
+      localPath: '/tmp/alphred/repos/github/acme/frontend',
+    });
+    const captured = createCapturedIo();
+
+    const createRunWorktree = vi.fn(async () => {
+      throw new Error('simulated worktree setup failure');
+    });
+    const cleanupRun = vi.fn(async () => undefined);
+    const createWorktreeManager = vi.fn(() => ({
+      createRunWorktree,
+      cleanupRun,
+    }));
+
+    const exitCode = await main(['run', '--tree', 'design_tree', '--repo', 'frontend'], {
+      dependencies: createDependencies(db, createUnusedProviderResolver(), {
+        createWorktreeManager,
+      }),
+      io: captured.io,
+    });
+
+    expect(exitCode).toBe(4);
+    expect(captured.stderr).toEqual(['Failed to execute run: simulated worktree setup failure']);
+    expect(cleanupRun).toHaveBeenCalledWith(expect.any(Number));
+    expect(
+      db.select({
+        status: workflowRuns.status,
+      })
+        .from(workflowRuns)
+        .all()[0]?.status,
+    ).toBe('cancelled');
   });
 
   it('auto-registers github shorthand repositories for run --repo', async () => {
@@ -858,6 +922,40 @@ describe('CLI repo commands', () => {
     expect(exitCode).toBe(0);
     expect(removeDirectory).toHaveBeenCalledWith('/tmp/alphred/repos/github/acme/frontend');
     expect(getRepositoryByName(db, 'frontend')).toBeNull();
+  });
+
+  it('returns runtime failure with a clear message when run-worktree history references a repository', async () => {
+    const db = createDatabase(':memory:');
+    migrateDatabase(db);
+    seedSingleNodeTree(db, 'design_tree');
+    const repository = insertRepository(db, {
+      name: 'frontend',
+      provider: 'github',
+      remoteUrl: 'https://github.com/acme/frontend.git',
+      remoteRef: 'acme/frontend',
+      cloneStatus: 'cloned',
+      localPath: '/tmp/alphred/repos/github/acme/frontend',
+    });
+    const run = materializeWorkflowRunFromTree(db, { treeKey: 'design_tree' });
+    insertRunWorktree(db, {
+      workflowRunId: run.run.id,
+      repositoryId: repository.id,
+      worktreePath: '/tmp/alphred/worktrees/design-tree-1',
+      branch: 'alphred/design_tree/1',
+      commitHash: 'abc123',
+    });
+    const captured = createCapturedIo();
+
+    const exitCode = await main(['repo', 'remove', 'frontend'], {
+      dependencies: createDependencies(db, createUnusedProviderResolver()),
+      io: captured.io,
+    });
+
+    expect(exitCode).toBe(4);
+    expect(captured.stderr).toEqual([
+      'Repository "frontend" cannot be removed because run-worktree history references it.',
+    ]);
+    expect(getRepositoryByName(db, 'frontend')).not.toBeNull();
   });
 
   it('syncs repositories via ensureRepositoryClone', async () => {

@@ -14,6 +14,8 @@ import {
   migrateDatabase,
   repositories,
   runNodes,
+  runWorktrees,
+  transitionWorkflowRunStatus,
   workflowRuns,
   workflowTrees,
   type AlphredDatabase,
@@ -591,8 +593,12 @@ function assertRepositoryIdentity(existing: RepositoryConfig, expected: Pick<Ins
 function resolveRunRepository(db: AlphredDatabase, value: string): ResolvedRunRepository {
   const parsedInput = parseRunRepositoryInput(value);
   if (parsedInput.kind === 'name') {
+    const existing = getRepositoryByName(db, parsedInput.repoName);
+    if (!existing) {
+      throw new Error(`Repository "${parsedInput.repoName}" was not found.`);
+    }
     return {
-      repoName: parsedInput.repoName,
+      repoName: existing.name,
       autoRegistered: false,
     };
   }
@@ -705,26 +711,27 @@ async function handleRunCommand(rawArgs: readonly string[], dependencies: CliDep
     return usageError(io, 'Option "--branch" requires "--repo".', RUN_USAGE);
   }
 
+  let db: AlphredDatabase | null = null;
   let runId: number | null = null;
   let worktreeManager: ReturnType<CliDependencies['createWorktreeManager']> | null = null;
+  let setupCompleted = false;
   let exitCode: ExitCode = EXIT_SUCCESS;
 
   try {
-    const db = openInitializedDatabase(dependencies, io);
+    db = openInitializedDatabase(dependencies, io);
+    const resolvedRepo = repoInput ? resolveRunRepository(db, repoInput) : null;
+    if (resolvedRepo?.autoRegistered) {
+      io.stdout(
+        `Auto-registered repository "${resolvedRepo.repoName}" from ${resolvedRepo.provider}:${resolvedRepo.remoteRef}.`,
+      );
+    }
+
     const planner = createSqlWorkflowPlanner(db);
     const materializedRun = planner.materializeRun({ treeKey });
     runId = materializedRun.run.id;
     io.stdout(`Started run id=${materializedRun.run.id} for tree "${treeKey}".`);
-
     let workingDirectory = io.cwd;
-    if (repoInput) {
-      const resolvedRepo = resolveRunRepository(db, repoInput);
-      if (resolvedRepo.autoRegistered) {
-        io.stdout(
-          `Auto-registered repository "${resolvedRepo.repoName}" from ${resolvedRepo.provider}:${resolvedRepo.remoteRef}.`,
-        );
-      }
-
+    if (resolvedRepo) {
       worktreeManager = dependencies.createWorktreeManager(db, {
         environment: io.env,
       });
@@ -737,6 +744,7 @@ async function handleRunCommand(rawArgs: readonly string[], dependencies: CliDep
       workingDirectory = worktree.path;
       io.stdout(`Created worktree "${worktree.path}" on branch "${worktree.branch}" for repo "${resolvedRepo.repoName}".`);
     }
+    setupCompleted = true;
 
     const executor = createSqlWorkflowExecutor(db, {
       resolveProvider: dependencies.resolveProvider,
@@ -760,6 +768,27 @@ async function handleRunCommand(rawArgs: readonly string[], dependencies: CliDep
       exitCode = EXIT_SUCCESS;
     }
   } catch (error) {
+    if (db && runId !== null && !setupCompleted) {
+      try {
+        const run = db
+          .select({
+            status: workflowRuns.status,
+          })
+          .from(workflowRuns)
+          .where(eq(workflowRuns.id, runId))
+          .get();
+        if (run?.status === 'pending') {
+          transitionWorkflowRunStatus(db, {
+            workflowRunId: runId,
+            expectedFrom: 'pending',
+            to: 'cancelled',
+          });
+        }
+      } catch (transitionError) {
+        io.stderr(`Failed to cancel run id=${runId} after setup error: ${toErrorMessage(transitionError)}`);
+      }
+    }
+
     if (hasErrorCode(error, 'WORKFLOW_TREE_NOT_FOUND')) {
       io.stderr(`Workflow tree not found for key "${treeKey}".`);
       exitCode = EXIT_NOT_FOUND;
@@ -948,6 +977,19 @@ async function handleRepoRemoveCommand(
     if (!repository) {
       io.stderr(`Repository "${name}" was not found.`);
       return EXIT_NOT_FOUND;
+    }
+
+    const referencedRunWorktree = db
+      .select({
+        id: runWorktrees.id,
+      })
+      .from(runWorktrees)
+      .where(eq(runWorktrees.repositoryId, repository.id))
+      .limit(1)
+      .get();
+    if (referencedRunWorktree) {
+      io.stderr(`Repository "${name}" cannot be removed because run-worktree history references it.`);
+      return EXIT_RUNTIME_ERROR;
     }
 
     const deleted = db
