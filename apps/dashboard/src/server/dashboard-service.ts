@@ -429,15 +429,40 @@ export function createDashboardService(options: {
       resolveProvider: dependencies.resolveProvider,
     });
 
-    const execution = await executor.executeRun({
-      workflowRunId: runId,
-      options: {
-        workingDirectory,
-      },
-    });
+    let execution: Awaited<ReturnType<typeof executor.executeRun>> | undefined;
+    let executionError: unknown = null;
+    try {
+      execution = await executor.executeRun({
+        workflowRunId: runId,
+        options: {
+          workingDirectory,
+        },
+      });
+    } catch (error) {
+      executionError = error;
+    }
 
+    let cleanupError: unknown = null;
     if (cleanupWorktree && worktreeManager) {
-      await worktreeManager.cleanupRun(runId);
+      try {
+        await worktreeManager.cleanupRun(runId);
+      } catch (error) {
+        cleanupError = error;
+      }
+    }
+
+    if (executionError !== null) {
+      throw executionError;
+    }
+
+    if (cleanupError !== null) {
+      throw cleanupError;
+    }
+
+    if (execution === undefined) {
+      throw new DashboardIntegrationError('internal_error', 'Dashboard execution did not produce a terminal result.', {
+        status: 500,
+      });
     }
 
     return {

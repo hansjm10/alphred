@@ -170,6 +170,7 @@ Validation notes:
 - `branch`, when provided, must be a string.
 - `executionMode`, when provided, must be `"async"` or `"sync"`.
 - `cleanupWorktree`, when provided, must be a boolean.
+- When `cleanupWorktree` is `true`, the service attempts worktree cleanup after workflow execution for both success and failure outcomes once execution starts.
 
 Response:
 - `202` when `mode = "async"`

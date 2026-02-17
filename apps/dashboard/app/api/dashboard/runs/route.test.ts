@@ -22,6 +22,16 @@ function createJsonRequest(url: string, payload: unknown): Request {
   });
 }
 
+function createInvalidJsonRequest(url: string, body: string): Request {
+  return new Request(url, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+    },
+    body,
+  });
+}
+
 describe('Route /api/dashboard/runs', () => {
   beforeEach(() => {
     createDashboardServiceMock.mockReset();
@@ -135,6 +145,17 @@ describe('Route /api/dashboard/runs', () => {
           message: 'Run launch request body must be an object.',
         },
       });
+    });
+
+    it('returns 400 when request body contains malformed JSON', async () => {
+      const response = await POST(createInvalidJsonRequest('http://localhost/api/dashboard/runs', '{"treeKey":'));
+
+      expect(launchWorkflowRunMock).not.toHaveBeenCalled();
+      expect(response.status).toBe(400);
+      const payload = await response.json();
+      expect(payload.error.code).toBe('invalid_request');
+      expect(typeof payload.error.message).toBe('string');
+      expect(payload.error.message.length).toBeGreaterThan(0);
     });
 
     it.each([

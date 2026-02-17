@@ -285,6 +285,103 @@ describe('createDashboardService', () => {
     expect(closeDatabase).toHaveBeenCalledTimes(2);
   });
 
+  it('attempts cleanupWorktree for sync launches when execution fails', async () => {
+    const executeRun = vi.fn(async () => {
+      throw new Error('executor failed');
+    });
+    const cleanupRun = vi.fn(async () => undefined);
+    const createRunWorktree = vi.fn(async () => ({
+      id: 1,
+      runId: 1,
+      repositoryId: 1,
+      path: '/tmp/worktree-failure',
+      branch: 'main',
+      commitHash: null,
+      createdAt: '2026-02-17T20:00:00.000Z',
+    }));
+
+    const { db, dependencies } = createHarness({
+      createSqlWorkflowExecutor: () =>
+        ({ executeRun }) as unknown as ReturnType<DashboardServiceDependencies['createSqlWorkflowExecutor']>,
+      createWorktreeManager: () => ({
+        createRunWorktree,
+        cleanupRun,
+      }),
+    });
+    seedRunData(db);
+
+    const service = createDashboardService({ dependencies });
+
+    await expect(
+      service.launchWorkflowRun({
+        treeKey: 'demo-tree',
+        repositoryName: 'demo-repo',
+        executionMode: 'sync',
+        cleanupWorktree: true,
+      }),
+    ).rejects.toMatchObject({
+      name: 'DashboardIntegrationError',
+      code: 'internal_error',
+      status: 500,
+    });
+
+    expect(createRunWorktree).toHaveBeenCalledTimes(1);
+    expect(executeRun).toHaveBeenCalledTimes(1);
+    expect(cleanupRun).toHaveBeenCalledTimes(1);
+  });
+
+  it('attempts cleanupWorktree for async launches when execution fails', async () => {
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const executeRun = vi.fn(async () => {
+      throw new Error('executor failed');
+    });
+    const cleanupRun = vi.fn(async () => undefined);
+    const createRunWorktree = vi.fn(async () => ({
+      id: 1,
+      runId: 1,
+      repositoryId: 1,
+      path: '/tmp/worktree-failure',
+      branch: 'main',
+      commitHash: null,
+      createdAt: '2026-02-17T20:00:00.000Z',
+    }));
+    const createWorktreeManager = vi.fn(() => ({
+      createRunWorktree,
+      cleanupRun,
+    }));
+
+    const { db, dependencies } = createHarness({
+      createSqlWorkflowExecutor: () =>
+        ({ executeRun }) as unknown as ReturnType<DashboardServiceDependencies['createSqlWorkflowExecutor']>,
+      createWorktreeManager,
+    });
+    seedRunData(db);
+
+    try {
+      const service = createDashboardService({ dependencies });
+      const result = await service.launchWorkflowRun({
+        treeKey: 'demo-tree',
+        repositoryName: 'demo-repo',
+        executionMode: 'async',
+        cleanupWorktree: true,
+      });
+
+      expect(result.mode).toBe('async');
+
+      const deadline = Date.now() + 1000;
+      while (Date.now() < deadline && service.hasBackgroundExecution(result.workflowRunId)) {
+        await new Promise(resolve => setTimeout(resolve, 10));
+      }
+
+      expect(service.hasBackgroundExecution(result.workflowRunId)).toBe(false);
+      expect(createWorktreeManager).toHaveBeenCalledTimes(2);
+      expect(executeRun).toHaveBeenCalledTimes(1);
+      expect(cleanupRun).toHaveBeenCalledTimes(1);
+    } finally {
+      consoleErrorSpy.mockRestore();
+    }
+  });
+
   it('loads repository and run snapshots from the shared db schema', async () => {
     const { db, dependencies } = createHarness();
     seedRunData(db);
