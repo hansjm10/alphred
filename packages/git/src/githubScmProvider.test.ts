@@ -1,13 +1,15 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { checkAuthMock, createPullRequestMock, getIssueMock } = vi.hoisted(() => ({
+const { checkAuthMock, cloneRepoMock, createPullRequestMock, getIssueMock } = vi.hoisted(() => ({
   checkAuthMock: vi.fn(),
+  cloneRepoMock: vi.fn(),
   createPullRequestMock: vi.fn(),
   getIssueMock: vi.fn(),
 }));
 
 vi.mock('./github.js', () => ({
   checkAuthForRepo: checkAuthMock,
+  cloneRepo: cloneRepoMock,
   createPullRequest: createPullRequestMock,
   getIssue: getIssueMock,
 }));
@@ -17,8 +19,16 @@ import { GitHubScmProvider } from './githubScmProvider.js';
 describe('GitHubScmProvider', () => {
   const provider = new GitHubScmProvider({ kind: 'github', repo: 'owner/repo' });
 
+  it('exposes provider config for identity validation', () => {
+    expect(provider.getConfig()).toEqual({
+      kind: 'github',
+      repo: 'owner/repo',
+    });
+  });
+
   beforeEach(() => {
     checkAuthMock.mockReset();
+    cloneRepoMock.mockReset();
     createPullRequestMock.mockReset();
     getIssueMock.mockReset();
   });
@@ -131,9 +141,16 @@ describe('GitHubScmProvider', () => {
     });
   });
 
-  it('exposes cloneRepo as a stub until clone support lands', async () => {
-    await expect(provider.cloneRepo('git@github.com:owner/repo.git', '/tmp/repo')).rejects.toThrow(
-      'cloneRepo is not implemented yet',
+  it('delegates clone calls to the github adapter', async () => {
+    cloneRepoMock.mockResolvedValueOnce(undefined);
+
+    await expect(provider.cloneRepo('https://github.com/owner/repo.git', '/tmp/repo')).resolves.toBeUndefined();
+
+    expect(cloneRepoMock).toHaveBeenCalledWith(
+      'owner/repo',
+      'https://github.com/owner/repo.git',
+      '/tmp/repo',
+      expect.any(Object),
     );
   });
 });

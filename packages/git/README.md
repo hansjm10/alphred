@@ -30,12 +30,22 @@ auth validation.
 
 ## Behavior Notes
 
-- `cloneRepo(...)` is a placeholder in both providers and currently throws:
-  `cloneRepo is not implemented yet. Tracked in the repo-clone issue.`
+- `cloneRepo(...)` is implemented in both providers:
+  - GitHub: `gh repo clone <repo> <path>` with `git clone <remote> <path>` fallback.
+  - Azure DevOps: `git clone <remote> <path>`.
+  - Azure clone intentionally uses `git clone` in this adapter so token/env handling is shared with fetch/clone auth helpers instead of depending on `az repos clone`.
 - Credential env precedence for subprocess calls:
   - GitHub: `ALPHRED_GH_TOKEN` over `GH_TOKEN`
   - GitHub Enterprise: `ALPHRED_GH_ENTERPRISE_TOKEN` over `GH_ENTERPRISE_TOKEN`
   - Azure DevOps: `ALPHRED_AZURE_DEVOPS_PAT` over `AZURE_DEVOPS_EXT_PAT`
+- HTTP auth-header scoping:
+  - `-c http.<origin>/.extraheader=...` is only added when the remote resolves to an HTTP(S) origin.
+  - SSH/SCP remotes run clone/fetch without `http.extraheader` injection.
+- Sandbox helpers:
+  - `resolveSandboxDir()` uses `ALPHRED_SANDBOX_DIR` or defaults to `~/.alphred/repos`.
+  - `deriveSandboxRepoPath(provider, remoteRef)` deterministically maps refs to sandbox paths.
+- Registry clone orchestration:
+  - `ensureRepositoryClone(...)` integrates with the repository registry (`@alphred/db`), clones or fetches existing clones, and keeps `clone_status` / `local_path` in sync.
 - `GitHubScmProvider.createPullRequest(...)` extracts a numeric PR id from URLs
   matching `/pull/<number>`. If parsing fails, it falls back to using the full
   URL as `PullRequestResult.id`.

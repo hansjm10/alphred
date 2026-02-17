@@ -2,6 +2,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import type { AuthStatus } from '@alphred/shared';
 import { createAuthErrorMessage } from './authUtils.js';
+import { containsGitAuthArgs, createRedactedGitCommandFailureMessage } from './gitCommandSanitizer.js';
 
 const execFileAsync = promisify(execFile);
 const AZURE_DEVOPS_BASE_URL = 'https://dev.azure.com';
@@ -77,6 +78,25 @@ export async function createPullRequest(
   return data.pullRequestId;
 }
 
+export async function cloneRepo(
+  remote: string,
+  localPath: string,
+  environment: NodeJS.ProcessEnv = process.env,
+): Promise<void> {
+  const env = resolveAzureEnvironment(environment);
+  const authConfig = resolveAzureGitAuthConfig(remote, env);
+  const cloneArgs = [...authConfig, 'clone', remote, localPath];
+  try {
+    await execFileAsync('git', cloneArgs, { env });
+  } catch (error) {
+    if (!containsGitAuthArgs(cloneArgs)) {
+      throw error;
+    }
+
+    throw new Error(createRedactedGitCommandFailureMessage(cloneArgs, 'git clone failed'));
+  }
+}
+
 export async function checkAuth(
   organization: string,
   environment: NodeJS.ProcessEnv = process.env,
@@ -123,6 +143,34 @@ function resolveAzureEnvironment(environment: NodeJS.ProcessEnv): NodeJS.Process
   }
 
   return env;
+}
+
+function resolveAzureGitAuthConfig(remote: string, environment: NodeJS.ProcessEnv): string[] {
+  const pat = environment.ALPHRED_AZURE_DEVOPS_PAT ?? environment.AZURE_DEVOPS_EXT_PAT;
+  if (typeof pat !== 'string' || pat.length === 0) {
+    return [];
+  }
+
+  const origin = resolveRemoteOrigin(remote);
+  if (origin === undefined) {
+    return [];
+  }
+
+  const authHeader = `AUTHORIZATION: Basic ${Buffer.from(`:${pat}`).toString('base64')}`;
+  return ['-c', `http.${origin}/.extraheader=${authHeader}`];
+}
+
+function resolveRemoteOrigin(remote: string): string | undefined {
+  try {
+    const url = new URL(remote);
+    if (url.protocol !== 'https:' && url.protocol !== 'http:') {
+      return undefined;
+    }
+
+    return url.origin;
+  } catch {
+    return undefined;
+  }
 }
 
 async function checkAzureAccountAuth(

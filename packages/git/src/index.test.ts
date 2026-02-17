@@ -8,10 +8,16 @@ describe('git index exports', () => {
     expect(typeof git.listWorktrees).toBe('function');
     expect(typeof git.getGitHubIssue).toBe('function');
     expect(typeof git.createGitHubPR).toBe('function');
+    expect(typeof git.cloneGitHubRepo).toBe('function');
     expect(typeof git.getAzureWorkItem).toBe('function');
     expect(typeof git.createAzurePR).toBe('function');
+    expect(typeof git.cloneAzureRepo).toBe('function');
     expect(typeof git.createScmProvider).toBe('function');
     expect(typeof git.GitHubScmProvider).toBe('function');
     expect(typeof git.AzureDevOpsScmProvider).toBe('function');
+    expect(typeof git.ensureRepositoryClone).toBe('function');
+    expect(typeof git.fetchRepository).toBe('function');
+    expect(typeof git.resolveSandboxDir).toBe('function');
+    expect(typeof git.deriveSandboxRepoPath).toBe('function');
   });
 });

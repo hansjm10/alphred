@@ -13,7 +13,7 @@ vi.mock('node:util', () => ({
   promisify: () => execFileAsyncMock,
 }));
 
-import { checkAuth, createPullRequest, getWorkItem } from './azureDevops.js';
+import { checkAuth, cloneRepo, createPullRequest, getWorkItem } from './azureDevops.js';
 
 describe('azure devops adapter', () => {
   beforeEach(() => {
@@ -166,6 +166,75 @@ describe('azure devops adapter', () => {
         },
       },
     );
+  });
+
+  it('clones repositories with PAT-aware git auth configuration', async () => {
+    execFileAsyncMock.mockResolvedValueOnce({
+      stdout: '',
+    });
+
+    await expect(
+      cloneRepo('https://dev.azure.com/org/proj/_git/repo', '/tmp/repo', {
+        AZURE_DEVOPS_EXT_PAT: 'host-pat',
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(execFileAsyncMock).toHaveBeenCalledWith(
+      'git',
+      [
+        '-c',
+        'http.https://dev.azure.com/.extraheader=AUTHORIZATION: Basic Omhvc3QtcGF0',
+        'clone',
+        'https://dev.azure.com/org/proj/_git/repo',
+        '/tmp/repo',
+      ],
+      {
+        env: {
+          AZURE_DEVOPS_EXT_PAT: 'host-pat',
+        },
+      },
+    );
+  });
+
+  it('does not inject HTTP auth config for SSH remotes', async () => {
+    execFileAsyncMock.mockResolvedValueOnce({
+      stdout: '',
+    });
+
+    await expect(
+      cloneRepo('git@ssh.dev.azure.com:v3/org/proj/repo', '/tmp/repo', {
+        AZURE_DEVOPS_EXT_PAT: 'host-pat',
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(execFileAsyncMock).toHaveBeenCalledWith(
+      'git',
+      [
+        'clone',
+        'git@ssh.dev.azure.com:v3/org/proj/repo',
+        '/tmp/repo',
+      ],
+      {
+        env: {
+          AZURE_DEVOPS_EXT_PAT: 'host-pat',
+        },
+      },
+    );
+  });
+
+  it('redacts PAT auth headers when git clone fails', async () => {
+    execFileAsyncMock.mockRejectedValueOnce(
+      new Error(
+        'Command failed: git -c http.https://dev.azure.com/.extraheader=AUTHORIZATION: Basic Omhvc3QtcGF0 clone https://dev.azure.com/org/proj/_git/repo /tmp/repo',
+      ),
+    );
+
+    const clonePromise = cloneRepo('https://dev.azure.com/org/proj/_git/repo', '/tmp/repo', {
+      AZURE_DEVOPS_EXT_PAT: 'host-pat',
+    });
+
+    await expect(clonePromise).rejects.toThrow('AUTHORIZATION: <redacted>');
+    await expect(clonePromise).rejects.not.toThrow('Omhvc3QtcGF0');
   });
 
   it('returns authenticated status after account and devops checks pass', async () => {
