@@ -80,10 +80,9 @@ export async function ensureRepositoryClone(params: EnsureRepositoryCloneParams)
   }
 
   const provider = resolveProvider(repository, params.provider);
-  await mkdir(dirname(localPath), { recursive: true });
-  await rm(localPath, { recursive: true, force: true });
-
   try {
+    await mkdir(dirname(localPath), { recursive: true });
+    await rm(localPath, { recursive: true, force: true });
     await provider.cloneRepo(repository.remoteUrl, localPath, environment);
     const updated = updateRepositoryCloneStatus(params.db, {
       repositoryId: repository.id,
@@ -96,7 +95,7 @@ export async function ensureRepositoryClone(params: EnsureRepositoryCloneParams)
       action: 'cloned',
     };
   } catch (error) {
-    await rm(localPath, { recursive: true, force: true });
+    await rm(localPath, { recursive: true, force: true }).catch(() => undefined);
     updateRepositoryCloneStatus(params.db, {
       repositoryId: repository.id,
       cloneStatus: 'error',

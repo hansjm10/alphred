@@ -404,6 +404,38 @@ describe('ensureRepositoryClone', () => {
     await expect(access(expectedPath)).rejects.toThrow();
   });
 
+  it('marks clone status as error when preparing the clone target fails', async () => {
+    const db = createMigratedDb();
+    const sandboxDir = await createSandboxDir();
+    cleanupPaths.add(sandboxDir);
+    const expectedPath = join(sandboxDir, 'github', 'acme', 'frontend');
+    const { provider, cloneRepo } = createMockProvider('github');
+
+    await writeFile(join(sandboxDir, 'github'), 'not-a-directory');
+
+    await expect(
+      ensureRepositoryClone({
+        db,
+        repository: {
+          name: 'frontend',
+          provider: 'github',
+          remoteUrl: 'https://github.com/acme/frontend.git',
+          remoteRef: 'acme/frontend',
+        },
+        provider,
+        environment: {
+          ALPHRED_SANDBOX_DIR: sandboxDir,
+        },
+      }),
+    ).rejects.toThrow();
+
+    const repository = getRepositoryByName(db, 'frontend');
+    expect(repository).not.toBeNull();
+    expect(repository?.cloneStatus).toBe('error');
+    expect(repository?.localPath).toBe(expectedPath);
+    expect(cloneRepo).not.toHaveBeenCalled();
+  });
+
   it('ignores unsafe persisted localPath values and clones to the derived sandbox path', async () => {
     const db = createMigratedDb();
     const sandboxDir = await createSandboxDir();

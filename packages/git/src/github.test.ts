@@ -250,6 +250,28 @@ describe('github adapter', () => {
     );
   });
 
+  it('redacts embedded URL credentials when origin override fails after successful gh clone', async () => {
+    execFileAsyncMock
+      .mockResolvedValueOnce({
+        stdout: '',
+      })
+      .mockRejectedValueOnce(
+        new Error(
+          'Command failed: git -C /tmp/owner-repo remote set-url origin https://x-access-token:gh-host-token@github.com/owner/repo.git',
+        ),
+      );
+
+    const clonePromise = cloneRepo(
+      'owner/repo',
+      'https://x-access-token:gh-host-token@github.com/owner/repo.git',
+      '/tmp/owner-repo',
+      {},
+    );
+
+    await expect(clonePromise).rejects.toThrow('https://<redacted>@github.com/owner/repo.git');
+    await expect(clonePromise).rejects.not.toThrow('gh-host-token');
+  });
+
   it('falls back to git clone when gh clone fails', async () => {
     execFileAsyncMock
       .mockRejectedValueOnce(new Error('gh clone failed'))

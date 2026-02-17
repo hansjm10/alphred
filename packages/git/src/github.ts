@@ -100,7 +100,12 @@ export async function cloneRepo(
   }
 
   if (trimmedRemote.length > 0) {
-    await execFileAsync('git', ['-C', localPath, 'remote', 'set-url', 'origin', trimmedRemote], { env });
+    const setOriginArgs = ['-C', localPath, 'remote', 'set-url', 'origin', trimmedRemote];
+    try {
+      await execFileAsync('git', setOriginArgs, { env });
+    } catch (error) {
+      throw createGitRemoteSetUrlError(error, setOriginArgs);
+    }
   }
 }
 
@@ -110,6 +115,14 @@ function createGitCloneFallbackError(error: unknown, cloneArgs: readonly string[
   }
 
   return new Error(createRedactedGitCommandFailureMessage(cloneArgs, 'git clone failed'));
+}
+
+function createGitRemoteSetUrlError(error: unknown, setUrlArgs: readonly string[]): Error {
+  if (!containsGitAuthArgs(setUrlArgs)) {
+    return error instanceof Error ? error : new Error('git remote set-url failed');
+  }
+
+  return new Error(createRedactedGitCommandFailureMessage(setUrlArgs, 'git remote set-url failed'));
 }
 
 function resolveGitCloneSource(repo: string, remote: string): string {
