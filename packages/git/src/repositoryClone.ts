@@ -622,9 +622,40 @@ async function resolveRepositoryOrigin(
     });
     const remoteUrl = stdout.trim();
     return remoteUrl.length === 0 ? undefined : remoteUrl;
-  } catch {
-    return undefined;
+  } catch (error) {
+    if (isMissingOriginRemoteError(error)) {
+      return undefined;
+    }
+
+    throw error;
   }
+}
+
+function isMissingOriginRemoteError(error: unknown): boolean {
+  if (typeof error !== 'object' || error === null) {
+    return false;
+  }
+
+  const errorRecord = error as { code?: unknown; stderr?: unknown; message?: unknown };
+  if (errorRecord.code !== 2) {
+    return false;
+  }
+
+  const stderr = toErrorText(errorRecord.stderr);
+  const message = typeof errorRecord.message === 'string' ? errorRecord.message : '';
+  return /no such remote ['"]origin['"]/i.test(`${stderr}\n${message}`);
+}
+
+function toErrorText(value: unknown): string {
+  if (typeof value === 'string') {
+    return value;
+  }
+
+  if (Buffer.isBuffer(value)) {
+    return value.toString('utf8');
+  }
+
+  return '';
 }
 
 function normalizeRemoteForComparison(remoteUrl: string): string {
