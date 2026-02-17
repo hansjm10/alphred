@@ -135,6 +135,34 @@ type ResolvedRunRepository =
       remoteRef: string;
     };
 
+type RunWorktreeManager = ReturnType<CliDependencies['createWorktreeManager']>;
+
+type ParsedRunCommandInput =
+  | {
+      ok: true;
+      treeKey: string;
+      repoInput: string | null;
+      branchOverride: string | undefined;
+    }
+  | {
+      ok: false;
+      exitCode: ExitCode;
+    };
+
+type RunExecutionSetup = {
+  workingDirectory: string;
+  worktreeManager: RunWorktreeManager | null;
+};
+
+type RunExecutionSummary = {
+  workflowRunId: number;
+  finalStep: {
+    outcome: string;
+    runStatus: WorkflowRunStatus;
+  };
+  executedNodes: number;
+};
+
 type DisplayRunNode = {
   id: number;
   nodeKey: string;
@@ -686,7 +714,7 @@ function parseRepoAddConfig(options: ReadonlyMap<string, string>): {
   };
 }
 
-async function handleRunCommand(rawArgs: readonly string[], dependencies: CliDependencies, io: CliIo): Promise<ExitCode> {
+function parseRunCommandInput(rawArgs: readonly string[], io: CliIo): ParsedRunCommandInput {
   const parsedOptions = validateCommandOptions(
     rawArgs,
     {
@@ -697,63 +725,189 @@ async function handleRunCommand(rawArgs: readonly string[], dependencies: CliDep
     io,
   );
   if (!parsedOptions.ok) {
-    return parsedOptions.exitCode;
+    return {
+      ok: false,
+      exitCode: parsedOptions.exitCode,
+    };
   }
 
   const treeKey = getRequiredOption(parsedOptions.options, 'tree', 'tree_key', RUN_USAGE, io);
   if (!treeKey) {
-    return EXIT_USAGE_ERROR;
+    return {
+      ok: false,
+      exitCode: EXIT_USAGE_ERROR,
+    };
   }
 
   const repoOption = parsedOptions.options.get('repo');
   const repoInput = repoOption?.trim();
   if (repoOption !== undefined && repoInput === '') {
-    return usageError(io, 'Option "--repo" requires a value.', RUN_USAGE);
+    return {
+      ok: false,
+      exitCode: usageError(io, 'Option "--repo" requires a value.', RUN_USAGE),
+    };
   }
 
   const branchOption = parsedOptions.options.get('branch');
   const branchOverride = branchOption?.trim();
   if (branchOption !== undefined && branchOverride === '') {
-    return usageError(io, 'Option "--branch" requires a value.', RUN_USAGE);
+    return {
+      ok: false,
+      exitCode: usageError(io, 'Option "--branch" requires a value.', RUN_USAGE),
+    };
   }
 
   if (branchOverride && !repoInput) {
-    return usageError(io, 'Option "--branch" requires "--repo".', RUN_USAGE);
+    return {
+      ok: false,
+      exitCode: usageError(io, 'Option "--branch" requires "--repo".', RUN_USAGE),
+    };
   }
+
+  return {
+    ok: true,
+    treeKey,
+    repoInput: repoInput ?? null,
+    branchOverride,
+  };
+}
+
+function reportAutoRegisteredRepository(io: Pick<CliIo, 'stdout'>, repository: ResolvedRunRepository | null): void {
+  if (!repository?.autoRegistered) {
+    return;
+  }
+
+  io.stdout(`Auto-registered repository "${repository.repoName}" from ${repository.provider}:${repository.remoteRef}.`);
+}
+
+function materializeRun(treeKey: string, db: AlphredDatabase, io: Pick<CliIo, 'stdout'>): number {
+  const planner = createSqlWorkflowPlanner(db);
+  const materializedRun = planner.materializeRun({ treeKey });
+  const runId = materializedRun.run.id;
+  io.stdout(`Started run id=${runId} for tree "${treeKey}".`);
+  return runId;
+}
+
+async function setupRunExecution(
+  runId: number,
+  treeKey: string,
+  resolvedRepo: ResolvedRunRepository | null,
+  branchOverride: string | undefined,
+  worktreeManager: RunWorktreeManager | null,
+  io: CliIo,
+): Promise<RunExecutionSetup> {
+  if (!resolvedRepo) {
+    return {
+      workingDirectory: io.cwd,
+      worktreeManager: null,
+    };
+  }
+  if (!worktreeManager) {
+    throw new Error('Internal error: worktree manager was not initialized for repository-backed run.');
+  }
+
+  const worktree = await worktreeManager.createRunWorktree({
+    repoName: resolvedRepo.repoName,
+    treeKey,
+    runId,
+    branch: branchOverride,
+  });
+  io.stdout(`Created worktree "${worktree.path}" on branch "${worktree.branch}" for repo "${resolvedRepo.repoName}".`);
+  return {
+    workingDirectory: worktree.path,
+    worktreeManager,
+  };
+}
+
+function summarizeRunExecution(execution: RunExecutionSummary, io: CliIo): ExitCode {
+  io.stdout(
+    `Run id=${execution.workflowRunId} outcome=${execution.finalStep.outcome} status=${execution.finalStep.runStatus} executed_nodes=${execution.executedNodes}.`,
+  );
+
+  if (shouldTreatRunStatusAsFailure(execution.finalStep.runStatus)) {
+    io.stderr(`Run id=${execution.workflowRunId} finished with status=${execution.finalStep.runStatus}.`);
+    return EXIT_RUNTIME_ERROR;
+  }
+
+  return EXIT_SUCCESS;
+}
+
+function cancelPendingRunAfterSetupFailure(db: AlphredDatabase, runId: number, io: Pick<CliIo, 'stderr'>): void {
+  try {
+    const run = db
+      .select({
+        status: workflowRuns.status,
+      })
+      .from(workflowRuns)
+      .where(eq(workflowRuns.id, runId))
+      .get();
+    if (run?.status === 'pending') {
+      transitionWorkflowRunStatus(db, {
+        workflowRunId: runId,
+        expectedFrom: 'pending',
+        to: 'cancelled',
+      });
+    }
+  } catch (transitionError) {
+    io.stderr(`Failed to cancel run id=${runId} after setup error: ${toErrorMessage(transitionError)}`);
+  }
+}
+
+function mapRunExecutionError(error: unknown, treeKey: string, io: Pick<CliIo, 'stderr'>): ExitCode {
+  if (hasErrorCode(error, 'WORKFLOW_TREE_NOT_FOUND')) {
+    io.stderr(`Workflow tree not found for key "${treeKey}".`);
+    return EXIT_NOT_FOUND;
+  }
+
+  io.stderr(`Failed to execute run: ${toErrorMessage(error)}`);
+  return EXIT_RUNTIME_ERROR;
+}
+
+async function cleanupRunWorktrees(
+  worktreeManager: RunWorktreeManager | null,
+  runId: number | null,
+  io: Pick<CliIo, 'stderr'>,
+): Promise<ExitCode | null> {
+  if (!worktreeManager || runId === null) {
+    return null;
+  }
+
+  try {
+    await worktreeManager.cleanupRun(runId);
+    return null;
+  } catch (error) {
+    io.stderr(`Failed to clean up run worktrees for run id=${runId}: ${toErrorMessage(error)}`);
+    return EXIT_RUNTIME_ERROR;
+  }
+}
+
+async function handleRunCommand(rawArgs: readonly string[], dependencies: CliDependencies, io: CliIo): Promise<ExitCode> {
+  const parsedInput = parseRunCommandInput(rawArgs, io);
+  if (!parsedInput.ok) {
+    return parsedInput.exitCode;
+  }
+  const { treeKey, repoInput, branchOverride } = parsedInput;
 
   let db: AlphredDatabase | null = null;
   let runId: number | null = null;
-  let worktreeManager: ReturnType<CliDependencies['createWorktreeManager']> | null = null;
+  let worktreeManager: RunWorktreeManager | null = null;
   let setupCompleted = false;
   let exitCode: ExitCode = EXIT_SUCCESS;
 
   try {
     db = openInitializedDatabase(dependencies, io);
     const resolvedRepo = repoInput ? resolveRunRepository(db, repoInput) : null;
-    if (resolvedRepo?.autoRegistered) {
-      io.stdout(
-        `Auto-registered repository "${resolvedRepo.repoName}" from ${resolvedRepo.provider}:${resolvedRepo.remoteRef}.`,
-      );
-    }
+    reportAutoRegisteredRepository(io, resolvedRepo);
 
-    const planner = createSqlWorkflowPlanner(db);
-    const materializedRun = planner.materializeRun({ treeKey });
-    runId = materializedRun.run.id;
-    io.stdout(`Started run id=${materializedRun.run.id} for tree "${treeKey}".`);
-    let workingDirectory = io.cwd;
     if (resolvedRepo) {
       worktreeManager = dependencies.createWorktreeManager(db, {
         environment: io.env,
       });
-      const worktree = await worktreeManager.createRunWorktree({
-        repoName: resolvedRepo.repoName,
-        treeKey,
-        runId: materializedRun.run.id,
-        branch: branchOverride,
-      });
-      workingDirectory = worktree.path;
-      io.stdout(`Created worktree "${worktree.path}" on branch "${worktree.branch}" for repo "${resolvedRepo.repoName}".`);
     }
+
+    runId = materializeRun(treeKey, db, io);
+    const runSetup = await setupRunExecution(runId, treeKey, resolvedRepo, branchOverride, worktreeManager, io);
+    worktreeManager = runSetup.worktreeManager;
     setupCompleted = true;
 
     const executor = createSqlWorkflowExecutor(db, {
@@ -761,59 +915,23 @@ async function handleRunCommand(rawArgs: readonly string[], dependencies: CliDep
     });
 
     const execution = await executor.executeRun({
-      workflowRunId: materializedRun.run.id,
+      workflowRunId: runId,
       options: {
-        workingDirectory,
+        workingDirectory: runSetup.workingDirectory,
       },
     });
 
-    io.stdout(
-      `Run id=${execution.workflowRunId} outcome=${execution.finalStep.outcome} status=${execution.finalStep.runStatus} executed_nodes=${execution.executedNodes}.`,
-    );
-
-    if (shouldTreatRunStatusAsFailure(execution.finalStep.runStatus)) {
-      io.stderr(`Run id=${execution.workflowRunId} finished with status=${execution.finalStep.runStatus}.`);
-      exitCode = EXIT_RUNTIME_ERROR;
-    } else {
-      exitCode = EXIT_SUCCESS;
-    }
+    exitCode = summarizeRunExecution(execution, io);
   } catch (error) {
     if (db && runId !== null && !setupCompleted) {
-      try {
-        const run = db
-          .select({
-            status: workflowRuns.status,
-          })
-          .from(workflowRuns)
-          .where(eq(workflowRuns.id, runId))
-          .get();
-        if (run?.status === 'pending') {
-          transitionWorkflowRunStatus(db, {
-            workflowRunId: runId,
-            expectedFrom: 'pending',
-            to: 'cancelled',
-          });
-        }
-      } catch (transitionError) {
-        io.stderr(`Failed to cancel run id=${runId} after setup error: ${toErrorMessage(transitionError)}`);
-      }
+      cancelPendingRunAfterSetupFailure(db, runId, io);
     }
 
-    if (hasErrorCode(error, 'WORKFLOW_TREE_NOT_FOUND')) {
-      io.stderr(`Workflow tree not found for key "${treeKey}".`);
-      exitCode = EXIT_NOT_FOUND;
-    } else {
-      io.stderr(`Failed to execute run: ${toErrorMessage(error)}`);
-      exitCode = EXIT_RUNTIME_ERROR;
-    }
+    exitCode = mapRunExecutionError(error, treeKey, io);
   } finally {
-    if (worktreeManager && runId !== null) {
-      try {
-        await worktreeManager.cleanupRun(runId);
-      } catch (error) {
-        io.stderr(`Failed to clean up run worktrees for run id=${runId}: ${toErrorMessage(error)}`);
-        exitCode = EXIT_RUNTIME_ERROR;
-      }
+    const cleanupExitCode = await cleanupRunWorktrees(worktreeManager, runId, io);
+    if (cleanupExitCode !== null) {
+      exitCode = cleanupExitCode;
     }
   }
 
