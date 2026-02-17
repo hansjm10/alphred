@@ -20,6 +20,12 @@ const AZURE_DEVOPS_HOSTNAME = 'dev.azure.com';
 const AZURE_DEVOPS_SSH_HOSTNAME = 'ssh.dev.azure.com';
 const AZURE_DEVOPS_LEGACY_HOST_SUFFIX = '.visualstudio.com';
 const SCP_REMOTE_REGEX = /^(?:[^@]+@)?([^:/]+):(.+)$/;
+const GIT_EXECUTABLE_ENV_KEY = 'ALPHRED_GIT_EXECUTABLE';
+const UNIX_GIT_EXECUTABLE_CANDIDATES = ['/usr/bin/git', '/usr/local/bin/git', '/opt/homebrew/bin/git'];
+const WINDOWS_GIT_EXECUTABLE_CANDIDATES = [
+  'C:\\Program Files\\Git\\cmd\\git.exe',
+  'C:\\Program Files\\Git\\bin\\git.exe',
+];
 
 export type EnsureRepositoryCloneParams = {
   db: AlphredDatabase;
@@ -170,6 +176,7 @@ export async function fetchRepository(
   const authConfig = resolveGitFetchAuthConfig(context, environment);
   await runGitCommand([...authConfig, 'fetch', '--all'], {
     cwd: localPath,
+    environment,
   });
 }
 
@@ -177,10 +184,12 @@ async function runGitCommand(
   args: string[],
   options: {
     cwd?: string;
+    environment?: NodeJS.ProcessEnv;
   },
 ): Promise<void> {
+  const gitExecutable = await resolveGitExecutable(options.environment);
   await new Promise<void>((resolve, reject) => {
-    const childProcess = spawn('git', args, {
+    const childProcess = spawn(gitExecutable, args, {
       cwd: options.cwd,
       stdio: 'inherit',
     });
@@ -198,6 +207,33 @@ async function runGitCommand(
       );
     });
   });
+}
+
+async function resolveGitExecutable(environment: NodeJS.ProcessEnv = process.env): Promise<string> {
+  const configuredPath = environment[GIT_EXECUTABLE_ENV_KEY]?.trim();
+  if (configuredPath !== undefined && configuredPath.length > 0) {
+    if (!isAbsolute(configuredPath)) {
+      throw new Error(`${GIT_EXECUTABLE_ENV_KEY} must be an absolute path to a git executable.`);
+    }
+
+    return configuredPath;
+  }
+
+  const candidates = process.platform === 'win32'
+    ? WINDOWS_GIT_EXECUTABLE_CANDIDATES
+    : UNIX_GIT_EXECUTABLE_CANDIDATES;
+  for (const candidate of candidates) {
+    try {
+      await access(candidate);
+      return candidate;
+    } catch {
+      continue;
+    }
+  }
+
+  throw new Error(
+    `Unable to locate git executable in fixed system paths. Set ${GIT_EXECUTABLE_ENV_KEY} to an absolute path.`,
+  );
 }
 
 function resolveGitFetchAuthConfig(

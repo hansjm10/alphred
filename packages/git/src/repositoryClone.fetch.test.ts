@@ -19,6 +19,8 @@ vi.mock('node:util', () => ({
 
 import { fetchRepository } from './repositoryClone.js';
 
+const gitExecutablePattern = /(?:^|[/\\])git(?:\.exe)?$/;
+
 function mockSuccessfulGitSpawn(): void {
   spawnMock.mockImplementationOnce(() => {
     const process = new EventEmitter() as ChildProcess;
@@ -63,7 +65,7 @@ describe('fetchRepository', () => {
     ).resolves.toBeUndefined();
 
     expect(spawnMock).toHaveBeenCalledWith(
-      'git',
+      expect.stringMatching(gitExecutablePattern),
       [
         '-c',
         'http.https://dev.azure.com/.extraheader=AUTHORIZATION: Basic OmF6dXJlLXBhdA==',
@@ -95,7 +97,7 @@ describe('fetchRepository', () => {
     ).resolves.toBeUndefined();
 
     expect(spawnMock).toHaveBeenCalledWith(
-      'git',
+      expect.stringMatching(gitExecutablePattern),
       [
         '-c',
         'http.https://github.com/.extraheader=AUTHORIZATION: Basic eC1hY2Nlc3MtdG9rZW46Z2gtdG9rZW4=',
@@ -126,7 +128,7 @@ describe('fetchRepository', () => {
     ).resolves.toBeUndefined();
 
     expect(spawnMock).toHaveBeenCalledWith(
-      'git',
+      expect.stringMatching(gitExecutablePattern),
       ['fetch', '--all'],
       {
         cwd: '/tmp/repo',
@@ -152,7 +154,7 @@ describe('fetchRepository', () => {
     ).resolves.toBeUndefined();
 
     expect(spawnMock).toHaveBeenCalledWith(
-      'git',
+      expect.stringMatching(gitExecutablePattern),
       [
         '-c',
         'http.https://github.example.com/.extraheader=AUTHORIZATION: Basic eC1hY2Nlc3MtdG9rZW46Z2hlcy10b2tlbg==',
@@ -183,7 +185,7 @@ describe('fetchRepository', () => {
     ).resolves.toBeUndefined();
 
     expect(spawnMock).toHaveBeenCalledWith(
-      'git',
+      expect.stringMatching(gitExecutablePattern),
       ['fetch', '--all'],
       {
         cwd: '/tmp/repo',
@@ -209,7 +211,7 @@ describe('fetchRepository', () => {
     ).resolves.toBeUndefined();
 
     expect(spawnMock).toHaveBeenCalledWith(
-      'git',
+      expect.stringMatching(gitExecutablePattern),
       ['fetch', '--all'],
       {
         cwd: '/tmp/repo',
@@ -235,7 +237,7 @@ describe('fetchRepository', () => {
     ).resolves.toBeUndefined();
 
     expect(spawnMock).toHaveBeenCalledWith(
-      'git',
+      expect.stringMatching(gitExecutablePattern),
       ['fetch', '--all'],
       {
         cwd: '/tmp/repo',
@@ -250,7 +252,7 @@ describe('fetchRepository', () => {
     await expect(fetchRepository('/tmp/repo', {})).resolves.toBeUndefined();
 
     expect(spawnMock).toHaveBeenCalledWith(
-      'git',
+      expect.stringMatching(gitExecutablePattern),
       ['fetch', '--all'],
       {
         cwd: '/tmp/repo',
