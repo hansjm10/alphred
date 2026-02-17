@@ -373,6 +373,33 @@ describe('createDashboardService', () => {
     });
   });
 
+  it.each([
+    {
+      repositoryName: '',
+    },
+    {
+      repositoryName: '   ',
+    },
+  ])('rejects empty repositoryName input when launching runs', async ({ repositoryName }) => {
+    const { dependencies } = createHarness();
+    const service = createDashboardService({ dependencies });
+
+    try {
+      service.launchWorkflowRun({
+        treeKey: 'demo-tree',
+        repositoryName,
+      });
+      throw new Error('Expected launchWorkflowRun to throw for empty repositoryName input.');
+    } catch (error) {
+      expect(error).toMatchObject({
+        name: 'DashboardIntegrationError',
+        code: 'invalid_request',
+        status: 400,
+        message: 'repositoryName cannot be empty when provided.',
+      });
+    }
+  });
+
   it('checks github auth status through scm provider adapter', async () => {
     const checkAuth = vi.fn(async () => ({
       authenticated: false,

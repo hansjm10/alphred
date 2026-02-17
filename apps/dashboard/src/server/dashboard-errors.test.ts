@@ -27,8 +27,22 @@ describe('toDashboardIntegrationError', () => {
     expect(mapped.status).toBe(401);
   });
 
+  it('maps mixed-case auth-required messages to auth_required', () => {
+    const mapped = toDashboardIntegrationError(new Error('Authentication Required: run gh auth login'));
+
+    expect(mapped.code).toBe('auth_required');
+    expect(mapped.status).toBe(401);
+  });
+
   it('maps malformed JSON parse errors to invalid_request', () => {
     const mapped = toDashboardIntegrationError(new SyntaxError('Unexpected token } in JSON at position 12'));
+
+    expect(mapped.code).toBe('invalid_request');
+    expect(mapped.status).toBe(400);
+  });
+
+  it('maps lower-case invalid messages to invalid_request', () => {
+    const mapped = toDashboardIntegrationError(new Error('invalid launch payload'));
 
     expect(mapped.code).toBe('invalid_request');
     expect(mapped.status).toBe(400);

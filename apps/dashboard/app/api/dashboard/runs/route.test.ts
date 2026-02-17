@@ -149,6 +149,16 @@ describe('Route /api/dashboard/runs', () => {
         message: 'Field "repositoryName" must be a string when provided.',
       },
       {
+        title: 'repositoryName is an empty string',
+        payload: { treeKey: 'default', repositoryName: '' },
+        message: 'Field "repositoryName" cannot be empty when provided.',
+      },
+      {
+        title: 'repositoryName is whitespace only',
+        payload: { treeKey: 'default', repositoryName: '   ' },
+        message: 'Field "repositoryName" cannot be empty when provided.',
+      },
+      {
         title: 'branch has an invalid type',
         payload: { treeKey: 'default', branch: false },
         message: 'Field "branch" must be a string when provided.',

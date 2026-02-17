@@ -682,6 +682,13 @@ export function createDashboardService(options: {
         });
       }
 
+      const repositoryName = request.repositoryName?.trim();
+      if (request.repositoryName !== undefined && repositoryName?.length === 0) {
+        throw new DashboardIntegrationError('invalid_request', 'repositoryName cannot be empty when provided.', {
+          status: 400,
+        });
+      }
+
       const executionMode = request.executionMode ?? 'async';
       if (executionMode !== 'async' && executionMode !== 'sync') {
         throw new DashboardIntegrationError('invalid_request', 'executionMode must be "async" or "sync".', {
@@ -699,12 +706,12 @@ export function createDashboardService(options: {
         let worktreeManager: Pick<WorktreeManager, 'createRunWorktree' | 'cleanupRun'> | null = null;
 
         try {
-          if (request.repositoryName) {
-            const repository = getRepositoryByName(db, request.repositoryName.trim());
+          if (repositoryName !== undefined) {
+            const repository = getRepositoryByName(db, repositoryName);
             if (!repository) {
               throw new DashboardIntegrationError(
                 'not_found',
-                `Repository "${request.repositoryName}" was not found.`,
+                `Repository "${repositoryName}" was not found.`,
                 { status: 404 },
               );
             }

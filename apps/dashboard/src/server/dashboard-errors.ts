@@ -52,8 +52,8 @@ function readMessage(error: unknown): string {
   return String(error);
 }
 
-function isJsonParseError(error: unknown, message: string): boolean {
-  return error instanceof SyntaxError && message.includes('JSON');
+function isJsonParseError(error: unknown, normalizedMessage: string): boolean {
+  return error instanceof SyntaxError && normalizedMessage.includes('json');
 }
 
 export function toDashboardIntegrationError(
@@ -65,6 +65,7 @@ export function toDashboardIntegrationError(
   }
 
   const message = readMessage(error);
+  const normalizedMessage = message.toLowerCase();
 
   if (hasCode(error) && error.code === 'WORKFLOW_TREE_NOT_FOUND') {
     return new DashboardIntegrationError('not_found', message, {
@@ -73,35 +74,42 @@ export function toDashboardIntegrationError(
     });
   }
 
-  if (message.includes('authentication is required') || message.includes('auth') && message.includes('required')) {
+  if (
+    normalizedMessage.includes('authentication is required') ||
+    (normalizedMessage.includes('auth') && normalizedMessage.includes('required'))
+  ) {
     return new DashboardIntegrationError('auth_required', message, {
       status: 401,
       cause: error,
     });
   }
 
-  if (message.includes('was not found') || message.includes('not found')) {
+  if (normalizedMessage.includes('was not found') || normalizedMessage.includes('not found')) {
     return new DashboardIntegrationError('not_found', message, {
       status: 404,
       cause: error,
     });
   }
 
-  if (isJsonParseError(error, message)) {
+  if (isJsonParseError(error, normalizedMessage)) {
     return new DashboardIntegrationError('invalid_request', message, {
       status: 400,
       cause: error,
     });
   }
 
-  if (message.includes('Invalid') || message.includes('Missing') || message.includes('cannot be empty')) {
+  if (
+    normalizedMessage.includes('invalid') ||
+    normalizedMessage.includes('missing') ||
+    normalizedMessage.includes('cannot be empty')
+  ) {
     return new DashboardIntegrationError('invalid_request', message, {
       status: 400,
       cause: error,
     });
   }
 
-  if (message.includes('already exists') || message.includes('precondition failed')) {
+  if (normalizedMessage.includes('already exists') || normalizedMessage.includes('precondition failed')) {
     return new DashboardIntegrationError('conflict', message, {
       status: 409,
       cause: error,

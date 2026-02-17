@@ -40,6 +40,11 @@ function parseLaunchRequest(payload: unknown): DashboardRunLaunchRequest {
       status: 400,
     });
   }
+  if (typeof repositoryNameValue === 'string' && repositoryNameValue.trim().length === 0) {
+    throw new DashboardIntegrationError('invalid_request', 'Field "repositoryName" cannot be empty when provided.', {
+      status: 400,
+    });
+  }
 
   const branchValue = candidate.branch;
   if (branchValue !== undefined && typeof branchValue !== 'string') {
