@@ -514,6 +514,26 @@ describe('github adapter', () => {
     await expect(clonePromise).rejects.not.toThrow('eC1hY2Nlc3MtdG9rZW46aG9zdC10b2tlbg==');
   });
 
+  it('redacts embedded URL credentials when fallback git clone fails', async () => {
+    execFileAsyncMock
+      .mockRejectedValueOnce(new Error('gh clone failed'))
+      .mockRejectedValueOnce(
+        new Error(
+          'Command failed: git clone https://x-access-token:gh-host-token@github.com/owner/repo.git /tmp/owner-repo',
+        ),
+      );
+
+    const clonePromise = cloneRepo(
+      'owner/repo',
+      'https://x-access-token:gh-host-token@github.com/owner/repo.git',
+      '/tmp/owner-repo',
+      {},
+    );
+
+    await expect(clonePromise).rejects.toThrow('https://<redacted>@github.com/owner/repo.git');
+    await expect(clonePromise).rejects.not.toThrow('gh-host-token');
+  });
+
   it('does not inject HTTP auth config for SSH remotes in git fallback clone', async () => {
     execFileAsyncMock
       .mockRejectedValueOnce(new Error('gh clone failed'))

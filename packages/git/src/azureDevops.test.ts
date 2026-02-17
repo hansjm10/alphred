@@ -237,6 +237,21 @@ describe('azure devops adapter', () => {
     await expect(clonePromise).rejects.not.toThrow('Omhvc3QtcGF0');
   });
 
+  it('redacts embedded URL credentials when git clone fails', async () => {
+    execFileAsyncMock.mockRejectedValueOnce(
+      new Error(
+        'Command failed: git clone https://build-user:host-pat@dev.azure.com/org/proj/_git/repo /tmp/repo',
+      ),
+    );
+
+    const clonePromise = cloneRepo('https://build-user:host-pat@dev.azure.com/org/proj/_git/repo', '/tmp/repo', {
+      AZURE_DEVOPS_EXT_PAT: 'host-pat',
+    });
+
+    await expect(clonePromise).rejects.toThrow('https://<redacted>@dev.azure.com/org/proj/_git/repo');
+    await expect(clonePromise).rejects.not.toThrow('host-pat');
+  });
+
   it('returns authenticated status after account and devops checks pass', async () => {
     execFileAsyncMock
       .mockResolvedValueOnce({
