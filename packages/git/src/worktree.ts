@@ -39,7 +39,7 @@ export async function createWorktree(
   branchOrParams: string | CreateWorktreeParams,
 ): Promise<WorktreeInfo> {
   const branch = resolveWorktreeBranchName(branchOrParams);
-  const worktreePath = join(worktreeBase, branch.replace(/\//g, '-'));
+  const worktreePath = join(worktreeBase, branch.replaceAll('/', '-'));
 
   await execFileAsync('git', ['worktree', 'add', '-b', branch, worktreePath], {
     cwd: repoDir,
