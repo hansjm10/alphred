@@ -106,6 +106,60 @@ describe('WorktreeManager', () => {
     expect(active[0]?.branch).toBe('alphred/design_tree/1-implement');
   });
 
+  it('uses an explicit branch name override when provided', async () => {
+    const db = createMigratedDb();
+    const runId = seedRun(db);
+    const repository = insertRepository(db, {
+      name: 'frontend-override',
+      provider: 'github',
+      remoteUrl: 'https://github.com/acme/frontend-override.git',
+      remoteRef: 'acme/frontend-override',
+      defaultBranch: 'main',
+      branchTemplate: 'alphred/{tree-key}/{run-id}-{node-key}',
+      localPath: '/tmp/alphred/repos/github/acme/frontend-override',
+      cloneStatus: 'pending',
+    });
+
+    const ensureRepositoryClone = vi.fn(async () => ({
+      repository: {
+        ...repository,
+        localPath: '/tmp/alphred/repos/github/acme/frontend-override',
+        cloneStatus: 'cloned' as const,
+      },
+      action: 'fetched' as const,
+    }));
+    const createWorktree = vi.fn(async () => ({
+      path: '/tmp/alphred/worktrees/fix-auth-bug',
+      branch: 'fix/auth-bug',
+      commit: 'abc123',
+    }));
+
+    const manager = new WorktreeManager(db, {
+      worktreeBase: '/tmp/alphred/worktrees',
+      ensureRepositoryClone,
+      createWorktree,
+    });
+
+    const created = await manager.createRunWorktree({
+      repoName: 'frontend-override',
+      treeKey: 'design_tree',
+      runId,
+      nodeKey: 'implement',
+      branch: '  fix/auth-bug  ',
+    });
+
+    expect(ensureRepositoryClone).toHaveBeenCalledTimes(1);
+    expect(createWorktree).toHaveBeenCalledWith(
+      '/tmp/alphred/repos/github/acme/frontend-override',
+      '/tmp/alphred/worktrees',
+      {
+        branch: 'fix/auth-bug',
+        baseRef: 'main',
+      },
+    );
+    expect(created.branch).toBe('fix/auth-bug');
+  });
+
   it('cleanupRun removes all active worktrees and marks them removed', async () => {
     const db = createMigratedDb();
     const runId = seedRun(db);

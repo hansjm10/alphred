@@ -34,6 +34,7 @@ export type CreateRunWorktreeParams = {
   treeKey: string;
   runId: number;
   nodeKey?: string;
+  branch?: string;
   branchTemplate?: string;
   baseBranch?: string;
 };
@@ -45,8 +46,9 @@ export type WorktreeManagerOptions = {
     repoDir: string,
     worktreeBase: string,
     params: {
+      branch?: string;
       branchTemplate?: string | null;
-      branchContext: {
+      branchContext?: {
         treeKey: string;
         runId: number;
         nodeKey?: string;
@@ -119,10 +121,13 @@ export class WorktreeManager {
       throw new Error(`Repository "${clonedRepository.name}" does not have a local clone path.`);
     }
 
-    const worktree = await this.createWorktree(
-      clonedRepository.localPath,
-      this.worktreeBase,
-      {
+    const trimmedBranch = params.branch?.trim();
+    const createParams = trimmedBranch && trimmedBranch.length > 0
+      ? {
+        branch: trimmedBranch,
+        baseRef: params.baseBranch ?? clonedRepository.defaultBranch,
+      }
+      : {
         branchTemplate: params.branchTemplate ?? clonedRepository.branchTemplate,
         branchContext: {
           treeKey: params.treeKey,
@@ -130,7 +135,12 @@ export class WorktreeManager {
           nodeKey: params.nodeKey,
         },
         baseRef: params.baseBranch ?? clonedRepository.defaultBranch,
-      },
+      };
+
+    const worktree = await this.createWorktree(
+      clonedRepository.localPath,
+      this.worktreeBase,
+      createParams,
     );
 
     const persisted = insertRunWorktree(this.db, {
