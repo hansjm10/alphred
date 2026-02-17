@@ -6,7 +6,9 @@ import {
   guardDefinitions,
   phaseArtifacts,
   promptTemplates,
+  repositories,
   routingDecisions,
+  runWorktrees,
   runNodes,
   treeEdges,
   treeNodes,
@@ -297,9 +299,36 @@ describe('database schema hardening', () => {
       .returning({ id: phaseArtifacts.id })
       .get();
 
+    const repository = db
+      .insert(repositories)
+      .values({
+        name: 'design-repo',
+        provider: 'github',
+        remoteUrl: 'https://github.com/acme/design-repo.git',
+        remoteRef: 'acme/design-repo',
+        defaultBranch: 'main',
+        cloneStatus: 'cloned',
+      })
+      .returning({ id: repositories.id })
+      .get();
+
+    const runWorktree = db
+      .insert(runWorktrees)
+      .values({
+        workflowRunId: seed.runId,
+        repositoryId: repository.id,
+        worktreePath: '/tmp/alphred/worktrees/design-tree-1',
+        branch: 'alphred/design_tree/1',
+        commitHash: 'abc123',
+        status: 'active',
+      })
+      .returning({ id: runWorktrees.id })
+      .get();
+
     expect(edge.id).toBeGreaterThan(0);
     expect(decision.id).toBeGreaterThan(0);
     expect(artifact.id).toBeGreaterThan(0);
+    expect(runWorktree.id).toBeGreaterThan(0);
   });
 
   it('enforces foreign keys for relational execution records', () => {
@@ -378,6 +407,55 @@ describe('database schema hardening', () => {
         .where(eq(workflowRuns.id, seed.runId))
         .run(),
     ).not.toThrow();
+  });
+
+  it('enforces run-worktree status and removal timestamp invariants', () => {
+    const db = createDatabase(':memory:');
+    migrateDatabase(db);
+    const seed = seedTreeState(db, 'run_worktree_constraints');
+    const repository = db
+      .insert(repositories)
+      .values({
+        name: 'run-worktree-constraints-repo',
+        provider: 'github',
+        remoteUrl: 'https://github.com/acme/run-worktree-constraints-repo.git',
+        remoteRef: 'acme/run-worktree-constraints-repo',
+        defaultBranch: 'main',
+        cloneStatus: 'cloned',
+      })
+      .returning({ id: repositories.id })
+      .get();
+
+    expect(() =>
+      db.insert(runWorktrees).values({
+        workflowRunId: seed.runId,
+        repositoryId: repository.id,
+        worktreePath: '/tmp/alphred/worktrees/run-worktree-invalid-status',
+        branch: 'alphred/design_tree/invalid-status',
+        status: 'stale',
+      }).run(),
+    ).toThrow();
+
+    expect(() =>
+      db.insert(runWorktrees).values({
+        workflowRunId: seed.runId,
+        repositoryId: repository.id,
+        worktreePath: '/tmp/alphred/worktrees/run-worktree-active-has-removed-at',
+        branch: 'alphred/design_tree/active-has-removed-at',
+        status: 'active',
+        removedAt: '2026-01-01T00:00:00.000Z',
+      }).run(),
+    ).toThrow();
+
+    expect(() =>
+      db.insert(runWorktrees).values({
+        workflowRunId: seed.runId,
+        repositoryId: repository.id,
+        worktreePath: '/tmp/alphred/worktrees/run-worktree-removed-missing-removed-at',
+        branch: 'alphred/design_tree/removed-missing-removed-at',
+        status: 'removed',
+      }).run(),
+    ).toThrow();
   });
 
   it('enforces tree edge transition mode combinations', () => {

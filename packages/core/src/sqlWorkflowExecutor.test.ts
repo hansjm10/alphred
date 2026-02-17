@@ -4795,4 +4795,122 @@ describe('createSqlWorkflowExecutor', () => {
       }),
     ).rejects.toThrow('Workflow run id=999 was not found.');
   });
+
+  it('invokes onRunTerminal when execution transitions a run into a terminal status', async () => {
+    const { db, runId } = seedSingleAgentRun();
+    const onRunTerminal = vi.fn(async () => undefined);
+    const executor = createSqlWorkflowExecutor(db, {
+      resolveProvider: () =>
+        createProvider([
+          { type: 'result', content: 'Design report body', timestamp: 102 },
+        ]),
+      onRunTerminal,
+    });
+
+    const result = await executor.executeRun({
+      workflowRunId: runId,
+      options: {
+        workingDirectory: '/tmp/alphred-worktree',
+      },
+    });
+
+    expect(result.finalStep.runStatus).toBe('completed');
+    expect(onRunTerminal).toHaveBeenCalledTimes(1);
+    expect(onRunTerminal).toHaveBeenCalledWith({
+      workflowRunId: runId,
+      runStatus: 'completed',
+    });
+  });
+
+  it('invokes onRunTerminal when execution transitions a run into failed', async () => {
+    const { db, runId } = seedSingleHumanNodeRun();
+    const onRunTerminal = vi.fn(async () => undefined);
+    const executor = createSqlWorkflowExecutor(db, {
+      resolveProvider: () => createProvider([]),
+      onRunTerminal,
+    });
+
+    const result = await executor.executeRun({
+      workflowRunId: runId,
+      options: {
+        workingDirectory: '/tmp/alphred-worktree',
+      },
+    });
+
+    expect(result.finalStep).toEqual({
+      outcome: 'run_terminal',
+      workflowRunId: runId,
+      runStatus: 'failed',
+    });
+    expect(onRunTerminal).toHaveBeenCalledTimes(1);
+    expect(onRunTerminal).toHaveBeenCalledWith({
+      workflowRunId: runId,
+      runStatus: 'failed',
+    });
+  });
+
+  it('does not invoke onRunTerminal for blocked non-terminal outcomes', async () => {
+    const { db, runId, runNodeId } = seedSingleAgentRun();
+    transitionWorkflowRunStatus(db, {
+      workflowRunId: runId,
+      expectedFrom: 'pending',
+      to: 'running',
+      occurredAt: '2026-01-01T00:00:00.000Z',
+    });
+    transitionRunNodeStatus(db, {
+      runNodeId,
+      expectedFrom: 'pending',
+      to: 'running',
+      occurredAt: '2026-01-01T00:01:00.000Z',
+    });
+
+    const onRunTerminal = vi.fn(async () => undefined);
+    const executor = createSqlWorkflowExecutor(db, {
+      resolveProvider: () => createProvider([]),
+      onRunTerminal,
+    });
+
+    const result = await executor.executeNextRunnableNode({
+      workflowRunId: runId,
+      options: {
+        workingDirectory: '/tmp/alphred-worktree',
+      },
+    });
+
+    expect(result).toEqual({
+      outcome: 'blocked',
+      workflowRunId: runId,
+      runStatus: 'running',
+    });
+    expect(onRunTerminal).not.toHaveBeenCalled();
+  });
+
+  it('does not invoke onRunTerminal when the run is already terminal before the call', async () => {
+    const { db, runId } = seedSingleAgentRun();
+    transitionWorkflowRunStatus(db, {
+      workflowRunId: runId,
+      expectedFrom: 'pending',
+      to: 'cancelled',
+    });
+
+    const onRunTerminal = vi.fn(async () => undefined);
+    const executor = createSqlWorkflowExecutor(db, {
+      resolveProvider: () => createProvider([]),
+      onRunTerminal,
+    });
+
+    const result = await executor.executeNextRunnableNode({
+      workflowRunId: runId,
+      options: {
+        workingDirectory: '/tmp/alphred-worktree',
+      },
+    });
+
+    expect(result).toEqual({
+      outcome: 'run_terminal',
+      workflowRunId: runId,
+      runStatus: 'cancelled',
+    });
+    expect(onRunTerminal).not.toHaveBeenCalled();
+  });
 });

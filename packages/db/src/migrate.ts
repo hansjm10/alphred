@@ -98,6 +98,32 @@ export function migrateDatabase(db: AlphredDatabase): void {
   tx.run(sql`CREATE INDEX IF NOT EXISTS workflow_runs_created_at_idx
     ON workflow_runs(created_at)`);
 
+  tx.run(sql`CREATE TABLE IF NOT EXISTS run_worktrees (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    workflow_run_id INTEGER NOT NULL REFERENCES workflow_runs(id) ON DELETE CASCADE,
+    repository_id INTEGER NOT NULL REFERENCES repositories(id) ON DELETE RESTRICT,
+    worktree_path TEXT NOT NULL,
+    branch TEXT NOT NULL,
+    commit_hash TEXT,
+    status TEXT NOT NULL DEFAULT 'active',
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    removed_at TEXT,
+    CONSTRAINT run_worktrees_status_ck
+      CHECK (status IN ('active', 'removed')),
+    CONSTRAINT run_worktrees_removal_timestamp_ck
+      CHECK (
+        (status = 'active' AND removed_at IS NULL)
+        OR
+        (status = 'removed' AND removed_at IS NOT NULL)
+      )
+  )`);
+  tx.run(sql`CREATE INDEX IF NOT EXISTS run_worktrees_run_id_status_idx
+    ON run_worktrees(workflow_run_id, status)`);
+  tx.run(sql`CREATE INDEX IF NOT EXISTS run_worktrees_repository_id_status_idx
+    ON run_worktrees(repository_id, status)`);
+  tx.run(sql`CREATE INDEX IF NOT EXISTS run_worktrees_created_at_idx
+    ON run_worktrees(created_at)`);
+
   tx.run(sql`CREATE TABLE IF NOT EXISTS tree_nodes (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     workflow_tree_id INTEGER NOT NULL REFERENCES workflow_trees(id) ON DELETE CASCADE,
