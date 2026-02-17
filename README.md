@@ -121,6 +121,10 @@ Notes:
 - A dedicated regression suite verifies runtime env overrides cannot enable `/test/*` when the build gate is off.
 - If an e2e run is interrupted, a stale build lock directory can block the next run; increase the timeout via `ALPHRED_E2E_BUILD_LOCK_TIMEOUT_MS` (default `180000`) or remove `apps/dashboard/.e2e-build-lock`.
 
+## Dashboard API Contracts
+
+- `apps/dashboard/README.md` documents the dashboard integration API endpoints, request/response payloads, and error envelope used by `/api/dashboard/*`.
+
 ## How It Works
 
 1. **Workflows** define a sequence of phases, each with an agent provider, prompt, and transitions
