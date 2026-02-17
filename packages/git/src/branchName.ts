@@ -117,7 +117,7 @@ function sanitizeBranchSegment(segment: string): string {
     .join('')
     .replaceAll(/[[ ~^:\\?*]+/g, '-')
     .replaceAll(/\.\.+/g, '.')
-    .replaceAll(/@\{/g, '-');
+    .replaceAll('@{', '-');
 
   let value = trimDotAndDashEdges(collapseRepeatedCharacter(withoutControls, '-'));
 
