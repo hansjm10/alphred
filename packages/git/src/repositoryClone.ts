@@ -75,10 +75,12 @@ export async function ensureRepositoryClone(params: EnsureRepositoryCloneParams)
     };
 
     await fetchAll(localPath, environment, fetchContext);
+    const defaultBranch = await resolveRepositoryDefaultBranch(localPath, repository.defaultBranch, environment);
     const updated = updateRepositoryCloneStatus(params.db, {
       repositoryId: repository.id,
       cloneStatus: 'cloned',
       localPath,
+      defaultBranch,
     });
 
     return {
@@ -92,10 +94,12 @@ export async function ensureRepositoryClone(params: EnsureRepositoryCloneParams)
     await mkdir(dirname(localPath), { recursive: true });
     await rm(localPath, { recursive: true, force: true });
     await provider.cloneRepo(repository.remoteUrl, localPath, environment);
+    const defaultBranch = await resolveRepositoryDefaultBranch(localPath, repository.defaultBranch, environment);
     const updated = updateRepositoryCloneStatus(params.db, {
       repositoryId: repository.id,
       cloneStatus: 'cloned',
       localPath,
+      defaultBranch,
     });
 
     return {
@@ -111,6 +115,32 @@ export async function ensureRepositoryClone(params: EnsureRepositoryCloneParams)
     });
     throw error;
   }
+}
+
+async function resolveRepositoryDefaultBranch(
+  localPath: string,
+  fallback: string,
+  environment: NodeJS.ProcessEnv,
+): Promise<string> {
+  try {
+    const gitExecutable = await resolveGitExecutable(environment);
+    const { stdout } = await execFileAsync(
+      gitExecutable,
+      ['symbolic-ref', '--quiet', '--short', 'refs/remotes/origin/HEAD'],
+      { cwd: localPath },
+    );
+    const trimmed = stdout.trim();
+    if (trimmed.startsWith('origin/')) {
+      const branch = trimmed.slice('origin/'.length).trim();
+      if (branch.length > 0) {
+        return branch;
+      }
+    }
+  } catch {
+    // Preserve the existing configured default branch if origin/HEAD is unavailable.
+  }
+
+  return fallback;
 }
 
 async function resolveRepositoryLocalPath(

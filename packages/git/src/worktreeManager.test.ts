@@ -160,6 +160,61 @@ describe('WorktreeManager', () => {
     expect(created.branch).toBe('fix/auth-bug');
   });
 
+  it('uses the default branch returned by ensureRepositoryClone for the worktree base ref', async () => {
+    const db = createMigratedDb();
+    const runId = seedRun(db);
+    const repository = insertRepository(db, {
+      name: 'frontend-default-branch',
+      provider: 'github',
+      remoteUrl: 'https://github.com/acme/frontend-default-branch.git',
+      remoteRef: 'acme/frontend-default-branch',
+      defaultBranch: 'main',
+      localPath: '/tmp/alphred/repos/github/acme/frontend-default-branch',
+      cloneStatus: 'pending',
+    });
+
+    const ensureRepositoryClone = vi.fn(async () => ({
+      repository: {
+        ...repository,
+        defaultBranch: 'master',
+        localPath: '/tmp/alphred/repos/github/acme/frontend-default-branch',
+        cloneStatus: 'cloned' as const,
+      },
+      action: 'fetched' as const,
+    }));
+    const createWorktree = vi.fn(async () => ({
+      path: '/tmp/alphred/worktrees/alphred-design-tree-2',
+      branch: 'alphred/design_tree/2',
+      commit: 'def456',
+    }));
+
+    const manager = new WorktreeManager(db, {
+      worktreeBase: '/tmp/alphred/worktrees',
+      ensureRepositoryClone,
+      createWorktree,
+    });
+
+    await manager.createRunWorktree({
+      repoName: 'frontend-default-branch',
+      treeKey: 'design_tree',
+      runId,
+    });
+
+    expect(createWorktree).toHaveBeenCalledWith(
+      '/tmp/alphred/repos/github/acme/frontend-default-branch',
+      '/tmp/alphred/worktrees',
+      {
+        branchTemplate: null,
+        branchContext: {
+          treeKey: 'design_tree',
+          runId,
+          nodeKey: undefined,
+        },
+        baseRef: 'master',
+      },
+    );
+  });
+
   it('cleanupRun removes all active worktrees and marks them removed', async () => {
     const db = createMigratedDb();
     const runId = seedRun(db);

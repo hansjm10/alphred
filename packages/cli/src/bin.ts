@@ -992,6 +992,10 @@ async function handleRepoRemoveCommand(
       return EXIT_RUNTIME_ERROR;
     }
 
+    if (purge && repository.localPath) {
+      await dependencies.removeDirectory(repository.localPath);
+    }
+
     const deleted = db
       .delete(repositories)
       .where(eq(repositories.id, repository.id))
@@ -1002,7 +1006,6 @@ async function handleRepoRemoveCommand(
     }
 
     if (purge && repository.localPath) {
-      await dependencies.removeDirectory(repository.localPath);
       io.stdout(`Removed repository "${name}" and purged "${repository.localPath}".`);
     } else {
       io.stdout(`Removed repository "${name}".`);

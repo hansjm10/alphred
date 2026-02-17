@@ -95,6 +95,53 @@ describe('ensureRepositoryClone', () => {
     expect(result.repository.localPath).toBe(expectedPath);
   });
 
+  it('persists the remote default branch discovered from origin/HEAD after clone', async () => {
+    const db = createMigratedDb();
+    const sandboxDir = await createSandboxDir();
+    const remoteFixtureDir = await createSandboxDir();
+    cleanupPaths.add(sandboxDir);
+    cleanupPaths.add(remoteFixtureDir);
+
+    const sourcePath = join(remoteFixtureDir, 'source');
+    const remotePath = join(remoteFixtureDir, 'remote.git');
+    await mkdir(sourcePath, { recursive: true });
+    await execFileAsync('git', ['init'], { cwd: sourcePath });
+    await execFileAsync('git', ['config', 'user.email', 'alphred-tests@example.com'], { cwd: sourcePath });
+    await execFileAsync('git', ['config', 'user.name', 'Alphred Tests'], { cwd: sourcePath });
+    await execFileAsync('git', ['checkout', '-b', 'master'], { cwd: sourcePath });
+    await writeFile(join(sourcePath, 'README.md'), '# fixture\n');
+    await execFileAsync('git', ['add', 'README.md'], { cwd: sourcePath });
+    await execFileAsync('git', ['commit', '-m', 'initial'], { cwd: sourcePath });
+    await execFileAsync('git', ['init', '--bare', remotePath]);
+    await execFileAsync('git', ['remote', 'add', 'origin', remotePath], { cwd: sourcePath });
+    await execFileAsync('git', ['push', '--set-upstream', 'origin', 'master'], { cwd: sourcePath });
+    await execFileAsync('git', ['symbolic-ref', 'HEAD', 'refs/heads/master'], { cwd: remotePath });
+
+    const expectedRemoteUrl = 'https://github.com/acme/default-branch-fixture.git';
+    const { provider } = createMockProvider('github', async (_remote, localPath) => {
+      await execFileAsync('git', ['clone', remotePath, localPath]);
+      await execFileAsync('git', ['remote', 'set-url', 'origin', expectedRemoteUrl], { cwd: localPath });
+    });
+
+    const result = await ensureRepositoryClone({
+      db,
+      repository: {
+        name: 'default-branch-fixture',
+        provider: 'github',
+        remoteUrl: expectedRemoteUrl,
+        remoteRef: 'acme/default-branch-fixture',
+      },
+      provider,
+      environment: {
+        ALPHRED_SANDBOX_DIR: sandboxDir,
+      },
+    });
+
+    expect(result.action).toBe('cloned');
+    expect(result.repository.defaultBranch).toBe('master');
+    expect(getRepositoryByName(db, 'default-branch-fixture')?.defaultBranch).toBe('master');
+  });
+
   it('fetches existing cloned repositories instead of recloning', async () => {
     const db = createMigratedDb();
     const sandboxDir = await createSandboxDir();

@@ -924,6 +924,33 @@ describe('CLI repo commands', () => {
     expect(getRepositoryByName(db, 'frontend')).toBeNull();
   });
 
+  it('preserves repository registry state when purge fails', async () => {
+    const db = createDatabase(':memory:');
+    migrateDatabase(db);
+    insertRepository(db, {
+      name: 'frontend',
+      provider: 'github',
+      remoteUrl: 'https://github.com/acme/frontend.git',
+      remoteRef: 'acme/frontend',
+      cloneStatus: 'cloned',
+      localPath: '/tmp/alphred/repos/github/acme/frontend',
+    });
+    const captured = createCapturedIo();
+
+    const exitCode = await main(['repo', 'remove', 'frontend', '--purge'], {
+      dependencies: createDependencies(db, createUnusedProviderResolver(), {
+        removeDirectory: async () => {
+          throw new Error('simulated purge failure');
+        },
+      }),
+      io: captured.io,
+    });
+
+    expect(exitCode).toBe(4);
+    expect(captured.stderr).toEqual(['Failed to remove repository: simulated purge failure']);
+    expect(getRepositoryByName(db, 'frontend')).not.toBeNull();
+  });
+
   it('returns runtime failure with a clear message when run-worktree history references a repository', async () => {
     const db = createDatabase(':memory:');
     migrateDatabase(db);
