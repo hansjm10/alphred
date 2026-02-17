@@ -170,7 +170,6 @@ export async function fetchRepository(
   const authConfig = resolveGitFetchAuthConfig(context, environment);
   await runGitCommand([...authConfig, 'fetch', '--all'], {
     cwd: localPath,
-    environment,
   });
 }
 
@@ -178,14 +177,11 @@ async function runGitCommand(
   args: string[],
   options: {
     cwd?: string;
-    environment: NodeJS.ProcessEnv;
   },
 ): Promise<void> {
-  const environment = stripPathEnvironmentEntries(options.environment);
   await new Promise<void>((resolve, reject) => {
     const childProcess = spawn('git', args, {
       cwd: options.cwd,
-      env: environment,
       stdio: 'inherit',
     });
 
@@ -202,14 +198,6 @@ async function runGitCommand(
       );
     });
   });
-}
-
-function stripPathEnvironmentEntries(environment: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-  const sanitized = { ...environment };
-  delete sanitized.PATH;
-  delete sanitized.Path;
-  delete sanitized.path;
-  return sanitized;
 }
 
 function resolveGitFetchAuthConfig(
@@ -730,7 +718,7 @@ function normalizeRemoteForComparison(remoteUrl: string): string {
 function normalizeRemotePath(path: string): string {
   const withoutGitSuffix = path.replace(/\.git$/i, '');
   let endIndex = withoutGitSuffix.length;
-  while (endIndex > 0 && withoutGitSuffix.charCodeAt(endIndex - 1) === 47) {
+  while (endIndex > 0 && withoutGitSuffix.codePointAt(endIndex - 1) === 47) {
     endIndex -= 1;
   }
 

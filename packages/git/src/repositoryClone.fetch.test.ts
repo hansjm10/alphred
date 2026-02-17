@@ -72,9 +72,6 @@ describe('fetchRepository', () => {
       ],
       {
         cwd: '/tmp/repo',
-        env: {
-          ALPHRED_AZURE_DEVOPS_PAT: 'azure-pat',
-        },
         stdio: 'inherit',
       },
     );
@@ -107,9 +104,6 @@ describe('fetchRepository', () => {
       ],
       {
         cwd: '/tmp/repo',
-        env: {
-          ALPHRED_GH_TOKEN: 'gh-token',
-        },
         stdio: 'inherit',
       },
     );
@@ -136,9 +130,6 @@ describe('fetchRepository', () => {
       ['fetch', '--all'],
       {
         cwd: '/tmp/repo',
-        env: {
-          ALPHRED_GH_ENTERPRISE_TOKEN: 'ghes-token',
-        },
         stdio: 'inherit',
       },
     );
@@ -170,9 +161,6 @@ describe('fetchRepository', () => {
       ],
       {
         cwd: '/tmp/repo',
-        env: {
-          ALPHRED_GH_ENTERPRISE_TOKEN: 'ghes-token',
-        },
         stdio: 'inherit',
       },
     );
@@ -199,9 +187,6 @@ describe('fetchRepository', () => {
       ['fetch', '--all'],
       {
         cwd: '/tmp/repo',
-        env: {
-          ALPHRED_GH_TOKEN: 'gh-token',
-        },
         stdio: 'inherit',
       },
     );
@@ -228,9 +213,6 @@ describe('fetchRepository', () => {
       ['fetch', '--all'],
       {
         cwd: '/tmp/repo',
-        env: {
-          ALPHRED_GH_TOKEN: 'gh-token',
-        },
         stdio: 'inherit',
       },
     );
@@ -257,9 +239,6 @@ describe('fetchRepository', () => {
       ['fetch', '--all'],
       {
         cwd: '/tmp/repo',
-        env: {
-          ALPHRED_AZURE_DEVOPS_PAT: 'azure-pat',
-        },
         stdio: 'inherit',
       },
     );
@@ -275,7 +254,6 @@ describe('fetchRepository', () => {
       ['fetch', '--all'],
       {
         cwd: '/tmp/repo',
-        env: {},
         stdio: 'inherit',
       },
     );
