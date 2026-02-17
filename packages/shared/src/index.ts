@@ -33,6 +33,7 @@ export type RepositoryConfig = {
   remoteUrl: string;
   remoteRef: string;
   defaultBranch: string;
+  branchTemplate: string | null;
   localPath: string | null;
   cloneStatus: CloneStatus;
 };

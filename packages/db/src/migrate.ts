@@ -55,6 +55,7 @@ export function migrateDatabase(db: AlphredDatabase): void {
     remote_url TEXT NOT NULL,
     remote_ref TEXT NOT NULL,
     default_branch TEXT NOT NULL DEFAULT 'main',
+    branch_template TEXT,
     local_path TEXT,
     clone_status TEXT NOT NULL DEFAULT 'pending',
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
@@ -64,6 +65,13 @@ export function migrateDatabase(db: AlphredDatabase): void {
     CONSTRAINT repositories_clone_status_ck
       CHECK (clone_status IN ('pending', 'cloned', 'error'))
   )`);
+  const hasBranchTemplateColumn =
+    tx.get<{ count: number }>(
+      sql`SELECT COUNT(*) AS count FROM pragma_table_info('repositories') WHERE name = 'branch_template'`,
+    )?.count ?? 0;
+  if (hasBranchTemplateColumn === 0) {
+    tx.run(sql`ALTER TABLE repositories ADD COLUMN branch_template TEXT`);
+  }
   tx.run(sql`CREATE UNIQUE INDEX IF NOT EXISTS repositories_name_uq
     ON repositories(name)`);
   tx.run(sql`DROP INDEX IF EXISTS repositories_name_idx`);

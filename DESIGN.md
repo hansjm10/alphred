@@ -189,7 +189,7 @@ SQL-first workflow topology and execution state are modeled with normalized tabl
   - Constraint/index rationale:
     - Unique `(guard_key, version)` provides deterministic guard lookup.
 - `repositories`
-  - Managed repository registry (`name`, `provider`, `remote_url`, `remote_ref`, `default_branch`, `local_path`, `clone_status`).
+  - Managed repository registry (`name`, `provider`, `remote_url`, `remote_ref`, `default_branch`, `branch_template`, `local_path`, `clone_status`).
   - Constraint/index rationale:
     - Unique `name` prevents ambiguous repository aliases.
     - `provider` check enforces known SCM kinds (`github`, `azure-devops`).
@@ -197,6 +197,7 @@ SQL-first workflow topology and execution state are modeled with normalized tabl
     - `created_at` index supports chronological listing hot paths.
   - Write semantics:
     - `remote_ref` is stored as a provider-scoped opaque identifier. Provider-specific shape validation is deferred to SCM adapter layers.
+    - `branch_template` is optional and, when set, overrides the global branch naming template for worktree branch generation.
     - Clone-status updates preserve `local_path` unless an explicit `local_path` value is supplied with the update.
 - `tree_nodes`
   - Phase template nodes (`node_key`, `node_type`, `provider`, `prompt_template_id`, retry policy).
@@ -254,3 +255,8 @@ Each run operates in an isolated git worktree:
 2. Agent operates within the worktree directory
 3. On completion, create PR via `gh` or `az` CLI
 4. Clean up worktree after PR creation
+
+Branch naming for worktrees is template-driven:
+- Template precedence: explicit per-run branch value, repository `branch_template`, `ALPHRED_BRANCH_TEMPLATE`, then default `alphred/{tree-key}/{run-id}`.
+- Supported template tokens: `{tree-key}`, `{run-id}`, `{node-key}`, `{issue-id}`, `{timestamp}`, `{short-hash}`, `{date}`.
+- Generated branch names are sanitized to avoid invalid git ref characters and invalid trailing segments.

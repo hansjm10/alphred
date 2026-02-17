@@ -1,4 +1,11 @@
-export { createWorktree, removeWorktree, listWorktrees, type WorktreeInfo } from './worktree.js';
+export { createWorktree, removeWorktree, listWorktrees, type WorktreeInfo, type CreateWorktreeParams } from './worktree.js';
+export {
+  DEFAULT_BRANCH_TEMPLATE,
+  generateBranchName,
+  generateConfiguredBranchName,
+  resolveBranchTemplate,
+  type BranchNameContext,
+} from './branchName.js';
 export { getIssue as getGitHubIssue, createPullRequest as createGitHubPR, cloneRepo as cloneGitHubRepo, type GitHubIssue } from './github.js';
 export {
   getWorkItem as getAzureWorkItem,

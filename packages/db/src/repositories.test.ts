@@ -28,6 +28,7 @@ describe('repository registry CRUD helpers', () => {
     });
 
     expect(inserted.defaultBranch).toBe('main');
+    expect(inserted.branchTemplate).toBeNull();
     expect(inserted.localPath).toBeNull();
     expect(inserted.cloneStatus).toBe('pending');
 
@@ -73,6 +74,19 @@ describe('repository registry CRUD helpers', () => {
 
     expect(updated.cloneStatus).toBe('cloned');
     expect(updated.localPath).toBe('/tmp/alphred/backend');
+  });
+
+  it('persists optional branch template', () => {
+    const db = createMigratedDb();
+    const inserted = insertRepository(db, {
+      name: 'templated',
+      provider: 'github',
+      remoteUrl: 'https://github.com/acme/templated.git',
+      remoteRef: 'acme/templated',
+      branchTemplate: 'alphred/{issue-id}-{tree-key}',
+    });
+
+    expect(inserted.branchTemplate).toBe('alphred/{issue-id}-{tree-key}');
   });
 
   it('preserves existing local path when clone-status update omits localPath', () => {

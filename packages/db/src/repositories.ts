@@ -14,6 +14,7 @@ export type InsertRepositoryParams = {
   remoteUrl: string;
   remoteRef: string;
   defaultBranch?: string;
+  branchTemplate?: string | null;
   localPath?: string | null;
   cloneStatus?: CloneStatus;
   occurredAt?: string;
@@ -42,6 +43,7 @@ function toRepositoryConfig(row: RepositoryRow): RepositoryConfig {
     remoteUrl: row.remoteUrl,
     remoteRef: row.remoteRef,
     defaultBranch: row.defaultBranch,
+    branchTemplate: row.branchTemplate,
     localPath: row.localPath,
     cloneStatus: row.cloneStatus,
   };
@@ -61,6 +63,7 @@ export function insertRepository(db: AlphredDatabase, params: InsertRepositoryPa
       remoteUrl: params.remoteUrl,
       remoteRef: params.remoteRef,
       defaultBranch: params.defaultBranch ?? 'main',
+      branchTemplate: params.branchTemplate ?? null,
       localPath: params.localPath ?? null,
       cloneStatus,
       createdAt: occurredAt,

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import type { WorktreeInfo } from './worktree.js';
+import type { CreateWorktreeParams, WorktreeInfo } from './worktree.js';
 
 describe('worktree types', () => {
   it('should type-check WorktreeInfo', () => {
@@ -10,5 +10,17 @@ describe('worktree types', () => {
     };
     expect(info.path).toBe('/tmp/worktree');
     expect(info.branch).toBe('feature-branch');
+  });
+
+  it('should type-check createWorktree params for generated branch names', () => {
+    const params: CreateWorktreeParams = {
+      branchTemplate: 'alphred/{tree-key}/{run-id}',
+      branchContext: {
+        treeKey: 'design_tree',
+        runId: 42,
+      },
+    };
+
+    expect(params.branchContext?.runId).toBe(42);
   });
 });
