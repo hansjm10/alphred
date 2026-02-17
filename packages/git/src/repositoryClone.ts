@@ -181,10 +181,11 @@ async function runGitCommand(
     environment: NodeJS.ProcessEnv;
   },
 ): Promise<void> {
+  const environment = stripPathEnvironmentEntries(options.environment);
   await new Promise<void>((resolve, reject) => {
     const childProcess = spawn('git', args, {
       cwd: options.cwd,
-      env: options.environment,
+      env: environment,
       stdio: 'inherit',
     });
 
@@ -201,6 +202,14 @@ async function runGitCommand(
       );
     });
   });
+}
+
+function stripPathEnvironmentEntries(environment: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const sanitized = { ...environment };
+  delete sanitized.PATH;
+  delete sanitized.Path;
+  delete sanitized.path;
+  return sanitized;
 }
 
 function resolveGitFetchAuthConfig(
@@ -720,6 +729,10 @@ function normalizeRemoteForComparison(remoteUrl: string): string {
 
 function normalizeRemotePath(path: string): string {
   const withoutGitSuffix = path.replace(/\.git$/i, '');
-  const withoutTrailingSlashes = withoutGitSuffix.replaceAll(/\/+$/g, '');
-  return withoutTrailingSlashes;
+  let endIndex = withoutGitSuffix.length;
+  while (endIndex > 0 && withoutGitSuffix.charCodeAt(endIndex - 1) === 47) {
+    endIndex -= 1;
+  }
+
+  return withoutGitSuffix.slice(0, endIndex);
 }
