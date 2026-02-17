@@ -1,5 +1,5 @@
 import { execFile, spawn } from 'node:child_process';
-import { access, mkdir, rm } from 'node:fs/promises';
+import { access, mkdir, realpath, rm } from 'node:fs/promises';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { promisify } from 'node:util';
 import {
@@ -56,9 +56,11 @@ export async function ensureRepositoryClone(params: EnsureRepositoryCloneParams)
   const repository = getOrCreateRepository(params.db, params.repository);
   assertRepositoryIdentityMatches(repository, params.repository);
 
-  const localPath = resolveRepositoryLocalPath(repository, environment);
+  const localPath = await resolveRepositoryLocalPath(repository, environment);
+  const canReuseLocalPath = await isPathInsideProviderSandbox(localPath, repository.provider, environment);
   if (
-    await isGitRepository(localPath)
+    canReuseLocalPath
+    && await isGitRepository(localPath)
     && await hasExpectedRepositoryOrigin(localPath, repository.remoteUrl, environment)
   ) {
     const fetchContext: FetchRepositoryContext = {
@@ -105,28 +107,42 @@ export async function ensureRepositoryClone(params: EnsureRepositoryCloneParams)
   }
 }
 
-function resolveRepositoryLocalPath(repository: RepositoryConfig, environment: NodeJS.ProcessEnv): string {
+async function resolveRepositoryLocalPath(
+  repository: RepositoryConfig,
+  environment: NodeJS.ProcessEnv,
+): Promise<string> {
   const derivedPath = deriveSandboxRepoPath(repository.provider, repository.remoteRef, environment);
   const storedPath = repository.localPath;
   if (storedPath === null || storedPath === undefined) {
     return derivedPath;
   }
 
-  if (isPathInsideProviderSandbox(storedPath, repository.provider, environment)) {
+  if (await isPathInsideProviderSandbox(storedPath, repository.provider, environment)) {
     return storedPath;
   }
 
   return derivedPath;
 }
 
-function isPathInsideProviderSandbox(path: string, provider: ScmProviderKind, environment: NodeJS.ProcessEnv): boolean {
+async function isPathInsideProviderSandbox(
+  path: string,
+  provider: ScmProviderKind,
+  environment: NodeJS.ProcessEnv,
+): Promise<boolean> {
   if (!isAbsolute(path)) {
     return false;
   }
 
   const providerSandboxRoot = resolve(join(resolveSandboxDir(environment), provider));
-  const resolvedPath = resolve(path);
-  const relativePath = relative(providerSandboxRoot, resolvedPath);
+  const [resolvedSandboxRoot, resolvedPath] = await Promise.all([
+    resolveRealPath(providerSandboxRoot),
+    resolveRealPath(path),
+  ]);
+  if (resolvedSandboxRoot === undefined || resolvedPath === undefined) {
+    return false;
+  }
+
+  const relativePath = relative(resolvedSandboxRoot, resolvedPath);
   if (relativePath.length === 0) {
     return false;
   }
@@ -136,6 +152,14 @@ function isPathInsideProviderSandbox(path: string, provider: ScmProviderKind, en
   }
 
   return !isAbsolute(relativePath);
+}
+
+async function resolveRealPath(path: string): Promise<string | undefined> {
+  try {
+    return await realpath(path);
+  } catch {
+    return undefined;
+  }
 }
 
 export async function fetchRepository(
