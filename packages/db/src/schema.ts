@@ -114,6 +114,41 @@ export const workflowRuns = sqliteTable(
   }),
 );
 
+export const runWorktrees = sqliteTable(
+  'run_worktrees',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    workflowRunId: integer('workflow_run_id')
+      .notNull()
+      .references(() => workflowRuns.id, { onDelete: 'cascade' }),
+    repositoryId: integer('repository_id')
+      .notNull()
+      .references(() => repositories.id, { onDelete: 'restrict' }),
+    worktreePath: text('worktree_path').notNull(),
+    branch: text('branch').notNull(),
+    commitHash: text('commit_hash'),
+    status: text('status').notNull().default('active'),
+    createdAt: text('created_at').notNull().default(utcNow),
+    removedAt: text('removed_at'),
+  },
+  table => ({
+    statusCheck: check('run_worktrees_status_ck', sql`${table.status} in ('active', 'removed')`),
+    removalTimestampCheck: check(
+      'run_worktrees_removal_timestamp_ck',
+      sql`(
+        ${table.status} = 'active'
+        and ${table.removedAt} is null
+      ) or (
+        ${table.status} = 'removed'
+        and ${table.removedAt} is not null
+      )`,
+    ),
+    runStatusIdx: index('run_worktrees_run_id_status_idx').on(table.workflowRunId, table.status),
+    repositoryStatusIdx: index('run_worktrees_repository_id_status_idx').on(table.repositoryId, table.status),
+    createdAtIdx: index('run_worktrees_created_at_idx').on(table.createdAt),
+  }),
+);
+
 export const treeNodes = sqliteTable(
   'tree_nodes',
   {

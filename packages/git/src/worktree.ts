@@ -15,19 +15,33 @@ export type CreateWorktreeParams = {
   branch?: string;
   branchTemplate?: string | null;
   branchContext?: BranchNameContext;
+  baseRef?: string;
 };
 
-function resolveWorktreeBranchName(branchOrParams: string | CreateWorktreeParams): string {
+type ResolvedCreateWorktreeParams = {
+  branch: string;
+  baseRef?: string;
+};
+
+function resolveWorktreeParams(branchOrParams: string | CreateWorktreeParams): ResolvedCreateWorktreeParams {
   if (typeof branchOrParams === 'string') {
-    return branchOrParams;
+    return {
+      branch: branchOrParams,
+    };
   }
 
   if (branchOrParams.branch?.trim()) {
-    return branchOrParams.branch.trim();
+    return {
+      branch: branchOrParams.branch.trim(),
+      baseRef: branchOrParams.baseRef,
+    };
   }
 
   if (branchOrParams.branchContext) {
-    return generateConfiguredBranchName(branchOrParams.branchContext, branchOrParams.branchTemplate);
+    return {
+      branch: generateConfiguredBranchName(branchOrParams.branchContext, branchOrParams.branchTemplate),
+      baseRef: branchOrParams.baseRef,
+    };
   }
 
   throw new Error('createWorktree requires either a branch name or branchContext.');
@@ -38,10 +52,14 @@ export async function createWorktree(
   worktreeBase: string,
   branchOrParams: string | CreateWorktreeParams,
 ): Promise<WorktreeInfo> {
-  const branch = resolveWorktreeBranchName(branchOrParams);
+  const { branch, baseRef } = resolveWorktreeParams(branchOrParams);
   const worktreePath = join(worktreeBase, branch.replaceAll('/', '-'));
+  const worktreeAddArgs = ['worktree', 'add', '-b', branch, worktreePath];
+  if (baseRef !== undefined && baseRef.trim().length > 0) {
+    worktreeAddArgs.push(baseRef.trim());
+  }
 
-  await execFileAsync('git', ['worktree', 'add', '-b', branch, worktreePath], {
+  await execFileAsync('git', worktreeAddArgs, {
     cwd: repoDir,
   });
 

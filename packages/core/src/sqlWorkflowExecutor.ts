@@ -72,6 +72,8 @@ type RoutingDecisionSelection = {
   latestByRunNodeId: Map<number, RoutingDecisionRow>;
 };
 
+type TerminalWorkflowRunStatus = Extract<WorkflowRunStatus, 'completed' | 'failed' | 'cancelled'>;
+
 type NextRunnableSelection = {
   nextRunnableNode: RunNodeExecutionRow | null;
   latestNodeAttempts: RunNodeExecutionRow[];
@@ -143,6 +145,7 @@ export type ExecuteWorkflowRunResult = {
 
 export type SqlWorkflowExecutorDependencies = {
   resolveProvider: PhaseProviderResolver;
+  onRunTerminal?: (params: { workflowRunId: number; runStatus: TerminalWorkflowRunStatus }) => Promise<void> | void;
 };
 
 export type SqlWorkflowExecutor = {
@@ -693,6 +696,36 @@ function transitionRunTo(
     occurredAt,
   });
   return to;
+}
+
+function isTerminalWorkflowRunStatus(status: WorkflowRunStatus): status is TerminalWorkflowRunStatus {
+  return runTerminalStatuses.has(status);
+}
+
+async function notifyRunTerminalTransition(
+  dependencies: SqlWorkflowExecutorDependencies,
+  params: {
+    workflowRunId: number;
+    previousRunStatus: WorkflowRunStatus;
+    nextRunStatus: WorkflowRunStatus;
+  },
+): Promise<void> {
+  if (dependencies.onRunTerminal === undefined) {
+    return;
+  }
+
+  if (isTerminalWorkflowRunStatus(params.previousRunStatus)) {
+    return;
+  }
+
+  if (!isTerminalWorkflowRunStatus(params.nextRunStatus)) {
+    return;
+  }
+
+  await dependencies.onRunTerminal({
+    workflowRunId: params.workflowRunId,
+    runStatus: params.nextRunStatus,
+  });
 }
 
 function resolveRunStatusFromNodes(latestNodeAttempts: RunNodeExecutionRow[]): WorkflowRunStatus {
@@ -1509,16 +1542,33 @@ export function createSqlWorkflowExecutor(
       );
 
       if (!nextRunnableNode) {
-        return resolveNoRunnableOutcome(db, run, latestNodeAttempts, hasNoRouteDecision, hasUnresolvedDecision);
+        const result = resolveNoRunnableOutcome(db, run, latestNodeAttempts, hasNoRouteDecision, hasUnresolvedDecision);
+        await notifyRunTerminalTransition(dependencies, {
+          workflowRunId: run.id,
+          previousRunStatus: run.status,
+          nextRunStatus: result.runStatus,
+        });
+        return result;
       }
 
       const runStatus = ensureRunIsRunning(db, run);
       const claimResult = claimRunnableNode(db, run, nextRunnableNode);
       if (claimResult) {
+        await notifyRunTerminalTransition(dependencies, {
+          workflowRunId: run.id,
+          previousRunStatus: run.status,
+          nextRunStatus: claimResult.runStatus,
+        });
         return claimResult;
       }
       const claimedNode = loadRunNodeExecutionRowById(db, run.id, nextRunnableNode.runNodeId);
-      return executeClaimedRunnableNode(db, dependencies, run, claimedNode, edgeRows, params.options, runStatus);
+      const result = await executeClaimedRunnableNode(db, dependencies, run, claimedNode, edgeRows, params.options, runStatus);
+      await notifyRunTerminalTransition(dependencies, {
+        workflowRunId: run.id,
+        previousRunStatus: run.status,
+        nextRunStatus: result.runStatus,
+      });
+      return result;
     },
 
     async executeRun(params: ExecuteWorkflowRunParams): Promise<ExecuteWorkflowRunResult> {

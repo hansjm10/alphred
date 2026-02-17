@@ -6,6 +6,7 @@ describe('git index exports', () => {
     expect(typeof git.createWorktree).toBe('function');
     expect(typeof git.removeWorktree).toBe('function');
     expect(typeof git.listWorktrees).toBe('function');
+    expect(typeof git.WorktreeManager).toBe('function');
     expect(typeof git.generateBranchName).toBe('function');
     expect(typeof git.generateConfiguredBranchName).toBe('function');
     expect(typeof git.resolveBranchTemplate).toBe('function');

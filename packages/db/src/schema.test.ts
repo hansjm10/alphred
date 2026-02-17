@@ -6,7 +6,9 @@ import {
   guardDefinitions,
   phaseArtifacts,
   promptTemplates,
+  repositories,
   routingDecisions,
+  runWorktrees,
   runNodes,
   treeEdges,
   treeNodes,
@@ -297,9 +299,36 @@ describe('database schema hardening', () => {
       .returning({ id: phaseArtifacts.id })
       .get();
 
+    const repository = db
+      .insert(repositories)
+      .values({
+        name: 'design-repo',
+        provider: 'github',
+        remoteUrl: 'https://github.com/acme/design-repo.git',
+        remoteRef: 'acme/design-repo',
+        defaultBranch: 'main',
+        cloneStatus: 'cloned',
+      })
+      .returning({ id: repositories.id })
+      .get();
+
+    const runWorktree = db
+      .insert(runWorktrees)
+      .values({
+        workflowRunId: seed.runId,
+        repositoryId: repository.id,
+        worktreePath: '/tmp/alphred/worktrees/design-tree-1',
+        branch: 'alphred/design_tree/1',
+        commitHash: 'abc123',
+        status: 'active',
+      })
+      .returning({ id: runWorktrees.id })
+      .get();
+
     expect(edge.id).toBeGreaterThan(0);
     expect(decision.id).toBeGreaterThan(0);
     expect(artifact.id).toBeGreaterThan(0);
+    expect(runWorktree.id).toBeGreaterThan(0);
   });
 
   it('enforces foreign keys for relational execution records', () => {

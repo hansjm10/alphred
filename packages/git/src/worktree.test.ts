@@ -19,8 +19,10 @@ describe('worktree types', () => {
         treeKey: 'design_tree',
         runId: 42,
       },
+      baseRef: 'main',
     };
 
     expect(params.branchContext?.runId).toBe(42);
+    expect(params.baseRef).toBe('main');
   });
 });
