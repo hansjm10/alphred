@@ -156,7 +156,8 @@ function resolveAzureGitAuthConfig(remote: string, environment: NodeJS.ProcessEn
     return [];
   }
 
-  const authHeader = `AUTHORIZATION: Basic ${Buffer.from(`:${pat}`).toString('base64')}`;
+  const basicCredentials = Buffer.from(`:${pat}`).toString('base64');
+  const authHeader = `AUTHORIZATION: Basic ${basicCredentials}`;
   return ['-c', `http.${origin}/.extraheader=${authHeader}`];
 }
 

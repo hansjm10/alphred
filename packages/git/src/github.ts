@@ -290,7 +290,8 @@ function createGitAuthConfig(cloneSource: string, username: string, token: strin
     return [];
   }
 
-  const authHeader = `AUTHORIZATION: Basic ${Buffer.from(`${username}:${token}`).toString('base64')}`;
+  const basicCredentials = Buffer.from(`${username}:${token}`).toString('base64');
+  const authHeader = `AUTHORIZATION: Basic ${basicCredentials}`;
   return ['-c', `http.${origin}/.extraheader=${authHeader}`];
 }
 

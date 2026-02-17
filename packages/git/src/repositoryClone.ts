@@ -243,7 +243,8 @@ function createGitAuthConfig(remoteUrl: string, username: string, token: string)
     return [];
   }
 
-  const authHeader = `AUTHORIZATION: Basic ${Buffer.from(`${username}:${token}`).toString('base64')}`;
+  const basicCredentials = Buffer.from(`${username}:${token}`).toString('base64');
+  const authHeader = `AUTHORIZATION: Basic ${basicCredentials}`;
   return ['-c', `http.${origin}/.extraheader=${authHeader}`];
 }
 
@@ -441,6 +442,15 @@ function resolveAzureDevopsRemoteRepository(
     return undefined;
   }
 
+  const segments = decodeRemotePathSegments(pathname);
+  if (segments === undefined) {
+    return undefined;
+  }
+
+  return resolveAzureDevopsRemoteRepositoryFromSegments(remoteHost, segments);
+}
+
+function decodeRemotePathSegments(pathname: string): string[] | undefined {
   const segments: string[] = [];
   for (const segment of pathname.split('/')) {
     const trimmedSegment = segment.trim();
@@ -458,6 +468,13 @@ function resolveAzureDevopsRemoteRepository(
     segments.push(decodedSegment.replace(/\.git$/i, ''));
   }
 
+  return segments;
+}
+
+function resolveAzureDevopsRemoteRepositoryFromSegments(
+  remoteHost: string,
+  segments: string[],
+): { organization: string; project: string; repository: string } | undefined {
   if (remoteHost === AZURE_DEVOPS_HOSTNAME) {
     if (segments.length !== 4 || segments[2].toLowerCase() !== '_git') {
       return undefined;
@@ -703,6 +720,6 @@ function normalizeRemoteForComparison(remoteUrl: string): string {
 
 function normalizeRemotePath(path: string): string {
   const withoutGitSuffix = path.replace(/\.git$/i, '');
-  const withoutTrailingSlashes = withoutGitSuffix.replace(/\/+$/g, '');
+  const withoutTrailingSlashes = withoutGitSuffix.replaceAll(/\/+$/g, '');
   return withoutTrailingSlashes;
 }
