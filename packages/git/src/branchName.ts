@@ -21,20 +21,88 @@ function defaultRandomHex(length: number): string {
   return randomBytes(Math.ceil(length / 2)).toString('hex').slice(0, length);
 }
 
+function collapseRepeatedCharacter(value: string, character: string): string {
+  let result = '';
+  let previousWasCharacter = false;
+
+  for (const currentCharacter of value) {
+    if (currentCharacter === character) {
+      if (!previousWasCharacter) {
+        result += currentCharacter;
+      }
+      previousWasCharacter = true;
+      continue;
+    }
+
+    result += currentCharacter;
+    previousWasCharacter = false;
+  }
+
+  return result;
+}
+
+function trimCharacterEdges(value: string, character: string): string {
+  let start = 0;
+  let end = value.length;
+
+  while (start < end && value[start] === character) {
+    start += 1;
+  }
+
+  while (end > start && value[end - 1] === character) {
+    end -= 1;
+  }
+
+  return value.slice(start, end);
+}
+
+function trimDotAndDashEdges(value: string): string {
+  return trimCharacterEdges(trimCharacterEdges(value, '.'), '-');
+}
+
+function removeHyphenRunsAdjacentToSlash(value: string): string {
+  let result = '';
+  let index = 0;
+
+  while (index < value.length) {
+    if (value[index] !== '-') {
+      result += value[index];
+      index += 1;
+      continue;
+    }
+
+    let runEnd = index;
+    while (runEnd < value.length && value[runEnd] === '-') {
+      runEnd += 1;
+    }
+
+    const nextCharacter = value[runEnd] ?? '';
+    const previousOutputCharacter = result[result.length - 1] ?? '';
+    if (nextCharacter === '/' || previousOutputCharacter === '/') {
+      index = runEnd;
+      continue;
+    }
+
+    result += value.slice(index, runEnd);
+    index = runEnd;
+  }
+
+  return result;
+}
+
 function normalizeTokenValue(value: unknown): string {
   if (value === undefined || value === null) {
     return '';
   }
 
-  return String(value)
+  const normalized = String(value)
     .trim()
     .toLowerCase()
     .replace(/[\\/]+/g, '-')
     .replace(/[\s_]+/g, '-')
-    .replace(/[^a-z0-9.-]+/g, '-')
-    .replace(/-+/g, '-')
-    .replace(/^\.+|\.+$/g, '')
-    .replace(/^-+|-+$/g, '');
+    .replace(/[^a-z0-9.-]+/g, '-');
+
+  return trimDotAndDashEdges(collapseRepeatedCharacter(normalized, '-'));
 }
 
 function sanitizeBranchSegment(segment: string): string {
@@ -51,13 +119,10 @@ function sanitizeBranchSegment(segment: string): string {
     .replace(/\.\.+/g, '.')
     .replace(/@\{/g, '-');
 
-  let value = withoutControls
-    .replace(/-+/g, '-')
-    .replace(/^\.+|\.+$/g, '')
-    .replace(/^-+|-+$/g, '');
+  let value = trimDotAndDashEdges(collapseRepeatedCharacter(withoutControls, '-'));
 
   while (value.endsWith('.lock')) {
-    value = value.slice(0, -'.lock'.length).replace(/^\.+|\.+$/g, '').replace(/^-+|-+$/g, '');
+    value = trimDotAndDashEdges(value.slice(0, -'.lock'.length));
   }
 
   return value;
@@ -65,7 +130,7 @@ function sanitizeBranchSegment(segment: string): string {
 
 function sanitizeBranchName(rawBranchName: string): string {
   const rawSegments = rawBranchName
-    .replace(/\\/g, '-')
+    .replaceAll('\\', '-')
     .replace(/\/+/g, '/')
     .split('/');
 
@@ -78,7 +143,7 @@ function sanitizeBranchName(rawBranchName: string): string {
   }
 
   let branchName = segments.join('/');
-  branchName = branchName.replace(/\/-+/g, '/').replace(/-+\//g, '/');
+  branchName = removeHyphenRunsAdjacentToSlash(branchName);
 
   if (branchName.startsWith('-')) {
     branchName = `branch-${branchName.slice(1)}`;
