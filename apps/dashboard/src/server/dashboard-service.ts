@@ -301,11 +301,11 @@ export function createDashboardService(options: {
 
   async function withDatabase<T>(operation: (db: AlphredDatabase) => Promise<T> | T): Promise<T> {
     const db = dependencies.openDatabase(resolveDatabasePath(environment, cwd));
-    dependencies.migrateDatabase(db);
     let result: T | undefined;
     let caughtError: unknown = null;
 
     try {
+      dependencies.migrateDatabase(db);
       result = await operation(db);
     } catch (error) {
       caughtError = toDashboardIntegrationError(error);

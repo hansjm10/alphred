@@ -224,6 +224,29 @@ describe('createDashboardService', () => {
     expect(closeDatabase).toHaveBeenNthCalledWith(2, db);
   });
 
+  it('closes database handles when migration fails', async () => {
+    const closeDatabase = vi.fn(() => undefined);
+    const migrateDatabaseMock = vi.fn(() => {
+      throw new Error('migration failed');
+    });
+    const { db, dependencies } = createHarness({
+      migrateDatabase: migrateDatabaseMock,
+      closeDatabase,
+    });
+    const service = createDashboardService({ dependencies });
+
+    await expect(service.listRepositories()).rejects.toMatchObject({
+      name: 'DashboardIntegrationError',
+      code: 'internal_error',
+      status: 500,
+    });
+
+    expect(migrateDatabaseMock).toHaveBeenCalledTimes(1);
+    expect(migrateDatabaseMock).toHaveBeenCalledWith(db);
+    expect(closeDatabase).toHaveBeenCalledTimes(1);
+    expect(closeDatabase).toHaveBeenCalledWith(db);
+  });
+
   it('uses a separate database lifecycle for async run execution', async () => {
     const closeDatabase = vi.fn(() => undefined);
     const executeRun = vi.fn(async () => {
