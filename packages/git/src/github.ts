@@ -7,9 +7,9 @@ import { containsGitAuthArgs, createRedactedGitCommandFailureMessage } from './g
 
 const execFileAsync = promisify(execFile);
 const GITHUB_HOSTNAME = 'github.com';
-const GIT_ACCESS_TOKEN_USERNAME = 'x-access-token';
+const GIT_ACCESS_USERNAME = 'x-access-token';
 const SCP_REMOTE_REGEX = /^(?:[^@]+@)?([^:/]+):.+$/;
-const TOKEN_SCOPES_PREFIX = 'Token scopes:';
+const SCOPES_PREFIX = 'Token scopes:';
 const LOGGED_IN_PREFIX = 'logged in to ';
 const ACCOUNT_MARKER = ' account ';
 
@@ -32,7 +32,10 @@ export async function getIssue(
     '--json', 'number,title,body,labels',
   ], { env });
 
-  const data = JSON.parse(stdout) as { number: number; title: string; body: string; labels: { name: string }[] };
+  const data = parseJsonOutput<{ number: number; title: string; body: string; labels: { name: string }[] }>(
+    stdout,
+    'gh issue view',
+  );
   return {
     number: data.number,
     title: data.title,
@@ -255,12 +258,12 @@ function parseGitHubAuthUser(line: string): string | undefined {
 }
 
 function parseGitHubAuthScopes(line: string): string | undefined {
-  const scopePrefixIndex = line.indexOf(TOKEN_SCOPES_PREFIX);
+  const scopePrefixIndex = line.indexOf(SCOPES_PREFIX);
   if (scopePrefixIndex === -1) {
     return undefined;
   }
 
-  const rawScopes = line.slice(scopePrefixIndex + TOKEN_SCOPES_PREFIX.length).trim();
+  const rawScopes = line.slice(scopePrefixIndex + SCOPES_PREFIX.length).trim();
   return rawScopes.length > 0 ? rawScopes : undefined;
 }
 
@@ -270,7 +273,7 @@ function resolveGitCloneAuthConfig(cloneSource: string, environment: NodeJS.Proc
     return [];
   }
 
-  return createGitAuthConfig(cloneSource, GIT_ACCESS_TOKEN_USERNAME, token);
+  return createGitAuthConfig(cloneSource, GIT_ACCESS_USERNAME, token);
 }
 
 function resolveGitHubToken(cloneSource: string, environment: NodeJS.ProcessEnv): string | undefined {
@@ -330,6 +333,15 @@ function resolveConfiguredToken(...values: (string | undefined)[]): string | und
   }
 
   return undefined;
+}
+
+function parseJsonOutput<T>(stdout: string, commandLabel: string): T {
+  try {
+    return JSON.parse(stdout) as T;
+  } catch (error) {
+    const details = error instanceof Error ? error.message : String(error);
+    throw new Error(`${commandLabel} returned malformed JSON output: ${details}`);
+  }
 }
 
 function parseGitHubRepo(repo: string): { hostname: string; owner: string; repository: string } | undefined {

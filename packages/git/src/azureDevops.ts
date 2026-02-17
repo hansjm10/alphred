@@ -39,7 +39,10 @@ export async function getWorkItem(
     '--output', 'json',
   ], { env });
 
-  const data = JSON.parse(stdout) as { id: number; fields: Record<string, string> };
+  const data = parseJsonOutput<{ id: number; fields: Record<string, string> }>(
+    stdout,
+    'az boards work-item show',
+  );
   return {
     id: data.id,
     title: data.fields['System.Title'] ?? '',
@@ -74,7 +77,10 @@ export async function createPullRequest(
     '--output', 'json',
   ], { env });
 
-  const data = JSON.parse(stdout) as { pullRequestId: number };
+  const data = parseJsonOutput<{ pullRequestId: number }>(
+    stdout,
+    'az repos pr create',
+  );
   return data.pullRequestId;
 }
 
@@ -205,6 +211,15 @@ function parseAzureAccountUser(stdout: string): string | undefined {
     return typeof userName === 'string' && userName.trim().length > 0 ? userName : undefined;
   } catch {
     return undefined;
+  }
+}
+
+function parseJsonOutput<T>(stdout: string, commandLabel: string): T {
+  try {
+    return JSON.parse(stdout) as T;
+  } catch (error) {
+    const details = error instanceof Error ? error.message : String(error);
+    throw new Error(`${commandLabel} returned malformed JSON output: ${details}`);
   }
 }
 

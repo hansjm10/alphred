@@ -8,8 +8,8 @@ import { Codex, type CodexOptions } from '@openai/codex-sdk';
 const require = createRequire(import.meta.url);
 const SDK_IMPORT_RESOLUTION_CONDITIONS = new Set(['import', 'node', 'default']);
 
-const CODEX_API_KEY_ENV_VAR = 'CODEX_API_KEY';
-const OPENAI_API_KEY_ENV_VAR = 'OPENAI_API_KEY';
+const CODEX_API_AUTH_ENV_VAR = 'CODEX_API_KEY';
+const OPENAI_API_AUTH_ENV_VAR = 'OPENAI_API_KEY';
 const CODEX_MODEL_ENV_VAR = 'CODEX_MODEL';
 const OPENAI_BASE_URL_ENV_VAR = 'OPENAI_BASE_URL';
 const CODEX_HOME_ENV_VAR = 'CODEX_HOME';
@@ -281,12 +281,12 @@ function resolveCodexHome(env: NodeJS.ProcessEnv, getHomeDirectory: () => string
 }
 
 function resolveApiKey(env: NodeJS.ProcessEnv): string | undefined {
-  const codexApiKey = readConfiguredEnvValue(env, CODEX_API_KEY_ENV_VAR);
+  const codexApiKey = readConfiguredEnvValue(env, CODEX_API_AUTH_ENV_VAR);
   if (codexApiKey !== undefined) {
     return codexApiKey;
   }
 
-  return readConfiguredEnvValue(env, OPENAI_API_KEY_ENV_VAR);
+  return readConfiguredEnvValue(env, OPENAI_API_AUTH_ENV_VAR);
 }
 
 export function resetCodexSdkBootstrapCache(): void {
@@ -318,7 +318,7 @@ export function initializeCodexSdkBootstrap(overrides: CodexBootstrapOverrides =
         'CODEX_BOOTSTRAP_MISSING_AUTH',
         'Codex provider requires either an API key or an existing Codex CLI login session.',
         {
-          checkedEnvVars: [CODEX_API_KEY_ENV_VAR, OPENAI_API_KEY_ENV_VAR],
+          checkedEnvVars: [CODEX_API_AUTH_ENV_VAR, OPENAI_API_AUTH_ENV_VAR],
           codexHome,
         },
       );

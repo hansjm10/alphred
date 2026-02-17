@@ -1,5 +1,5 @@
-const CLAUDE_API_KEY_ENV_VAR = 'CLAUDE_API_KEY';
-const ANTHROPIC_API_KEY_ENV_VAR = 'ANTHROPIC_API_KEY';
+const CLAUDE_API_AUTH_ENV_VAR = 'CLAUDE_API_KEY';
+const ANTHROPIC_API_AUTH_ENV_VAR = 'ANTHROPIC_API_KEY';
 const CLAUDE_MODEL_ENV_VAR = 'CLAUDE_MODEL';
 const CLAUDE_BASE_URL_ENV_VAR = 'CLAUDE_BASE_URL';
 const ANTHROPIC_BASE_URL_ENV_VAR = 'ANTHROPIC_BASE_URL';
@@ -47,7 +47,7 @@ export type ClaudeSdkBootstrap = Readonly<{
   model: string;
   baseUrl?: string;
   apiKey: string;
-  apiKeySource: typeof CLAUDE_API_KEY_ENV_VAR | typeof ANTHROPIC_API_KEY_ENV_VAR;
+  apiKeySource: typeof CLAUDE_API_AUTH_ENV_VAR | typeof ANTHROPIC_API_AUTH_ENV_VAR;
 }>;
 
 let cachedBootstrap: ClaudeSdkBootstrap | undefined;
@@ -129,21 +129,21 @@ function resolveBaseUrl(env: NodeJS.ProcessEnv): string | undefined {
 
 function resolveApiKey(env: NodeJS.ProcessEnv): {
   apiKey: string;
-  apiKeySource: typeof CLAUDE_API_KEY_ENV_VAR | typeof ANTHROPIC_API_KEY_ENV_VAR;
+  apiKeySource: typeof CLAUDE_API_AUTH_ENV_VAR | typeof ANTHROPIC_API_AUTH_ENV_VAR;
 } | undefined {
-  const claudeApiKey = readConfiguredEnvValue(env, CLAUDE_API_KEY_ENV_VAR);
+  const claudeApiKey = readConfiguredEnvValue(env, CLAUDE_API_AUTH_ENV_VAR);
   if (claudeApiKey !== undefined) {
     return {
       apiKey: claudeApiKey,
-      apiKeySource: CLAUDE_API_KEY_ENV_VAR,
+      apiKeySource: CLAUDE_API_AUTH_ENV_VAR,
     };
   }
 
-  const anthropicApiKey = readConfiguredEnvValue(env, ANTHROPIC_API_KEY_ENV_VAR);
+  const anthropicApiKey = readConfiguredEnvValue(env, ANTHROPIC_API_AUTH_ENV_VAR);
   if (anthropicApiKey !== undefined) {
     return {
       apiKey: anthropicApiKey,
-      apiKeySource: ANTHROPIC_API_KEY_ENV_VAR,
+      apiKeySource: ANTHROPIC_API_AUTH_ENV_VAR,
     };
   }
 
@@ -186,7 +186,7 @@ export function initializeClaudeSdkBootstrap(overrides: ClaudeBootstrapOverrides
       'Claude provider requires an API key via CLAUDE_API_KEY or ANTHROPIC_API_KEY.',
       {
         requestedAuthMode: authMode,
-        checkedEnvVars: [CLAUDE_API_KEY_ENV_VAR, ANTHROPIC_API_KEY_ENV_VAR],
+        checkedEnvVars: [CLAUDE_API_AUTH_ENV_VAR, ANTHROPIC_API_AUTH_ENV_VAR],
       },
     );
   }
