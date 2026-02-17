@@ -13,6 +13,7 @@ const OPENAI_API_KEY_ENV_VAR = 'OPENAI_API_KEY';
 const CODEX_MODEL_ENV_VAR = 'CODEX_MODEL';
 const OPENAI_BASE_URL_ENV_VAR = 'OPENAI_BASE_URL';
 const CODEX_HOME_ENV_VAR = 'CODEX_HOME';
+const CODEX_SDK_PACKAGE_SPECIFIER_PARTS = ['@openai', 'codex-sdk'] as const;
 
 const DEFAULT_CODEX_MODEL = 'gpt-5-codex';
 
@@ -218,6 +219,7 @@ function defaultCheckCliSession(codexBinaryPath: string, env: NodeJS.ProcessEnv)
 }
 
 function resolveSdkPackageJsonPathFromEntrypoint(): string {
+  const sdkPackageSpecifier = CODEX_SDK_PACKAGE_SPECIFIER_PARTS.join('/');
   let sdkEntrypointPath: string;
   try {
     // Node supports custom resolution conditions at runtime, but the bundled type
@@ -225,7 +227,7 @@ function resolveSdkPackageJsonPathFromEntrypoint(): string {
     const resolveOptions = {
       conditions: SDK_IMPORT_RESOLUTION_CONDITIONS,
     } as unknown as Parameters<typeof require.resolve>[1];
-    sdkEntrypointPath = require.resolve('@openai/codex-sdk', resolveOptions);
+    sdkEntrypointPath = require.resolve(sdkPackageSpecifier, resolveOptions);
   } catch (error) {
     throw new CodexBootstrapError(
       'CODEX_BOOTSTRAP_INVALID_CONFIG',
