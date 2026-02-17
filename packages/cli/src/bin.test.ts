@@ -720,6 +720,14 @@ describe('CLI run/status commands', () => {
         stderr: ['Option "--tree" requires a value.', runUsage],
       },
       {
+        args: ['run', '--tree', 'design_tree', '--repo', '   '],
+        stderr: ['Option "--repo" requires a value.', runUsage],
+      },
+      {
+        args: ['run', '--tree', 'design_tree', '--repo', 'frontend', '--branch', '   '],
+        stderr: ['Option "--branch" requires a value.', runUsage],
+      },
+      {
         args: ['run', '--tree', 'design_tree', '--branch', 'fix/auth-bug'],
         stderr: ['Option "--branch" requires "--repo".', runUsage],
       },

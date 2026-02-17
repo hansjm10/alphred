@@ -705,8 +705,18 @@ async function handleRunCommand(rawArgs: readonly string[], dependencies: CliDep
     return EXIT_USAGE_ERROR;
   }
 
-  const repoInput = parsedOptions.options.get('repo')?.trim();
-  const branchOverride = parsedOptions.options.get('branch')?.trim();
+  const repoOption = parsedOptions.options.get('repo');
+  const repoInput = repoOption?.trim();
+  if (repoOption !== undefined && repoInput === '') {
+    return usageError(io, 'Option "--repo" requires a value.', RUN_USAGE);
+  }
+
+  const branchOption = parsedOptions.options.get('branch');
+  const branchOverride = branchOption?.trim();
+  if (branchOption !== undefined && branchOverride === '') {
+    return usageError(io, 'Option "--branch" requires a value.', RUN_USAGE);
+  }
+
   if (branchOverride && !repoInput) {
     return usageError(io, 'Option "--branch" requires "--repo".', RUN_USAGE);
   }
