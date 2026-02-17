@@ -61,8 +61,13 @@ pnpm dev:dashboard
 Current CLI command contract:
 
 ```bash
-alphred run --tree <tree_key>
+alphred run --tree <tree_key> [--repo <name|github:owner/repo|azure:org/project/repo>] [--branch <branch_name>]
 alphred status --run <run_id>
+alphred repo add --name <name> (--github <owner/repo> | --azure <org/project/repo>)
+alphred repo list
+alphred repo show <name>
+alphred repo remove <name> [--purge]
+alphred repo sync <name>
 alphred list
 ```
 
@@ -70,6 +75,8 @@ Notes:
 - `alphred list` is not implemented yet and exits with code `4`.
 - `alphred list` accepts no options or positional arguments; invalid list input exits with code `2`.
 - `alphred status` currently requires `--run <run_id>` and does not default to a latest run.
+- `alphred run --repo github:owner/repo` or `--repo azure:org/project/repo` auto-registers the repository alias using the final path segment and runs in a managed worktree.
+- `alphred run --branch <branch_name>` requires `--repo` and overrides generated branch naming for that run.
 - Set `ALPHRED_DB_PATH` to override the database path; relative paths resolve from the current working directory.
 
 Exit codes:

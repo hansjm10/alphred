@@ -124,6 +124,7 @@ export function updateRepositoryCloneStatus(
     repositoryId: number;
     cloneStatus: CloneStatus;
     localPath?: string | null;
+    defaultBranch?: string;
     occurredAt?: string;
   },
 ): RepositoryConfig {
@@ -134,6 +135,7 @@ export function updateRepositoryCloneStatus(
     cloneStatus: CloneStatus;
     updatedAt: string;
     localPath?: string | null;
+    defaultBranch?: string;
   } = {
     cloneStatus: params.cloneStatus,
     updatedAt: occurredAt,
@@ -141,6 +143,9 @@ export function updateRepositoryCloneStatus(
 
   if (params.localPath !== undefined) {
     updateValues.localPath = params.localPath;
+  }
+  if (params.defaultBranch !== undefined) {
+    updateValues.defaultBranch = params.defaultBranch;
   }
 
   const updated = db

@@ -76,6 +76,25 @@ describe('repository registry CRUD helpers', () => {
     expect(updated.localPath).toBe('/tmp/alphred/backend');
   });
 
+  it('updates default branch when provided', () => {
+    const db = createMigratedDb();
+    const inserted = insertRepository(db, {
+      name: 'frontend-default-branch',
+      provider: 'github',
+      remoteUrl: 'https://github.com/acme/frontend-default-branch.git',
+      remoteRef: 'acme/frontend-default-branch',
+      defaultBranch: 'main',
+    });
+
+    const updated = updateRepositoryCloneStatus(db, {
+      repositoryId: inserted.id,
+      cloneStatus: 'cloned',
+      defaultBranch: 'master',
+    });
+
+    expect(updated.defaultBranch).toBe('master');
+  });
+
   it('persists optional branch template', () => {
     const db = createMigratedDb();
     const inserted = insertRepository(db, {

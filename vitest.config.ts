@@ -9,6 +9,7 @@ export default defineConfig({
       '@alphred/shared': resolve(__dirname, 'packages/shared/src/index.ts'),
       '@alphred/core': resolve(__dirname, 'packages/core/src/index.ts'),
       '@alphred/agents': resolve(__dirname, 'packages/agents/src/index.ts'),
+      '@alphred/git': resolve(__dirname, 'packages/git/src/index.ts'),
     },
   },
   esbuild: {
