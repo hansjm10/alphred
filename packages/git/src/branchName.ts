@@ -1,0 +1,158 @@
+import { randomBytes } from 'node:crypto';
+
+export const DEFAULT_BRANCH_TEMPLATE = 'alphred/{tree-key}/{run-id}';
+
+export type BranchNameContext = {
+  treeKey: string;
+  runId: number;
+  nodeKey?: string;
+  issueId?: string;
+  timestamp?: number;
+};
+
+type GenerateBranchNameOptions = {
+  now?: () => Date;
+  randomHex?: (length: number) => string;
+};
+
+const tokenPattern = /\{(tree-key|run-id|node-key|issue-id|timestamp|short-hash|date)\}/g;
+
+function defaultRandomHex(length: number): string {
+  return randomBytes(Math.ceil(length / 2)).toString('hex').slice(0, length);
+}
+
+function normalizeTokenValue(value: unknown): string {
+  if (value === undefined || value === null) {
+    return '';
+  }
+
+  return String(value)
+    .trim()
+    .toLowerCase()
+    .replace(/[\\/]+/g, '-')
+    .replace(/[\s_]+/g, '-')
+    .replace(/[^a-z0-9.-]+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^\.+|\.+$/g, '')
+    .replace(/^-+|-+$/g, '');
+}
+
+function sanitizeBranchSegment(segment: string): string {
+  const withoutControls = Array.from(segment, character => {
+    const codePoint = character.charCodeAt(0);
+    if (codePoint <= 0x1f || codePoint === 0x7f) {
+      return '-';
+    }
+
+    return character;
+  })
+    .join('')
+    .replace(/[[ ~^:\\?*]+/g, '-')
+    .replace(/\.\.+/g, '.')
+    .replace(/@\{/g, '-');
+
+  let value = withoutControls
+    .replace(/-+/g, '-')
+    .replace(/^\.+|\.+$/g, '')
+    .replace(/^-+|-+$/g, '');
+
+  while (value.endsWith('.lock')) {
+    value = value.slice(0, -'.lock'.length).replace(/^\.+|\.+$/g, '').replace(/^-+|-+$/g, '');
+  }
+
+  return value;
+}
+
+function sanitizeBranchName(rawBranchName: string): string {
+  const rawSegments = rawBranchName
+    .replace(/\\/g, '-')
+    .replace(/\/+/g, '/')
+    .split('/');
+
+  const segments: string[] = [];
+  for (const segment of rawSegments) {
+    const sanitized = sanitizeBranchSegment(segment);
+    if (sanitized.length > 0) {
+      segments.push(sanitized);
+    }
+  }
+
+  let branchName = segments.join('/');
+  branchName = branchName.replace(/\/-+/g, '/').replace(/-+\//g, '/');
+
+  if (branchName.startsWith('-')) {
+    branchName = `branch-${branchName.slice(1)}`;
+  }
+
+  if (branchName.length === 0) {
+    return 'alphred/branch';
+  }
+
+  if (branchName.endsWith('.')) {
+    branchName = branchName.slice(0, -1);
+  }
+
+  if (branchName.length === 0) {
+    return 'alphred/branch';
+  }
+
+  return branchName;
+}
+
+export function resolveBranchTemplate(template?: string | null): string {
+  if (template?.trim()) {
+    return template.trim();
+  }
+
+  const envTemplate = process.env.ALPHRED_BRANCH_TEMPLATE;
+  if (envTemplate?.trim()) {
+    return envTemplate.trim();
+  }
+
+  return DEFAULT_BRANCH_TEMPLATE;
+}
+
+export function generateBranchName(
+  template: string,
+  context: BranchNameContext,
+  options: GenerateBranchNameOptions = {},
+): string {
+  const now = options.now ?? (() => new Date());
+  const randomHex = options.randomHex ?? defaultRandomHex;
+  const timestamp = context.timestamp ?? Math.floor(now().getTime() / 1000);
+  const date = new Date(timestamp * 1000).toISOString().slice(0, 10);
+
+  const normalizedTemplate = resolveBranchTemplate(template);
+  const interpolated = normalizedTemplate.replace(tokenPattern, (_match, token: string) => {
+    if (token === 'tree-key') {
+      return normalizeTokenValue(context.treeKey);
+    }
+    if (token === 'run-id') {
+      return normalizeTokenValue(context.runId);
+    }
+    if (token === 'node-key') {
+      return normalizeTokenValue(context.nodeKey);
+    }
+    if (token === 'issue-id') {
+      return normalizeTokenValue(context.issueId);
+    }
+    if (token === 'timestamp') {
+      return normalizeTokenValue(timestamp);
+    }
+    if (token === 'short-hash') {
+      return normalizeTokenValue(randomHex(6));
+    }
+
+    return normalizeTokenValue(date);
+  });
+
+  return sanitizeBranchName(interpolated);
+}
+
+export function generateConfiguredBranchName(
+  context: BranchNameContext,
+  template?: string | null,
+  options?: GenerateBranchNameOptions,
+): string {
+  return generateBranchName(resolveBranchTemplate(template), context, options);
+}

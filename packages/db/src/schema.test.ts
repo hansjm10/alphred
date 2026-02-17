@@ -107,6 +107,28 @@ function seedTreeState(db: ReturnType<typeof createDatabase>, keyPrefix = 'desig
 }
 
 describe('database schema hardening', () => {
+  it('adds repositories.branch_template when migrating a legacy repositories table', () => {
+    const db = createDatabase(':memory:');
+
+    db.run(sql`CREATE TABLE repositories (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      provider TEXT NOT NULL,
+      remote_url TEXT NOT NULL,
+      remote_ref TEXT NOT NULL,
+      default_branch TEXT NOT NULL DEFAULT 'main',
+      local_path TEXT,
+      clone_status TEXT NOT NULL DEFAULT 'pending',
+      created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+      updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+    )`);
+
+    expect(() => migrateDatabase(db)).not.toThrow();
+
+    const columns = db.all<{ name: string }>(sql`SELECT name FROM pragma_table_info('repositories') ORDER BY cid`);
+    expect(columns.map(column => column.name)).toContain('branch_template');
+  });
+
   it('runs migrations reproducibly in repeated executions without dropping existing data', () => {
     const db = createDatabase(':memory:');
 

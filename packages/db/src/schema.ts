@@ -68,6 +68,7 @@ export const repositories = sqliteTable(
     remoteUrl: text('remote_url').notNull(),
     remoteRef: text('remote_ref').notNull(),
     defaultBranch: text('default_branch').notNull().default('main'),
+    branchTemplate: text('branch_template'),
     localPath: text('local_path'),
     cloneStatus: text('clone_status').notNull().default('pending'),
     createdAt: text('created_at').notNull().default(utcNow),

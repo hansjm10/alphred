@@ -46,6 +46,11 @@ auth validation.
   - `deriveSandboxRepoPath(provider, remoteRef)` deterministically maps refs to sandbox paths.
 - Registry clone orchestration:
   - `ensureRepositoryClone(...)` integrates with the repository registry (`@alphred/db`), clones or fetches existing clones, and keeps `clone_status` / `local_path` in sync.
+- Branch naming templates:
+  - `generateConfiguredBranchName(context, template?)` resolves template precedence:
+    explicit template -> `ALPHRED_BRANCH_TEMPLATE` -> default `alphred/{tree-key}/{run-id}`.
+  - Supported template tokens: `{tree-key}`, `{run-id}`, `{node-key}`, `{issue-id}`, `{timestamp}`, `{short-hash}`, `{date}`.
+  - Generated names are sanitized to avoid invalid git branch characters and invalid trailing suffixes.
 - `GitHubScmProvider.createPullRequest(...)` extracts a numeric PR id from URLs
   matching `/pull/<number>`. If parsing fails, it falls back to using the full
   URL as `PullRequestResult.id`.

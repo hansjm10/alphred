@@ -1,6 +1,7 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { join } from 'node:path';
+import { generateConfiguredBranchName, type BranchNameContext } from './branchName.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -10,11 +11,34 @@ export type WorktreeInfo = {
   commit: string;
 };
 
+export type CreateWorktreeParams = {
+  branch?: string;
+  branchTemplate?: string | null;
+  branchContext?: BranchNameContext;
+};
+
+function resolveWorktreeBranchName(branchOrParams: string | CreateWorktreeParams): string {
+  if (typeof branchOrParams === 'string') {
+    return branchOrParams;
+  }
+
+  if (branchOrParams.branch?.trim()) {
+    return branchOrParams.branch.trim();
+  }
+
+  if (branchOrParams.branchContext) {
+    return generateConfiguredBranchName(branchOrParams.branchContext, branchOrParams.branchTemplate);
+  }
+
+  throw new Error('createWorktree requires either a branch name or branchContext.');
+}
+
 export async function createWorktree(
   repoDir: string,
   worktreeBase: string,
-  branch: string,
+  branchOrParams: string | CreateWorktreeParams,
 ): Promise<WorktreeInfo> {
+  const branch = resolveWorktreeBranchName(branchOrParams);
   const worktreePath = join(worktreeBase, branch.replace(/\//g, '-'));
 
   await execFileAsync('git', ['worktree', 'add', '-b', branch, worktreePath], {

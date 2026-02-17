@@ -99,6 +99,7 @@ describe('shared types', () => {
       remoteUrl: 'https://github.com/owner/repo.git',
       remoteRef: 'owner/repo',
       defaultBranch: 'main',
+      branchTemplate: null,
       localPath: null,
       cloneStatus,
     };
