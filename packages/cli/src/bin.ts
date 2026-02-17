@@ -24,8 +24,14 @@ import {
   type WorkflowRunStatus,
 } from '@alphred/db';
 import { createSqlWorkflowExecutor, createSqlWorkflowPlanner, type PhaseProviderResolver } from '@alphred/core';
-import { WorktreeManager, ensureRepositoryClone, resolveSandboxDir } from '@alphred/git';
-import type { RepositoryConfig } from '@alphred/shared';
+import {
+  WorktreeManager,
+  createScmProvider as createGitScmProvider,
+  ensureRepositoryClone,
+  resolveSandboxDir,
+  type ScmProviderConfig,
+} from '@alphred/git';
+import type { AuthStatus, RepositoryConfig } from '@alphred/shared';
 
 const EXIT_SUCCESS = 0;
 const EXIT_USAGE_ERROR = 2;
@@ -49,6 +55,9 @@ export type CliDependencies = {
   openDatabase: (path: string) => AlphredDatabase;
   migrateDatabase: (db: AlphredDatabase) => void;
   resolveProvider: PhaseProviderResolver;
+  createScmProvider: (config: ScmProviderConfig) => {
+    checkAuth: () => Promise<AuthStatus>;
+  };
   ensureRepositoryClone: typeof ensureRepositoryClone;
   createWorktreeManager: (db: AlphredDatabase, options: { environment: NodeJS.ProcessEnv }) => Pick<
     WorktreeManager,
@@ -184,6 +193,7 @@ const defaultDependencies: CliDependencies = {
   openDatabase: path => createDatabase(path),
   migrateDatabase: db => migrateDatabase(db),
   resolveProvider: providerName => resolveAgentProvider(providerName),
+  createScmProvider: config => createGitScmProvider(config),
   ensureRepositoryClone: params => ensureRepositoryClone(params),
   createWorktreeManager: (db, options) =>
     new WorktreeManager(db, {
@@ -517,6 +527,7 @@ const REPO_LIST_USAGE = 'Usage: alphred repo list';
 const REPO_SHOW_USAGE = 'Usage: alphred repo show <name>';
 const REPO_REMOVE_USAGE = 'Usage: alphred repo remove <name> [--purge]';
 const REPO_SYNC_USAGE = 'Usage: alphred repo sync <name>';
+type ScmAuthPreflightMode = 'warn' | 'require';
 
 function parseGitHubRemoteRef(ref: string): { remoteRef: string; remoteUrl: string; derivedName: string } {
   const segments = ref
@@ -772,6 +783,74 @@ function parseRunCommandInput(rawArgs: readonly string[], io: CliIo): ParsedRunC
   };
 }
 
+function formatScmProviderLabel(provider: RepositoryConfig['provider']): string {
+  return provider === 'github' ? 'GitHub' : 'Azure DevOps';
+}
+
+function toScmProviderConfigForAuth(
+  repository: Pick<RepositoryConfig, 'provider' | 'remoteRef'>,
+): ScmProviderConfig {
+  if (repository.provider === 'github') {
+    return {
+      kind: 'github',
+      repo: repository.remoteRef,
+    };
+  }
+
+  const segments = repository.remoteRef
+    .split('/')
+    .map(segment => segment.trim())
+    .filter(segment => segment.length > 0);
+  if (segments.length !== 3) {
+    throw new Error(
+      `Invalid Azure repository reference "${repository.remoteRef}". Expected org/project/repository.`,
+    );
+  }
+
+  return {
+    kind: 'azure-devops',
+    organization: segments[0],
+    project: segments[1],
+    repository: segments[2],
+  };
+}
+
+async function runScmAuthPreflight(
+  repository: Pick<RepositoryConfig, 'provider' | 'remoteRef'>,
+  dependencies: Pick<CliDependencies, 'createScmProvider'>,
+  io: Pick<CliIo, 'stderr'>,
+  options: {
+    commandName: string;
+    mode: ScmAuthPreflightMode;
+  },
+): Promise<ExitCode | null> {
+  const providerLabel = formatScmProviderLabel(repository.provider);
+
+  let authStatus: AuthStatus;
+  try {
+    const provider = dependencies.createScmProvider(toScmProviderConfigForAuth(repository));
+    authStatus = await provider.checkAuth();
+  } catch (error) {
+    io.stderr(`Failed to verify ${providerLabel} authentication: ${toErrorMessage(error)}`);
+    return EXIT_RUNTIME_ERROR;
+  }
+
+  if (authStatus.authenticated) {
+    return null;
+  }
+
+  const remediationMessage = authStatus.error?.trim() || `${providerLabel} authentication is not configured.`;
+  if (options.mode === 'warn') {
+    io.stderr(`Warning: ${providerLabel} authentication is not configured. Continuing "${options.commandName}".`);
+    io.stderr(remediationMessage);
+    return null;
+  }
+
+  io.stderr(`Failed to execute ${options.commandName}: ${providerLabel} authentication is required.`);
+  io.stderr(remediationMessage);
+  return EXIT_RUNTIME_ERROR;
+}
+
 function reportAutoRegisteredRepository(io: Pick<CliIo, 'stdout'>, repository: ResolvedRunRepository | null): void {
   if (!repository?.autoRegistered) {
     return;
@@ -897,6 +976,19 @@ async function handleRunCommand(rawArgs: readonly string[], dependencies: CliDep
   try {
     db = openInitializedDatabase(dependencies, io);
     const resolvedRepo = repoInput ? resolveRunRepository(db, repoInput) : null;
+    const runRepository = resolvedRepo ? getRepositoryByName(db, resolvedRepo.repoName) : null;
+    if (resolvedRepo && !runRepository) {
+      throw new Error(`Repository "${resolvedRepo.repoName}" was not found.`);
+    }
+    if (runRepository) {
+      const authExitCode = await runScmAuthPreflight(runRepository, dependencies, io, {
+        commandName: 'run --repo',
+        mode: 'require',
+      });
+      if (authExitCode !== null) {
+        return authExitCode;
+      }
+    }
     reportAutoRegisteredRepository(io, resolvedRepo);
 
     if (resolvedRepo) {
@@ -980,6 +1072,13 @@ async function handleRepoAddCommand(
     if (existing) {
       io.stderr(`Repository "${name}" already exists.`);
       return EXIT_RUNTIME_ERROR;
+    }
+    const authExitCode = await runScmAuthPreflight(repoConfig, dependencies, io, {
+      commandName: 'repo add',
+      mode: 'warn',
+    });
+    if (authExitCode !== null) {
+      return authExitCode;
     }
 
     const inserted = insertRepository(db, {
@@ -1182,6 +1281,13 @@ async function handleRepoSyncCommand(
     if (!repository) {
       io.stderr(`Repository "${name}" was not found.`);
       return EXIT_NOT_FOUND;
+    }
+    const authExitCode = await runScmAuthPreflight(repository, dependencies, io, {
+      commandName: 'repo sync',
+      mode: 'require',
+    });
+    if (authExitCode !== null) {
+      return authExitCode;
     }
 
     const synced = await dependencies.ensureRepositoryClone({

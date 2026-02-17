@@ -17,7 +17,7 @@ import {
   type AlphredDatabase,
   type InsertRepositoryParams,
 } from '@alphred/db';
-import type { EnsureRepositoryCloneParams, EnsureRepositoryCloneResult } from '@alphred/git';
+import type { EnsureRepositoryCloneParams, EnsureRepositoryCloneResult, ScmProviderConfig } from '@alphred/git';
 import type { RepositoryConfig } from '@alphred/shared';
 import { isExecutedAsScript, main, runCliEntrypoint, type CliDependencies } from './bin.js';
 
@@ -57,6 +57,7 @@ function createDependencies(
   db: AlphredDatabase,
   resolveProvider: CliDependencies['resolveProvider'],
   overrides: {
+    createScmProvider?: CliDependencies['createScmProvider'];
     ensureRepositoryClone?: CliDependencies['ensureRepositoryClone'];
     createWorktreeManager?: CliDependencies['createWorktreeManager'];
     removeDirectory?: CliDependencies['removeDirectory'];
@@ -90,10 +91,17 @@ function createDependencies(
     cleanupRun: async () => undefined,
   });
 
+  const defaultCreateScmProvider: CliDependencies['createScmProvider'] = (_config: ScmProviderConfig) => ({
+    checkAuth: async () => ({
+      authenticated: true,
+    }),
+  });
+
   return {
     openDatabase: () => db,
     migrateDatabase: database => migrateDatabase(database),
     resolveProvider,
+    createScmProvider: overrides.createScmProvider ?? defaultCreateScmProvider,
     ensureRepositoryClone: overrides.ensureRepositoryClone ?? defaultEnsureRepositoryClone,
     createWorktreeManager: overrides.createWorktreeManager ?? defaultWorktreeManagerFactory,
     removeDirectory: overrides.removeDirectory ?? (async () => undefined),
@@ -332,6 +340,11 @@ describe('CLI run/status commands', () => {
       createRunWorktree,
       cleanupRun,
     }));
+    const createScmProviderMock = vi.fn((_config: ScmProviderConfig) => ({
+      checkAuth: async () => ({
+        authenticated: true,
+      }),
+    }));
 
     let observedWorkingDirectory = '';
     const exitCode = await main(['run', '--tree', 'design_tree', '--repo', 'frontend', '--branch', 'fix/auth-bug'], {
@@ -341,6 +354,7 @@ describe('CLI run/status commands', () => {
           observedWorkingDirectory = options.workingDirectory;
         }),
         {
+          createScmProvider: createScmProviderMock,
           createWorktreeManager,
         },
       ),
@@ -354,6 +368,10 @@ describe('CLI run/status commands', () => {
       treeKey: 'design_tree',
       runId: expect.any(Number),
       branch: 'fix/auth-bug',
+    });
+    expect(createScmProviderMock).toHaveBeenCalledWith({
+      kind: 'github',
+      repo: 'acme/frontend',
     });
     expect(cleanupRun).toHaveBeenCalledWith(expect.any(Number));
     expect(observedWorkingDirectory).toBe('/tmp/alphred/worktrees/fix-auth-bug');
@@ -372,6 +390,50 @@ describe('CLI run/status commands', () => {
 
     expect(exitCode).toBe(4);
     expect(captured.stderr).toEqual(['Failed to execute run: Repository "missing" was not found.']);
+    expect(
+      db.select({ id: workflowRuns.id })
+        .from(workflowRuns)
+        .all(),
+    ).toEqual([]);
+  });
+
+  it('fails run --repo pre-flight when scm auth is missing', async () => {
+    const db = createDatabase(':memory:');
+    migrateDatabase(db);
+    seedSingleNodeTree(db, 'design_tree');
+    insertRepository(db, {
+      name: 'frontend',
+      provider: 'github',
+      remoteUrl: 'https://github.com/acme/frontend.git',
+      remoteRef: 'acme/frontend',
+      defaultBranch: 'main',
+      cloneStatus: 'cloned',
+      localPath: '/tmp/alphred/repos/github/acme/frontend',
+    });
+    const createScmProviderMock = vi.fn((_config: ScmProviderConfig) => ({
+      checkAuth: async () => ({
+        authenticated: false,
+        error: 'Run "gh auth login" to authenticate GitHub CLI.',
+      }),
+    }));
+    const captured = createCapturedIo();
+
+    const exitCode = await main(['run', '--tree', 'design_tree', '--repo', 'frontend'], {
+      dependencies: createDependencies(db, createUnusedProviderResolver(), {
+        createScmProvider: createScmProviderMock,
+      }),
+      io: captured.io,
+    });
+
+    expect(exitCode).toBe(4);
+    expect(captured.stderr).toEqual([
+      'Failed to execute run --repo: GitHub authentication is required.',
+      'Run "gh auth login" to authenticate GitHub CLI.',
+    ]);
+    expect(createScmProviderMock).toHaveBeenCalledWith({
+      kind: 'github',
+      repo: 'acme/frontend',
+    });
     expect(
       db.select({ id: workflowRuns.id })
         .from(workflowRuns)
@@ -633,6 +695,11 @@ describe('CLI run/status commands', () => {
         },
         migrateDatabase: database => migrateDatabase(database),
         resolveProvider: createUnusedProviderResolver(),
+        createScmProvider: () => ({
+          checkAuth: async () => ({
+            authenticated: true,
+          }),
+        }),
         ensureRepositoryClone: async () => {
           throw new Error('ensureRepositoryClone should not be called in this test');
         },
@@ -671,6 +738,11 @@ describe('CLI run/status commands', () => {
         },
         migrateDatabase: database => migrateDatabase(database),
         resolveProvider: createUnusedProviderResolver(),
+        createScmProvider: () => ({
+          checkAuth: async () => ({
+            authenticated: true,
+          }),
+        }),
         ensureRepositoryClone: async () => {
           throw new Error('ensureRepositoryClone should not be called in this test');
         },
@@ -845,10 +917,18 @@ describe('CLI repo commands', () => {
   it('adds github and azure repositories', async () => {
     const db = createDatabase(':memory:');
     migrateDatabase(db);
+    const createScmProviderMock = vi.fn((config: ScmProviderConfig) => ({
+      checkAuth: async () => ({
+        authenticated: true,
+        user: config.kind === 'github' ? 'octocat' : 'azure-user',
+      }),
+    }));
     const githubCaptured = createCapturedIo();
 
     const githubExitCode = await main(['repo', 'add', '--name', 'frontend', '--github', 'acme/frontend'], {
-      dependencies: createDependencies(db, createUnusedProviderResolver()),
+      dependencies: createDependencies(db, createUnusedProviderResolver(), {
+        createScmProvider: createScmProviderMock,
+      }),
       io: githubCaptured.io,
     });
 
@@ -858,7 +938,9 @@ describe('CLI repo commands', () => {
 
     const azureCaptured = createCapturedIo();
     const azureExitCode = await main(['repo', 'add', '--name', 'backend', '--azure', 'myorg/myproject/backend'], {
-      dependencies: createDependencies(db, createUnusedProviderResolver()),
+      dependencies: createDependencies(db, createUnusedProviderResolver(), {
+        createScmProvider: createScmProviderMock,
+      }),
       io: azureCaptured.io,
     });
 
@@ -867,6 +949,43 @@ describe('CLI repo commands', () => {
     expect(azureCaptured.stdout).toContain(
       'Registered repository "backend" (azure-devops:myorg/myproject/backend).',
     );
+    expect(createScmProviderMock).toHaveBeenCalledWith({
+      kind: 'github',
+      repo: 'acme/frontend',
+    });
+    expect(createScmProviderMock).toHaveBeenCalledWith({
+      kind: 'azure-devops',
+      organization: 'myorg',
+      project: 'myproject',
+      repository: 'backend',
+    });
+  });
+
+  it('warns on repo add when scm auth is missing and still persists the repository', async () => {
+    const db = createDatabase(':memory:');
+    migrateDatabase(db);
+    const createScmProviderMock = vi.fn((_config: ScmProviderConfig) => ({
+      checkAuth: async () => ({
+        authenticated: false,
+        error: 'Run "gh auth login" to authenticate GitHub CLI.',
+      }),
+    }));
+    const captured = createCapturedIo();
+
+    const exitCode = await main(['repo', 'add', '--name', 'frontend', '--github', 'acme/frontend'], {
+      dependencies: createDependencies(db, createUnusedProviderResolver(), {
+        createScmProvider: createScmProviderMock,
+      }),
+      io: captured.io,
+    });
+
+    expect(exitCode).toBe(0);
+    expect(captured.stderr).toEqual([
+      'Warning: GitHub authentication is not configured. Continuing "repo add".',
+      'Run "gh auth login" to authenticate GitHub CLI.',
+    ]);
+    expect(captured.stdout).toContain('Registered repository "frontend" (github:acme/frontend).');
+    expect(getRepositoryByName(db, 'frontend')).not.toBeNull();
   });
 
   it('normalizes repository names when adding', async () => {
@@ -1045,18 +1164,64 @@ describe('CLI repo commands', () => {
         action: 'cloned' as const,
       };
     });
+    const createScmProviderMock = vi.fn((_config: ScmProviderConfig) => ({
+      checkAuth: async () => ({
+        authenticated: true,
+      }),
+    }));
     const captured = createCapturedIo();
 
     const exitCode = await main(['repo', 'sync', 'frontend'], {
       dependencies: createDependencies(db, createUnusedProviderResolver(), {
+        createScmProvider: createScmProviderMock,
         ensureRepositoryClone: ensureRepositoryCloneMock,
       }),
       io: captured.io,
     });
 
     expect(exitCode).toBe(0);
+    expect(createScmProviderMock).toHaveBeenCalledWith({
+      kind: 'github',
+      repo: 'acme/frontend',
+    });
     expect(ensureRepositoryCloneMock).toHaveBeenCalledTimes(1);
     expect(captured.stdout.some(line => line.includes('Repository "frontend" cloned'))).toBe(true);
+  });
+
+  it('fails repo sync pre-flight when scm auth is missing', async () => {
+    const db = createDatabase(':memory:');
+    migrateDatabase(db);
+    insertRepository(db, {
+      name: 'frontend',
+      provider: 'github',
+      remoteUrl: 'https://github.com/acme/frontend.git',
+      remoteRef: 'acme/frontend',
+      cloneStatus: 'pending',
+      localPath: null,
+    });
+    const ensureRepositoryCloneMock = vi.fn();
+    const createScmProviderMock = vi.fn((_config: ScmProviderConfig) => ({
+      checkAuth: async () => ({
+        authenticated: false,
+        error: 'Run "gh auth login" to authenticate GitHub CLI.',
+      }),
+    }));
+    const captured = createCapturedIo();
+
+    const exitCode = await main(['repo', 'sync', 'frontend'], {
+      dependencies: createDependencies(db, createUnusedProviderResolver(), {
+        createScmProvider: createScmProviderMock,
+        ensureRepositoryClone: ensureRepositoryCloneMock,
+      }),
+      io: captured.io,
+    });
+
+    expect(exitCode).toBe(4);
+    expect(captured.stderr).toEqual([
+      'Failed to execute repo sync: GitHub authentication is required.',
+      'Run "gh auth login" to authenticate GitHub CLI.',
+    ]);
+    expect(ensureRepositoryCloneMock).not.toHaveBeenCalled();
   });
 
   it('returns usage errors for invalid repo command inputs', async () => {
