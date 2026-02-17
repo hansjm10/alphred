@@ -49,6 +49,23 @@ describe('GitHubScmProvider', () => {
     expect(checkAuthMock).toHaveBeenCalledWith('owner/repo');
   });
 
+  it('passes an explicit environment to github auth checks', async () => {
+    checkAuthMock.mockResolvedValueOnce({
+      authenticated: true,
+      user: 'hansjm10',
+    });
+    const environment: NodeJS.ProcessEnv = {
+      ALPHRED_GH_TOKEN: 'token-from-io',
+    };
+
+    await expect(provider.checkAuth(environment)).resolves.toEqual({
+      authenticated: true,
+      user: 'hansjm10',
+    });
+
+    expect(checkAuthMock).toHaveBeenCalledWith('owner/repo', environment);
+  });
+
   it('normalizes github issue responses into work items', async () => {
     getIssueMock.mockResolvedValueOnce({
       number: 42,

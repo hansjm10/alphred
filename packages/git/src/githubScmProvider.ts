@@ -17,8 +17,12 @@ export class GitHubScmProvider implements ScmProvider {
     return this.config;
   }
 
-  async checkAuth(): Promise<AuthStatus> {
-    return checkGitHubAuthForRepo(this.config.repo);
+  async checkAuth(environment?: NodeJS.ProcessEnv): Promise<AuthStatus> {
+    if (environment === undefined) {
+      return checkGitHubAuthForRepo(this.config.repo);
+    }
+
+    return checkGitHubAuthForRepo(this.config.repo, environment);
   }
 
   async cloneRepo(remote: string, localPath: string, environment: NodeJS.ProcessEnv = process.env): Promise<void> {

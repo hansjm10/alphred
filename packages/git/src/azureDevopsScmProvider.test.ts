@@ -54,6 +54,23 @@ describe('AzureDevOpsScmProvider', () => {
     expect(checkAuthMock).toHaveBeenCalledWith('org');
   });
 
+  it('passes an explicit environment to azure devops auth checks', async () => {
+    checkAuthMock.mockResolvedValueOnce({
+      authenticated: true,
+      user: 'jordan@example.com',
+    });
+    const environment: NodeJS.ProcessEnv = {
+      ALPHRED_AZURE_DEVOPS_PAT: 'token-from-io',
+    };
+
+    await expect(provider.checkAuth(environment)).resolves.toEqual({
+      authenticated: true,
+      user: 'jordan@example.com',
+    });
+
+    expect(checkAuthMock).toHaveBeenCalledWith('org', environment);
+  });
+
   it('normalizes azure devops work item responses', async () => {
     getWorkItemMock.mockResolvedValueOnce({
       id: 1001,

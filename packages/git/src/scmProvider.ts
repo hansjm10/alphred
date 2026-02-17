@@ -5,7 +5,7 @@ import type { AuthStatus, CreatePrParams, PullRequestResult, ScmProviderKind, Wo
 export type ScmProvider = {
   readonly kind: ScmProviderKind;
   getConfig?(): ScmProviderConfig;
-  checkAuth(): Promise<AuthStatus>;
+  checkAuth(environment?: NodeJS.ProcessEnv): Promise<AuthStatus>;
   cloneRepo(remote: string, localPath: string, environment?: NodeJS.ProcessEnv): Promise<void>;
   getWorkItem(id: number | string): Promise<WorkItem>;
   createPullRequest(params: CreatePrParams): Promise<PullRequestResult>;

@@ -17,8 +17,12 @@ export class AzureDevOpsScmProvider implements ScmProvider {
     return this.config;
   }
 
-  async checkAuth(): Promise<AuthStatus> {
-    return checkAzureDevOpsAuth(this.config.organization);
+  async checkAuth(environment?: NodeJS.ProcessEnv): Promise<AuthStatus> {
+    if (environment === undefined) {
+      return checkAzureDevOpsAuth(this.config.organization);
+    }
+
+    return checkAzureDevOpsAuth(this.config.organization, environment);
   }
 
   async cloneRepo(remote: string, localPath: string, environment: NodeJS.ProcessEnv = process.env): Promise<void> {

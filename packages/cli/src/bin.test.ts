@@ -410,13 +410,18 @@ describe('CLI run/status commands', () => {
       cloneStatus: 'cloned',
       localPath: '/tmp/alphred/repos/github/acme/frontend',
     });
-    const createScmProviderMock = vi.fn((_config: ScmProviderConfig) => ({
-      checkAuth: async () => ({
-        authenticated: false,
-        error: 'Run "gh auth login" to authenticate GitHub CLI.',
-      }),
+    const checkAuthMock = vi.fn(async (_environment?: NodeJS.ProcessEnv) => ({
+      authenticated: false,
+      error: 'Run "gh auth login" to authenticate GitHub CLI.',
     }));
-    const captured = createCapturedIo();
+    const createScmProviderMock = vi.fn((_config: ScmProviderConfig) => ({
+      checkAuth: checkAuthMock,
+    }));
+    const captured = createCapturedIo({
+      env: {
+        ALPHRED_GH_TOKEN: 'run-preflight-token',
+      },
+    });
 
     const exitCode = await main(['run', '--tree', 'design_tree', '--repo', 'frontend'], {
       dependencies: createDependencies(db, createUnusedProviderResolver(), {
@@ -434,6 +439,7 @@ describe('CLI run/status commands', () => {
       kind: 'github',
       repo: 'acme/frontend',
     });
+    expect(checkAuthMock).toHaveBeenCalledWith(captured.io.env);
     expect(
       db.select({ id: workflowRuns.id })
         .from(workflowRuns)
@@ -1200,13 +1206,18 @@ describe('CLI repo commands', () => {
       localPath: null,
     });
     const ensureRepositoryCloneMock = vi.fn();
-    const createScmProviderMock = vi.fn((_config: ScmProviderConfig) => ({
-      checkAuth: async () => ({
-        authenticated: false,
-        error: 'Run "gh auth login" to authenticate GitHub CLI.',
-      }),
+    const checkAuthMock = vi.fn(async (_environment?: NodeJS.ProcessEnv) => ({
+      authenticated: false,
+      error: 'Run "gh auth login" to authenticate GitHub CLI.',
     }));
-    const captured = createCapturedIo();
+    const createScmProviderMock = vi.fn((_config: ScmProviderConfig) => ({
+      checkAuth: checkAuthMock,
+    }));
+    const captured = createCapturedIo({
+      env: {
+        ALPHRED_GH_TOKEN: 'repo-sync-preflight-token',
+      },
+    });
 
     const exitCode = await main(['repo', 'sync', 'frontend'], {
       dependencies: createDependencies(db, createUnusedProviderResolver(), {
@@ -1221,6 +1232,7 @@ describe('CLI repo commands', () => {
       'Failed to execute repo sync: GitHub authentication is required.',
       'Run "gh auth login" to authenticate GitHub CLI.',
     ]);
+    expect(checkAuthMock).toHaveBeenCalledWith(captured.io.env);
     expect(ensureRepositoryCloneMock).not.toHaveBeenCalled();
   });
 

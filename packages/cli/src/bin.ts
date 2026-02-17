@@ -56,7 +56,7 @@ export type CliDependencies = {
   migrateDatabase: (db: AlphredDatabase) => void;
   resolveProvider: PhaseProviderResolver;
   createScmProvider: (config: ScmProviderConfig) => {
-    checkAuth: () => Promise<AuthStatus>;
+    checkAuth: (environment?: NodeJS.ProcessEnv) => Promise<AuthStatus>;
   };
   ensureRepositoryClone: typeof ensureRepositoryClone;
   createWorktreeManager: (db: AlphredDatabase, options: { environment: NodeJS.ProcessEnv }) => Pick<
@@ -818,7 +818,7 @@ function toScmProviderConfigForAuth(
 async function runScmAuthPreflight(
   repository: Pick<RepositoryConfig, 'provider' | 'remoteRef'>,
   dependencies: Pick<CliDependencies, 'createScmProvider'>,
-  io: Pick<CliIo, 'stderr'>,
+  io: Pick<CliIo, 'stderr' | 'env'>,
   options: {
     commandName: string;
     mode: ScmAuthPreflightMode;
@@ -829,7 +829,7 @@ async function runScmAuthPreflight(
   let authStatus: AuthStatus;
   try {
     const provider = dependencies.createScmProvider(toScmProviderConfigForAuth(repository));
-    authStatus = await provider.checkAuth();
+    authStatus = await provider.checkAuth(io.env);
   } catch (error) {
     io.stderr(`Failed to verify ${providerLabel} authentication: ${toErrorMessage(error)}`);
     return EXIT_RUNTIME_ERROR;
