@@ -14,6 +14,12 @@
     "test:e2e:all": "pnpm test:e2e && pnpm test:e2e:no-test-routes && pnpm test:e2e:build-gate"
   },
   "dependencies": {
+    "@alphred/agents": "workspace:*",
+    "@alphred/core": "workspace:*",
+    "@alphred/db": "workspace:*",
+    "@alphred/git": "workspace:*",
+    "@alphred/shared": "workspace:*",
+    "drizzle-orm": "^0.44.2",
     "next": "^16.0.1",
     "react": "^19.1.0",
     "react-dom": "^19.1.0"

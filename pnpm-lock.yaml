@@ -53,6 +53,24 @@ importers:
 
   apps/dashboard:
     dependencies:
+      '@alphred/agents':
+        specifier: workspace:*
+        version: link:../../packages/agents
+      '@alphred/core':
+        specifier: workspace:*
+        version: link:../../packages/core
+      '@alphred/db':
+        specifier: workspace:*
+        version: link:../../packages/db
+      '@alphred/git':
+        specifier: workspace:*
+        version: link:../../packages/git
+      '@alphred/shared':
+        specifier: workspace:*
+        version: link:../../packages/shared
+      drizzle-orm:
+        specifier: ^0.44.2
+        version: 0.44.7(@types/better-sqlite3@7.6.13)(better-sqlite3@11.10.0)
       next:
         specifier: ^16.0.1
         version: 16.1.6(@playwright/test@1.58.2)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
