@@ -23,8 +23,8 @@ const SCP_REMOTE_REGEX = /^(?:[^@]+@)?([^:/]+):(.+)$/;
 const GIT_EXECUTABLE_ENV_KEY = 'ALPHRED_GIT_EXECUTABLE';
 const UNIX_GIT_EXECUTABLE_CANDIDATES = ['/usr/bin/git', '/usr/local/bin/git', '/opt/homebrew/bin/git'];
 const WINDOWS_GIT_EXECUTABLE_CANDIDATES = [
-  'C:\\Program Files\\Git\\cmd\\git.exe',
-  'C:\\Program Files\\Git\\bin\\git.exe',
+  String.raw`C:\Program Files\Git\cmd\git.exe`,
+  String.raw`C:\Program Files\Git\bin\git.exe`,
 ];
 
 export type EnsureRepositoryCloneParams = {
