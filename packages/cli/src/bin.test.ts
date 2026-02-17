@@ -861,6 +861,33 @@ describe('CLI repo commands', () => {
     );
   });
 
+  it('normalizes repository names when adding', async () => {
+    const db = createDatabase(':memory:');
+    migrateDatabase(db);
+    const addCaptured = createCapturedIo();
+
+    const addExitCode = await main(['repo', 'add', '--name', '  frontend  ', '--github', 'acme/frontend'], {
+      dependencies: createDependencies(db, createUnusedProviderResolver()),
+      io: addCaptured.io,
+    });
+
+    expect(addExitCode).toBe(0);
+    expect(addCaptured.stderr).toEqual([]);
+    expect(addCaptured.stdout).toContain('Registered repository "frontend" (github:acme/frontend).');
+    expect(getRepositoryByName(db, 'frontend')).not.toBeNull();
+    expect(getRepositoryByName(db, '  frontend  ')).toBeNull();
+
+    const showCaptured = createCapturedIo();
+    const showExitCode = await main(['repo', 'show', 'frontend'], {
+      dependencies: createDependencies(db, createUnusedProviderResolver()),
+      io: showCaptured.io,
+    });
+
+    expect(showExitCode).toBe(0);
+    expect(showCaptured.stderr).toEqual([]);
+    expect(showCaptured.stdout).toContain('Name: frontend');
+  });
+
   it('lists and shows registered repositories', async () => {
     const db = createDatabase(':memory:');
     migrateDatabase(db);
@@ -1042,6 +1069,10 @@ describe('CLI repo commands', () => {
       {
         args: ['repo', 'add', '--name', 'frontend'],
         stderr: ['One of "--github" or "--azure" is required.', 'Usage: alphred repo add --name <name> (--github <owner/repo> | --azure <org/project/repo>)'],
+      },
+      {
+        args: ['repo', 'add', '--name', '  ', '--github', 'acme/frontend'],
+        stderr: ['Repository name cannot be empty.', 'Usage: alphred repo add --name <name> (--github <owner/repo> | --azure <org/project/repo>)'],
       },
       {
         args: ['repo', 'show'],

@@ -828,8 +828,14 @@ async function handleRepoAddCommand(
     return parsedOptions.exitCode;
   }
 
-  const name = getRequiredOption(parsedOptions.options, 'name', 'name', REPO_ADD_USAGE, io);
-  if (!name) {
+  const rawName = getRequiredOption(parsedOptions.options, 'name', 'name', REPO_ADD_USAGE, io);
+  if (!rawName) {
+    return EXIT_USAGE_ERROR;
+  }
+
+  const name = rawName.trim();
+  if (name.length === 0) {
+    usageError(io, 'Repository name cannot be empty.', REPO_ADD_USAGE);
     return EXIT_USAGE_ERROR;
   }
 
