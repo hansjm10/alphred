@@ -27,6 +27,13 @@ describe('toDashboardIntegrationError', () => {
     expect(mapped.status).toBe(401);
   });
 
+  it('maps malformed JSON parse errors to invalid_request', () => {
+    const mapped = toDashboardIntegrationError(new SyntaxError('Unexpected token } in JSON at position 12'));
+
+    expect(mapped.code).toBe('invalid_request');
+    expect(mapped.status).toBe(400);
+  });
+
   it('maps unknown errors to internal_error with fallback message', () => {
     const mapped = toDashboardIntegrationError(new Error('completely unexpected'), 'fallback');
 

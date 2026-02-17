@@ -52,6 +52,10 @@ function readMessage(error: unknown): string {
   return String(error);
 }
 
+function isJsonParseError(error: unknown, message: string): boolean {
+  return error instanceof SyntaxError && message.includes('JSON');
+}
+
 export function toDashboardIntegrationError(
   error: unknown,
   fallbackMessage = 'Dashboard integration request failed.',
@@ -79,6 +83,13 @@ export function toDashboardIntegrationError(
   if (message.includes('was not found') || message.includes('not found')) {
     return new DashboardIntegrationError('not_found', message, {
       status: 404,
+      cause: error,
+    });
+  }
+
+  if (isJsonParseError(error, message)) {
+    return new DashboardIntegrationError('invalid_request', message, {
+      status: 400,
       cause: error,
     });
   }

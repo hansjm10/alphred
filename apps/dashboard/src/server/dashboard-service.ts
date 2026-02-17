@@ -55,6 +55,7 @@ const backgroundRunExecutions = new Map<number, Promise<void>>();
 export type DashboardServiceDependencies = {
   openDatabase: (path: string) => AlphredDatabase;
   migrateDatabase: (db: AlphredDatabase) => void;
+  closeDatabase: (db: AlphredDatabase) => void;
   resolveProvider: PhaseProviderResolver;
   createScmProvider: (config: ScmProviderConfig) => {
     checkAuth: (environment?: NodeJS.ProcessEnv) => Promise<AuthStatus>;
@@ -71,6 +72,7 @@ export type DashboardServiceDependencies = {
 const defaultDependencies: DashboardServiceDependencies = {
   openDatabase: path => createDatabase(path),
   migrateDatabase: db => migrateDatabase(db),
+  closeDatabase: db => db.$client.close(),
   resolveProvider: providerName => resolveAgentProvider(providerName),
   createScmProvider: config => createScmProvider(config),
   ensureRepositoryClone: params => ensureRepositoryClone(params),
@@ -300,12 +302,28 @@ export function createDashboardService(options: {
   async function withDatabase<T>(operation: (db: AlphredDatabase) => Promise<T> | T): Promise<T> {
     const db = dependencies.openDatabase(resolveDatabasePath(environment, cwd));
     dependencies.migrateDatabase(db);
+    let result: T | undefined;
+    let caughtError: unknown = null;
 
     try {
-      return await operation(db);
+      result = await operation(db);
     } catch (error) {
-      throw toDashboardIntegrationError(error);
+      caughtError = toDashboardIntegrationError(error);
     }
+
+    try {
+      dependencies.closeDatabase(db);
+    } catch (error) {
+      if (caughtError === null) {
+        caughtError = toDashboardIntegrationError(error, 'Dashboard integration cleanup failed.');
+      }
+    }
+
+    if (caughtError !== null) {
+      throw caughtError;
+    }
+
+    return result as T;
   }
 
   async function ensureRepositoryAuth(repository: Pick<RepositoryConfig, 'provider' | 'remoteRef'>): Promise<void> {
@@ -722,13 +740,18 @@ export function createDashboardService(options: {
             };
           }
 
-          const executionPromise = executeWorkflowRun(
-            db,
-            runId,
-            workingDirectory,
-            worktreeManager,
-            request.cleanupWorktree ?? false,
-          )
+          const executionPromise = withDatabase(async backgroundDb => {
+            const backgroundWorktreeManager = worktreeManager
+              ? dependencies.createWorktreeManager(backgroundDb, environment)
+              : null;
+            await executeWorkflowRun(
+              backgroundDb,
+              runId,
+              workingDirectory,
+              backgroundWorktreeManager,
+              request.cleanupWorktree ?? false,
+            );
+          })
             .then(() => undefined)
             .catch((error: unknown) => {
               console.error(`Run id=${runId} background execution failed: ${toErrorMessage(error)}`);

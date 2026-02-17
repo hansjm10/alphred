@@ -26,6 +26,7 @@ function createHarness(overrides: Partial<DashboardServiceDependencies> = {}): {
   const dependencies: DashboardServiceDependencies = {
     openDatabase: () => db,
     migrateDatabase: input => migrateDatabase(input),
+    closeDatabase: () => undefined,
     resolveProvider: () => {
       throw new Error('resolveProvider should not be called in this test');
     },
@@ -208,6 +209,59 @@ function seedRunData(db: AlphredDatabase): void {
 }
 
 describe('createDashboardService', () => {
+  it('closes database handles after each operation', async () => {
+    const closeDatabase = vi.fn(() => undefined);
+    const { db, dependencies } = createHarness({ closeDatabase });
+    seedRunData(db);
+
+    const service = createDashboardService({ dependencies });
+
+    await service.listRepositories();
+    await service.listWorkflowTrees();
+
+    expect(closeDatabase).toHaveBeenCalledTimes(2);
+    expect(closeDatabase).toHaveBeenNthCalledWith(1, db);
+    expect(closeDatabase).toHaveBeenNthCalledWith(2, db);
+  });
+
+  it('uses a separate database lifecycle for async run execution', async () => {
+    const closeDatabase = vi.fn(() => undefined);
+    const executeRun = vi.fn(async () => {
+      await new Promise(resolve => setTimeout(resolve, 20));
+      return {
+        finalStep: {
+          runStatus: 'completed',
+          outcome: 'completed',
+        },
+        executedNodes: 1,
+      };
+    });
+    const { db, dependencies } = createHarness({
+      closeDatabase,
+      createSqlWorkflowExecutor: () =>
+        ({ executeRun }) as unknown as ReturnType<DashboardServiceDependencies['createSqlWorkflowExecutor']>,
+    });
+    seedRunData(db);
+
+    const service = createDashboardService({ dependencies });
+    const result = await service.launchWorkflowRun({
+      treeKey: 'demo-tree',
+      executionMode: 'async',
+    });
+
+    expect(result.mode).toBe('async');
+    expect(closeDatabase).toHaveBeenCalledTimes(1);
+
+    const deadline = Date.now() + 1000;
+    while (Date.now() < deadline && service.hasBackgroundExecution(result.workflowRunId)) {
+      await new Promise(resolve => setTimeout(resolve, 10));
+    }
+
+    expect(service.hasBackgroundExecution(result.workflowRunId)).toBe(false);
+    expect(executeRun).toHaveBeenCalledTimes(1);
+    expect(closeDatabase).toHaveBeenCalledTimes(2);
+  });
+
   it('loads repository and run snapshots from the shared db schema', async () => {
     const { db, dependencies } = createHarness();
     seedRunData(db);
