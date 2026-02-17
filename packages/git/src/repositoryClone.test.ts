@@ -1,0 +1,773 @@
+import { execFile } from 'node:child_process';
+import { access, mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
+import { promisify } from 'node:util';
+import { createDatabase, getRepositoryByName, insertRepository, migrateDatabase } from '@alphred/db';
+import type { ScmProviderKind } from '@alphred/shared';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { ensureRepositoryClone } from './repositoryClone.js';
+import type { ScmProvider } from './scmProvider.js';
+
+const execFileAsync = promisify(execFile);
+
+function createMigratedDb() {
+  const db = createDatabase(':memory:');
+  migrateDatabase(db);
+  return db;
+}
+
+async function createSandboxDir(): Promise<string> {
+  return mkdtemp(join(tmpdir(), 'alphred-git-clone-test-'));
+}
+
+async function initializeGitRepository(path: string, originUrl?: string): Promise<void> {
+  await mkdir(path, { recursive: true });
+  await execFileAsync('git', ['init'], { cwd: path });
+  if (originUrl !== undefined) {
+    await execFileAsync('git', ['remote', 'add', 'origin', originUrl], { cwd: path });
+  }
+}
+
+function createMockProvider(
+  kind: ScmProviderKind,
+  cloneImpl?: (remote: string, localPath: string, environment?: NodeJS.ProcessEnv) => Promise<void>,
+) {
+  const cloneRepo = vi.fn(cloneImpl ?? (async () => undefined));
+
+  const provider: ScmProvider = {
+    kind,
+    checkAuth: async () => ({ authenticated: true }),
+    cloneRepo,
+    getWorkItem: async () => {
+      throw new Error('not implemented');
+    },
+    createPullRequest: async () => {
+      throw new Error('not implemented');
+    },
+  };
+
+  return {
+    provider,
+    cloneRepo,
+  };
+}
+
+const cleanupPaths = new Set<string>();
+
+afterEach(async () => {
+  for (const path of cleanupPaths) {
+    await rm(path, { recursive: true, force: true });
+    cleanupPaths.delete(path);
+  }
+});
+
+describe('ensureRepositoryClone', () => {
+  it('inserts new repositories, clones to sandbox, and marks status as cloned', async () => {
+    const db = createMigratedDb();
+    const sandboxDir = await createSandboxDir();
+    cleanupPaths.add(sandboxDir);
+    const expectedPath = join(sandboxDir, 'github', 'acme', 'frontend');
+    const { provider, cloneRepo } = createMockProvider('github', async (_remote, localPath) => {
+      await mkdir(localPath, { recursive: true });
+      await writeFile(join(localPath, '.git'), '');
+    });
+
+    const result = await ensureRepositoryClone({
+      db,
+      repository: {
+        name: 'frontend',
+        provider: 'github',
+        remoteUrl: 'https://github.com/acme/frontend.git',
+        remoteRef: 'acme/frontend',
+      },
+      provider,
+      environment: {
+        ALPHRED_SANDBOX_DIR: sandboxDir,
+      },
+    });
+
+    expect(result.action).toBe('cloned');
+    expect(cloneRepo).toHaveBeenCalledWith('https://github.com/acme/frontend.git', expectedPath, {
+      ALPHRED_SANDBOX_DIR: sandboxDir,
+    });
+    expect(result.repository.cloneStatus).toBe('cloned');
+    expect(result.repository.localPath).toBe(expectedPath);
+  });
+
+  it('fetches existing cloned repositories instead of recloning', async () => {
+    const db = createMigratedDb();
+    const sandboxDir = await createSandboxDir();
+    cleanupPaths.add(sandboxDir);
+    const localPath = join(sandboxDir, 'github', 'acme', 'frontend');
+    await initializeGitRepository(localPath, 'https://github.com/acme/frontend.git');
+
+    insertRepository(db, {
+      name: 'frontend',
+      provider: 'github',
+      remoteUrl: 'https://github.com/acme/frontend.git',
+      remoteRef: 'acme/frontend',
+      localPath,
+      cloneStatus: 'cloned',
+    });
+
+    const fetchAll = vi.fn(async () => undefined);
+    const { provider, cloneRepo } = createMockProvider('github');
+
+    const result = await ensureRepositoryClone({
+      db,
+      repository: {
+        name: 'frontend',
+        provider: 'github',
+        remoteUrl: 'https://github.com/acme/frontend.git',
+        remoteRef: 'acme/frontend',
+      },
+      provider,
+      fetchAll,
+      environment: {
+        ALPHRED_SANDBOX_DIR: sandboxDir,
+      },
+    });
+
+    expect(result.action).toBe('fetched');
+    expect(fetchAll).toHaveBeenCalledWith(
+      localPath,
+      { ALPHRED_SANDBOX_DIR: sandboxDir },
+      {
+        provider: 'github',
+        remoteUrl: 'https://github.com/acme/frontend.git',
+      },
+    );
+    expect(cloneRepo).not.toHaveBeenCalled();
+  });
+
+  it('fetches existing git repositories even when clone status is error', async () => {
+    const db = createMigratedDb();
+    const sandboxDir = await createSandboxDir();
+    cleanupPaths.add(sandboxDir);
+    const localPath = join(sandboxDir, 'github', 'acme', 'frontend');
+    await initializeGitRepository(localPath, 'https://github.com/acme/frontend.git');
+
+    insertRepository(db, {
+      name: 'frontend',
+      provider: 'github',
+      remoteUrl: 'https://github.com/acme/frontend.git',
+      remoteRef: 'acme/frontend',
+      localPath,
+      cloneStatus: 'error',
+    });
+
+    const fetchAll = vi.fn(async () => undefined);
+    const { provider, cloneRepo } = createMockProvider('github');
+
+    const result = await ensureRepositoryClone({
+      db,
+      repository: {
+        name: 'frontend',
+        provider: 'github',
+        remoteUrl: 'https://github.com/acme/frontend.git',
+        remoteRef: 'acme/frontend',
+      },
+      provider,
+      fetchAll,
+      environment: {
+        ALPHRED_SANDBOX_DIR: sandboxDir,
+      },
+    });
+
+    expect(result.action).toBe('fetched');
+    expect(result.repository.cloneStatus).toBe('cloned');
+    expect(fetchAll).toHaveBeenCalledWith(
+      localPath,
+      { ALPHRED_SANDBOX_DIR: sandboxDir },
+      {
+        provider: 'github',
+        remoteUrl: 'https://github.com/acme/frontend.git',
+      },
+    );
+    expect(cloneRepo).not.toHaveBeenCalled();
+  });
+
+  it('reclones existing repositories when origin does not match the expected remote', async () => {
+    const db = createMigratedDb();
+    const sandboxDir = await createSandboxDir();
+    cleanupPaths.add(sandboxDir);
+    const localPath = join(sandboxDir, 'github', 'acme', 'frontend');
+    await initializeGitRepository(localPath, 'https://github.com/acme/frontend-mirror.git');
+
+    insertRepository(db, {
+      name: 'frontend',
+      provider: 'github',
+      remoteUrl: 'https://github.com/acme/frontend.git',
+      remoteRef: 'acme/frontend',
+      localPath,
+      cloneStatus: 'cloned',
+    });
+
+    const fetchAll = vi.fn(async () => undefined);
+    const { provider, cloneRepo } = createMockProvider('github', async (_remote, path) => {
+      await mkdir(path, { recursive: true });
+      await writeFile(join(path, '.git'), '');
+    });
+
+    const result = await ensureRepositoryClone({
+      db,
+      repository: {
+        name: 'frontend',
+        provider: 'github',
+        remoteUrl: 'https://github.com/acme/frontend.git',
+        remoteRef: 'acme/frontend',
+      },
+      provider,
+      fetchAll,
+      environment: {
+        ALPHRED_SANDBOX_DIR: sandboxDir,
+      },
+    });
+
+    expect(result.action).toBe('cloned');
+    expect(fetchAll).not.toHaveBeenCalled();
+    expect(cloneRepo).toHaveBeenCalledWith('https://github.com/acme/frontend.git', localPath, {
+      ALPHRED_SANDBOX_DIR: sandboxDir,
+    });
+  });
+
+  it('reclones existing repositories when origin is not configured', async () => {
+    const db = createMigratedDb();
+    const sandboxDir = await createSandboxDir();
+    cleanupPaths.add(sandboxDir);
+    const localPath = join(sandboxDir, 'github', 'acme', 'frontend');
+    await initializeGitRepository(localPath);
+
+    insertRepository(db, {
+      name: 'frontend',
+      provider: 'github',
+      remoteUrl: 'https://github.com/acme/frontend.git',
+      remoteRef: 'acme/frontend',
+      localPath,
+      cloneStatus: 'cloned',
+    });
+
+    const fetchAll = vi.fn(async () => undefined);
+    const { provider, cloneRepo } = createMockProvider('github', async (_remote, path) => {
+      await mkdir(path, { recursive: true });
+      await writeFile(join(path, '.git'), '');
+    });
+
+    const result = await ensureRepositoryClone({
+      db,
+      repository: {
+        name: 'frontend',
+        provider: 'github',
+        remoteUrl: 'https://github.com/acme/frontend.git',
+        remoteRef: 'acme/frontend',
+      },
+      provider,
+      fetchAll,
+      environment: {
+        ALPHRED_SANDBOX_DIR: sandboxDir,
+      },
+    });
+
+    expect(result.action).toBe('cloned');
+    expect(fetchAll).not.toHaveBeenCalled();
+    expect(cloneRepo).toHaveBeenCalledWith('https://github.com/acme/frontend.git', localPath, {
+      ALPHRED_SANDBOX_DIR: sandboxDir,
+    });
+  });
+
+  it('preserves existing repositories when origin lookup fails for execution reasons', async () => {
+    const db = createMigratedDb();
+    const sandboxDir = await createSandboxDir();
+    cleanupPaths.add(sandboxDir);
+    const localPath = join(sandboxDir, 'github', 'acme', 'frontend');
+    await initializeGitRepository(localPath, 'https://github.com/acme/frontend.git');
+    const markerPath = join(localPath, 'keep.txt');
+    await writeFile(markerPath, 'keep');
+
+    insertRepository(db, {
+      name: 'frontend',
+      provider: 'github',
+      remoteUrl: 'https://github.com/acme/frontend.git',
+      remoteRef: 'acme/frontend',
+      localPath,
+      cloneStatus: 'cloned',
+    });
+
+    const fetchAll = vi.fn(async () => undefined);
+    const { provider, cloneRepo } = createMockProvider('github');
+
+    await expect(
+      ensureRepositoryClone({
+        db,
+        repository: {
+          name: 'frontend',
+          provider: 'github',
+          remoteUrl: 'https://github.com/acme/frontend.git',
+          remoteRef: 'acme/frontend',
+        },
+        provider,
+        fetchAll,
+        environment: {
+          ALPHRED_SANDBOX_DIR: sandboxDir,
+          PATH: '',
+        },
+      }),
+    ).rejects.toThrow();
+
+    const repository = getRepositoryByName(db, 'frontend');
+    expect(repository).not.toBeNull();
+    expect(repository?.cloneStatus).toBe('cloned');
+    expect(repository?.localPath).toBe(localPath);
+    await expect(access(markerPath)).resolves.toBeUndefined();
+    expect(fetchAll).not.toHaveBeenCalled();
+    expect(cloneRepo).not.toHaveBeenCalled();
+  });
+
+  it('preserves clone status and local repository when fetch fails', async () => {
+    const db = createMigratedDb();
+    const sandboxDir = await createSandboxDir();
+    cleanupPaths.add(sandboxDir);
+    const localPath = join(sandboxDir, 'github', 'acme', 'frontend');
+    await initializeGitRepository(localPath, 'https://github.com/acme/frontend.git');
+
+    insertRepository(db, {
+      name: 'frontend',
+      provider: 'github',
+      remoteUrl: 'https://github.com/acme/frontend.git',
+      remoteRef: 'acme/frontend',
+      localPath,
+      cloneStatus: 'cloned',
+    });
+
+    const fetchAll = vi.fn(async () => {
+      throw new Error('fetch failed');
+    });
+    const { provider, cloneRepo } = createMockProvider('github');
+
+    await expect(
+      ensureRepositoryClone({
+        db,
+        repository: {
+          name: 'frontend',
+          provider: 'github',
+          remoteUrl: 'https://github.com/acme/frontend.git',
+          remoteRef: 'acme/frontend',
+        },
+        provider,
+        fetchAll,
+        environment: {
+          ALPHRED_SANDBOX_DIR: sandboxDir,
+        },
+      }),
+    ).rejects.toThrow('fetch failed');
+
+    const repository = getRepositoryByName(db, 'frontend');
+    expect(repository).not.toBeNull();
+    expect(repository?.cloneStatus).toBe('cloned');
+    expect(repository?.localPath).toBe(localPath);
+    await expect(access(localPath)).resolves.toBeUndefined();
+    expect(cloneRepo).not.toHaveBeenCalled();
+  });
+
+  it('marks clone status as error and removes partial directories when clone fails', async () => {
+    const db = createMigratedDb();
+    const sandboxDir = await createSandboxDir();
+    cleanupPaths.add(sandboxDir);
+    const expectedPath = join(sandboxDir, 'github', 'acme', 'frontend');
+    const { provider } = createMockProvider('github', async (_remote, localPath) => {
+      await mkdir(localPath, { recursive: true });
+      await writeFile(join(localPath, '.git'), '');
+      throw new Error('clone failed');
+    });
+
+    await expect(
+      ensureRepositoryClone({
+        db,
+        repository: {
+          name: 'frontend',
+          provider: 'github',
+          remoteUrl: 'https://github.com/acme/frontend.git',
+          remoteRef: 'acme/frontend',
+        },
+        provider,
+        environment: {
+          ALPHRED_SANDBOX_DIR: sandboxDir,
+        },
+      }),
+    ).rejects.toThrow('clone failed');
+
+    const repository = getRepositoryByName(db, 'frontend');
+    expect(repository).not.toBeNull();
+    expect(repository?.cloneStatus).toBe('error');
+    expect(repository?.localPath).toBe(expectedPath);
+    await expect(access(expectedPath)).rejects.toThrow();
+  });
+
+  it('marks clone status as error when preparing the clone target fails', async () => {
+    const db = createMigratedDb();
+    const sandboxDir = await createSandboxDir();
+    cleanupPaths.add(sandboxDir);
+    const expectedPath = join(sandboxDir, 'github', 'acme', 'frontend');
+    const { provider, cloneRepo } = createMockProvider('github');
+
+    await writeFile(join(sandboxDir, 'github'), 'not-a-directory');
+
+    await expect(
+      ensureRepositoryClone({
+        db,
+        repository: {
+          name: 'frontend',
+          provider: 'github',
+          remoteUrl: 'https://github.com/acme/frontend.git',
+          remoteRef: 'acme/frontend',
+        },
+        provider,
+        environment: {
+          ALPHRED_SANDBOX_DIR: sandboxDir,
+        },
+      }),
+    ).rejects.toThrow();
+
+    const repository = getRepositoryByName(db, 'frontend');
+    expect(repository).not.toBeNull();
+    expect(repository?.cloneStatus).toBe('error');
+    expect(repository?.localPath).toBe(expectedPath);
+    expect(cloneRepo).not.toHaveBeenCalled();
+  });
+
+  it('ignores unsafe persisted localPath values and clones to the derived sandbox path', async () => {
+    const db = createMigratedDb();
+    const sandboxDir = await createSandboxDir();
+    cleanupPaths.add(sandboxDir);
+    const unsafeRoot = await createSandboxDir();
+    cleanupPaths.add(unsafeRoot);
+    const unsafePath = join(unsafeRoot, 'unsafe-repository-path');
+    const unsafeMarkerPath = join(unsafePath, 'do-not-delete.txt');
+    const expectedPath = join(sandboxDir, 'github', 'acme', 'frontend');
+
+    await mkdir(unsafePath, { recursive: true });
+    await writeFile(unsafeMarkerPath, 'keep');
+
+    insertRepository(db, {
+      name: 'frontend',
+      provider: 'github',
+      remoteUrl: 'https://github.com/acme/frontend.git',
+      remoteRef: 'acme/frontend',
+      cloneStatus: 'error',
+      localPath: unsafePath,
+    });
+
+    const { provider, cloneRepo } = createMockProvider('github', async (_remote, localPath) => {
+      await mkdir(localPath, { recursive: true });
+      await writeFile(join(localPath, '.git'), '');
+    });
+
+    const result = await ensureRepositoryClone({
+      db,
+      repository: {
+        name: 'frontend',
+        provider: 'github',
+        remoteUrl: 'https://github.com/acme/frontend.git',
+        remoteRef: 'acme/frontend',
+      },
+      provider,
+      environment: {
+        ALPHRED_SANDBOX_DIR: sandboxDir,
+      },
+    });
+
+    expect(cloneRepo).toHaveBeenCalledWith('https://github.com/acme/frontend.git', expectedPath, {
+      ALPHRED_SANDBOX_DIR: sandboxDir,
+    });
+    expect(result.repository.localPath).toBe(expectedPath);
+    await expect(access(unsafeMarkerPath)).resolves.toBeUndefined();
+  });
+
+  it('ignores persisted localPath symlinks that resolve outside the provider sandbox', async () => {
+    const db = createMigratedDb();
+    const sandboxDir = await createSandboxDir();
+    cleanupPaths.add(sandboxDir);
+    const unsafeRoot = await createSandboxDir();
+    cleanupPaths.add(unsafeRoot);
+    const expectedPath = join(sandboxDir, 'github', 'acme', 'frontend');
+    const unsafePath = join(unsafeRoot, 'outside-repository');
+    const unsafeMarkerPath = join(unsafePath, 'do-not-delete.txt');
+
+    await initializeGitRepository(unsafePath, 'https://github.com/acme/frontend.git');
+    await writeFile(unsafeMarkerPath, 'keep');
+    await mkdir(dirname(expectedPath), { recursive: true });
+    await symlink(unsafePath, expectedPath);
+
+    insertRepository(db, {
+      name: 'frontend',
+      provider: 'github',
+      remoteUrl: 'https://github.com/acme/frontend.git',
+      remoteRef: 'acme/frontend',
+      cloneStatus: 'cloned',
+      localPath: expectedPath,
+    });
+
+    const fetchAll = vi.fn(async () => undefined);
+    const { provider, cloneRepo } = createMockProvider('github', async (_remote, localPath) => {
+      await mkdir(localPath, { recursive: true });
+      await writeFile(join(localPath, '.git'), '');
+    });
+
+    const result = await ensureRepositoryClone({
+      db,
+      repository: {
+        name: 'frontend',
+        provider: 'github',
+        remoteUrl: 'https://github.com/acme/frontend.git',
+        remoteRef: 'acme/frontend',
+      },
+      provider,
+      fetchAll,
+      environment: {
+        ALPHRED_SANDBOX_DIR: sandboxDir,
+      },
+    });
+
+    expect(result.action).toBe('cloned');
+    expect(fetchAll).not.toHaveBeenCalled();
+    expect(cloneRepo).toHaveBeenCalledWith('https://github.com/acme/frontend.git', expectedPath, {
+      ALPHRED_SANDBOX_DIR: sandboxDir,
+    });
+    await expect(access(unsafeMarkerPath)).resolves.toBeUndefined();
+  });
+
+  it('rejects when repository identity does not match existing registry row', async () => {
+    const db = createMigratedDb();
+    insertRepository(db, {
+      name: 'frontend',
+      provider: 'github',
+      remoteUrl: 'https://github.com/acme/frontend.git',
+      remoteRef: 'acme/frontend',
+    });
+
+    const { provider } = createMockProvider('github');
+
+    await expect(
+      ensureRepositoryClone({
+        db,
+        repository: {
+          name: 'frontend',
+          provider: 'github',
+          remoteUrl: 'https://github.com/acme/frontend-mirror.git',
+          remoteRef: 'acme/frontend-mirror',
+        },
+        provider,
+      }),
+    ).rejects.toThrow('remoteUrl mismatch');
+  });
+
+  it('rejects injected providers with mismatched repository identity', async () => {
+    const db = createMigratedDb();
+    const sandboxDir = await createSandboxDir();
+    cleanupPaths.add(sandboxDir);
+    const { provider, cloneRepo } = createMockProvider('github');
+    const providerWithMismatchedConfig: ScmProvider = {
+      ...provider,
+      getConfig: () => ({
+        kind: 'github',
+        repo: 'acme/frontend-mirror',
+      }),
+    };
+
+    await expect(
+      ensureRepositoryClone({
+        db,
+        repository: {
+          name: 'frontend',
+          provider: 'github',
+          remoteUrl: 'https://github.com/acme/frontend.git',
+          remoteRef: 'acme/frontend',
+        },
+        provider: providerWithMismatchedConfig,
+        environment: {
+          ALPHRED_SANDBOX_DIR: sandboxDir,
+        },
+      }),
+    ).rejects.toThrow('Provider identity mismatch');
+
+    expect(cloneRepo).not.toHaveBeenCalled();
+  });
+
+  it('does not persist repository rows when remoteRef validation fails', async () => {
+    const db = createMigratedDb();
+
+    await expect(
+      ensureRepositoryClone({
+        db,
+        repository: {
+          name: 'frontend',
+          provider: 'github',
+          remoteUrl: 'https://github.com/acme/frontend.git',
+          remoteRef: 'acme',
+        },
+      }),
+    ).rejects.toThrow('Invalid GitHub remoteRef');
+
+    expect(getRepositoryByName(db, 'frontend')).toBeNull();
+  });
+
+  it('rejects remoteRef owner/repository that does not match remoteUrl', async () => {
+    const db = createMigratedDb();
+
+    await expect(
+      ensureRepositoryClone({
+        db,
+        repository: {
+          name: 'frontend',
+          provider: 'github',
+          remoteUrl: 'https://github.com/acme/frontend.git',
+          remoteRef: 'acme/frontend-mirror',
+        },
+      }),
+    ).rejects.toThrow('Owner/repository must match remoteUrl repository acme/frontend');
+
+    expect(getRepositoryByName(db, 'frontend')).toBeNull();
+  });
+
+  it('rejects hostless remoteRef for GitHub Enterprise remotes', async () => {
+    const db = createMigratedDb();
+
+    await expect(
+      ensureRepositoryClone({
+        db,
+        repository: {
+          name: 'enterprise-frontend',
+          provider: 'github',
+          remoteUrl: 'https://github.example.com/acme/frontend.git',
+          remoteRef: 'acme/frontend',
+        },
+      }),
+    ).rejects.toThrow('Expected github.example.com/owner/repo');
+
+    expect(getRepositoryByName(db, 'enterprise-frontend')).toBeNull();
+  });
+
+  it('rejects enterprise remoteRef host that does not match remoteUrl host', async () => {
+    const db = createMigratedDb();
+
+    await expect(
+      ensureRepositoryClone({
+        db,
+        repository: {
+          name: 'enterprise-frontend',
+          provider: 'github',
+          remoteUrl: 'https://github.example.com/acme/frontend.git',
+          remoteRef: 'github.other.example/acme/frontend',
+        },
+      }),
+    ).rejects.toThrow('Host must match remoteUrl host github.example.com');
+
+    expect(getRepositoryByName(db, 'enterprise-frontend')).toBeNull();
+  });
+
+  it('rejects Azure DevOps remotes hosted outside supported Azure domains', async () => {
+    const db = createMigratedDb();
+
+    await expect(
+      ensureRepositoryClone({
+        db,
+        repository: {
+          name: 'azure-frontend',
+          provider: 'azure-devops',
+          remoteUrl: 'https://example.com/acme/platform/_git/frontend',
+          remoteRef: 'acme/platform/frontend',
+        },
+      }),
+    ).rejects.toThrow('Host must be dev.azure.com, ssh.dev.azure.com, or *.visualstudio.com');
+
+    expect(getRepositoryByName(db, 'azure-frontend')).toBeNull();
+  });
+
+  it('rejects Azure DevOps remoteRef values that do not match remoteUrl repository identity', async () => {
+    const db = createMigratedDb();
+
+    await expect(
+      ensureRepositoryClone({
+        db,
+        repository: {
+          name: 'azure-frontend',
+          provider: 'azure-devops',
+          remoteUrl: 'https://dev.azure.com/acme/platform/_git/frontend',
+          remoteRef: 'acme/platform/frontend-mirror',
+        },
+      }),
+    ).rejects.toThrow('Organization/project/repository must match remoteUrl repository acme/platform/frontend');
+
+    expect(getRepositoryByName(db, 'azure-frontend')).toBeNull();
+  });
+
+  it('accepts Azure DevOps remoteUrl values with encoded path segments', async () => {
+    const db = createMigratedDb();
+    const sandboxDir = await createSandboxDir();
+    cleanupPaths.add(sandboxDir);
+    const expectedPath = join(sandboxDir, 'azure-devops', 'acme', 'My Project', 'frontend');
+    const { provider, cloneRepo } = createMockProvider('azure-devops');
+
+    const result = await ensureRepositoryClone({
+      db,
+      repository: {
+        name: 'azure-frontend',
+        provider: 'azure-devops',
+        remoteUrl: 'https://dev.azure.com/acme/My%20Project/_git/frontend',
+        remoteRef: 'acme/My Project/frontend',
+      },
+      provider,
+      environment: {
+        ALPHRED_SANDBOX_DIR: sandboxDir,
+      },
+    });
+
+    expect(result.action).toBe('cloned');
+    expect(cloneRepo).toHaveBeenCalledWith(
+      'https://dev.azure.com/acme/My%20Project/_git/frontend',
+      expectedPath,
+      {
+        ALPHRED_SANDBOX_DIR: sandboxDir,
+      },
+    );
+  });
+
+  it('rejects existing Azure DevOps repositories with unsupported remote hosts before fetch', async () => {
+    const db = createMigratedDb();
+    const sandboxDir = await createSandboxDir();
+    cleanupPaths.add(sandboxDir);
+    const localPath = join(sandboxDir, 'azure-devops', 'acme', 'platform', 'frontend');
+    await mkdir(localPath, { recursive: true });
+    await writeFile(join(localPath, '.git'), '');
+
+    insertRepository(db, {
+      name: 'azure-frontend',
+      provider: 'azure-devops',
+      remoteUrl: 'https://example.com/acme/platform/_git/frontend',
+      remoteRef: 'acme/platform/frontend',
+      localPath,
+      cloneStatus: 'cloned',
+    });
+
+    const fetchAll = vi.fn(async () => undefined);
+
+    await expect(
+      ensureRepositoryClone({
+        db,
+        repository: {
+          name: 'azure-frontend',
+          provider: 'azure-devops',
+          remoteUrl: 'https://example.com/acme/platform/_git/frontend',
+          remoteRef: 'acme/platform/frontend',
+        },
+        fetchAll,
+        environment: {
+          ALPHRED_SANDBOX_DIR: sandboxDir,
+        },
+      }),
+    ).rejects.toThrow('Host must be dev.azure.com, ssh.dev.azure.com, or *.visualstudio.com');
+
+    expect(fetchAll).not.toHaveBeenCalled();
+  });
+});

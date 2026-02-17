@@ -1,8 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { execFileAsyncMock, execFileMock } = vi.hoisted(() => ({
+const { accessMock, execFileAsyncMock, execFileMock, rmMock } = vi.hoisted(() => ({
+  accessMock: vi.fn(),
   execFileAsyncMock: vi.fn(),
   execFileMock: vi.fn(),
+  rmMock: vi.fn(),
 }));
 
 vi.mock('node:child_process', () => ({
@@ -13,12 +15,20 @@ vi.mock('node:util', () => ({
   promisify: () => execFileAsyncMock,
 }));
 
-import { checkAuth, checkAuthForRepo, createPullRequest, getIssue } from './github.js';
+vi.mock('node:fs/promises', () => ({
+  access: accessMock,
+  rm: rmMock,
+}));
+
+import { checkAuth, checkAuthForRepo, cloneRepo, createPullRequest, getIssue } from './github.js';
 
 describe('github adapter', () => {
   beforeEach(() => {
+    accessMock.mockReset();
     execFileMock.mockReset();
     execFileAsyncMock.mockReset();
+    rmMock.mockReset();
+    accessMock.mockRejectedValue(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }));
   });
 
   it('fetches issue details and maps label names', async () => {
@@ -142,6 +152,430 @@ describe('github adapter', () => {
         env: {
           GH_ENTERPRISE_TOKEN: 'alphred-enterprise-token',
           ALPHRED_GH_ENTERPRISE_TOKEN: 'alphred-enterprise-token',
+        },
+      },
+    );
+  });
+
+  it('clones with gh by default', async () => {
+    execFileAsyncMock.mockResolvedValueOnce({
+      stdout: '',
+    }).mockResolvedValueOnce({
+      stdout: '',
+    });
+
+    await expect(
+      cloneRepo('owner/repo', 'https://github.com/owner/repo.git', '/tmp/owner-repo', {
+        GH_TOKEN: 'host-token',
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(execFileAsyncMock).toHaveBeenNthCalledWith(
+      1,
+      'gh',
+      ['repo', 'clone', 'owner/repo', '/tmp/owner-repo'],
+      {
+        env: {
+          GH_TOKEN: 'host-token',
+        },
+      },
+    );
+    expect(execFileAsyncMock).toHaveBeenNthCalledWith(
+      2,
+      'git',
+      ['-C', '/tmp/owner-repo', 'remote', 'set-url', 'origin', 'https://github.com/owner/repo.git'],
+      {
+        env: {
+          GH_TOKEN: 'host-token',
+        },
+      },
+    );
+  });
+
+  it('does not override origin when configured remote is blank', async () => {
+    execFileAsyncMock.mockResolvedValueOnce({
+      stdout: '',
+    });
+
+    await expect(
+      cloneRepo('owner/repo', '   ', '/tmp/owner-repo', {
+        GH_TOKEN: 'host-token',
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(execFileAsyncMock).toHaveBeenCalledTimes(1);
+    expect(execFileAsyncMock).toHaveBeenCalledWith(
+      'gh',
+      ['repo', 'clone', 'owner/repo', '/tmp/owner-repo'],
+      {
+        env: {
+          GH_TOKEN: 'host-token',
+        },
+      },
+    );
+  });
+
+  it('throws when origin override fails after successful gh clone', async () => {
+    execFileAsyncMock
+      .mockResolvedValueOnce({
+        stdout: '',
+      })
+      .mockRejectedValueOnce(new Error('set-url failed'));
+
+    await expect(
+      cloneRepo('owner/repo', 'https://github.com/owner/repo.git', '/tmp/owner-repo', {
+        GH_TOKEN: 'host-token',
+      }),
+    ).rejects.toThrow('set-url failed');
+
+    expect(execFileAsyncMock).toHaveBeenNthCalledWith(
+      1,
+      'gh',
+      ['repo', 'clone', 'owner/repo', '/tmp/owner-repo'],
+      {
+        env: {
+          GH_TOKEN: 'host-token',
+        },
+      },
+    );
+    expect(execFileAsyncMock).toHaveBeenNthCalledWith(
+      2,
+      'git',
+      ['-C', '/tmp/owner-repo', 'remote', 'set-url', 'origin', 'https://github.com/owner/repo.git'],
+      {
+        env: {
+          GH_TOKEN: 'host-token',
+        },
+      },
+    );
+  });
+
+  it('redacts embedded URL credentials when origin override fails after successful gh clone', async () => {
+    execFileAsyncMock
+      .mockResolvedValueOnce({
+        stdout: '',
+      })
+      .mockRejectedValueOnce(
+        new Error(
+          'Command failed: git -C /tmp/owner-repo remote set-url origin https://x-access-token:gh-host-token@github.com/owner/repo.git',
+        ),
+      );
+
+    const clonePromise = cloneRepo(
+      'owner/repo',
+      'https://x-access-token:gh-host-token@github.com/owner/repo.git',
+      '/tmp/owner-repo',
+      {},
+    );
+
+    await expect(clonePromise).rejects.toThrow('https://<redacted>@github.com/owner/repo.git');
+    await expect(clonePromise).rejects.not.toThrow('gh-host-token');
+  });
+
+  it('falls back to git clone when gh clone fails', async () => {
+    execFileAsyncMock
+      .mockRejectedValueOnce(new Error('gh clone failed'))
+      .mockResolvedValueOnce({
+        stdout: '',
+      });
+
+    await expect(
+      cloneRepo('owner/repo', 'https://github.com/owner/repo.git', '/tmp/owner-repo', {
+        GH_TOKEN: 'host-token',
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(execFileAsyncMock).toHaveBeenNthCalledWith(
+      1,
+      'gh',
+      ['repo', 'clone', 'owner/repo', '/tmp/owner-repo'],
+      {
+        env: {
+          GH_TOKEN: 'host-token',
+        },
+      },
+    );
+    expect(execFileAsyncMock).toHaveBeenNthCalledWith(
+      2,
+      'git',
+      [
+        '-c',
+        'http.https://github.com/.extraheader=AUTHORIZATION: Basic eC1hY2Nlc3MtdG9rZW46aG9zdC10b2tlbg==',
+        'clone',
+        'https://github.com/owner/repo.git',
+        '/tmp/owner-repo',
+      ],
+      {
+        env: {
+          GH_TOKEN: 'host-token',
+        },
+      },
+    );
+    expect(rmMock).not.toHaveBeenCalled();
+  });
+
+  it('uses an HTTPS repo clone source when fallback runs with blank remote', async () => {
+    execFileAsyncMock
+      .mockRejectedValueOnce(new Error('gh clone failed'))
+      .mockResolvedValueOnce({
+        stdout: '',
+      });
+
+    await expect(
+      cloneRepo('owner/repo', '   ', '/tmp/owner-repo', {
+        GH_TOKEN: 'host-token',
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(execFileAsyncMock).toHaveBeenNthCalledWith(
+      2,
+      'git',
+      [
+        '-c',
+        'http.https://github.com/.extraheader=AUTHORIZATION: Basic eC1hY2Nlc3MtdG9rZW46aG9zdC10b2tlbg==',
+        'clone',
+        'https://github.com/owner/repo.git',
+        '/tmp/owner-repo',
+      ],
+      {
+        env: {
+          GH_TOKEN: 'host-token',
+        },
+      },
+    );
+  });
+
+  it('cleans partial directories before fallback clone when gh clone fails', async () => {
+    execFileAsyncMock
+      .mockRejectedValueOnce(new Error('gh clone failed'))
+      .mockRejectedValueOnce(Object.assign(new Error('destination exists'), {
+        stderr: "fatal: destination path '/tmp/owner-repo' already exists and is not an empty directory.",
+      }))
+      .mockResolvedValueOnce({
+        stdout: '',
+      });
+    accessMock
+      .mockRejectedValueOnce(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }))
+      .mockResolvedValueOnce(undefined);
+    rmMock.mockResolvedValueOnce(undefined);
+
+    await expect(
+      cloneRepo('owner/repo', 'https://github.com/owner/repo.git', '/tmp/owner-repo', {}),
+    ).resolves.toBeUndefined();
+
+    expect(rmMock).toHaveBeenCalledWith('/tmp/owner-repo', { recursive: true, force: true });
+    expect(execFileAsyncMock).toHaveBeenNthCalledWith(
+      2,
+      'git',
+      ['clone', 'https://github.com/owner/repo.git', '/tmp/owner-repo'],
+      {
+        env: {},
+      },
+    );
+  });
+
+  it('does not delete an existing clone target when fallback git clone fails', async () => {
+    accessMock.mockResolvedValueOnce(undefined);
+    execFileAsyncMock
+      .mockRejectedValueOnce(new Error('gh clone failed'))
+      .mockRejectedValueOnce(Object.assign(new Error('destination exists'), {
+        stderr: "fatal: destination path '/tmp/owner-repo' already exists and is not an empty directory.",
+      }));
+
+    await expect(
+      cloneRepo('owner/repo', 'https://github.com/owner/repo.git', '/tmp/owner-repo', {}),
+    ).rejects.toThrow('destination exists');
+
+    expect(rmMock).not.toHaveBeenCalled();
+  });
+
+  it('uses enterprise token when falling back to git clone for enterprise remotes', async () => {
+    execFileAsyncMock
+      .mockRejectedValueOnce(new Error('gh clone failed'))
+      .mockResolvedValueOnce({
+        stdout: '',
+      });
+
+    await expect(
+      cloneRepo(
+        'github.example.com/owner/repo',
+        'https://github.example.com/owner/repo.git',
+        '/tmp/owner-repo',
+        {
+          ALPHRED_GH_ENTERPRISE_TOKEN: 'ghes-token',
+        },
+      ),
+    ).resolves.toBeUndefined();
+
+    expect(execFileAsyncMock).toHaveBeenNthCalledWith(
+      1,
+      'gh',
+      ['repo', 'clone', 'github.example.com/owner/repo', '/tmp/owner-repo'],
+      {
+        env: {
+          ALPHRED_GH_ENTERPRISE_TOKEN: 'ghes-token',
+          GH_ENTERPRISE_TOKEN: 'ghes-token',
+        },
+      },
+    );
+    expect(execFileAsyncMock).toHaveBeenNthCalledWith(
+      2,
+      'git',
+      [
+        '-c',
+        'http.https://github.example.com/.extraheader=AUTHORIZATION: Basic eC1hY2Nlc3MtdG9rZW46Z2hlcy10b2tlbg==',
+        'clone',
+        'https://github.example.com/owner/repo.git',
+        '/tmp/owner-repo',
+      ],
+      {
+        env: {
+          ALPHRED_GH_ENTERPRISE_TOKEN: 'ghes-token',
+          GH_ENTERPRISE_TOKEN: 'ghes-token',
+        },
+      },
+    );
+  });
+
+  it('does not use enterprise token when git clone fallback targets github.com', async () => {
+    execFileAsyncMock
+      .mockRejectedValueOnce(new Error('gh clone failed'))
+      .mockResolvedValueOnce({
+        stdout: '',
+      });
+
+    await expect(
+      cloneRepo(
+        'owner/repo',
+        'https://github.com/owner/repo.git',
+        '/tmp/owner-repo',
+        {
+          ALPHRED_GH_ENTERPRISE_TOKEN: 'ghes-token',
+        },
+      ),
+    ).resolves.toBeUndefined();
+
+    expect(execFileAsyncMock).toHaveBeenNthCalledWith(
+      2,
+      'git',
+      ['clone', 'https://github.com/owner/repo.git', '/tmp/owner-repo'],
+      {
+        env: {
+          ALPHRED_GH_ENTERPRISE_TOKEN: 'ghes-token',
+          GH_ENTERPRISE_TOKEN: 'ghes-token',
+        },
+      },
+    );
+  });
+
+  it('does not fall back to GH_TOKEN when git clone fallback targets non-github hosts', async () => {
+    execFileAsyncMock
+      .mockRejectedValueOnce(new Error('gh clone failed'))
+      .mockResolvedValueOnce({
+        stdout: '',
+      });
+
+    await expect(
+      cloneRepo(
+        'github.example.com/owner/repo',
+        'https://github.example.com/owner/repo.git',
+        '/tmp/owner-repo',
+        {
+          GH_TOKEN: 'host-token',
+        },
+      ),
+    ).resolves.toBeUndefined();
+
+    expect(execFileAsyncMock).toHaveBeenNthCalledWith(
+      2,
+      'git',
+      ['clone', 'https://github.example.com/owner/repo.git', '/tmp/owner-repo'],
+      {
+        env: {
+          GH_TOKEN: 'host-token',
+        },
+      },
+    );
+  });
+
+  it('uses plain git clone fallback when no token is available', async () => {
+    execFileAsyncMock
+      .mockRejectedValueOnce(new Error('gh clone failed'))
+      .mockResolvedValueOnce({
+        stdout: '',
+      });
+
+    await expect(
+      cloneRepo('owner/repo', 'https://github.com/owner/repo.git', '/tmp/owner-repo', {}),
+    ).resolves.toBeUndefined();
+
+    expect(execFileAsyncMock).toHaveBeenNthCalledWith(
+      2,
+      'git',
+      ['clone', 'https://github.com/owner/repo.git', '/tmp/owner-repo'],
+      {
+        env: {},
+      },
+    );
+  });
+
+  it('redacts auth headers when fallback git clone fails', async () => {
+    execFileAsyncMock
+      .mockRejectedValueOnce(new Error('gh clone failed'))
+      .mockRejectedValueOnce(
+        new Error(
+          'Command failed: git -c http.https://github.com/.extraheader=AUTHORIZATION: Basic eC1hY2Nlc3MtdG9rZW46aG9zdC10b2tlbg== clone https://github.com/owner/repo.git /tmp/owner-repo',
+        ),
+      );
+
+    const clonePromise = cloneRepo('owner/repo', 'https://github.com/owner/repo.git', '/tmp/owner-repo', {
+      GH_TOKEN: 'host-token',
+    });
+
+    await expect(clonePromise).rejects.toThrow('AUTHORIZATION: <redacted>');
+    await expect(clonePromise).rejects.not.toThrow('eC1hY2Nlc3MtdG9rZW46aG9zdC10b2tlbg==');
+  });
+
+  it('redacts embedded URL credentials when fallback git clone fails', async () => {
+    execFileAsyncMock
+      .mockRejectedValueOnce(new Error('gh clone failed'))
+      .mockRejectedValueOnce(
+        new Error(
+          'Command failed: git clone https://x-access-token:gh-host-token@github.com/owner/repo.git /tmp/owner-repo',
+        ),
+      );
+
+    const clonePromise = cloneRepo(
+      'owner/repo',
+      'https://x-access-token:gh-host-token@github.com/owner/repo.git',
+      '/tmp/owner-repo',
+      {},
+    );
+
+    await expect(clonePromise).rejects.toThrow('https://<redacted>@github.com/owner/repo.git');
+    await expect(clonePromise).rejects.not.toThrow('gh-host-token');
+  });
+
+  it('does not inject HTTP auth config for SSH remotes in git fallback clone', async () => {
+    execFileAsyncMock
+      .mockRejectedValueOnce(new Error('gh clone failed'))
+      .mockResolvedValueOnce({
+        stdout: '',
+      });
+
+    await expect(
+      cloneRepo('owner/repo', 'git@github.com:owner/repo.git', '/tmp/owner-repo', {
+        GH_TOKEN: 'host-token',
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(execFileAsyncMock).toHaveBeenNthCalledWith(
+      2,
+      'git',
+      ['clone', 'git@github.com:owner/repo.git', '/tmp/owner-repo'],
+      {
+        env: {
+          GH_TOKEN: 'host-token',
         },
       },
     );
