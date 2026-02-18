@@ -4,6 +4,9 @@ This document defines the server API surface exposed by the dashboard integratio
 
 Base path: `/api/dashboard`
 
+Related UX planning artifact:
+- `apps/dashboard/docs/ux-storyboard.md` (Issue `#95` research, IA, wireframes, and implementation handoff)
+
 ## Error Shape
 
 All route-level errors return this envelope:
