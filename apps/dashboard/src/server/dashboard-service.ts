@@ -284,8 +284,35 @@ function toErrorMessage(error: unknown): string {
   return String(error);
 }
 
-function isPendingRunTransitionError(error: unknown): boolean {
+function isWorkflowRunTransitionPreconditionError(error: unknown): boolean {
   return error instanceof Error && error.message.includes('precondition failed');
+}
+
+function toBackgroundFailureTransition(
+  status: RunStatus,
+): { expectedFrom: 'pending' | 'running' | 'paused'; to: 'cancelled' | 'failed' } | null {
+  if (status === 'pending') {
+    return {
+      expectedFrom: 'pending',
+      to: 'cancelled',
+    };
+  }
+
+  if (status === 'running') {
+    return {
+      expectedFrom: 'running',
+      to: 'failed',
+    };
+  }
+
+  if (status === 'paused') {
+    return {
+      expectedFrom: 'paused',
+      to: 'cancelled',
+    };
+  }
+
+  return null;
 }
 
 export type DashboardService = ReturnType<typeof createDashboardService>;
@@ -480,9 +507,47 @@ export function createDashboardService(options: {
         to: 'cancelled',
       });
     } catch (error) {
-      if (!isPendingRunTransitionError(error)) {
+      if (!isWorkflowRunTransitionPreconditionError(error)) {
         throw error;
       }
+    }
+  }
+
+  async function markRunTerminalAfterBackgroundFailure(runId: number, originalError: unknown): Promise<void> {
+    console.error(`Run id=${runId} background execution failed: ${toErrorMessage(originalError)}`);
+
+    try {
+      await withDatabase(async db => {
+        const run = db
+          .select({
+            status: workflowRuns.status,
+          })
+          .from(workflowRuns)
+          .where(eq(workflowRuns.id, runId))
+          .get();
+        if (!run) {
+          return;
+        }
+
+        const transition = toBackgroundFailureTransition(run.status as RunStatus);
+        if (!transition) {
+          return;
+        }
+
+        try {
+          transitionWorkflowRunStatus(db, {
+            workflowRunId: runId,
+            expectedFrom: transition.expectedFrom,
+            to: transition.to,
+          });
+        } catch (error) {
+          if (!isWorkflowRunTransitionPreconditionError(error)) {
+            throw error;
+          }
+        }
+      });
+    } catch (transitionError) {
+      console.error(`Run id=${runId} background failure status update failed: ${toErrorMessage(transitionError)}`);
     }
   }
 
@@ -785,8 +850,8 @@ export function createDashboardService(options: {
             );
           })
             .then(() => undefined)
-            .catch((error: unknown) => {
-              console.error(`Run id=${runId} background execution failed: ${toErrorMessage(error)}`);
+            .catch(async (error: unknown) => {
+              await markRunTerminalAfterBackgroundFailure(runId, error);
             })
             .finally(() => {
               backgroundRunExecutions.delete(runId);

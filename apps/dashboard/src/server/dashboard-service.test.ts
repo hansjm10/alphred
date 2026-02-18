@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createSqlWorkflowExecutor, createSqlWorkflowPlanner } from '@alphred/core';
+import { eq } from 'drizzle-orm';
 import {
   createDatabase,
   migrateDatabase,
@@ -9,6 +10,7 @@ import {
   runNodes,
   runWorktrees,
   treeNodes,
+  transitionWorkflowRunStatus,
   transitionRunNodeStatus,
   workflowRuns,
   workflowTrees,
@@ -208,6 +210,13 @@ function seedRunData(db: AlphredDatabase): void {
     .run();
 }
 
+async function waitForBackgroundExecution(service: ReturnType<typeof createDashboardService>, workflowRunId: number): Promise<void> {
+  const deadline = Date.now() + 1000;
+  while (Date.now() < deadline && service.hasBackgroundExecution(workflowRunId)) {
+    await new Promise(resolve => setTimeout(resolve, 10));
+  }
+}
+
 describe('createDashboardService', () => {
   it('closes database handles after each operation', async () => {
     const closeDatabase = vi.fn(() => undefined);
@@ -275,10 +284,7 @@ describe('createDashboardService', () => {
     expect(result.mode).toBe('async');
     expect(closeDatabase).toHaveBeenCalledTimes(1);
 
-    const deadline = Date.now() + 1000;
-    while (Date.now() < deadline && service.hasBackgroundExecution(result.workflowRunId)) {
-      await new Promise(resolve => setTimeout(resolve, 10));
-    }
+    await waitForBackgroundExecution(service, result.workflowRunId);
 
     expect(service.hasBackgroundExecution(result.workflowRunId)).toBe(false);
     expect(executeRun).toHaveBeenCalledTimes(1);
@@ -368,15 +374,113 @@ describe('createDashboardService', () => {
 
       expect(result.mode).toBe('async');
 
-      const deadline = Date.now() + 1000;
-      while (Date.now() < deadline && service.hasBackgroundExecution(result.workflowRunId)) {
-        await new Promise(resolve => setTimeout(resolve, 10));
-      }
+      await waitForBackgroundExecution(service, result.workflowRunId);
 
       expect(service.hasBackgroundExecution(result.workflowRunId)).toBe(false);
       expect(createWorktreeManager).toHaveBeenCalledTimes(2);
       expect(executeRun).toHaveBeenCalledTimes(1);
       expect(cleanupRun).toHaveBeenCalledTimes(1);
+    } finally {
+      consoleErrorSpy.mockRestore();
+    }
+  });
+
+  it('marks accepted async runs as cancelled when detached startup fails before execution begins', async () => {
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const createRunWorktree = vi.fn(async () => ({
+      id: 1,
+      runId: 1,
+      repositoryId: 1,
+      path: '/tmp/worktree-failure',
+      branch: 'main',
+      commitHash: null,
+      createdAt: '2026-02-17T20:00:00.000Z',
+    }));
+    const cleanupRun = vi.fn(async () => undefined);
+    const createWorktreeManager = vi
+      .fn()
+      .mockImplementationOnce(() => ({
+        createRunWorktree,
+        cleanupRun,
+      }))
+      .mockImplementationOnce(() => {
+        throw new Error('background worktree manager init failed');
+      });
+
+    const { db, dependencies } = createHarness({
+      createWorktreeManager,
+    });
+    seedRunData(db);
+
+    try {
+      const service = createDashboardService({ dependencies });
+      const result = await service.launchWorkflowRun({
+        treeKey: 'demo-tree',
+        repositoryName: 'demo-repo',
+        executionMode: 'async',
+      });
+
+      await waitForBackgroundExecution(service, result.workflowRunId);
+
+      const persisted = db
+        .select({
+          status: workflowRuns.status,
+          startedAt: workflowRuns.startedAt,
+          completedAt: workflowRuns.completedAt,
+        })
+        .from(workflowRuns)
+        .where(eq(workflowRuns.id, result.workflowRunId))
+        .get();
+
+      expect(persisted?.status).toBe('cancelled');
+      expect(persisted?.startedAt).toBeNull();
+      expect(persisted?.completedAt).not.toBeNull();
+      expect(service.hasBackgroundExecution(result.workflowRunId)).toBe(false);
+    } finally {
+      consoleErrorSpy.mockRestore();
+    }
+  });
+
+  it('marks accepted async runs as failed when detached execution fails after the run starts', async () => {
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const { db, dependencies } = createHarness({
+      createSqlWorkflowExecutor: () =>
+        ({
+          executeRun: async (params: { workflowRunId: number }) => {
+            transitionWorkflowRunStatus(db, {
+              workflowRunId: params.workflowRunId,
+              expectedFrom: 'pending',
+              to: 'running',
+            });
+            throw new Error('executor failed after run start');
+          },
+        }) as unknown as ReturnType<DashboardServiceDependencies['createSqlWorkflowExecutor']>,
+    });
+    seedRunData(db);
+
+    try {
+      const service = createDashboardService({ dependencies });
+      const result = await service.launchWorkflowRun({
+        treeKey: 'demo-tree',
+        executionMode: 'async',
+      });
+
+      await waitForBackgroundExecution(service, result.workflowRunId);
+
+      const persisted = db
+        .select({
+          status: workflowRuns.status,
+          startedAt: workflowRuns.startedAt,
+          completedAt: workflowRuns.completedAt,
+        })
+        .from(workflowRuns)
+        .where(eq(workflowRuns.id, result.workflowRunId))
+        .get();
+
+      expect(persisted?.status).toBe('failed');
+      expect(persisted?.startedAt).not.toBeNull();
+      expect(persisted?.completedAt).not.toBeNull();
+      expect(service.hasBackgroundExecution(result.workflowRunId)).toBe(false);
     } finally {
       consoleErrorSpy.mockRestore();
     }

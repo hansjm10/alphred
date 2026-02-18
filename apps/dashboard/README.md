@@ -175,6 +175,10 @@ Validation notes:
 Response:
 - `202` when `mode = "async"`
 - `200` when `mode = "sync"`
+- Async lifecycle semantics after `202`:
+  - If detached execution fails before the run starts, the run is marked `cancelled`.
+  - If detached execution fails after the run starts, the run is marked `failed`.
+  - Terminal status can be observed through `GET /runs` and `GET /runs/[runId]`.
 
 Body type: `DashboardRunLaunchResult`.
 

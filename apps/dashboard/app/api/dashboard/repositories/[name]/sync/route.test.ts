@@ -22,8 +22,18 @@ describe('POST /api/dashboard/repositories/[name]/sync', () => {
 
   it('syncs the targeted repository', async () => {
     syncRepositoryMock.mockResolvedValue({
-      repositoryName: 'demo-repo',
       action: 'fetched',
+      repository: {
+        id: 1,
+        name: 'demo-repo',
+        provider: 'github',
+        remoteRef: 'octocat/demo-repo',
+        remoteUrl: 'https://github.com/octocat/demo-repo.git',
+        defaultBranch: 'main',
+        branchTemplate: null,
+        cloneStatus: 'cloned',
+        localPath: '/tmp/repos/demo-repo',
+      },
     });
 
     const response = await POST(
@@ -35,8 +45,18 @@ describe('POST /api/dashboard/repositories/[name]/sync', () => {
 
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({
-      repositoryName: 'demo-repo',
       action: 'fetched',
+      repository: {
+        id: 1,
+        name: 'demo-repo',
+        provider: 'github',
+        remoteRef: 'octocat/demo-repo',
+        remoteUrl: 'https://github.com/octocat/demo-repo.git',
+        defaultBranch: 'main',
+        branchTemplate: null,
+        cloneStatus: 'cloned',
+        localPath: '/tmp/repos/demo-repo',
+      },
     });
     expect(syncRepositoryMock).toHaveBeenCalledWith('demo-repo');
   });
