@@ -51,6 +51,35 @@ describe('RunWorktreePage', () => {
     );
   });
 
+  it('falls back to the first tracked file when the requested path is unknown', () => {
+    render(<RunWorktreePage params={{ runId: '412' }} searchParams={{ path: 'does/not/exist.ts' }} />);
+
+    expect(screen.getByLabelText('File diff preview')).toHaveTextContent(
+      'emitLifecycleCheckpoint',
+    );
+    expect(screen.getByRole('link', { name: 'View Diff' })).toHaveAttribute(
+      'href',
+      '/runs/412/worktree?path=src%2Fcore%2Fengine.ts',
+    );
+  });
+
+  it('uses the first repeated path value before applying fallback rules', () => {
+    render(
+      <RunWorktreePage
+        params={{ runId: '412' }}
+        searchParams={{ path: ['does/not/exist.ts', 'apps/dashboard/app/runs/page.tsx'] }}
+      />,
+    );
+
+    expect(screen.getByLabelText('File diff preview')).toHaveTextContent(
+      'emitLifecycleCheckpoint',
+    );
+    expect(screen.getByRole('link', { name: 'View Diff' })).toHaveAttribute(
+      'href',
+      '/runs/412/worktree?path=src%2Fcore%2Fengine.ts',
+    );
+  });
+
   it('renders empty state when the run has no changed files', () => {
     render(<RunWorktreePage params={{ runId: '410' }} />);
 

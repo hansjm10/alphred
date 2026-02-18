@@ -139,6 +139,28 @@ Top-level routes:
 - `/runs/[runId]/worktree` File explorer scoped to run.
 - `/settings/integrations` Auth state and remediation actions.
 
+### 4.1 Route Contract Matrix
+
+| Route | Purpose | Required states |
+| --- | --- | --- |
+| `/` | Overview snapshot with active-run CTA entry points | loading, error, empty, active |
+| `/repositories` | Repository registry and sync actions | loading, error, empty, list |
+| `/runs` | Run list with status filter tabs | loading, error, empty, list |
+| `/runs/[runId]` | Run detail timeline, node status, artifacts | loading, error, not-found, detail |
+| `/runs/[runId]/worktree` | Run-scoped changed-file explorer | loading, error, not-found, empty-files, detail |
+| `/settings/integrations` | Integration/auth status and remediation actions | loading, error, empty, configured |
+
+### 4.2 Query Parameter Contract
+
+- `/runs?status=<value>`
+  - Supported values: `running`, `failed`.
+  - Unsupported or missing values resolve to `all`.
+  - Repeated values use the first value.
+- `/runs/[runId]/worktree?path=<file-path>`
+  - If `path` matches a tracked worktree file, that file is selected.
+  - If `path` is missing or unsupported, selection falls back to the first tracked file.
+  - Repeated values use the first value before fallback rules are applied.
+
 Navigation pattern:
 - Persistent left rail for primary areas.
 - Sticky top bar for run context, global status, and quick actions.
