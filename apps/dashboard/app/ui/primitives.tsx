@@ -17,11 +17,11 @@ type PanelProps = ComponentPropsWithoutRef<'aside'> & {
   tone?: SurfaceTone;
 };
 
-type StatusBadgeProps = {
+type StatusBadgeProps = Readonly<{
   status: StatusVariant;
   label?: string;
   className?: string;
-};
+}>;
 
 type ButtonLinkProps = ComponentPropsWithoutRef<typeof Link> & {
   tone?: ButtonTone;
@@ -36,11 +36,11 @@ export type TabItem = Readonly<{
   label: string;
 }>;
 
-type TabsProps = {
+type TabsProps = Readonly<{
   items: readonly TabItem[];
   activeHref: string;
   ariaLabel?: string;
-};
+}>;
 
 const STATUS_VARIANTS: Record<StatusVariant, { icon: string; label: string }> = {
   pending: { icon: 'o', label: 'Pending' },
