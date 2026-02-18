@@ -8,11 +8,7 @@
 
 # Claude / Codex
 .claude/
-.codex/*
-!.codex/skills/
-.codex/skills/*
-!.codex/skills/nextjs-mcp-change-guard/
-!.codex/skills/nextjs-mcp-change-guard/**
+.codex/
 .mcp.json
 .playwright-mcp/
 
