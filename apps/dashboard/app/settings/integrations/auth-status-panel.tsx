@@ -68,9 +68,9 @@ export function AuthStatusPanel({ authGate }: AuthStatusPanelProps) {
       </ul>
       <p className="meta-text">{visibleAuthGate.detail}</p>
       {checkError ? (
-        <p className="meta-text" role="status" aria-live="polite">
+        <output className="meta-text" aria-live="polite">
           {checkError}
-        </p>
+        </output>
       ) : null}
 
       <div className="action-row">

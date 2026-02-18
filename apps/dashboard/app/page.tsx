@@ -1,4 +1,5 @@
 import Link from 'next/link';
+import type { ReactNode } from 'react';
 import {
   RUN_ROUTE_FIXTURES,
   buildRunDetailHref,
@@ -22,19 +23,26 @@ export function OverviewPageContent({ activeRuns, authGate }: Readonly<{
   activeRuns: readonly RunRouteRecord[];
   authGate: GitHubAuthGate;
 }>) {
-  const launchAction = authGate.canMutate ? (
-    <ButtonLink href="/runs" tone="primary">
-      Launch Run
-    </ButtonLink>
-  ) : authGate.state === 'checking' ? (
-    <ActionButton tone="primary" disabled aria-disabled="true">
-      Checking auth...
-    </ActionButton>
-  ) : (
-    <ButtonLink href="/settings/integrations" tone="primary">
-      Connect GitHub
-    </ButtonLink>
-  );
+  let launchAction: ReactNode;
+  if (authGate.canMutate) {
+    launchAction = (
+      <ButtonLink href="/runs" tone="primary">
+        Launch Run
+      </ButtonLink>
+    );
+  } else if (authGate.state === 'checking') {
+    launchAction = (
+      <ActionButton tone="primary" disabled aria-disabled="true">
+        Checking auth...
+      </ActionButton>
+    );
+  } else {
+    launchAction = (
+      <ButtonLink href="/settings/integrations" tone="primary">
+        Connect GitHub
+      </ButtonLink>
+    );
+  }
 
   const authContextMessage =
     authGate.state === 'auth_error'
