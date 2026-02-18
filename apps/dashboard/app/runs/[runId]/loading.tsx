@@ -1,12 +1,5 @@
-import { Card } from '../../ui/primitives';
+import { RouteLoadingBoundary } from '../../ui/route-loading-boundary';
 
 export default function RunDetailLoading() {
-  return (
-    <div className="page-stack">
-      <Card title="Loading run detail">
-        <output aria-live="polite">Fetching timeline and node lifecycle...</output>
-      </Card>
-    </div>
-  );
+  return <RouteLoadingBoundary title="Loading run detail" message="Fetching timeline and node lifecycle..." />;
 }
-

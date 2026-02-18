@@ -1,12 +1,5 @@
-import { Card } from '../../../ui/primitives';
+import { RouteLoadingBoundary } from '../../../ui/route-loading-boundary';
 
 export default function RunWorktreeLoading() {
-  return (
-    <div className="page-stack">
-      <Card title="Loading worktree">
-        <output aria-live="polite">Preparing changed-file explorer...</output>
-      </Card>
-    </div>
-  );
+  return <RouteLoadingBoundary title="Loading worktree" message="Preparing changed-file explorer..." />;
 }
-

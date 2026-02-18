@@ -1,11 +1,5 @@
-import { Card } from '../../ui/primitives';
+import { RouteLoadingBoundary } from '../../ui/route-loading-boundary';
 
 export default function IntegrationsLoading() {
-  return (
-    <div className="page-stack">
-      <Card title="Loading integrations">
-        <output aria-live="polite">Checking GitHub authentication status...</output>
-      </Card>
-    </div>
-  );
+  return <RouteLoadingBoundary title="Loading integrations" message="Checking GitHub authentication status..." />;
 }

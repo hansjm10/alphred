@@ -11,6 +11,9 @@ export type RouteErrorBoundaryProps = Readonly<{
   logPrefix: string;
 }>;
 
+export type RouteSegmentErrorProps = Pick<RouteErrorBoundaryProps, 'error' | 'reset'>;
+type RouteErrorBoundaryConfig = Pick<RouteErrorBoundaryProps, 'title' | 'message' | 'logPrefix'>;
+
 export function RouteErrorBoundary({
   error,
   reset,
@@ -32,4 +35,18 @@ export function RouteErrorBoundary({
       </Card>
     </div>
   );
+}
+
+export function createRouteErrorBoundary({ title, message, logPrefix }: RouteErrorBoundaryConfig) {
+  return function RouteSegmentError({ error, reset }: RouteSegmentErrorProps) {
+    return (
+      <RouteErrorBoundary
+        error={error}
+        reset={reset}
+        title={title}
+        message={message}
+        logPrefix={logPrefix}
+      />
+    );
+  };
 }

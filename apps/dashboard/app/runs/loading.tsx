@@ -1,12 +1,5 @@
-import { Card } from '../ui/primitives';
+import { RouteLoadingBoundary } from '../ui/route-loading-boundary';
 
 export default function RunsLoading() {
-  return (
-    <div className="page-stack">
-      <Card title="Loading runs">
-        <output aria-live="polite">Loading run lifecycle data...</output>
-      </Card>
-    </div>
-  );
+  return <RouteLoadingBoundary title="Loading runs" message="Loading run lifecycle data..." />;
 }
-
