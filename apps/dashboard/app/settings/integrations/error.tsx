@@ -1,26 +1,20 @@
 'use client';
 
-import { useEffect } from 'react';
-import { ActionButton, Card } from '../../ui/primitives';
+import { RouteErrorBoundary, type RouteErrorBoundaryProps } from '../../ui/route-error-boundary';
 
 type IntegrationsErrorProps = Readonly<{
-  error: Error & { digest?: string };
-  reset: () => void;
+  error: RouteErrorBoundaryProps['error'];
+  reset: RouteErrorBoundaryProps['reset'];
 }>;
 
 export default function IntegrationsError({ error, reset }: IntegrationsErrorProps) {
-  useEffect(() => {
-    console.error('Integrations route error:', error);
-  }, [error]);
-
   return (
-    <div className="page-stack">
-      <Card title="Integrations unavailable" role="alert" aria-live="assertive">
-        <p>Unable to load integration authentication status.</p>
-        <div className="action-row">
-          <ActionButton onClick={reset}>Retry</ActionButton>
-        </div>
-      </Card>
-    </div>
+    <RouteErrorBoundary
+      error={error}
+      reset={reset}
+      title="Integrations unavailable"
+      message="Unable to load integration authentication status."
+      logPrefix="Integrations route error:"
+    />
   );
 }

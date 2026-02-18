@@ -1,27 +1,20 @@
 'use client';
 
-import { useEffect } from 'react';
-import { ActionButton, Card } from '../../../ui/primitives';
+import { RouteErrorBoundary, type RouteErrorBoundaryProps } from '../../../ui/route-error-boundary';
 
 type RunWorktreeErrorProps = Readonly<{
-  error: Error & { digest?: string };
-  reset: () => void;
+  error: RouteErrorBoundaryProps['error'];
+  reset: RouteErrorBoundaryProps['reset'];
 }>;
 
 export default function RunWorktreeError({ error, reset }: RunWorktreeErrorProps) {
-  useEffect(() => {
-    console.error('Run worktree route error:', error);
-  }, [error]);
-
   return (
-    <div className="page-stack">
-      <Card title="Worktree unavailable" role="alert" aria-live="assertive">
-        <p>Unable to load worktree files for this run.</p>
-        <div className="action-row">
-          <ActionButton onClick={reset}>Retry</ActionButton>
-        </div>
-      </Card>
-    </div>
+    <RouteErrorBoundary
+      error={error}
+      reset={reset}
+      title="Worktree unavailable"
+      message="Unable to load worktree files for this run."
+      logPrefix="Run worktree route error:"
+    />
   );
 }
-
