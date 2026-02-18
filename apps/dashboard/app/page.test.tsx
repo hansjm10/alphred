@@ -3,7 +3,7 @@
 import { render, screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import { OverviewPageContent } from './page';
-import { createGitHubAuthErrorGate, createGitHubAuthGate } from './ui/github-auth';
+import { createCheckingGitHubAuthGate, createGitHubAuthErrorGate, createGitHubAuthGate } from './ui/github-auth';
 
 describe('Dashboard Page', () => {
   it('renders the dashboard home content', () => {
@@ -61,5 +61,17 @@ describe('Dashboard Page', () => {
     expect(screen.getAllByRole('link', { name: 'Connect GitHub' }).length).toBeGreaterThan(0);
     expect(screen.queryByRole('link', { name: 'Launch Run' })).not.toBeInTheDocument();
     expect(screen.getByText('gh auth login')).toBeInTheDocument();
+  });
+
+  it('renders checking state CTA while auth is being verified', () => {
+    render(
+      <OverviewPageContent
+        activeRuns={[]}
+        authGate={createCheckingGitHubAuthGate()}
+      />,
+    );
+
+    expect(screen.getByRole('button', { name: 'Checking auth...' })).toBeDisabled();
+    expect(screen.queryByRole('link', { name: 'Launch Run' })).not.toBeInTheDocument();
   });
 });
