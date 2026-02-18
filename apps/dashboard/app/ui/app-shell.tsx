@@ -67,7 +67,7 @@ export default function AppShell({ children }: AppShellProps) {
           </div>
 
           <div className="shell-topbar-actions">
-            <StatusBadge status="running" label="System ready" />
+            <StatusBadge status="completed" label="System ready" />
             <ButtonLink href="/runs" tone="primary">
               Launch Run
             </ButtonLink>

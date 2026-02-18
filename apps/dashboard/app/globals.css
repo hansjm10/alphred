@@ -159,7 +159,7 @@ output {
 }
 
 .shell-topbar h1 {
-  font: 600 24px/32px var(--font-display);
+  font: 700 32px/40px var(--font-display);
 }
 
 .shell-topbar-actions {
@@ -182,7 +182,7 @@ output {
 }
 
 .page-heading h2 {
-  font: 600 20px/28px var(--font-display);
+  font: 600 24px/32px var(--font-display);
 }
 
 .page-heading p {
@@ -362,6 +362,7 @@ output {
   color: var(--text-muted);
   font-family: var(--font-data);
   font-size: 13px;
+  font-variant-numeric: tabular-nums;
 }
 
 .action-row {
