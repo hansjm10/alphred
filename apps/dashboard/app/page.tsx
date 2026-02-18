@@ -4,18 +4,42 @@ import {
   buildRunDetailHref,
   type RunRouteRecord,
 } from './runs/run-route-fixtures';
-import { ButtonLink, Card, Panel, StatusBadge } from './ui/primitives';
+import { AuthRemediation } from './ui/auth-remediation';
+import type { GitHubAuthGate } from './ui/github-auth';
+import { loadGitHubAuthGate } from './ui/load-github-auth-gate';
+import { ActionButton, ButtonLink, Card, Panel, StatusBadge } from './ui/primitives';
 
 type PageProps = Readonly<{
   activeRuns?: readonly RunRouteRecord[];
+  authGate?: GitHubAuthGate;
 }>;
 
 function listDefaultActiveRuns(): readonly RunRouteRecord[] {
   return RUN_ROUTE_FIXTURES.filter((run) => run.status === 'running' || run.status === 'paused');
 }
 
-export default function Page({ activeRuns }: PageProps = {}) {
-  const visibleActiveRuns = activeRuns ?? listDefaultActiveRuns();
+export function OverviewPageContent({ activeRuns, authGate }: Readonly<{
+  activeRuns: readonly RunRouteRecord[];
+  authGate: GitHubAuthGate;
+}>) {
+  const launchAction = authGate.canMutate ? (
+    <ButtonLink href="/runs" tone="primary">
+      Launch Run
+    </ButtonLink>
+  ) : authGate.state === 'checking' ? (
+    <ActionButton tone="primary" disabled aria-disabled="true">
+      Checking auth...
+    </ActionButton>
+  ) : (
+    <ButtonLink href="/settings/integrations" tone="primary">
+      Connect GitHub
+    </ButtonLink>
+  );
+
+  const authContextMessage =
+    authGate.state === 'auth_error'
+      ? 'Run launch is blocked because auth checks are failing.'
+      : 'Run launch is blocked until GitHub authentication is configured.';
 
   return (
     <div className="page-stack">
@@ -29,7 +53,7 @@ export default function Page({ activeRuns }: PageProps = {}) {
           <ul className="entity-list">
             <li>
               <span>GitHub Auth</span>
-              <StatusBadge status="completed" label="Authenticated" />
+              <StatusBadge status={authGate.badge.status} label={authGate.badge.label} />
             </li>
             <li>
               <span>Repository Sync Queue</span>
@@ -40,9 +64,10 @@ export default function Page({ activeRuns }: PageProps = {}) {
               <StatusBadge status="running" label="Healthy" />
             </li>
           </ul>
+          <p className="meta-text">{`Last checked: ${authGate.checkedAtLabel}`}</p>
 
           <p className="meta-text">Active runs</p>
-          {visibleActiveRuns.length === 0 ? (
+          {activeRuns.length === 0 ? (
             <div className="page-stack">
               <h3>No active runs</h3>
               <p>Connect GitHub, sync a repository, and launch your first run.</p>
@@ -53,7 +78,7 @@ export default function Page({ activeRuns }: PageProps = {}) {
             </div>
           ) : (
             <ul className="entity-list">
-              {visibleActiveRuns.map((run) => (
+              {activeRuns.map((run) => (
                 <li key={run.id}>
                   <Link href={buildRunDetailHref(run.id)}>{`Run #${run.id} ${run.workflow}`}</Link>
                   <StatusBadge status={run.status} />
@@ -67,12 +92,23 @@ export default function Page({ activeRuns }: PageProps = {}) {
           <div className="action-row">
             <ButtonLink href="/settings/integrations">Check Auth</ButtonLink>
             <ButtonLink href="/repositories">Go to Repositories</ButtonLink>
-            <ButtonLink href="/runs" tone="primary">
-              Launch Run
-            </ButtonLink>
+            {launchAction}
           </div>
+          <AuthRemediation authGate={authGate} context={authContextMessage} />
         </Panel>
       </div>
     </div>
+  );
+}
+
+export default async function Page({ activeRuns, authGate }: PageProps = {}) {
+  const visibleActiveRuns = activeRuns ?? listDefaultActiveRuns();
+  const resolvedAuthGate = authGate ?? (await loadGitHubAuthGate());
+
+  return (
+    <OverviewPageContent
+      activeRuns={visibleActiveRuns}
+      authGate={resolvedAuthGate}
+    />
   );
 }

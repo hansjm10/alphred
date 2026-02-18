@@ -2,11 +2,22 @@
 
 import { render, screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
-import Page from './page';
+import { OverviewPageContent } from './page';
+import { createGitHubAuthErrorGate, createGitHubAuthGate } from './ui/github-auth';
 
 describe('Dashboard Page', () => {
   it('renders the dashboard home content', () => {
-    render(<Page />);
+    render(
+      <OverviewPageContent
+        activeRuns={[]}
+        authGate={createGitHubAuthGate({
+          authenticated: true,
+          user: 'octocat',
+          scopes: ['repo'],
+          error: null,
+        })}
+      />,
+    );
 
     expect(screen.getByRole('heading', { name: 'System readiness' })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Global readiness' })).toBeInTheDocument();
@@ -17,7 +28,17 @@ describe('Dashboard Page', () => {
   });
 
   it('renders empty-state actions when there are no active runs', () => {
-    render(<Page activeRuns={[]} />);
+    render(
+      <OverviewPageContent
+        activeRuns={[]}
+        authGate={createGitHubAuthGate({
+          authenticated: true,
+          user: 'octocat',
+          scopes: ['repo'],
+          error: null,
+        })}
+      />,
+    );
 
     expect(screen.getByRole('heading', { name: 'No active runs' })).toBeInTheDocument();
     expect(
@@ -27,5 +48,18 @@ describe('Dashboard Page', () => {
       'href',
       '/settings/integrations',
     );
+  });
+
+  it('gates launch CTA and surfaces remediation when auth check fails', () => {
+    render(
+      <OverviewPageContent
+        activeRuns={[]}
+        authGate={createGitHubAuthErrorGate('Unable to verify GitHub auth')}
+      />,
+    );
+
+    expect(screen.getAllByRole('link', { name: 'Connect GitHub' }).length).toBeGreaterThan(0);
+    expect(screen.queryByRole('link', { name: 'Launch Run' })).not.toBeInTheDocument();
+    expect(screen.getByText('gh auth login')).toBeInTheDocument();
   });
 });

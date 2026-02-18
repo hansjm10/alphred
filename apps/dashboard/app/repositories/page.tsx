@@ -1,3 +1,6 @@
+import { AuthRemediation } from '../ui/auth-remediation';
+import type { GitHubAuthGate } from '../ui/github-auth';
+import { loadGitHubAuthGate } from '../ui/load-github-auth-gate';
 import { ActionButton, Card, Panel, StatusBadge } from '../ui/primitives';
 
 type RepositoryStatus = 'pending' | 'completed' | 'failed';
@@ -16,9 +19,18 @@ const DEFAULT_REPOSITORIES: readonly RepositoryRecord[] = [
 
 type RepositoriesPageProps = Readonly<{
   repositories?: readonly RepositoryRecord[];
+  authGate?: GitHubAuthGate;
 }>;
 
-export default function RepositoriesPage({ repositories = DEFAULT_REPOSITORIES }: RepositoriesPageProps = {}) {
+export function RepositoriesPageContent({
+  repositories,
+  authGate,
+}: Readonly<{
+  repositories: readonly RepositoryRecord[];
+  authGate: GitHubAuthGate;
+}>) {
+  const syncBlocked = repositories.length === 0 || !authGate.canMutate;
+
   return (
     <div className="page-stack">
       <section className="page-heading">
@@ -49,14 +61,28 @@ export default function RepositoriesPage({ repositories = DEFAULT_REPOSITORIES }
         </Card>
 
         <Panel title="Repository actions" description="Action surface using shared button primitives">
+          <p className="meta-text">{`GitHub auth: ${authGate.badge.label}`}</p>
           <div className="action-row">
-            <ActionButton disabled={repositories.length === 0} aria-disabled={repositories.length === 0}>
+            <ActionButton disabled={syncBlocked} aria-disabled={syncBlocked}>
               Sync Selected
             </ActionButton>
             <ActionButton tone="primary">Add Repository</ActionButton>
           </div>
+          <AuthRemediation
+            authGate={authGate}
+            context="Repository sync is blocked until GitHub authentication is available."
+          />
         </Panel>
       </div>
     </div>
   );
+}
+
+export default async function RepositoriesPage({
+  repositories = DEFAULT_REPOSITORIES,
+  authGate,
+}: RepositoriesPageProps = {}) {
+  const resolvedAuthGate = authGate ?? (await loadGitHubAuthGate());
+
+  return <RepositoriesPageContent repositories={repositories} authGate={resolvedAuthGate} />;
 }

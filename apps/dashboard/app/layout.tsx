@@ -2,6 +2,7 @@ import type { Metadata } from 'next';
 import type { ReactNode } from 'react';
 import './globals.css';
 import AppShell from './ui/app-shell';
+import { loadGitHubAuthGate } from './ui/load-github-auth-gate';
 
 export const metadata: Metadata = {
   title: 'Alphred Dashboard',
@@ -12,11 +13,13 @@ type RootLayoutProps = Readonly<{
   children: ReactNode;
 }>;
 
-export default function RootLayout({ children }: RootLayoutProps) {
+export default async function RootLayout({ children }: RootLayoutProps) {
+  const authGate = await loadGitHubAuthGate();
+
   return (
     <html lang="en">
       <body>
-        <AppShell>{children}</AppShell>
+        <AppShell authGate={authGate}>{children}</AppShell>
       </body>
     </html>
   );

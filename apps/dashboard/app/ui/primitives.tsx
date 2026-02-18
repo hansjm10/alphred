@@ -2,7 +2,7 @@ import Link from 'next/link';
 import type { ComponentPropsWithoutRef, ReactNode } from 'react';
 
 type SurfaceTone = 'default' | 'subtle';
-type StatusVariant = 'pending' | 'running' | 'completed' | 'failed' | 'paused';
+export type StatusVariant = 'pending' | 'running' | 'completed' | 'failed' | 'paused';
 type ButtonTone = 'primary' | 'secondary';
 
 type CardProps = ComponentPropsWithoutRef<'section'> & {

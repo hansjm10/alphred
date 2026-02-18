@@ -3,11 +3,13 @@
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import type { ReactNode } from 'react';
+import type { GitHubAuthGate } from './github-auth';
 import { PRIMARY_NAV_ITEMS } from './navigation';
-import { ButtonLink, StatusBadge } from './primitives';
+import { ActionButton, ButtonLink, StatusBadge } from './primitives';
 
 type AppShellProps = Readonly<{
   children: ReactNode;
+  authGate: GitHubAuthGate;
 }>;
 
 function isActivePath(pathname: string, href: string): boolean {
@@ -18,7 +20,7 @@ function isActivePath(pathname: string, href: string): boolean {
   return pathname === href || pathname.startsWith(`${href}/`);
 }
 
-export default function AppShell({ children }: AppShellProps) {
+export default function AppShell({ children, authGate }: AppShellProps) {
   const pathname = usePathname() ?? '/';
   const activeNav =
     PRIMARY_NAV_ITEMS.find((item) => isActivePath(pathname, item.href)) ??
@@ -67,10 +69,20 @@ export default function AppShell({ children }: AppShellProps) {
           </div>
 
           <div className="shell-topbar-actions">
-            <StatusBadge status="completed" label="System ready" />
-            <ButtonLink href="/runs" tone="primary">
-              Launch Run
-            </ButtonLink>
+            <StatusBadge status={authGate.badge.status} label={authGate.badge.label} />
+            {authGate.canMutate ? (
+              <ButtonLink href="/runs" tone="primary">
+                Launch Run
+              </ButtonLink>
+            ) : authGate.state === 'checking' ? (
+              <ActionButton tone="primary" disabled aria-disabled="true">
+                Checking auth...
+              </ActionButton>
+            ) : (
+              <ButtonLink href="/settings/integrations" tone="primary">
+                Connect GitHub
+              </ButtonLink>
+            )}
           </div>
         </header>
 
