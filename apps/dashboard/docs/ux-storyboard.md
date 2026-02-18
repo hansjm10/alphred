@@ -612,6 +612,15 @@ State behavior:
 - Loading: spinner in status card only.
 - Error: diagnostic message + retry.
 
+Auth gate contract matrix:
+
+| Auth gate state | Badge label | Run/Repo mutation actions | Remediation panel | Integration CTA |
+| --- | --- | --- | --- | --- |
+| `checking` | `Checking` | Disabled | Hidden | `Check Auth` disabled while request in flight |
+| `authenticated` | `Authenticated` | Enabled | Hidden | `Check Auth` available; links to repos/runs visible |
+| `unauthenticated` | `Unauthenticated` | Blocked | Visible with `gh auth login` and token env command | `Check Auth` available |
+| `auth_error` | `Auth check failed` | Blocked | Visible with `gh auth login` and token env command | `Check Auth` available |
+
 ## 14) Interaction Acceptance Checks
 
 Use these checks during `#96` and `#97` implementation reviews:

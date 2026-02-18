@@ -1,6 +1,13 @@
-import { ButtonLink, Card, StatusBadge } from '../../ui/primitives';
+import type { GitHubAuthGate } from '../../ui/github-auth';
+import { loadGitHubAuthGate } from '../../ui/load-github-auth-gate';
+import { Card } from '../../ui/primitives';
+import { AuthStatusPanel } from './auth-status-panel';
 
-export default function IntegrationsPage() {
+type IntegrationsPageProps = Readonly<{
+  authGate?: GitHubAuthGate;
+}>;
+
+export function IntegrationsPageContent({ authGate }: Readonly<{ authGate: GitHubAuthGate }>) {
   return (
     <div className="page-stack">
       <section className="page-heading">
@@ -9,24 +16,14 @@ export default function IntegrationsPage() {
       </section>
 
       <Card title="GitHub authentication" description="Auth gate source for repo and run actions">
-        <ul className="entity-list">
-          <li>
-            <span>Current state</span>
-            <StatusBadge status="completed" label="Authenticated" />
-          </li>
-          <li>
-            <span>Last checked</span>
-            <span className="meta-text">just now</span>
-          </li>
-        </ul>
-
-        <div className="action-row">
-          <ButtonLink href="/settings/integrations" tone="primary">
-            Check Auth
-          </ButtonLink>
-          <ButtonLink href="/repositories">Back to Repositories</ButtonLink>
-        </div>
+        <AuthStatusPanel authGate={authGate} />
       </Card>
     </div>
   );
+}
+
+export default async function IntegrationsPage({ authGate }: IntegrationsPageProps = {}) {
+  const resolvedAuthGate = authGate ?? (await loadGitHubAuthGate());
+
+  return <IntegrationsPageContent authGate={resolvedAuthGate} />;
 }
