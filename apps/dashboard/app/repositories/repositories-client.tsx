@@ -284,8 +284,8 @@ export function RepositoriesPageContent({
                         <td>
                           <ActionButton
                             aria-label={`${actionLabel} ${repository.name}`}
-                            disabled={syncBlocked || isSyncing}
-                            aria-disabled={syncBlocked || isSyncing}
+                            disabled={syncBlocked || syncingRepositoryName !== null}
+                            aria-disabled={syncBlocked || syncingRepositoryName !== null}
                             onClick={() => {
                               void handleSync(repository);
                             }}

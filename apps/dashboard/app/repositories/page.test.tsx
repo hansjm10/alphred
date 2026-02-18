@@ -168,6 +168,56 @@ describe('RepositoriesPage', () => {
     expect(screen.getByText('new-repo sync completed (cloned).')).toBeInTheDocument();
   });
 
+  it('disables all row sync actions while a sync is in progress', async () => {
+    const repositories = [
+      createRepository({
+        id: 1,
+        name: 'alpha-repo',
+        cloneStatus: 'pending',
+        localPath: null,
+      }),
+      createRepository({
+        id: 2,
+        name: 'beta-repo',
+        cloneStatus: 'cloned',
+        localPath: '/tmp/repos/beta-repo',
+      }),
+    ];
+
+    let resolveSync!: (value: Response) => void;
+    const syncRequest = new Promise<Response>((resolve) => {
+      resolveSync = resolve;
+    });
+    const fetchMock = vi.mocked(global.fetch);
+    fetchMock.mockReturnValueOnce(syncRequest);
+
+    const user = userEvent.setup();
+    render(<RepositoriesPageContent repositories={repositories} authGate={createAuthenticatedAuthGate()} />);
+
+    await user.click(screen.getByRole('button', { name: 'Sync alpha-repo' }));
+
+    expect(screen.getByRole('button', { name: 'Sync alpha-repo' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Sync beta-repo' })).toBeDisabled();
+
+    resolveSync(
+      new Response(
+        JSON.stringify({
+          action: 'cloned',
+          repository: createRepository({
+            id: 1,
+            name: 'alpha-repo',
+            cloneStatus: 'cloned',
+            localPath: '/tmp/repos/alpha-repo',
+          }),
+        }),
+      ),
+    );
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Sync beta-repo' })).toBeEnabled();
+    });
+  });
+
   it('keeps retry path visible after sync failure and recovers on retry', async () => {
     const repositories = [
       createRepository({
