@@ -15,4 +15,17 @@ describe('Dashboard Page', () => {
       '/settings/integrations',
     );
   });
+
+  it('renders empty-state actions when there are no active runs', () => {
+    render(<Page activeRuns={[]} />);
+
+    expect(screen.getByRole('heading', { name: 'No active runs' })).toBeInTheDocument();
+    expect(
+      screen.getByText('Connect GitHub, sync a repository, and launch your first run.'),
+    ).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Connect GitHub' })).toHaveAttribute(
+      'href',
+      '/settings/integrations',
+    );
+  });
 });

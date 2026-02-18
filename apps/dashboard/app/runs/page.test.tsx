@@ -11,6 +11,7 @@ describe('RunsPage', () => {
     expect(screen.getByRole('heading', { name: 'Run lifecycle' })).toBeInTheDocument();
     expect(screen.getByRole('navigation', { name: 'Run status filters' })).toBeInTheDocument();
     expect(screen.getByText('#412 demo-tree')).toBeInTheDocument();
+    expect(screen.getAllByRole('link', { name: 'Open' })[0]).toHaveAttribute('href', '/runs/412');
     expect(screen.getByRole('link', { name: 'Running' })).toHaveAttribute(
       'href',
       '/runs?status=running',
@@ -30,6 +31,22 @@ describe('RunsPage', () => {
 
     expect(screen.getByRole('link', { name: 'Failed' })).toHaveAttribute('aria-current', 'page');
     expect(screen.getByRole('link', { name: 'All Runs' })).not.toHaveAttribute('aria-current');
+  });
+
+  it('uses the first status value when repeated query values are provided', () => {
+    render(<RunsPage searchParams={{ status: ['failed', 'running'] }} />);
+
+    expect(screen.getByRole('link', { name: 'Failed' })).toHaveAttribute('aria-current', 'page');
+    expect(screen.queryByText('#412 demo-tree')).not.toBeInTheDocument();
+    expect(screen.getByText('#411 demo-tree')).toBeInTheDocument();
+  });
+
+  it('falls back to all runs when the first repeated status value is unsupported', () => {
+    render(<RunsPage searchParams={{ status: ['paused', 'running'] }} />);
+
+    expect(screen.getByRole('link', { name: 'All Runs' })).toHaveAttribute('aria-current', 'page');
+    expect(screen.getByText('#412 demo-tree')).toBeInTheDocument();
+    expect(screen.getByText('#411 demo-tree')).toBeInTheDocument();
   });
 
   it('falls back to all runs tab for unknown status filters', () => {

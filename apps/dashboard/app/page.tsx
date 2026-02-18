@@ -1,6 +1,22 @@
+import Link from 'next/link';
+import {
+  RUN_ROUTE_FIXTURES,
+  buildRunDetailHref,
+  type RunRouteRecord,
+} from './runs/run-route-fixtures';
 import { ButtonLink, Card, Panel, StatusBadge } from './ui/primitives';
 
-export default function Page() {
+type PageProps = Readonly<{
+  activeRuns?: readonly RunRouteRecord[];
+}>;
+
+function listDefaultActiveRuns(): readonly RunRouteRecord[] {
+  return RUN_ROUTE_FIXTURES.filter((run) => run.status === 'running' || run.status === 'paused');
+}
+
+export default function Page({ activeRuns }: PageProps = {}) {
+  const visibleActiveRuns = activeRuns ?? listDefaultActiveRuns();
+
   return (
     <div className="page-stack">
       <section className="page-heading">
@@ -24,6 +40,27 @@ export default function Page() {
               <StatusBadge status="running" label="Healthy" />
             </li>
           </ul>
+
+          <p className="meta-text">Active runs</p>
+          {visibleActiveRuns.length === 0 ? (
+            <div className="page-stack">
+              <h3>No active runs</h3>
+              <p>Connect GitHub, sync a repository, and launch your first run.</p>
+              <div className="action-row">
+                <ButtonLink href="/settings/integrations">Connect GitHub</ButtonLink>
+                <ButtonLink href="/repositories">Go to Repositories</ButtonLink>
+              </div>
+            </div>
+          ) : (
+            <ul className="entity-list">
+              {visibleActiveRuns.map((run) => (
+                <li key={run.id}>
+                  <Link href={buildRunDetailHref(run.id)}>{`Run #${run.id} ${run.workflow}`}</Link>
+                  <StatusBadge status={run.status} />
+                </li>
+              ))}
+            </ul>
+          )}
         </Card>
 
         <Panel title="Actions" description="Follow the readiness sequence from the storyboard">

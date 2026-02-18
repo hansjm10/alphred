@@ -13,4 +13,12 @@ describe('RepositoriesPage', () => {
     expect(screen.getByText('Cloned')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Sync Selected' })).toBeInTheDocument();
   });
+
+  it('renders empty-state callout when no repositories exist', () => {
+    render(<RepositoriesPage repositories={[]} />);
+
+    expect(screen.getByRole('heading', { name: 'No repositories configured' })).toBeInTheDocument();
+    expect(screen.getAllByRole('button', { name: 'Add Repository' })).toHaveLength(2);
+    expect(screen.getByRole('button', { name: 'Sync Selected' })).toBeDisabled();
+  });
 });
