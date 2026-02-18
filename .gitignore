@@ -9,6 +9,8 @@
 # Claude / Codex
 .claude/
 .codex/
+.mcp.json
+.playwright-mcp/
 
 # Node
 node_modules/
