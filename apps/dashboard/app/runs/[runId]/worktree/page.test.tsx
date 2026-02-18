@@ -25,8 +25,8 @@ describe('RunWorktreePage', () => {
     notFoundMock.mockClear();
   });
 
-  it('renders changed files and default preview selection', () => {
-    render(<RunWorktreePage params={{ runId: '412' }} />);
+  it('renders changed files and default preview selection', async () => {
+    render(await RunWorktreePage({ params: Promise.resolve({ runId: '412' }) }));
 
     expect(screen.getByRole('heading', { name: 'Run #412 worktree' })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'src/core/engine.ts *' })).toHaveAttribute(
@@ -38,12 +38,12 @@ describe('RunWorktreePage', () => {
     );
   });
 
-  it('uses the deep-linked path when provided', () => {
+  it('uses the deep-linked path when provided', async () => {
     render(
-      <RunWorktreePage
-        params={{ runId: '412' }}
-        searchParams={{ path: 'apps/dashboard/app/runs/page.tsx' }}
-      />,
+      await RunWorktreePage({
+        params: Promise.resolve({ runId: '412' }),
+        searchParams: Promise.resolve({ path: 'apps/dashboard/app/runs/page.tsx' }),
+      }),
     );
 
     expect(screen.getByLabelText('File diff preview')).toHaveTextContent(
@@ -51,24 +51,12 @@ describe('RunWorktreePage', () => {
     );
   });
 
-  it('falls back to the first tracked file when the requested path is unknown', () => {
-    render(<RunWorktreePage params={{ runId: '412' }} searchParams={{ path: 'does/not/exist.ts' }} />);
-
-    expect(screen.getByLabelText('File diff preview')).toHaveTextContent(
-      'emitLifecycleCheckpoint',
-    );
-    expect(screen.getByRole('link', { name: 'View Diff' })).toHaveAttribute(
-      'href',
-      '/runs/412/worktree?path=src%2Fcore%2Fengine.ts',
-    );
-  });
-
-  it('uses the first repeated path value before applying fallback rules', () => {
+  it('falls back to the first tracked file when the requested path is unknown', async () => {
     render(
-      <RunWorktreePage
-        params={{ runId: '412' }}
-        searchParams={{ path: ['does/not/exist.ts', 'apps/dashboard/app/runs/page.tsx'] }}
-      />,
+      await RunWorktreePage({
+        params: Promise.resolve({ runId: '412' }),
+        searchParams: Promise.resolve({ path: 'does/not/exist.ts' }),
+      }),
     );
 
     expect(screen.getByLabelText('File diff preview')).toHaveTextContent(
@@ -80,15 +68,36 @@ describe('RunWorktreePage', () => {
     );
   });
 
-  it('renders empty state when the run has no changed files', () => {
-    render(<RunWorktreePage params={{ runId: '410' }} />);
+  it('uses the first repeated path value before applying fallback rules', async () => {
+    render(
+      await RunWorktreePage({
+        params: Promise.resolve({ runId: '412' }),
+        searchParams: Promise.resolve({
+          path: ['does/not/exist.ts', 'apps/dashboard/app/runs/page.tsx'],
+        }),
+      }),
+    );
+
+    expect(screen.getByLabelText('File diff preview')).toHaveTextContent(
+      'emitLifecycleCheckpoint',
+    );
+    expect(screen.getByRole('link', { name: 'View Diff' })).toHaveAttribute(
+      'href',
+      '/runs/412/worktree?path=src%2Fcore%2Fengine.ts',
+    );
+  });
+
+  it('renders empty state when the run has no changed files', async () => {
+    render(await RunWorktreePage({ params: Promise.resolve({ runId: '410' }) }));
 
     expect(screen.getByRole('heading', { name: 'No changed files' })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Back to Run' })).toHaveAttribute('href', '/runs/410');
   });
 
-  it('routes invalid run ids to not-found', () => {
-    expect(() => render(<RunWorktreePage params={{ runId: '9999' }} />)).toThrow(NOT_FOUND_ERROR);
+  it('routes invalid run ids to not-found', async () => {
+    await expect(
+      RunWorktreePage({ params: Promise.resolve({ runId: '9999' }) }),
+    ).rejects.toThrow(NOT_FOUND_ERROR);
     expect(notFoundMock).toHaveBeenCalled();
   });
 });

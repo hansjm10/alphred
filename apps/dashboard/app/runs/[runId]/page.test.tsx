@@ -25,8 +25,8 @@ describe('RunDetailPage', () => {
     notFoundMock.mockClear();
   });
 
-  it('renders run summary and completed-run worktree action', () => {
-    render(<RunDetailPage params={{ runId: '410' }} />);
+  it('renders run summary and completed-run worktree action', async () => {
+    render(await RunDetailPage({ params: Promise.resolve({ runId: '410' }) }));
 
     expect(screen.getByRole('heading', { name: 'Run #410' })).toBeInTheDocument();
     expect(screen.getByText('demo-repo')).toBeInTheDocument();
@@ -36,15 +36,17 @@ describe('RunDetailPage', () => {
     );
   });
 
-  it('renders status-specific primary action for active runs', () => {
-    render(<RunDetailPage params={{ runId: '412' }} />);
+  it('renders status-specific primary action for active runs', async () => {
+    render(await RunDetailPage({ params: Promise.resolve({ runId: '412' }) }));
 
     expect(screen.getByRole('button', { name: 'Pause' })).toBeDisabled();
     expect(screen.getByText('Run started and queued node execution.')).toBeInTheDocument();
   });
 
-  it('routes invalid run ids to not-found', () => {
-    expect(() => render(<RunDetailPage params={{ runId: '9999' }} />)).toThrow(NOT_FOUND_ERROR);
+  it('routes invalid run ids to not-found', async () => {
+    await expect(RunDetailPage({ params: Promise.resolve({ runId: '9999' }) })).rejects.toThrow(
+      NOT_FOUND_ERROR,
+    );
     expect(notFoundMock).toHaveBeenCalled();
   });
 });

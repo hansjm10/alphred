@@ -3,16 +3,18 @@ import { buildRunWorktreeHref, findRunByParam, resolveWorktreePath } from '../..
 import { ButtonLink, Card, Panel } from '../../../ui/primitives';
 
 type RunWorktreePageProps = Readonly<{
-  params: {
+  params: Promise<{
     runId: string;
-  };
-  searchParams?: {
+  }>;
+  searchParams?: Promise<{
     path?: string | string[];
-  };
+  }>;
 }>;
 
-export default function RunWorktreePage({ params, searchParams }: RunWorktreePageProps) {
-  const run = findRunByParam(params.runId);
+export default async function RunWorktreePage({ params, searchParams }: RunWorktreePageProps) {
+  const { runId } = await params;
+  const resolvedSearchParams = await searchParams;
+  const run = findRunByParam(runId);
   if (run === null) {
     notFound();
   }
@@ -34,7 +36,7 @@ export default function RunWorktreePage({ params, searchParams }: RunWorktreePag
     );
   }
 
-  const selectedPath = resolveWorktreePath(run, searchParams?.path);
+  const selectedPath = resolveWorktreePath(run, resolvedSearchParams?.path);
   const fallbackFile = run.worktree.files[0];
   if (!fallbackFile) {
     notFound();

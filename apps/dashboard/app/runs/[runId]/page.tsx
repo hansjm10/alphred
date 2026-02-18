@@ -8,9 +8,9 @@ import {
 import { ActionButton, ButtonLink, Card, Panel, StatusBadge } from '../../ui/primitives';
 
 type RunDetailPageProps = Readonly<{
-  params: {
+  params: Promise<{
     runId: string;
-  };
+  }>;
 }>;
 
 function renderPrimaryAction(run: RunRouteRecord) {
@@ -39,8 +39,9 @@ function renderPrimaryAction(run: RunRouteRecord) {
   );
 }
 
-export default function RunDetailPage({ params }: RunDetailPageProps) {
-  const run = findRunByParam(params.runId);
+export default async function RunDetailPage({ params }: RunDetailPageProps) {
+  const { runId } = await params;
+  const run = findRunByParam(runId);
   if (run === null) {
     notFound();
   }
