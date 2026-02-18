@@ -220,6 +220,51 @@ Design intent: operational cockpit; dense but legible; high signal-to-noise.
 - Why selected:
   - Best match for run-state scanning, failure triage, and long-session operator use.
 
+Concrete style specification for implementation:
+
+- Typography scale:
+  - `h1` `32/40` `Space Grotesk 700`
+  - `h2` `24/32` `Space Grotesk 600`
+  - `h3` `20/28` `Space Grotesk 600`
+  - body default `16/24` `Source Sans 3 400`
+  - body compact `14/20` `Source Sans 3 400`
+  - data labels/table cells `13/20` `IBM Plex Mono 400` with `font-variant-numeric: tabular-nums`
+- Core color tokens:
+  - `--bg-canvas: #F6F8FB`
+  - `--bg-surface: #FFFFFF`
+  - `--bg-subtle: #EEF2F6`
+  - `--border-default: #D0D7E2`
+  - `--text-primary: #1F2937`
+  - `--text-secondary: #4B5565`
+  - `--text-muted: #6B7280`
+  - `--accent-active: #1F75CB`
+  - `--accent-info: #005D5D`
+  - `--accent-success: #198038`
+  - `--accent-warning: #8E6400`
+  - `--accent-danger: #DA1E28`
+- Accessibility baseline:
+  - Ensure normal text contrast >= `4.5:1` and non-text UI contrast >= `3:1`.
+  - Current token checks pass for default text/accent pairs used in badges and controls.
+- Layout and spacing:
+  - Use `8px` base spacing scale (`8, 12, 16, 24, 32, 40, 48`).
+  - Desktop shell: `240px` left rail + fluid content.
+  - Content max width `1440px`; card gap `16px`; panel internal padding `16px`.
+  - Grid: 12 columns desktop, 4 columns mobile.
+- Status and data-viz semantics:
+  - `running` -> `--accent-active`
+  - `completed` -> `--accent-success`
+  - `failed` -> `--accent-danger`
+  - `paused` -> `--accent-warning`
+  - `pending` -> neutral border + icon
+  - Never communicate state with color alone; always pair with text/icon shape.
+- Motion:
+  - `150ms` for micro-interactions (hover, focus, badge updates).
+  - `240ms` for panel reveal and route-level content transitions.
+  - Easing: standard accelerate/decelerate cubic-bezier curves from Carbon motion guidance.
+- Chart palette (ordered):
+  - `#1F75CB`, `#005D5D`, `#198038`, `#8E6400`, `#DA1E28`, `#6929C4`
+  - Reserve red/green for status-critical meaning and avoid red-vs-green-only comparisons.
+
 ### Option B: Canvas Flow
 Design intent: editorial and spacious, emphasizing storytelling over dense ops data.
 
@@ -281,3 +326,37 @@ Unit/integration focus by issue:
 
 - Deviation from epic sequence: `#104` is already closed before `#95`. This storyboard assumes `#104` contracts as the integration baseline.
 - Follow-up needed if contracts are insufficient: open targeted API extension issues rather than expanding scope of `#95`.
+
+## 11) Web Research Inputs (2026-02-18)
+
+Sources used to ground style decisions:
+- Grafana dashboard design best practices:
+  - https://grafana.com/docs/grafana/latest/dashboards/build-dashboards/best-practices/
+  - Used for narrative-first dashboard structure and reducing panel noise.
+- GitLab Pajamas dashboard pattern:
+  - https://design.gitlab.com/patterns/dashboards/
+  - Used for block hierarchy and widget organization.
+- GitLab data visualization color guidance:
+  - https://design.gitlab.com/data-visualization/color
+  - Used for semantic color mapping and avoiding red/green ambiguity.
+- USWDS data visualization guidance:
+  - https://designsystem.digital.gov/components/data-visualization/
+  - Used for clear legends, data labels, and color restraint in charts.
+- W3C WCAG 2.2 minimum contrast:
+  - https://www.w3.org/TR/WCAG22/#contrast-minimum
+  - Used as accessibility threshold for text contrast.
+- W3C WCAG 2.2 non-text contrast:
+  - https://www.w3.org/TR/WCAG22/#non-text-contrast
+  - Used for borders, focus rings, and interactive control contrast.
+- GitHub Primer primitives:
+  - https://primer.style/primitives/colors
+  - Used as reference model for structured color token scales.
+- IBM Carbon data visualization palettes:
+  - https://carbondesignsystem.com/data-visualization/color-palettes/
+  - Used for category palette ordering and semantic color consistency.
+- IBM Carbon motion:
+  - https://carbondesignsystem.com/elements/motion/overview/
+  - Used for practical motion-duration defaults.
+- Typeface references:
+  - Space Grotesk: https://floriankarsten.com/typefaces/space-grotesk
+  - Source Sans 3: https://github.com/adobe-fonts/source-sans
