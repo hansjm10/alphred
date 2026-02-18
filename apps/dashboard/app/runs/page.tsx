@@ -1,4 +1,12 @@
-import { Card, StatusBadge, Tabs, type TabItem } from '../ui/primitives';
+import Link from 'next/link';
+import {
+  RUN_ROUTE_FIXTURES,
+  buildRunDetailHref,
+  listRunsForFilter,
+  normalizeRunFilter,
+  resolveRunFilterHref,
+} from './run-route-fixtures';
+import { ButtonLink, Card, StatusBadge, Tabs, type TabItem } from '../ui/primitives';
 
 const RUN_FILTER_TABS: readonly TabItem[] = [
   { href: '/runs', label: 'All Runs' },
@@ -12,18 +20,10 @@ type RunsPageProps = Readonly<{
   };
 }>;
 
-function resolveActiveRunsHref(status: string | string[] | undefined): string {
-  const normalized = Array.isArray(status) ? status[0] : status;
-
-  if (normalized === 'running' || normalized === 'failed') {
-    return `/runs?status=${normalized}`;
-  }
-
-  return '/runs';
-}
-
 export default function RunsPage({ searchParams }: RunsPageProps) {
-  const activeHref = resolveActiveRunsHref(searchParams?.status);
+  const activeFilter = normalizeRunFilter(searchParams?.status);
+  const activeHref = resolveRunFilterHref(activeFilter);
+  const visibleRuns = listRunsForFilter(activeFilter);
 
   return (
     <div className="page-stack">
@@ -34,21 +34,37 @@ export default function RunsPage({ searchParams }: RunsPageProps) {
 
       <Tabs items={RUN_FILTER_TABS} activeHref={activeHref} ariaLabel="Run status filters" />
 
-      <Card title="Recent runs" description="Shared status vocabulary from the storyboard">
-        <ul className="entity-list">
-          <li>
-            <span>#412 demo-tree</span>
-            <StatusBadge status="running" label="Running" />
-          </li>
-          <li>
-            <span>#411 demo-tree</span>
-            <StatusBadge status="completed" label="Completed" />
-          </li>
-          <li>
-            <span>#410 demo-tree</span>
-            <StatusBadge status="paused" label="Paused" />
-          </li>
-        </ul>
+      <Card
+        title="Recent runs"
+        description="Run-centric routes are canonical for all timeline and worktree investigation."
+      >
+        {visibleRuns.length === 0 ? (
+          <div className="page-stack">
+            <p>No runs match this filter.</p>
+            <div className="action-row">
+              <ButtonLink href="/runs">Clear Filters</ButtonLink>
+            </div>
+          </div>
+        ) : (
+          <ul className="entity-list">
+            {visibleRuns.map((run) => (
+              <li key={run.id}>
+                <div>
+                  <span>{`#${run.id} ${run.workflow}`}</span>
+                  <p className="meta-text">{run.repository}</p>
+                </div>
+                <div className="action-row">
+                  <StatusBadge status={run.status} />
+                  <Link className="button-link button-link--secondary" href={buildRunDetailHref(run.id)}>
+                    Open
+                  </Link>
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
+
+        <p className="meta-text">{`Total tracked runs: ${RUN_ROUTE_FIXTURES.length}`}</p>
       </Card>
     </div>
   );

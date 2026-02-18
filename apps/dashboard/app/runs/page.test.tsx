@@ -11,6 +11,7 @@ describe('RunsPage', () => {
     expect(screen.getByRole('heading', { name: 'Run lifecycle' })).toBeInTheDocument();
     expect(screen.getByRole('navigation', { name: 'Run status filters' })).toBeInTheDocument();
     expect(screen.getByText('#412 demo-tree')).toBeInTheDocument();
+    expect(screen.getAllByRole('link', { name: 'Open' })[0]).toHaveAttribute('href', '/runs/412');
     expect(screen.getByRole('link', { name: 'Running' })).toHaveAttribute(
       'href',
       '/runs?status=running',

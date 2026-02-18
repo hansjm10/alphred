@@ -1,3 +1,5 @@
+import Link from 'next/link';
+import { RUN_ROUTE_FIXTURES, buildRunDetailHref } from './runs/run-route-fixtures';
 import { ButtonLink, Card, Panel, StatusBadge } from './ui/primitives';
 
 export default function Page() {
@@ -23,6 +25,18 @@ export default function Page() {
               <span>Workflow Engine</span>
               <StatusBadge status="running" label="Healthy" />
             </li>
+          </ul>
+
+          <p className="meta-text">Active runs</p>
+          <ul className="entity-list">
+            {RUN_ROUTE_FIXTURES.filter((run) => run.status === 'running' || run.status === 'paused').map(
+              (run) => (
+                <li key={run.id}>
+                  <Link href={buildRunDetailHref(run.id)}>{`Run #${run.id} ${run.workflow}`}</Link>
+                  <StatusBadge status={run.status} />
+                </li>
+              ),
+            )}
           </ul>
         </Card>
 
