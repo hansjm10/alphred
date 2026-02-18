@@ -5,6 +5,8 @@
   },
   "include": [
     "next-env.d.ts",
+    "src/**/*.test.ts",
+    "src/**/*.test.tsx",
     "app/**/*.test.ts",
     "app/**/*.test.tsx",
     "scripts/**/*.test.ts",
