@@ -1,0 +1,4 @@
+interface:
+  display_name: "Next.js Change Guard"
+  short_description: "Verify Next.js UI and server edits with MCP + Playwright"
+  default_prompt: "Use $nextjs-mcp-change-guard after Next.js frontend or server-logic changes to detect runtime and browser regressions before finalizing."
