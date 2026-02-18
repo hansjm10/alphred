@@ -19,6 +19,28 @@ Define a creative, operator-friendly dashboard UX before page-level implementati
 In scope: user journeys, IA, low-fidelity wireframes, visual direction decision, implementation handoff.
 Out of scope: final component implementation, final brand polish, backend feature additions.
 
+## 1.1 Key Concepts (New-User Glossary)
+
+- Repository:
+  - A source code repo managed by Alphred for dashboard-driven runs.
+- Run:
+  - One execution instance of a workflow tree on a selected repository context.
+- Node:
+  - A single phase inside a run (for example design/implement/review); each node has its own lifecycle state.
+- Timeline event:
+  - A timestamped activity emitted during run execution (status changes, tool events, result events).
+- Worktree:
+  - The isolated run-linked filesystem snapshot used for code changes and artifact inspection.
+- Readiness:
+  - The minimum conditions for running safely: valid auth + syncable/cloned repository.
+
+Operator quick-start sequence:
+1. Check auth on Integrations.
+2. Sync/select repository on Repositories.
+3. Launch from Runs or Overview.
+4. Monitor run in Run Detail.
+5. Inspect changed files in Run Worktree.
+
 ## 2) Operator Jobs-to-be-Done
 
 1. Verify environment is ready (GitHub auth, repo visibility).
@@ -43,6 +65,13 @@ Primary surfaces:
 - Overview route auth banner
 - Settings/Integrations route
 
+User actions and visible cues:
+- Action: user clicks `Check Auth`.
+- Cues:
+  - `checking`: spinner + disabled mutation CTAs.
+  - `authenticated`: green status badge + run/repo CTAs enabled.
+  - `unauthenticated` or `auth_error`: warning/error badge + inline remediation commands.
+
 ### Journey B (P0): Select/sync repository
 Start: user has or adds a repository.
 End: repo is in `cloned` state and selectable for runs.
@@ -53,6 +82,13 @@ State transitions:
 
 Primary surfaces:
 - Repositories list + detail drawer/panel
+
+User actions and visible cues:
+- Action: user clicks `Sync` on a repository row.
+- Cues:
+  - `sync_in_progress`: row spinner and action disabled.
+  - `cloned`: success badge + local path shown.
+  - `sync_error`: error badge + `Retry` action + remediation hint.
 
 ### Journey C (P0): Launch run and monitor lifecycle
 Start: user selects workflow/repo and launches run.
@@ -67,6 +103,13 @@ Primary surfaces:
 - Runs list
 - Run detail timeline
 
+User actions and visible cues:
+- Action: user clicks `Launch Run`.
+- Cues:
+  - `run_pending`: new row appears with queued badge.
+  - `run_running`: active badge + elapsed timer + timeline stream.
+  - terminal (`completed`/`failed`): terminal badge + artifact/worktree affordance.
+
 ### Journey D (P1): Inspect worktree artifacts
 Start: user opens run worktree view.
 End: user can browse changed files and preview content.
@@ -78,6 +121,13 @@ State transitions:
 
 Primary surfaces:
 - Worktree explorer split view
+
+User actions and visible cues:
+- Action: user opens `Open Worktree` from run detail.
+- Cues:
+  - `loading_tree`: tree and preview skeletons.
+  - `tree_loaded`: changed-file markers visible in tree.
+  - `load_error`: scoped error for the requested path with local retry.
 
 ## 4) Information Architecture and Navigation Model
 
@@ -104,13 +154,13 @@ Deep-link model:
 
 ```text
 +--------------------------------------------------------------------------------+
-| Alphred  [Overview] [Repositories] [Runs] [Worktree] [Settings]      Auth: OK |
+| Alphred  [Overview] [Repositories] [Runs] [Integrations]             Auth: OK |
 +-------------------------+------------------------------------------------------+
 | Left rail nav           | Page title                             Quick actions |
 | - Overview              |------------------------------------------------------|
 | - Repositories          | Content region                                         |
 | - Runs                  |                                                      |
-| - Settings              |                                                      |
+| - Integrations          |                                                      |
 +-------------------------+------------------------------------------------------+
 ```
 
@@ -201,6 +251,11 @@ Error state:
 | README.md                      |                                                |
 +--------------------------------------------------------------------------------+
 ```
+
+Legend:
+- `*` means the file changed during this run.
+- Default selection is first changed file.
+- Preview pane supports toggle between diff and content view.
 
 ## 6) Visual Direction Options
 
@@ -360,3 +415,192 @@ Sources used to ground style decisions:
 - Typeface references:
   - Space Grotesk: https://floriankarsten.com/typefaces/space-grotesk
   - Source Sans 3: https://github.com/adobe-fonts/source-sans
+
+## 12) UX Clarity Model (Operator Mental Model)
+
+This product is easiest to understand when the UI reinforces one core sequence:
+
+1. Verify readiness (auth + repository clone state).
+2. Launch a run.
+3. Monitor run progress.
+4. Inspect run outputs/worktree.
+5. Recover from failures.
+
+Clarity rules used across screens:
+- A run is the primary unit of work; all deep investigation is run-scoped.
+- Worktree is not a top-level domain; it is a run-detail sub-surface.
+- Each screen has exactly one primary CTA.
+- Every blocked action must explain why and what to do next.
+- Every async surface must show last-updated timestamp and stale/reconnecting status.
+- Status text, icon, and color are always shown together.
+- Timeline and status badges use the same status vocabulary everywhere.
+
+## 13) Per-Screen Interaction Specification
+
+### 13.1 Overview (`/`)
+
+Primary user question:
+- Is the system ready, and what needs my attention now?
+
+Primary CTA:
+- `Launch Run` when readiness is met.
+- Fallback CTA becomes `Connect GitHub` or `Sync Repository` when blocked.
+
+Content order:
+1. Global readiness card (auth state, repo readiness, backend health).
+2. Active runs list (running/paused first).
+3. Blockers card (auth errors, failed syncs, failed runs).
+4. Recent completed runs (collapsed by default).
+
+Interactions:
+- Clicking an active run opens `/runs/[runId]`.
+- Clicking blocker opens the remediation route directly:
+  - auth blocker -> `/settings/integrations`
+  - repo blocker -> `/repositories`
+  - run blocker -> `/runs/[runId]`
+
+State behavior:
+- Loading: skeleton cards and disabled CTA.
+- Empty: onboarding copy with two actions (`Connect GitHub`, `Go to Repositories`).
+- Error: retry + diagnostics link; preserve last known snapshot if available.
+- Error remediation path (explicit):
+  1. Check auth state from the global status strip.
+  2. If auth is degraded, open `/settings/integrations` and run `Check Auth`.
+  3. Return to Overview and retry data load.
+
+### 13.2 Repositories (`/repositories`)
+
+Primary user question:
+- Can I launch from this repo, and if not, how do I fix it?
+
+Primary CTA:
+- `Sync` (per-row) or `Add Repository` (global when none exist).
+
+Content structure:
+1. Filter/search row.
+2. Repository table (name, provider, clone status, local path, last sync, actions).
+3. Side panel for selected repository details and remediation notes.
+
+Interactions:
+- Row select opens details panel without route jump.
+- `Sync` triggers in-row progress state and disables duplicate sync clicks.
+- `Retry` appears only for `error` status.
+- Selecting a `cloned` repository enables `Launch Run with this repo`.
+
+State behavior:
+- Loading: table skeleton.
+- Empty: callout with `Add Repository`.
+- Error: banner with retry and persistent last successful list (if cached).
+
+### 13.3 Runs List (`/runs`)
+
+Primary user question:
+- What is currently running, what failed, and what should I open first?
+
+Primary CTA:
+- `Launch Run`.
+
+Content structure:
+1. Filter bar (`status`, `workflow`, `repository`, time window).
+2. Sorted run table (running first, then failed, then recent completed).
+3. Compact KPI strip (active count, failures in 24h, median duration).
+
+Interactions:
+- Row click opens `/runs/[runId]`.
+- Filters update URL query params for shareable deep links.
+- Running rows display live-updating elapsed duration.
+
+State behavior:
+- Loading: skeleton rows.
+- Empty: explain no runs found for filters and provide `Clear Filters`.
+- Error: retry and keep prior filter state.
+
+### 13.4 Run Detail (`/runs/[runId]`)
+
+Primary user question:
+- Where is this run in the lifecycle, and what changed recently?
+
+Primary CTA:
+- Contextual:
+  - running: `Pause` (if available)
+  - paused: `Resume`
+  - failed: `Retry Failed Node` (if supported)
+  - completed: `Open Worktree`
+
+Content structure:
+1. Header summary (run status, workflow, repo, started/completed timestamps).
+2. Split body:
+  - left: timeline/events
+  - right: node lifecycle panel
+3. Bottom section: artifacts and routing decisions.
+
+Interactions:
+- Selecting a timeline event highlights related node.
+- Selecting a node filters timeline to that node.
+- `Open Worktree` navigates to `/runs/[runId]/worktree`.
+
+State behavior:
+- Loading: preserve header shell, skeleton body.
+- Error: show if run could not be loaded vs events stream failed.
+- Stale stream: non-blocking warning with reconnect countdown.
+
+### 13.5 Run Worktree (`/runs/[runId]/worktree`)
+
+Primary user question:
+- Which files changed, and what is the impact?
+
+Primary CTA:
+- `View Diff` for selected file (or `Open Raw` if non-text).
+
+Content structure:
+1. Top bar (run reference, branch, changed-file count, search path).
+2. Split view:
+  - left: tree with changed-file badges
+  - right: preview pane (diff/content/metadata)
+
+Interactions:
+- Default selection is first changed file.
+- Tree supports keyboard navigation and lazy expansion.
+- Preview toggles between unified diff and rendered/plain content.
+
+State behavior:
+- Loading: tree + preview skeletons.
+- Empty: explicit message when no changed files exist.
+- Error: path-scoped retry (do not reload entire page by default).
+
+### 13.6 Integrations (`/settings/integrations`)
+
+Primary user question:
+- Is auth valid, and how do I fix it fast if not?
+
+Primary CTA:
+- `Check Auth`.
+
+Content structure:
+1. GitHub auth status card.
+2. Scope/identity details when authenticated.
+3. Remediation panel with command snippets when unauthenticated/error.
+
+Interactions:
+- `Check Auth` refreshes status and timestamp.
+- Copy actions for remediation commands.
+- Success state links back to `/repositories` and `/runs`.
+
+State behavior:
+- Loading: spinner in status card only.
+- Error: diagnostic message + retry.
+
+## 14) Interaction Acceptance Checks
+
+Use these checks during `#96` and `#97` implementation reviews:
+
+1. User can identify readiness blockers from Overview in under one screen view.
+2. Every page has exactly one primary CTA with clear preconditions.
+3. Any blocked action provides remediation in the same interaction context.
+4. Run detail always answers:
+   - current status
+   - latest event
+   - next likely operator action
+5. Worktree page defaults to changed files, not full repository noise.
+6. Route transitions preserve context (filters, selected run, selected file path).
+7. Loading, empty, error states are distinct and action-oriented on every top-level route.
