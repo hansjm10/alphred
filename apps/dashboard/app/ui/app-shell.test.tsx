@@ -71,4 +71,25 @@ describe('AppShell', () => {
     );
     expect(screen.queryByRole('link', { name: 'Launch Run' })).not.toBeInTheDocument();
   });
+
+  it('uses remediation CTA for explicit unauthenticated state', () => {
+    testPathname.value = '/';
+    render(
+      <AppShell authGate={createGitHubAuthGate({
+        authenticated: false,
+        user: null,
+        scopes: [],
+        error: 'Run gh auth login before launching.',
+      })}>
+        <p>route content</p>
+      </AppShell>,
+    );
+
+    expect(screen.getByRole('link', { name: 'Connect GitHub' })).toHaveAttribute(
+      'href',
+      '/settings/integrations',
+    );
+    expect(screen.queryByRole('link', { name: 'Launch Run' })).not.toBeInTheDocument();
+    expect(screen.getByText('Unauthenticated')).toBeInTheDocument();
+  });
 });
