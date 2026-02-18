@@ -106,6 +106,16 @@ export type DashboardRepositorySyncResult = {
   repository: DashboardRepositoryState;
 };
 
+export type DashboardCreateRepositoryRequest = {
+  name: string;
+  provider: 'github';
+  remoteRef: string;
+};
+
+export type DashboardCreateRepositoryResult = {
+  repository: DashboardRepositoryState;
+};
+
 export type DashboardRunLaunchRequest = {
   treeKey: string;
   repositoryName?: string;
