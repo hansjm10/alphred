@@ -1,9 +1,14 @@
 import type { ReactElement } from 'react';
 import { describe, expect, it, vi } from 'vitest';
+import { connection } from 'next/server';
 import RootLayout from './layout';
 import AppShell from './ui/app-shell';
 import { createGitHubAuthGate, type GitHubAuthGate } from './ui/github-auth';
 import { loadGitHubAuthGate } from './ui/load-github-auth-gate';
+
+vi.mock('next/server', () => ({
+  connection: vi.fn(),
+}));
 
 vi.mock('./ui/load-github-auth-gate', () => ({
   loadGitHubAuthGate: vi.fn(),
@@ -17,6 +22,7 @@ describe('RootLayout', () => {
       scopes: ['repo'],
       error: null,
     });
+    vi.mocked(connection).mockResolvedValue(undefined);
     vi.mocked(loadGitHubAuthGate).mockResolvedValue(authGate);
 
     const child = <div>dashboard content</div>;
@@ -36,5 +42,6 @@ describe('RootLayout', () => {
     expect(shell.type).toBe(AppShell);
     expect(shell.props.children).toBe(child);
     expect(shell.props.authGate).toEqual(authGate);
+    expect(connection).toHaveBeenCalledTimes(1);
   });
 });
