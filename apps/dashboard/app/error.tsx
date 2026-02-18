@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect } from 'react';
+import { ActionButton, Card } from './ui/primitives';
 
 type ErrorPageProps = Readonly<{
   error: Error & { digest?: string };
@@ -13,16 +14,13 @@ export default function DashboardError({ error, reset }: ErrorPageProps) {
   }, [error]);
 
   return (
-    <div className="app">
-      <main>
-        <section className="status-panel" role="alert" aria-live="assertive">
-          <h2>Dashboard error</h2>
-          <p>Something went wrong while loading this route.</p>
-          <button className="state-action" type="button" onClick={reset}>
-            Try again
-          </button>
-        </section>
-      </main>
+    <div className="page-stack">
+      <Card title="Dashboard error" role="alert" aria-live="assertive">
+        <p>Something went wrong while loading this route.</p>
+        <div className="action-row">
+          <ActionButton onClick={reset}>Try again</ActionButton>
+        </div>
+      </Card>
     </div>
   );
 }

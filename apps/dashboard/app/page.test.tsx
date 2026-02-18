@@ -8,8 +8,11 @@ describe('Dashboard Page', () => {
   it('renders the dashboard home content', () => {
     render(<Page />);
 
-    expect(screen.getByRole('heading', { name: 'Alphred Dashboard' })).toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: 'Workflow Runs' })).toBeInTheDocument();
-    expect(screen.getByText('No active runs. Start a workflow from the CLI.')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'System readiness' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Global readiness' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Check Auth' })).toHaveAttribute(
+      'href',
+      '/settings/integrations',
+    );
   });
 });
