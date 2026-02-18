@@ -36,10 +36,55 @@ export type RunRouteRecord = Readonly<{
 
 export type RunRouteFilter = 'all' | 'running' | 'failed';
 
+type CreateRunRouteRecordInput = Omit<RunRouteRecord, 'workflow'> & Readonly<{ workflow?: string }>;
+
+function createRunRouteRecord({
+  id,
+  repository,
+  status,
+  startedAtLabel,
+  completedAtLabel,
+  timeline,
+  nodes,
+  artifacts,
+  routingDecisions,
+  worktree,
+  workflow = 'demo-tree',
+}: CreateRunRouteRecordInput): RunRouteRecord {
+  return {
+    id,
+    workflow,
+    repository,
+    status,
+    startedAtLabel,
+    completedAtLabel,
+    timeline,
+    nodes,
+    artifacts,
+    routingDecisions,
+    worktree,
+  };
+}
+
+function createNodeSnapshots(
+  design: RunRouteStatus,
+  implement: RunRouteStatus,
+  review: RunRouteStatus,
+): readonly RunNodeSnapshot[] {
+  return [
+    { nodeKey: 'design', status: design },
+    { nodeKey: 'implement', status: implement },
+    { nodeKey: 'review', status: review },
+  ];
+}
+
+function createWorktree(branch: string, files: readonly RunWorktreeFile[]): RunRouteRecord['worktree'] {
+  return { branch, files };
+}
+
 export const RUN_ROUTE_FIXTURES: readonly RunRouteRecord[] = [
-  {
+  createRunRouteRecord({
     id: 412,
-    workflow: 'demo-tree',
     repository: 'demo-repo',
     status: 'running',
     startedAtLabel: '2m ago',
@@ -49,40 +94,32 @@ export const RUN_ROUTE_FIXTURES: readonly RunRouteRecord[] = [
       { timestamp: '20:04', summary: 'Design node completed and implement node started.' },
       { timestamp: '20:05', summary: 'Routing decision recorded for implement node.' },
     ],
-    nodes: [
-      { nodeKey: 'design', status: 'completed' },
-      { nodeKey: 'implement', status: 'running' },
-      { nodeKey: 'review', status: 'pending' },
-    ],
+    nodes: createNodeSnapshots('completed', 'running', 'pending'),
     artifacts: ['Design notes (markdown)', 'Implementation patch (diff)'],
     routingDecisions: ['implement -> review approved'],
-    worktree: {
-      branch: 'alphred/demo-tree/412',
-      files: [
-        {
-          path: 'src/core/engine.ts',
-          changed: true,
-          preview: 'Engine loop now emits lifecycle checkpoints.',
-          diff: '+ emitLifecycleCheckpoint(runId, "implement-started")',
-        },
-        {
-          path: 'apps/dashboard/app/runs/page.tsx',
-          changed: true,
-          preview: 'Runs table now links to canonical run detail routes.',
-          diff: '+ <Link href="/runs/412">Open</Link>',
-        },
-        {
-          path: 'README.md',
-          changed: false,
-          preview: 'Project notes for operator sequence.',
-          diff: '+ Clarified run detail and worktree deep-link model.',
-        },
-      ],
-    },
-  },
-  {
+    worktree: createWorktree('alphred/demo-tree/412', [
+      {
+        path: 'src/core/engine.ts',
+        changed: true,
+        preview: 'Engine loop now emits lifecycle checkpoints.',
+        diff: '+ emitLifecycleCheckpoint(runId, "implement-started")',
+      },
+      {
+        path: 'apps/dashboard/app/runs/page.tsx',
+        changed: true,
+        preview: 'Runs table now links to canonical run detail routes.',
+        diff: '+ <Link href="/runs/412">Open</Link>',
+      },
+      {
+        path: 'README.md',
+        changed: false,
+        preview: 'Project notes for operator sequence.',
+        diff: '+ Clarified run detail and worktree deep-link model.',
+      },
+    ]),
+  }),
+  createRunRouteRecord({
     id: 411,
-    workflow: 'demo-tree',
     repository: 'sample-repo',
     status: 'failed',
     startedAtLabel: '14m ago',
@@ -92,28 +129,20 @@ export const RUN_ROUTE_FIXTURES: readonly RunRouteRecord[] = [
       { timestamp: '19:50', summary: 'Implement node failed with auth error.' },
       { timestamp: '19:51', summary: 'Run marked failed and remediation captured.' },
     ],
-    nodes: [
-      { nodeKey: 'design', status: 'completed' },
-      { nodeKey: 'implement', status: 'failed' },
-      { nodeKey: 'review', status: 'pending' },
-    ],
+    nodes: createNodeSnapshots('completed', 'failed', 'pending'),
     artifacts: ['Failure log (text)', 'Auth remediation note'],
     routingDecisions: ['implement -> retry blocked until auth fixed'],
-    worktree: {
-      branch: 'alphred/demo-tree/411',
-      files: [
-        {
-          path: 'src/ui/panel.tsx',
-          changed: true,
-          preview: 'Panel status badges now show auth failure context.',
-          diff: '+ <StatusBadge status="failed" label="Auth error" />',
-        },
-      ],
-    },
-  },
-  {
+    worktree: createWorktree('alphred/demo-tree/411', [
+      {
+        path: 'src/ui/panel.tsx',
+        changed: true,
+        preview: 'Panel status badges now show auth failure context.',
+        diff: '+ <StatusBadge status="failed" label="Auth error" />',
+      },
+    ]),
+  }),
+  createRunRouteRecord({
     id: 410,
-    workflow: 'demo-tree',
     repository: 'demo-repo',
     status: 'completed',
     startedAtLabel: '27m ago',
@@ -123,19 +152,12 @@ export const RUN_ROUTE_FIXTURES: readonly RunRouteRecord[] = [
       { timestamp: '19:39', summary: 'All nodes completed.' },
       { timestamp: '19:41', summary: 'Cleanup removed temporary files.' },
     ],
-    nodes: [
-      { nodeKey: 'design', status: 'completed' },
-      { nodeKey: 'implement', status: 'completed' },
-      { nodeKey: 'review', status: 'completed' },
-    ],
+    nodes: createNodeSnapshots('completed', 'completed', 'completed'),
     artifacts: ['Summary report (markdown)'],
     routingDecisions: ['review -> approved'],
-    worktree: {
-      branch: 'alphred/demo-tree/410',
-      files: [],
-    },
-  },
-] as const;
+    worktree: createWorktree('alphred/demo-tree/410', []),
+  }),
+];
 
 export function normalizeRunFilter(status: string | string[] | undefined): RunRouteFilter {
   const normalized = Array.isArray(status) ? status[0] : status;
@@ -197,4 +219,3 @@ export function resolveWorktreePath(
     ? requestedPath
     : (run.worktree.files[0]?.path ?? null);
 }
-
