@@ -2,12 +2,15 @@
 
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import type { ReactElement } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { IntegrationsPageContent } from './page';
+import IntegrationsPage, { IntegrationsPageContent } from './page';
+import type { GitHubAuthGate } from '../../ui/github-auth';
 import { createGitHubAuthErrorGate, createGitHubAuthGate } from '../../ui/github-auth';
 
-const { refreshMock } = vi.hoisted(() => ({
+const { refreshMock, loadGitHubAuthGateMock } = vi.hoisted(() => ({
   refreshMock: vi.fn(),
+  loadGitHubAuthGateMock: vi.fn(),
 }));
 
 vi.mock('next/navigation', () => ({
@@ -16,11 +19,16 @@ vi.mock('next/navigation', () => ({
   }),
 }));
 
+vi.mock('../../ui/load-github-auth-gate', () => ({
+  loadGitHubAuthGate: loadGitHubAuthGateMock,
+}));
+
 describe('IntegrationsPage', () => {
   const fetchMock = vi.fn<typeof fetch>();
 
   beforeEach(() => {
     refreshMock.mockReset();
+    loadGitHubAuthGateMock.mockReset();
     fetchMock.mockReset();
     vi.stubGlobal('fetch', fetchMock);
   });
@@ -117,5 +125,61 @@ describe('IntegrationsPage', () => {
       );
     });
     expect(refreshMock).not.toHaveBeenCalled();
+  });
+
+  it('surfaces an inline status message when auth check returns a non-ok status', async () => {
+    const user = userEvent.setup();
+    fetchMock.mockResolvedValue(new Response('{}', { status: 503 }));
+
+    render(
+      <IntegrationsPageContent
+        authGate={createGitHubAuthGate({
+          authenticated: true,
+          user: 'octocat',
+          scopes: ['repo'],
+          error: null,
+        })}
+      />,
+    );
+
+    await user.click(screen.getByRole('button', { name: 'Check Auth' }));
+
+    await waitFor(() => {
+      expect(screen.getByRole('status')).toHaveTextContent(
+        'Unable to refresh GitHub authentication status. Try again.',
+      );
+    });
+    expect(refreshMock).not.toHaveBeenCalled();
+  });
+
+  it('loads auth gate for the async integrations export when no authGate prop is provided', async () => {
+    const authGate = createGitHubAuthGate({
+      authenticated: true,
+      user: 'octocat',
+      scopes: ['repo'],
+      error: null,
+    });
+    loadGitHubAuthGateMock.mockResolvedValue(authGate);
+
+    const root = (await IntegrationsPage()) as ReactElement<{ authGate: GitHubAuthGate }>;
+
+    expect(loadGitHubAuthGateMock).toHaveBeenCalledTimes(1);
+    expect(root.type).toBe(IntegrationsPageContent);
+    expect(root.props.authGate).toEqual(authGate);
+  });
+
+  it('uses provided authGate without calling loader in async integrations export', async () => {
+    const authGate = createGitHubAuthGate({
+      authenticated: true,
+      user: 'octocat',
+      scopes: ['repo'],
+      error: null,
+    });
+
+    const root = (await IntegrationsPage({ authGate })) as ReactElement<{ authGate: GitHubAuthGate }>;
+
+    expect(loadGitHubAuthGateMock).not.toHaveBeenCalled();
+    expect(root.type).toBe(IntegrationsPageContent);
+    expect(root.props.authGate).toEqual(authGate);
   });
 });

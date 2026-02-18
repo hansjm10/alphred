@@ -1,11 +1,25 @@
 // @vitest-environment jsdom
 
 import { render, screen } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
-import { OverviewPageContent } from './page';
+import type { ReactElement } from 'react';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import Page, { OverviewPageContent } from './page';
+import type { GitHubAuthGate } from './ui/github-auth';
 import { createCheckingGitHubAuthGate, createGitHubAuthErrorGate, createGitHubAuthGate } from './ui/github-auth';
 
+const { loadGitHubAuthGateMock } = vi.hoisted(() => ({
+  loadGitHubAuthGateMock: vi.fn(),
+}));
+
+vi.mock('./ui/load-github-auth-gate', () => ({
+  loadGitHubAuthGate: loadGitHubAuthGateMock,
+}));
+
 describe('Dashboard Page', () => {
+  beforeEach(() => {
+    loadGitHubAuthGateMock.mockReset();
+  });
+
   it('renders the dashboard home content', () => {
     render(
       <OverviewPageContent
@@ -73,5 +87,42 @@ describe('Dashboard Page', () => {
 
     expect(screen.getByRole('button', { name: 'Checking auth...' })).toBeDisabled();
     expect(screen.queryByRole('link', { name: 'Launch Run' })).not.toBeInTheDocument();
+  });
+
+  it('loads auth gate for the async page export when no authGate prop is provided', async () => {
+    const authGate = createGitHubAuthGate({
+      authenticated: true,
+      user: 'octocat',
+      scopes: ['repo'],
+      error: null,
+    });
+    loadGitHubAuthGateMock.mockResolvedValue(authGate);
+
+    const root = (await Page({ activeRuns: [] })) as ReactElement<{
+      activeRuns: readonly unknown[];
+      authGate: GitHubAuthGate;
+    }>;
+
+    expect(loadGitHubAuthGateMock).toHaveBeenCalledTimes(1);
+    expect(root.type).toBe(OverviewPageContent);
+    expect(root.props.authGate).toEqual(authGate);
+  });
+
+  it('uses provided authGate without calling loader in async page export', async () => {
+    const authGate = createGitHubAuthGate({
+      authenticated: true,
+      user: 'octocat',
+      scopes: ['repo'],
+      error: null,
+    });
+
+    const root = (await Page({ activeRuns: [], authGate })) as ReactElement<{
+      activeRuns: readonly unknown[];
+      authGate: GitHubAuthGate;
+    }>;
+
+    expect(loadGitHubAuthGateMock).not.toHaveBeenCalled();
+    expect(root.type).toBe(OverviewPageContent);
+    expect(root.props.authGate).toEqual(authGate);
   });
 });

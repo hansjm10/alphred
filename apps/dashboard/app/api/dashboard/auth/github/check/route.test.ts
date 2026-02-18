@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { DashboardGitHubAuthStatus } from '../../../../../../src/server/dashboard-contracts';
 
 const { createDashboardServiceMock, checkGitHubAuthMock } = vi.hoisted(() => ({
   createDashboardServiceMock: vi.fn(),
@@ -21,18 +22,35 @@ describe('POST /api/dashboard/auth/github/check', () => {
   });
 
   it('returns GitHub auth status from the dashboard service', async () => {
-    checkGitHubAuthMock.mockResolvedValue({
+    const authStatus = {
       authenticated: true,
-      message: 'ok',
-    });
+      user: 'octocat',
+      scopes: ['repo', 'workflow'],
+      error: null,
+    } satisfies DashboardGitHubAuthStatus;
+    checkGitHubAuthMock.mockResolvedValue(authStatus);
 
     const response = await POST();
 
     expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toEqual({
-      authenticated: true,
-      message: 'ok',
-    });
+    expect(response.headers.get('content-type')).toContain('application/json');
+    await expect(response.json()).resolves.toEqual(authStatus);
+    expect(checkGitHubAuthMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('returns unauthenticated payload shape from the dashboard service without remapping', async () => {
+    const authStatus = {
+      authenticated: false,
+      user: null,
+      scopes: [],
+      error: 'Run gh auth login before syncing repositories.',
+    } satisfies DashboardGitHubAuthStatus;
+    checkGitHubAuthMock.mockResolvedValue(authStatus);
+
+    const response = await POST();
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual(authStatus);
     expect(checkGitHubAuthMock).toHaveBeenCalledTimes(1);
   });
 
