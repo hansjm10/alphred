@@ -358,6 +358,123 @@ output {
   justify-content: space-between;
 }
 
+.repositories-toolbar {
+  align-items: flex-end;
+  display: flex;
+  gap: var(--space-2);
+  justify-content: space-between;
+}
+
+.repositories-search {
+  display: grid;
+  gap: 4px;
+  max-width: 420px;
+  width: 100%;
+}
+
+.repositories-search input {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  font: 400 14px/20px var(--font-body);
+  padding: 8px 10px;
+}
+
+.repositories-search input:focus-visible,
+.repo-name-button:focus-visible {
+  outline: 2px solid var(--accent-active);
+  outline-offset: 2px;
+}
+
+.repositories-table-wrapper {
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  overflow-x: auto;
+}
+
+.repositories-table {
+  border-collapse: collapse;
+  min-width: 840px;
+  width: 100%;
+}
+
+.repositories-table th,
+.repositories-table td {
+  border-bottom: 1px solid var(--border-default);
+  padding: 10px;
+  text-align: left;
+  vertical-align: top;
+}
+
+.repositories-table th {
+  background: var(--bg-subtle);
+  color: var(--text-secondary);
+  font: 600 13px/18px var(--font-data);
+}
+
+.repositories-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.repositories-row--selected {
+  background: color-mix(in srgb, var(--accent-active) 8%, var(--bg-surface));
+}
+
+.repo-name-button {
+  background: transparent;
+  border: 0;
+  color: var(--text-primary);
+  cursor: pointer;
+  font: 600 14px/20px var(--font-display);
+  text-align: left;
+}
+
+.repo-name-button:hover {
+  color: var(--accent-active);
+}
+
+.repo-path {
+  background: var(--bg-canvas);
+  border: 1px solid var(--border-default);
+  border-radius: 6px;
+  color: var(--text-secondary);
+  display: inline-block;
+  font: 400 12px/18px var(--font-data);
+  max-width: 100%;
+  padding: 2px 6px;
+}
+
+.repo-cell-error {
+  color: var(--accent-danger);
+  font-size: 13px;
+}
+
+.repo-detail-list {
+  gap: var(--space-1);
+}
+
+.repo-detail-list li {
+  align-items: flex-start;
+}
+
+.repo-banner {
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  font: 600 13px/20px var(--font-data);
+  padding: 8px 10px;
+}
+
+.repo-banner--success {
+  border-color: color-mix(in srgb, var(--accent-success) 50%, var(--border-default));
+  color: var(--accent-success);
+}
+
+.repo-banner--error {
+  border-color: color-mix(in srgb, var(--accent-danger) 50%, var(--border-default));
+  color: var(--accent-danger);
+}
+
 .meta-text {
   color: var(--text-muted);
   font-family: var(--font-data);
@@ -436,6 +553,11 @@ output {
 
   .shell-topbar {
     align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .repositories-toolbar {
+    align-items: stretch;
     flex-direction: column;
   }
 
