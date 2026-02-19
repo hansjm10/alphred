@@ -112,16 +112,46 @@ function parseDateValue(value: string | null): Date | null {
   return parsed;
 }
 
-function formatDateTime(value: string | null, fallback: string): string {
+function padTwoDigits(value: number): string {
+  return value.toString().padStart(2, '0');
+}
+
+function formatUtcDateTime(value: Date): string {
+  const year = value.getUTCFullYear();
+  const month = padTwoDigits(value.getUTCMonth() + 1);
+  const day = padTwoDigits(value.getUTCDate());
+  const hour = padTwoDigits(value.getUTCHours());
+  const minute = padTwoDigits(value.getUTCMinutes());
+  const second = padTwoDigits(value.getUTCSeconds());
+
+  return `${year}-${month}-${day} ${hour}:${minute}:${second} UTC`;
+}
+
+function formatUtcTime(value: Date): string {
+  const hour = padTwoDigits(value.getUTCHours());
+  const minute = padTwoDigits(value.getUTCMinutes());
+  const second = padTwoDigits(value.getUTCSeconds());
+  return `${hour}:${minute}:${second} UTC`;
+}
+
+function formatDateTime(value: string | null, fallback: string, hasHydrated: boolean): string {
   const parsed = parseDateValue(value);
   if (parsed === null) {
     return fallback;
   }
 
+  if (!hasHydrated) {
+    return formatUtcDateTime(parsed);
+  }
+
   return parsed.toLocaleString();
 }
 
-function formatTimelineTime(value: Date): string {
+function formatTimelineTime(value: Date, hasHydrated: boolean): string {
+  if (!hasHydrated) {
+    return formatUtcTime(value);
+  }
+
   return value.toLocaleTimeString(undefined, {
     hour: '2-digit',
     minute: '2-digit',
@@ -129,8 +159,13 @@ function formatTimelineTime(value: Date): string {
   });
 }
 
-function formatLastUpdated(value: number): string {
-  return new Date(value).toLocaleTimeString(undefined, {
+function formatLastUpdated(value: number, hasHydrated: boolean): string {
+  const parsed = new Date(value);
+  if (!hasHydrated) {
+    return formatUtcTime(parsed);
+  }
+
+  return parsed.toLocaleTimeString(undefined, {
     hour: '2-digit',
     minute: '2-digit',
     second: '2-digit',
@@ -374,8 +409,13 @@ export function RunDetailContent({
   const [lastUpdatedAtMs, setLastUpdatedAtMs] = useState<number>(() => resolveInitialLastUpdatedAtMs(initialDetail));
   const [nextRetryAtMs, setNextRetryAtMs] = useState<number | null>(null);
   const [retryCountdownSeconds, setRetryCountdownSeconds] = useState<number | null>(null);
+  const [hasHydrated, setHasHydrated] = useState<boolean>(false);
 
   const lastUpdatedAtRef = useRef<number>(lastUpdatedAtMs);
+
+  useEffect(() => {
+    setHasHydrated(true);
+  }, []);
 
   useEffect(() => {
     setDetail(initialDetail);
@@ -557,11 +597,11 @@ export function RunDetailContent({
             </li>
             <li>
               <span>Started</span>
-              <span className="meta-text">{formatDateTime(detail.run.startedAt, 'Not started')}</span>
+              <span className="meta-text">{formatDateTime(detail.run.startedAt, 'Not started', hasHydrated)}</span>
             </li>
             <li>
               <span>Completed</span>
-              <span className="meta-text">{formatDateTime(detail.run.completedAt, 'In progress')}</span>
+              <span className="meta-text">{formatDateTime(detail.run.completedAt, 'In progress', hasHydrated)}</span>
             </li>
           </ul>
         </Card>
@@ -585,7 +625,7 @@ export function RunDetailContent({
             <p className="run-realtime-status__badge">{realtimeLabel.badgeLabel}</p>
             <p className="meta-text">{realtimeLabel.detail}</p>
             <p className="meta-text">
-              {`Last updated ${formatLastUpdated(lastUpdatedAtMs)}.`}
+              {`Last updated ${formatLastUpdated(lastUpdatedAtMs, hasHydrated)}.`}
               {isRefreshing ? ' Refreshing timeline...' : ''}
             </p>
           </div>
@@ -624,7 +664,7 @@ export function RunDetailContent({
                         setSelectedNodeId(event.relatedNodeId);
                       }}
                     >
-                      <p className="meta-text">{formatTimelineTime(event.timestamp)}</p>
+                      <p className="meta-text">{formatTimelineTime(event.timestamp, hasHydrated)}</p>
                       <p>{event.summary}</p>
                     </button>
                   </li>
