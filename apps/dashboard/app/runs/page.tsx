@@ -15,7 +15,9 @@ type RunsPageProps = Readonly<{
   workflows?: readonly DashboardWorkflowTreeSummary[];
   repositories?: readonly DashboardRepositoryState[];
   authGate?: GitHubAuthGate;
-  searchParams?: {
+  searchParams?: Promise<{
+    status?: string | string[];
+  }> | {
     status?: string | string[];
   };
 }>;
@@ -29,7 +31,8 @@ export default async function RunsPage({
   authGate,
   searchParams,
 }: RunsPageProps = {}) {
-  const activeFilter = normalizeRunFilter(searchParams?.status);
+  const resolvedSearchParams = await searchParams;
+  const activeFilter = normalizeRunFilter(resolvedSearchParams?.status);
   const [resolvedRuns, resolvedWorkflows, resolvedRepositories, resolvedAuthGate] = await Promise.all([
     runs ?? loadDashboardRunSummaries(),
     workflows ?? loadDashboardWorkflowTrees(),

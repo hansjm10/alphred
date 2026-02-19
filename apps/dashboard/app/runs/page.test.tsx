@@ -312,7 +312,7 @@ describe('RunsPage', () => {
       workflows,
       repositories,
       authGate,
-      searchParams: { status: ['failed', 'running'] },
+      searchParams: Promise.resolve({ status: ['failed', 'running'] }),
     })) as ReactElement<{
       runs: readonly DashboardRunSummary[];
       workflows: readonly DashboardWorkflowTreeSummary[];
