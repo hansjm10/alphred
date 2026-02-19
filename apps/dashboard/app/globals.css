@@ -531,6 +531,11 @@ output {
   color: var(--accent-danger);
 }
 
+.run-launch-banner__note {
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+
 .run-inline-link {
   color: inherit;
   text-decoration: underline;

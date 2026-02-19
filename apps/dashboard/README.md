@@ -272,6 +272,15 @@ Response `200`:
 
 Type: `{ worktrees: DashboardRunWorktreeMetadata[] }`.
 
+## UI Route Notes
+
+### `/runs/[runId]/worktree`
+
+- The page loads persisted run detail first via dashboard service APIs.
+- If persisted run detail is not found, the page falls back to fixture-backed previews for known fixture run IDs.
+- For persisted runs, the page renders worktree metadata (status, branch, path, commit) only.
+- File preview/diff UI is fixture-only; persisted runs show a "File preview unavailable" panel.
+
 ## Source of Truth
 
 Canonical payload types live in:

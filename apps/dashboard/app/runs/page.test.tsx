@@ -267,6 +267,74 @@ describe('RunsPage', () => {
     expect(screen.getByText('#600 Other Tree')).toBeInTheDocument();
   });
 
+  it('keeps launch accepted messaging when lifecycle refresh fails', async () => {
+    const fetchMock = vi.mocked(global.fetch);
+    fetchMock
+      .mockResolvedValueOnce(createJsonResponse({
+        workflowRunId: 700,
+        mode: 'async',
+        status: 'accepted',
+        runStatus: 'running',
+        executionOutcome: null,
+        executedNodes: null,
+      }, { status: 202 }))
+      .mockResolvedValueOnce(createJsonResponse({
+        error: {
+          message: 'Refresh unavailable.',
+        },
+      }, { status: 503 }));
+
+    const user = userEvent.setup();
+    render(
+      <RunsPageContent
+        runs={[createRunSummary({ id: 412, status: 'running' })]}
+        workflows={[createWorkflow(), createWorkflow({ id: 2, treeKey: 'other-tree', name: 'Other Tree' })]}
+        repositories={[createRepository({ name: 'demo-repo', cloneStatus: 'cloned' })]}
+        authGate={createAuthenticatedAuthGate()}
+        activeFilter="all"
+      />,
+    );
+
+    await user.selectOptions(screen.getByLabelText('Workflow'), 'other-tree');
+    await user.click(screen.getByRole('button', { name: 'Launch Run' }));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenNthCalledWith(1, '/api/dashboard/runs', expect.any(Object));
+      expect(fetchMock).toHaveBeenNthCalledWith(2, '/api/dashboard/runs?limit=50', { method: 'GET' });
+    });
+
+    expect(await screen.findByText(/Run #700 accepted with status running./)).toBeInTheDocument();
+    expect(
+      screen.getByText(/Run accepted, but lifecycle refresh failed: Refresh unavailable\./),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('shows an error when launch response payload is malformed', async () => {
+    const fetchMock = vi.mocked(global.fetch);
+    fetchMock.mockResolvedValueOnce(createJsonResponse({
+      workflowRunId: '700',
+    }, { status: 202 }));
+
+    const user = userEvent.setup();
+    render(
+      <RunsPageContent
+        runs={[createRunSummary({ id: 412, status: 'running' })]}
+        workflows={[createWorkflow(), createWorkflow({ id: 2, treeKey: 'other-tree', name: 'Other Tree' })]}
+        repositories={[createRepository({ name: 'demo-repo', cloneStatus: 'cloned' })]}
+        authGate={createAuthenticatedAuthGate()}
+        activeFilter="all"
+      />,
+    );
+
+    await user.selectOptions(screen.getByLabelText('Workflow'), 'other-tree');
+    await user.click(screen.getByRole('button', { name: 'Launch Run' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Run launch response was malformed.');
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole('link', { name: 'Open run detail' })).toBeNull();
+  });
+
   it('renders fallback repository label when run has no repository context', () => {
     render(
       <RunsPageContent

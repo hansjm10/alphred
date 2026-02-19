@@ -35,6 +35,16 @@ const RUN_FILTER_TABS: readonly TabItem[] = [
 
 const DEFAULT_RUN_LIST_LIMIT = 50;
 const ACTIVE_RUN_STATUSES = new Set<DashboardRunSummary['status']>(['pending', 'running', 'paused']);
+const LAUNCH_RESULT_MODES = new Set<DashboardRunLaunchResult['mode']>(['async', 'sync']);
+const LAUNCH_RESULT_STATUSES = new Set<DashboardRunLaunchResult['status']>(['accepted', 'completed']);
+const LAUNCH_RESULT_RUN_STATUSES = new Set<DashboardRunLaunchResult['runStatus']>([
+  'pending',
+  'running',
+  'paused',
+  'completed',
+  'failed',
+  'cancelled',
+]);
 
 function resolveApiErrorMessage(status: number, payload: unknown, fallbackPrefix: string): string {
   if (
@@ -136,6 +146,59 @@ function getLaunchBlockedReason(
   return null;
 }
 
+function parseLaunchResult(payload: unknown): DashboardRunLaunchResult | null {
+  if (typeof payload !== 'object' || payload === null) {
+    return null;
+  }
+
+  const candidate = payload as Record<string, unknown>;
+  const workflowRunId = candidate.workflowRunId;
+  const mode = candidate.mode;
+  const status = candidate.status;
+  const runStatus = candidate.runStatus;
+  const executionOutcome = candidate.executionOutcome;
+  const executedNodes = candidate.executedNodes;
+
+  if (typeof workflowRunId !== 'number' || !Number.isInteger(workflowRunId)) {
+    return null;
+  }
+
+  if (typeof mode !== 'string' || !LAUNCH_RESULT_MODES.has(mode as DashboardRunLaunchResult['mode'])) {
+    return null;
+  }
+
+  if (
+    typeof status !== 'string' ||
+    !LAUNCH_RESULT_STATUSES.has(status as DashboardRunLaunchResult['status'])
+  ) {
+    return null;
+  }
+
+  if (
+    typeof runStatus !== 'string' ||
+    !LAUNCH_RESULT_RUN_STATUSES.has(runStatus as DashboardRunLaunchResult['runStatus'])
+  ) {
+    return null;
+  }
+
+  if (executionOutcome !== null && typeof executionOutcome !== 'string') {
+    return null;
+  }
+
+  if (executedNodes !== null && (typeof executedNodes !== 'number' || !Number.isInteger(executedNodes))) {
+    return null;
+  }
+
+  return {
+    workflowRunId,
+    mode: mode as DashboardRunLaunchResult['mode'],
+    status: status as DashboardRunLaunchResult['status'],
+    runStatus: runStatus as DashboardRunLaunchResult['runStatus'],
+    executionOutcome: executionOutcome as string | null,
+    executedNodes: executedNodes as number | null,
+  };
+}
+
 export function RunsPageContent({
   runs,
   workflows,
@@ -149,6 +212,7 @@ export function RunsPageContent({
   const [branch, setBranch] = useState<string>('');
   const [isLaunching, setIsLaunching] = useState<boolean>(false);
   const [launchError, setLaunchError] = useState<string | null>(null);
+  const [launchRefreshWarning, setLaunchRefreshWarning] = useState<string | null>(null);
   const [launchResult, setLaunchResult] = useState<DashboardRunLaunchResult | null>(null);
 
   const launchBlockedReason = getLaunchBlockedReason(authGate, workflows);
@@ -195,6 +259,7 @@ export function RunsPageContent({
     }
 
     setLaunchError(null);
+    setLaunchRefreshWarning(null);
     setLaunchResult(null);
     setIsLaunching(true);
 
@@ -216,10 +281,22 @@ export function RunsPageContent({
         throw new Error(resolveApiErrorMessage(response.status, payload, 'Run launch failed'));
       }
 
-      setLaunchResult(payload as DashboardRunLaunchResult);
-      await refreshRunState();
+      const parsedResult = parseLaunchResult(payload);
+      if (parsedResult === null) {
+        throw new Error('Run launch response was malformed.');
+      }
+
+      setLaunchResult(parsedResult);
+
+      try {
+        await refreshRunState();
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Unable to refresh run lifecycle state.';
+        setLaunchRefreshWarning(`Run accepted, but lifecycle refresh failed: ${message}`);
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Run launch failed.';
+      setLaunchResult(null);
       setLaunchError(message);
     } finally {
       setIsLaunching(false);
@@ -318,6 +395,9 @@ export function RunsPageContent({
               <Link className="run-inline-link" href={`/runs/${launchResult.workflowRunId}`}>
                 Open run detail
               </Link>
+              {launchRefreshWarning ? (
+                <span className="run-launch-banner__note">{` ${launchRefreshWarning}`}</span>
+              ) : null}
             </output>
           ) : null}
         </Card>
