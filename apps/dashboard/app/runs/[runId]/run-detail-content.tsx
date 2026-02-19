@@ -405,7 +405,8 @@ export function RunDetailContent({
     enableRealtime && ACTIVE_RUN_STATUSES.has(initialDetail.run.status) ? 'live' : 'disabled',
   );
   const [isRefreshing, setIsRefreshing] = useState<boolean>(false);
-  const [selectedNodeId, setSelectedNodeId] = useState<number | null>(null);
+  const [highlightedNodeId, setHighlightedNodeId] = useState<number | null>(null);
+  const [filteredNodeId, setFilteredNodeId] = useState<number | null>(null);
   const [lastUpdatedAtMs, setLastUpdatedAtMs] = useState<number>(() => resolveInitialLastUpdatedAtMs(initialDetail));
   const [nextRetryAtMs, setNextRetryAtMs] = useState<number | null>(null);
   const [retryCountdownSeconds, setRetryCountdownSeconds] = useState<number | null>(null);
@@ -432,14 +433,14 @@ export function RunDetailContent({
   }, [lastUpdatedAtMs]);
 
   useEffect(() => {
-    if (selectedNodeId === null) {
-      return;
+    if (highlightedNodeId !== null && !detail.nodes.some((node) => node.id === highlightedNodeId)) {
+      setHighlightedNodeId(null);
     }
 
-    if (!detail.nodes.some((node) => node.id === selectedNodeId)) {
-      setSelectedNodeId(null);
+    if (filteredNodeId !== null && !detail.nodes.some((node) => node.id === filteredNodeId)) {
+      setFilteredNodeId(null);
     }
-  }, [detail.nodes, selectedNodeId]);
+  }, [detail.nodes, filteredNodeId, highlightedNodeId]);
 
   useEffect(() => {
     if (!enableRealtime || !ACTIVE_RUN_STATUSES.has(detail.run.status)) {
@@ -591,17 +592,22 @@ export function RunDetailContent({
     [detail.run, detail.worktrees.length],
   );
   const selectedNode = useMemo(
-    () => detail.nodes.find((node) => node.id === selectedNodeId) ?? null,
-    [detail.nodes, selectedNodeId],
+    () => detail.nodes.find((node) => node.id === filteredNodeId) ?? null,
+    [detail.nodes, filteredNodeId],
   );
   const visibleTimeline = useMemo(
     () =>
-      selectedNodeId === null
+      filteredNodeId === null
         ? timeline
-        : timeline.filter((event) => event.relatedNodeId === null || event.relatedNodeId === selectedNodeId),
-    [selectedNodeId, timeline],
+        : timeline.filter((event) => event.relatedNodeId === null || event.relatedNodeId === filteredNodeId),
+    [filteredNodeId, timeline],
   );
   const realtimeLabel = resolveRealtimeLabel(channelState, pollIntervalMs, retryCountdownSeconds);
+  const toggleNodeFilter = (nodeId: number): void => {
+    const nextNodeId = filteredNodeId === nodeId ? null : nodeId;
+    setFilteredNodeId(nextNodeId);
+    setHighlightedNodeId(nextNodeId);
+  };
 
   return (
     <div className="page-stack">
@@ -677,7 +683,13 @@ export function RunDetailContent({
           {selectedNode ? (
             <div className="run-timeline-filter">
               <p className="meta-text">{`Filtered to ${selectedNode.nodeKey} (attempt ${selectedNode.attempt}).`}</p>
-              <ActionButton className="run-timeline-clear" onClick={() => setSelectedNodeId(null)}>
+              <ActionButton
+                className="run-timeline-clear"
+                onClick={() => {
+                  setFilteredNodeId(null);
+                  setHighlightedNodeId(null);
+                }}
+              >
                 Show all events
               </ActionButton>
             </div>
@@ -686,7 +698,7 @@ export function RunDetailContent({
           <ol className="page-stack" aria-label="Run timeline">
             {visibleTimeline.length > 0 ? (
               visibleTimeline.map((event) => {
-                const highlighted = selectedNodeId !== null && event.relatedNodeId === selectedNodeId;
+                const highlighted = highlightedNodeId !== null && event.relatedNodeId === highlightedNodeId;
 
                 return (
                   <li key={event.key}>
@@ -695,7 +707,7 @@ export function RunDetailContent({
                       className={`run-timeline-event${highlighted ? ' run-timeline-event--selected' : ''}`}
                       aria-pressed={highlighted}
                       onClick={() => {
-                        setSelectedNodeId(event.relatedNodeId);
+                        setHighlightedNodeId(event.relatedNodeId);
                       }}
                     >
                       <p className="meta-text">{formatTimelineTime(event.timestamp, hasHydrated)}</p>
@@ -706,7 +718,7 @@ export function RunDetailContent({
               })
             ) : (
               <li>
-                <p>{selectedNodeId === null ? 'No lifecycle events captured yet.' : 'No events match the selected node.'}</p>
+                <p>{filteredNodeId === null ? 'No lifecycle events captured yet.' : 'No events match the selected node.'}</p>
               </li>
             )}
           </ol>
@@ -716,7 +728,7 @@ export function RunDetailContent({
           <ul className="entity-list run-node-status-list">
             {detail.nodes.length > 0 ? (
               detail.nodes.map((node) => {
-                const selected = selectedNodeId === node.id;
+                const selected = highlightedNodeId === node.id;
 
                 return (
                   <li key={node.id}>
@@ -724,7 +736,7 @@ export function RunDetailContent({
                       className={`run-node-filter${selected ? ' run-node-filter--selected' : ''}`}
                       aria-pressed={selected}
                       onClick={() => {
-                        setSelectedNodeId((current) => (current === node.id ? null : node.id));
+                        toggleNodeFilter(node.id);
                       }}
                     >
                       {`${node.nodeKey} (attempt ${node.attempt})`}
