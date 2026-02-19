@@ -324,7 +324,8 @@ output {
 
 .button-link:focus-visible,
 .shell-nav-link:focus-visible,
-.tabs__link:focus-visible {
+.tabs__link:focus-visible,
+.run-timeline-event:focus-visible {
   outline: 2px solid var(--accent-active);
   outline-offset: 2px;
 }
@@ -574,6 +575,89 @@ output {
 
 .run-action-feedback {
   margin-top: var(--space-2);
+}
+
+.run-realtime-status {
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  display: grid;
+  gap: 4px;
+  margin-top: var(--space-2);
+  padding: 8px 10px;
+}
+
+.run-realtime-status__badge {
+  font: 600 12px/18px var(--font-data);
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.run-realtime-status--live {
+  border-color: color-mix(in srgb, var(--accent-success) 45%, var(--border-default));
+}
+
+.run-realtime-status--reconnecting {
+  border-color: color-mix(in srgb, var(--accent-warning) 55%, var(--border-default));
+}
+
+.run-realtime-status--stale {
+  border-color: color-mix(in srgb, var(--accent-danger) 45%, var(--border-default));
+}
+
+.run-realtime-warning {
+  border: 1px solid color-mix(in srgb, var(--accent-danger) 45%, var(--border-default));
+  border-radius: var(--radius-sm);
+  color: var(--accent-danger);
+  font: 600 13px/20px var(--font-data);
+  margin-top: var(--space-2);
+  padding: 8px 10px;
+}
+
+.run-timeline-filter {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.run-timeline-clear {
+  font: 600 12px/18px var(--font-display);
+  padding: 6px 10px;
+}
+
+.run-timeline-event {
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  color: inherit;
+  cursor: pointer;
+  display: grid;
+  gap: 4px;
+  padding: 8px;
+  text-align: left;
+  width: 100%;
+}
+
+.run-timeline-event:hover {
+  background: color-mix(in srgb, var(--accent-active) 6%, var(--bg-surface));
+}
+
+.run-timeline-event--selected {
+  background: color-mix(in srgb, var(--accent-active) 10%, var(--bg-surface));
+  border-color: color-mix(in srgb, var(--accent-active) 45%, var(--border-default));
+}
+
+.run-node-status-list li {
+  align-items: center;
+}
+
+.run-node-filter {
+  justify-content: flex-start;
+  min-width: 0;
+}
+
+.run-node-filter--selected {
+  border-color: color-mix(in srgb, var(--accent-active) 55%, var(--border-default));
 }
 
 .meta-text {
