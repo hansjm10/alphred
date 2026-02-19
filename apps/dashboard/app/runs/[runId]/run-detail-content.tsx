@@ -450,8 +450,10 @@ export function RunDetailContent({
     }
 
     let cancelled = false;
+    const abortController = new AbortController();
     let timeoutId: number | null = null;
     let consecutiveFailures = 0;
+    const shouldSkipUpdate = (): boolean => cancelled || abortController.signal.aborted;
 
     const scheduleNextPoll = (delayMs: number): void => {
       timeoutId = window.setTimeout(() => {
@@ -460,7 +462,7 @@ export function RunDetailContent({
     };
 
     const pollRunDetail = async (): Promise<void> => {
-      if (cancelled) {
+      if (shouldSkipUpdate()) {
         return;
       }
 
@@ -471,9 +473,16 @@ export function RunDetailContent({
           headers: {
             accept: 'application/json',
           },
+          signal: abortController.signal,
         });
+        if (shouldSkipUpdate()) {
+          return;
+        }
 
         const payload = (await response.json().catch(() => null)) as unknown;
+        if (shouldSkipUpdate()) {
+          return;
+        }
         if (!response.ok) {
           throw new Error(resolveApiErrorMessage(response.status, payload, 'Unable to refresh run timeline'));
         }
@@ -481,6 +490,9 @@ export function RunDetailContent({
         const parsedDetail = parseRunDetailPayload(payload, detail.run.id);
         if (parsedDetail === null) {
           throw new Error('Realtime run detail response was malformed.');
+        }
+        if (shouldSkipUpdate()) {
+          return;
         }
 
         consecutiveFailures = 0;
@@ -499,6 +511,10 @@ export function RunDetailContent({
           setChannelState('disabled');
         }
       } catch (error) {
+        const isAbortError = error instanceof Error && error.name === 'AbortError';
+        if (shouldSkipUpdate() || isAbortError) {
+          return;
+        }
         consecutiveFailures += 1;
         const retryDelayMs = Math.min(
           pollIntervalMs * 2 ** Math.max(0, consecutiveFailures - 1),
@@ -522,6 +538,7 @@ export function RunDetailContent({
 
     return () => {
       cancelled = true;
+      abortController.abort();
       if (timeoutId !== null) {
         clearTimeout(timeoutId);
       }

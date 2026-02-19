@@ -44,3 +44,8 @@ playwright-report/
 # Alphred working files
 .runs/
 .worktrees/
+
+# Skill-generated artifacts
+artifacts/
+baseline-*
+postedit-*
