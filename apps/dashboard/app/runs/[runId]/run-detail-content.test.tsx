@@ -220,6 +220,74 @@ describe('RunDetailContent realtime updates', () => {
     expect(screen.getByText(/Update channel degraded: network down/i)).toBeInTheDocument();
   });
 
+  it('degrades gracefully when realtime response omits required run fields', async () => {
+    fetchMock.mockResolvedValue(
+      createJsonResponse({
+        run: {
+          id: 412,
+          status: 'running',
+          repository: null,
+          startedAt: '2026-02-18T00:00:00.000Z',
+          completedAt: null,
+          createdAt: '2026-02-18T00:00:00.000Z',
+          nodeSummary: {
+            pending: 0,
+            running: 1,
+            completed: 1,
+            failed: 0,
+            skipped: 0,
+            cancelled: 0,
+          },
+        },
+        nodes: [],
+        artifacts: [],
+        routingDecisions: [],
+        worktrees: [],
+      }),
+    );
+
+    render(
+      <RunDetailContent
+        initialDetail={createRunDetail()}
+        repositories={[createRepository()]}
+        pollIntervalMs={50}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText(/Connection interrupted\. Retrying in/i)).toBeInTheDocument();
+    }, { timeout: 2_000 });
+
+    await waitFor(() => {
+      expect(screen.getByText(/Update channel degraded: Realtime run detail response was malformed\./i)).toBeInTheDocument();
+    }, { timeout: 2_000 });
+  });
+
+  it('degrades gracefully when realtime response includes malformed node snapshots', async () => {
+    fetchMock.mockResolvedValue(
+      createJsonResponse({
+        ...createRunDetail(),
+        nodes: [{ id: 1 }],
+      }),
+    );
+
+    render(
+      <RunDetailContent
+        initialDetail={createRunDetail()}
+        repositories={[createRepository()]}
+        pollIntervalMs={50}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText(/Connection interrupted\. Retrying in/i)).toBeInTheDocument();
+    }, { timeout: 2_000 });
+
+    await waitFor(() => {
+      expect(screen.getByText(/Update channel degraded: Realtime run detail response was malformed\./i)).toBeInTheDocument();
+    }, { timeout: 2_000 });
+  });
+
   it('clears degraded warning when realtime is disabled after an error', async () => {
     const initialDetail = createRunDetail();
     fetchMock.mockRejectedValue(new Error('network down'));

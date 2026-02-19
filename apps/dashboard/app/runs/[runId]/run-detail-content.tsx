@@ -45,6 +45,33 @@ const RUN_STATUSES = new Set<DashboardRunSummary['status']>([
   'failed',
   'cancelled',
 ]);
+const NODE_STATUSES = new Set<DashboardRunDetail['nodes'][number]['status']>([
+  'pending',
+  'running',
+  'completed',
+  'failed',
+  'skipped',
+  'cancelled',
+]);
+const ARTIFACT_TYPES = new Set<DashboardRunDetail['artifacts'][number]['artifactType']>([
+  'report',
+  'note',
+  'log',
+]);
+const ARTIFACT_CONTENT_TYPES = new Set<DashboardRunDetail['artifacts'][number]['contentType']>([
+  'text',
+  'markdown',
+  'json',
+  'diff',
+]);
+const ROUTING_DECISION_TYPES = new Set<DashboardRunDetail['routingDecisions'][number]['decisionType']>([
+  'approved',
+  'changes_requested',
+  'blocked',
+  'retry',
+  'no_route',
+]);
+const WORKTREE_STATUSES = new Set<DashboardRunDetail['worktrees'][number]['status']>(['active', 'removed']);
 
 export const RUN_DETAIL_POLL_INTERVAL_MS = 4_000;
 const RUN_DETAIL_POLL_BACKOFF_MAX_MS = 20_000;
@@ -52,6 +79,152 @@ const RUN_DETAIL_STALE_THRESHOLD_MS = 15_000;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
+}
+
+function isInteger(value: unknown): value is number {
+  return typeof value === 'number' && Number.isInteger(value);
+}
+
+function isNullableString(value: unknown): value is string | null {
+  return value === null || typeof value === 'string';
+}
+
+function hasNodeStatusSummary(value: unknown): boolean {
+  if (!isRecord(value)) {
+    return false;
+  }
+
+  return (
+    isInteger(value.pending) &&
+    isInteger(value.running) &&
+    isInteger(value.completed) &&
+    isInteger(value.failed) &&
+    isInteger(value.skipped) &&
+    isInteger(value.cancelled)
+  );
+}
+
+function hasArtifactShape(value: unknown): value is DashboardRunDetail['artifacts'][number] {
+  if (!isRecord(value)) {
+    return false;
+  }
+
+  return (
+    isInteger(value.id) &&
+    isInteger(value.runNodeId) &&
+    typeof value.artifactType === 'string' &&
+    ARTIFACT_TYPES.has(value.artifactType as DashboardRunDetail['artifacts'][number]['artifactType']) &&
+    typeof value.contentType === 'string' &&
+    ARTIFACT_CONTENT_TYPES.has(value.contentType as DashboardRunDetail['artifacts'][number]['contentType']) &&
+    typeof value.contentPreview === 'string' &&
+    typeof value.createdAt === 'string'
+  );
+}
+
+function hasRoutingDecisionShape(value: unknown): value is DashboardRunDetail['routingDecisions'][number] {
+  if (!isRecord(value)) {
+    return false;
+  }
+
+  return (
+    isInteger(value.id) &&
+    isInteger(value.runNodeId) &&
+    typeof value.decisionType === 'string' &&
+    ROUTING_DECISION_TYPES.has(
+      value.decisionType as DashboardRunDetail['routingDecisions'][number]['decisionType'],
+    ) &&
+    isNullableString(value.rationale) &&
+    typeof value.createdAt === 'string'
+  );
+}
+
+function hasRunNodeShape(value: unknown): value is DashboardRunDetail['nodes'][number] {
+  if (!isRecord(value)) {
+    return false;
+  }
+
+  if (
+    !isInteger(value.id) ||
+    !isInteger(value.treeNodeId) ||
+    typeof value.nodeKey !== 'string' ||
+    !isInteger(value.sequenceIndex) ||
+    !isInteger(value.attempt) ||
+    typeof value.status !== 'string' ||
+    !NODE_STATUSES.has(value.status as DashboardRunDetail['nodes'][number]['status']) ||
+    !isNullableString(value.startedAt) ||
+    !isNullableString(value.completedAt)
+  ) {
+    return false;
+  }
+
+  if (value.latestArtifact !== null && !hasArtifactShape(value.latestArtifact)) {
+    return false;
+  }
+
+  if (value.latestRoutingDecision !== null && !hasRoutingDecisionShape(value.latestRoutingDecision)) {
+    return false;
+  }
+
+  return true;
+}
+
+function hasWorktreeShape(
+  value: unknown,
+  expectedRunId: number,
+): value is DashboardRunDetail['worktrees'][number] {
+  if (!isRecord(value)) {
+    return false;
+  }
+
+  return (
+    isInteger(value.id) &&
+    isInteger(value.runId) &&
+    value.runId === expectedRunId &&
+    isInteger(value.repositoryId) &&
+    typeof value.path === 'string' &&
+    typeof value.branch === 'string' &&
+    isNullableString(value.commitHash) &&
+    typeof value.status === 'string' &&
+    WORKTREE_STATUSES.has(value.status as DashboardRunDetail['worktrees'][number]['status']) &&
+    typeof value.createdAt === 'string' &&
+    isNullableString(value.removedAt)
+  );
+}
+
+function hasRunSummaryShape(value: unknown, expectedRunId: number): value is DashboardRunDetail['run'] {
+  if (!isRecord(value)) {
+    return false;
+  }
+
+  if (!isInteger(value.id) || value.id !== expectedRunId) {
+    return false;
+  }
+
+  if (typeof value.status !== 'string' || !RUN_STATUSES.has(value.status as DashboardRunSummary['status'])) {
+    return false;
+  }
+
+  if (!isNullableString(value.startedAt) || !isNullableString(value.completedAt) || typeof value.createdAt !== 'string') {
+    return false;
+  }
+
+  const tree = value.tree;
+  if (
+    !isRecord(tree) ||
+    !isInteger(tree.id) ||
+    typeof tree.treeKey !== 'string' ||
+    !isInteger(tree.version) ||
+    typeof tree.name !== 'string'
+  ) {
+    return false;
+  }
+
+  const repository = value.repository;
+  if (repository !== null && (!isRecord(repository) || !isInteger(repository.id) || typeof repository.name !== 'string')) {
+    return false;
+  }
+
+  return hasNodeStatusSummary(value.nodeSummary);
 }
 
 function resolveApiErrorMessage(status: number, payload: unknown, fallbackPrefix: string): string {
@@ -74,25 +247,26 @@ function parseRunDetailPayload(payload: unknown, expectedRunId: number): Dashboa
     return null;
   }
 
-  const run = payload.run;
-  if (!isRecord(run)) {
+  if (!hasRunSummaryShape(payload.run, expectedRunId)) {
     return null;
   }
 
-  if (run.id !== expectedRunId) {
+  if (!Array.isArray(payload.nodes) || !payload.nodes.every((node) => hasRunNodeShape(node))) {
     return null;
   }
 
-  if (typeof run.status !== 'string' || !RUN_STATUSES.has(run.status as DashboardRunSummary['status'])) {
+  if (!Array.isArray(payload.artifacts) || !payload.artifacts.every((artifact) => hasArtifactShape(artifact))) {
     return null;
   }
 
   if (
-    !Array.isArray(payload.nodes) ||
-    !Array.isArray(payload.artifacts) ||
     !Array.isArray(payload.routingDecisions) ||
-    !Array.isArray(payload.worktrees)
+    !payload.routingDecisions.every((decision) => hasRoutingDecisionShape(decision))
   ) {
+    return null;
+  }
+
+  if (!Array.isArray(payload.worktrees) || !payload.worktrees.every((worktree) => hasWorktreeShape(worktree, expectedRunId))) {
     return null;
   }
 
