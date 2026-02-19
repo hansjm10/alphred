@@ -39,6 +39,14 @@ vi.mock('../repositories/load-dashboard-repositories', () => ({
 }));
 
 function createRunSummary(overrides: Partial<DashboardRunSummary> = {}): DashboardRunSummary {
+  const repositoryContext =
+    overrides.repository === undefined
+      ? {
+        id: 1,
+        name: 'demo-repo',
+      }
+      : overrides.repository;
+
   return {
     id: overrides.id ?? 412,
     tree: overrides.tree ?? {
@@ -48,6 +56,7 @@ function createRunSummary(overrides: Partial<DashboardRunSummary> = {}): Dashboa
       name: 'Demo Tree',
     },
     status: overrides.status ?? 'running',
+    repository: repositoryContext,
     startedAt: overrides.startedAt ?? '2026-02-18T00:00:00.000Z',
     completedAt: overrides.completedAt ?? null,
     createdAt: overrides.createdAt ?? '2026-02-18T00:00:00.000Z',
@@ -131,8 +140,10 @@ describe('RunsPage', () => {
     expect(screen.getByRole('heading', { name: 'Run lifecycle' })).toBeInTheDocument();
     expect(screen.getByLabelText('Workflow')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Launch Run' })).toBeEnabled();
+    expect(screen.getByRole('columnheader', { name: 'Repository' })).toBeInTheDocument();
     expect(screen.getByRole('columnheader', { name: 'Node lifecycle' })).toBeInTheDocument();
     expect(screen.getByText('#412 Demo Tree')).toBeInTheDocument();
+    expect(screen.getAllByText('demo-repo').length).toBeGreaterThan(0);
     expect(screen.getAllByRole('link', { name: 'Open' })[0]).toHaveAttribute('href', '/runs/412');
   });
 
@@ -222,6 +233,21 @@ describe('RunsPage', () => {
     expect(await screen.findByText(/Run #600 accepted with status running./)).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Open run detail' })).toHaveAttribute('href', '/runs/600');
     expect(screen.getByText('#600 Other Tree')).toBeInTheDocument();
+  });
+
+  it('renders fallback repository label when run has no repository context', () => {
+    render(
+      <RunsPageContent
+        runs={[createRunSummary({ id: 500, repository: null })]}
+        workflows={[createWorkflow()]}
+        repositories={[createRepository()]}
+        authGate={createAuthenticatedAuthGate()}
+        activeFilter="all"
+      />,
+    );
+
+    expect(screen.getByText('#500 Demo Tree')).toBeInTheDocument();
+    expect(screen.getByText('Not attached')).toBeInTheDocument();
   });
 
   it('blocks launch actions and shows remediation when auth is unavailable', () => {

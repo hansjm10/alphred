@@ -61,6 +61,10 @@ function createRunDetail(overrides: RunDetailOverrides = {}): DashboardRunDetail
         version: 1,
         name: 'Demo Tree',
       },
+      repository: {
+        id: 1,
+        name: 'demo-repo',
+      },
       status: 'running',
       startedAt: '2026-02-18T00:00:00.000Z',
       completedAt: null,

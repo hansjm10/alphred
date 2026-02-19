@@ -351,6 +351,7 @@ export function RunsPageContent({
               <thead>
                 <tr>
                   <th scope="col">Run</th>
+                  <th scope="col">Repository</th>
                   <th scope="col">Status</th>
                   <th scope="col">Started</th>
                   <th scope="col">Completed</th>
@@ -365,6 +366,7 @@ export function RunsPageContent({
                       <p>{`#${run.id} ${run.tree.name}`}</p>
                       <p className="meta-text">{run.tree.treeKey}</p>
                     </td>
+                    <td className="meta-text">{run.repository?.name ?? 'Not attached'}</td>
                     <td>
                       <StatusBadge status={run.status} />
                     </td>

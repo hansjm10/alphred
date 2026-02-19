@@ -505,6 +505,10 @@ describe('createDashboardService', () => {
 
     const runsResponse = await service.listWorkflowRuns();
     expect(runsResponse).toHaveLength(1);
+    expect(runsResponse[0]?.repository).toEqual({
+      id: 1,
+      name: 'demo-repo',
+    });
     expect(runsResponse[0]?.nodeSummary.completed).toBe(1);
 
     const runDetail = await service.getWorkflowRunDetail(1);
@@ -513,6 +517,18 @@ describe('createDashboardService', () => {
     expect(runDetail.nodes[0]?.latestArtifact?.artifactType).toBe('report');
     expect(runDetail.nodes[0]?.latestRoutingDecision?.decisionType).toBe('approved');
     expect(runDetail.worktrees).toHaveLength(1);
+  });
+
+  it('returns null run repository context when no run worktree exists', async () => {
+    const { db, dependencies } = createHarness();
+    seedRunData(db);
+    db.delete(runWorktrees).where(eq(runWorktrees.workflowRunId, 1)).run();
+
+    const service = createDashboardService({ dependencies });
+    const runsResponse = await service.listWorkflowRuns();
+
+    expect(runsResponse).toHaveLength(1);
+    expect(runsResponse[0]?.repository).toBeNull();
   });
 
   it('syncs repositories through ensureRepositoryClone and auth check adapters', async () => {

@@ -173,6 +173,10 @@ Response `200`:
         "version": 1,
         "name": "Demo Tree"
       },
+      "repository": {
+        "id": 1,
+        "name": "demo-repo"
+      },
       "status": "completed",
       "startedAt": "2026-02-17T20:01:00.000Z",
       "completedAt": "2026-02-17T20:02:00.000Z",
@@ -191,6 +195,10 @@ Response `200`:
 ```
 
 Type: `{ runs: DashboardRunSummary[] }`.
+
+Notes:
+- `repository` reflects the active run worktree repository when present.
+- `repository` is `null` when a run has no associated worktree/repository context.
 
 ### `POST /runs`
 
