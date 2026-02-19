@@ -65,6 +65,47 @@ Response `200`:
 
 Type: `{ repositories: DashboardRepositoryState[] }`.
 
+### `POST /repositories`
+
+Registers a GitHub repository in the dashboard registry.
+
+Request body:
+
+```json
+{
+  "name": "frontend",
+  "provider": "github",
+  "remoteRef": "octocat/frontend"
+}
+```
+
+Validation notes:
+- Body must be a JSON object.
+- `name` is required and must be a string.
+- `provider` must be exactly `"github"`.
+- `remoteRef` is required and must be a string in `owner/repository` format.
+- Duplicate repository names return `409 conflict`.
+
+Response `201`:
+
+```json
+{
+  "repository": {
+    "id": 2,
+    "name": "frontend",
+    "provider": "github",
+    "remoteRef": "octocat/frontend",
+    "remoteUrl": "https://github.com/octocat/frontend.git",
+    "defaultBranch": "main",
+    "branchTemplate": null,
+    "cloneStatus": "pending",
+    "localPath": null
+  }
+}
+```
+
+Type: `DashboardCreateRepositoryResult`.
+
 ### `POST /repositories/[name]/sync`
 
 Triggers repository clone/fetch synchronization for a configured repository.

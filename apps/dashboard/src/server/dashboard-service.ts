@@ -5,6 +5,7 @@ import { createSqlWorkflowExecutor, createSqlWorkflowPlanner, type PhaseProvider
 import {
   createDatabase,
   getRepositoryByName,
+  insertRepository,
   listRepositories,
   listRunWorktreesForRun,
   migrateDatabase,
@@ -27,6 +28,8 @@ import {
 import type { AuthStatus, RepositoryConfig } from '@alphred/shared';
 import type {
   DashboardArtifactSnapshot,
+  DashboardCreateRepositoryRequest,
+  DashboardCreateRepositoryResult,
   DashboardGitHubAuthStatus,
   DashboardNodeStatus,
   DashboardNodeStatusSummary,
@@ -256,6 +259,29 @@ function parseAzureRemoteRef(remoteRef: string): {
     organization: segments[0],
     project: segments[1],
     repository: segments[2],
+  };
+}
+
+function parseGitHubRemoteRef(remoteRef: string): {
+  owner: string;
+  repository: string;
+} {
+  const segments = remoteRef
+    .split('/')
+    .map(segment => segment.trim())
+    .filter(segment => segment.length > 0);
+
+  if (segments.length !== 2) {
+    throw new DashboardIntegrationError(
+      'invalid_request',
+      `Invalid GitHub repository reference "${remoteRef}". Expected owner/repository.`,
+      { status: 400 },
+    );
+  }
+
+  return {
+    owner: segments[0],
+    repository: segments[1],
   };
 }
 
@@ -570,6 +596,43 @@ export function createDashboardService(options: {
 
     listRepositories(): Promise<DashboardRepositoryState[]> {
       return withDatabase(async db => listRepositories(db).map(toRepositoryState));
+    },
+
+    async createRepository(request: DashboardCreateRepositoryRequest): Promise<DashboardCreateRepositoryResult> {
+      const trimmedName = request.name.trim();
+      if (trimmedName.length === 0) {
+        throw new DashboardIntegrationError('invalid_request', 'Repository name cannot be empty.', {
+          status: 400,
+        });
+      }
+
+      const trimmedRemoteRef = request.remoteRef.trim();
+      if (trimmedRemoteRef.length === 0) {
+        throw new DashboardIntegrationError('invalid_request', 'Repository remoteRef cannot be empty.', {
+          status: 400,
+        });
+      }
+
+      return withDatabase(async db => {
+        const existing = getRepositoryByName(db, trimmedName);
+        if (existing) {
+          throw new DashboardIntegrationError('conflict', `Repository "${trimmedName}" already exists.`, {
+            status: 409,
+          });
+        }
+
+        const parsedRemoteRef = parseGitHubRemoteRef(trimmedRemoteRef);
+        const inserted = insertRepository(db, {
+          name: trimmedName,
+          provider: request.provider,
+          remoteRef: `${parsedRemoteRef.owner}/${parsedRemoteRef.repository}`,
+          remoteUrl: `https://github.com/${parsedRemoteRef.owner}/${parsedRemoteRef.repository}.git`,
+        });
+
+        return {
+          repository: toRepositoryState(inserted),
+        };
+      });
     },
 
     listWorkflowRuns(limit = 20): Promise<DashboardRunSummary[]> {

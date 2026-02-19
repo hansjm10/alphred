@@ -552,6 +552,91 @@ describe('createDashboardService', () => {
     expect(ensureRepositoryCloneMock).toHaveBeenCalledTimes(1);
   });
 
+  it('creates github repositories through the shared db schema', async () => {
+    const { db, dependencies } = createHarness();
+    seedRunData(db);
+
+    const service = createDashboardService({ dependencies });
+    const result = await service.createRepository({
+      name: 'new-repo',
+      provider: 'github',
+      remoteRef: 'octocat/new-repo',
+    });
+
+    expect(result.repository.name).toBe('new-repo');
+    expect(result.repository.provider).toBe('github');
+    expect(result.repository.remoteRef).toBe('octocat/new-repo');
+    expect(result.repository.remoteUrl).toBe('https://github.com/octocat/new-repo.git');
+    expect(result.repository.cloneStatus).toBe('pending');
+    expect(result.repository.localPath).toBeNull();
+
+    const repositoriesResponse = await service.listRepositories();
+    expect(repositoriesResponse.some(repository => repository.name === 'new-repo')).toBe(true);
+  });
+
+  it.each([
+    {
+      name: '',
+    },
+    {
+      name: '   ',
+    },
+  ])('rejects empty repository names on createRepository: "$name"', async ({ name }) => {
+    const { db, dependencies } = createHarness();
+    seedRunData(db);
+    const service = createDashboardService({ dependencies });
+
+    await expect(
+      service.createRepository({
+        name,
+        provider: 'github',
+        remoteRef: 'octocat/new-repo',
+      }),
+    ).rejects.toMatchObject({
+      name: 'DashboardIntegrationError',
+      code: 'invalid_request',
+      status: 400,
+      message: 'Repository name cannot be empty.',
+    });
+  });
+
+  it('rejects invalid github remote refs on createRepository', async () => {
+    const { db, dependencies } = createHarness();
+    seedRunData(db);
+    const service = createDashboardService({ dependencies });
+
+    await expect(
+      service.createRepository({
+        name: 'new-repo',
+        provider: 'github',
+        remoteRef: 'octocat',
+      }),
+    ).rejects.toMatchObject({
+      name: 'DashboardIntegrationError',
+      code: 'invalid_request',
+      status: 400,
+    });
+  });
+
+  it('rejects duplicate repository names on createRepository', async () => {
+    const { db, dependencies } = createHarness();
+    seedRunData(db);
+    const service = createDashboardService({ dependencies });
+
+    await expect(
+      service.createRepository({
+        name: 'demo-repo',
+        provider: 'github',
+        remoteRef: 'octocat/demo-repo',
+      }),
+    ).rejects.toMatchObject({
+      name: 'DashboardIntegrationError',
+      code: 'conflict',
+      status: 409,
+      message: 'Repository "demo-repo" already exists.',
+    });
+  });
+
   it('translates planner missing-tree failures to not_found errors', async () => {
     const { db, dependencies } = createHarness({
       createSqlWorkflowPlanner: () => ({
