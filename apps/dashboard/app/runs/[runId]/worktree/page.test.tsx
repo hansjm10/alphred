@@ -79,6 +79,9 @@ describe('RunWorktreePage', () => {
   beforeEach(() => {
     notFoundMock.mockClear();
     loadDashboardRunDetailMock.mockReset();
+    loadDashboardRunDetailMock.mockRejectedValue(
+      new DashboardIntegrationError('not_found', 'Run was not found.', { status: 404 }),
+    );
   });
 
   it('renders changed files and default preview selection', async () => {
@@ -92,7 +95,7 @@ describe('RunWorktreePage', () => {
     expect(screen.getByLabelText('File diff preview')).toHaveTextContent(
       'emitLifecycleCheckpoint',
     );
-    expect(loadDashboardRunDetailMock).not.toHaveBeenCalled();
+    expect(loadDashboardRunDetailMock).toHaveBeenCalledWith(412);
   });
 
   it('uses the deep-linked path when provided', async () => {
@@ -162,6 +165,34 @@ describe('RunWorktreePage', () => {
     expect(screen.getByText('/tmp/worktrees/test-flow-2')).toBeInTheDocument();
     expect(screen.getByText('alphred/test_flow/2')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Back to Run' })).toHaveAttribute('href', '/runs/2');
+  });
+
+  it('prefers persisted run data over fixture content when ids collide', async () => {
+    loadDashboardRunDetailMock.mockResolvedValue(
+      createRunDetail({
+        run: { id: 412 },
+        worktrees: [
+          {
+            id: 220,
+            runId: 412,
+            repositoryId: 1,
+            path: '/tmp/worktrees/persisted-412',
+            branch: 'alphred/persisted/412',
+            commitHash: 'abc1234',
+            status: 'active',
+            createdAt: '2026-02-19T00:51:57.000Z',
+            removedAt: null,
+          },
+        ],
+      }),
+    );
+
+    render(await RunWorktreePage({ params: Promise.resolve({ runId: '412' }) }));
+
+    expect(loadDashboardRunDetailMock).toHaveBeenCalledWith(412);
+    expect(screen.getByRole('heading', { name: 'Worktree metadata' })).toBeInTheDocument();
+    expect(screen.getByText('alphred/persisted/412')).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Changed files' })).toBeNull();
   });
 
   it('routes missing persisted run ids to not-found', async () => {

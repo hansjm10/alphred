@@ -30,8 +30,26 @@ function resolvePrimaryWorktree(detail: DashboardRunDetail): DashboardRunDetail[
 export default async function RunWorktreePage({ params, searchParams }: RunWorktreePageProps) {
   const { runId } = await params;
   const resolvedSearchParams = await searchParams;
-  const fixtureRun = findRunByParam(runId);
-  if (fixtureRun !== null) {
+  const parsedRunId = parseRunId(runId);
+  if (parsedRunId === null) {
+    notFound();
+  }
+
+  let detail: DashboardRunDetail | null = null;
+  try {
+    detail = await loadDashboardRunDetail(parsedRunId);
+  } catch (error) {
+    if (!(error instanceof DashboardIntegrationError && error.code === 'not_found')) {
+      throw error;
+    }
+  }
+
+  if (detail === null) {
+    const fixtureRun = findRunByParam(runId);
+    if (fixtureRun === null) {
+      notFound();
+    }
+
     if (fixtureRun.worktree.files.length === 0) {
       return (
         <div className="page-stack">
@@ -97,22 +115,6 @@ export default async function RunWorktreePage({ params, searchParams }: RunWorkt
         </div>
       </div>
     );
-  }
-
-  const parsedRunId = parseRunId(runId);
-  if (parsedRunId === null) {
-    notFound();
-  }
-
-  let detail: DashboardRunDetail;
-  try {
-    detail = await loadDashboardRunDetail(parsedRunId);
-  } catch (error) {
-    if (error instanceof DashboardIntegrationError && error.code === 'not_found') {
-      notFound();
-    }
-
-    throw error;
   }
 
   const worktree = resolvePrimaryWorktree(detail);

@@ -144,6 +144,8 @@ describe('RunsPage', () => {
     expect(screen.getByRole('columnheader', { name: 'Node lifecycle' })).toBeInTheDocument();
     expect(screen.getByText('#412 Demo Tree')).toBeInTheDocument();
     expect(screen.getAllByText('demo-repo').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('2026-02-18 00:00:00 UTC')).toHaveLength(2);
+    expect(screen.getByText('2026-02-18 00:02:00 UTC')).toBeInTheDocument();
     expect(screen.getAllByRole('link', { name: 'Open' })[0]).toHaveAttribute('href', '/runs/412');
   });
 
