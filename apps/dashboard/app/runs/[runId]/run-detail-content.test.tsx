@@ -285,7 +285,31 @@ describe('RunDetailContent realtime updates', () => {
 
     expect(screen.getByText('design completed.')).toBeInTheDocument();
     expect(screen.getByText('implement started (attempt 1).')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'design (attempt 1)' })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByRole('button', { name: 'design (attempt 1)' })).toHaveAttribute('aria-pressed', 'false');
     expect(screen.queryByText(/Filtered to design \(attempt 1\)\./i)).toBeNull();
+  });
+
+  it('keeps node filter button selected after clicking a run-level timeline event', async () => {
+    const user = userEvent.setup();
+
+    render(
+      <RunDetailContent
+        initialDetail={createRunDetail()}
+        repositories={[createRepository()]}
+        enableRealtime={false}
+      />,
+    );
+
+    const designFilterButton = screen.getByRole('button', { name: 'design (attempt 1)' });
+    await user.click(designFilterButton);
+
+    expect(screen.queryByText('implement started (attempt 1).')).toBeNull();
+    expect(designFilterButton).toHaveAttribute('aria-pressed', 'true');
+
+    await user.click(screen.getByRole('button', { name: /run started\./i }));
+
+    expect(screen.queryByText('implement started (attempt 1).')).toBeNull();
+    expect(screen.getByText(/Filtered to design \(attempt 1\)\./i)).toBeInTheDocument();
+    expect(designFilterButton).toHaveAttribute('aria-pressed', 'true');
   });
 });

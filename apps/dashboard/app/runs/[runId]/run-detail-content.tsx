@@ -728,7 +728,7 @@ export function RunDetailContent({
           <ul className="entity-list run-node-status-list">
             {detail.nodes.length > 0 ? (
               detail.nodes.map((node) => {
-                const selected = highlightedNodeId === node.id;
+                const selected = filteredNodeId === node.id;
 
                 return (
                   <li key={node.id}>
