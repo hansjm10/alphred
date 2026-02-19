@@ -87,12 +87,14 @@ function buildTimeline(detail: DashboardRunDetail): readonly TimelineItem[] {
   const fallbackDate = parseDateValue(detail.run.createdAt) ?? new Date(0);
   const events: TimelineItem[] = [];
 
-  const startedAt = parseDateValue(detail.run.startedAt) ?? fallbackDate;
-  events.push({
-    key: `run-start-${detail.run.id}`,
-    timestamp: startedAt,
-    summary: 'Run started.',
-  });
+  const startedAt = parseDateValue(detail.run.startedAt);
+  if (startedAt) {
+    events.push({
+      key: `run-start-${detail.run.id}`,
+      timestamp: startedAt,
+      summary: 'Run started.',
+    });
+  }
 
   const completedAt = parseDateValue(detail.run.completedAt);
   if (completedAt) {

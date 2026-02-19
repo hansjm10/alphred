@@ -170,6 +170,36 @@ describe('RunsPage', () => {
     expect(screen.getByRole('link', { name: 'Running' })).toHaveAttribute('aria-current', 'page');
   });
 
+  it('re-syncs visible rows when server-provided runs props change', () => {
+    const initialRuns = [createRunSummary({ id: 412, status: 'running' })];
+    const refreshedRuns = [createRunSummary({ id: 610, status: 'failed', completedAt: '2026-02-18T00:02:00.000Z' })];
+
+    const { rerender } = render(
+      <RunsPageContent
+        runs={initialRuns}
+        workflows={[createWorkflow()]}
+        repositories={[createRepository()]}
+        authGate={createAuthenticatedAuthGate()}
+        activeFilter="all"
+      />,
+    );
+
+    expect(screen.getByText('#412 Demo Tree')).toBeInTheDocument();
+
+    rerender(
+      <RunsPageContent
+        runs={refreshedRuns}
+        workflows={[createWorkflow()]}
+        repositories={[createRepository()]}
+        authGate={createAuthenticatedAuthGate()}
+        activeFilter="all"
+      />,
+    );
+
+    expect(screen.queryByText('#412 Demo Tree')).toBeNull();
+    expect(screen.getByText('#610 Demo Tree')).toBeInTheDocument();
+  });
+
   it('launches a run and refreshes lifecycle rows', async () => {
     const fetchMock = vi.mocked(global.fetch);
     fetchMock

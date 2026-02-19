@@ -194,6 +194,30 @@ describe('RunDetailPage', () => {
     expect(screen.getByText('Routing decision: approved.')).toBeInTheDocument();
   });
 
+  it('does not render a synthetic start event when run has not started', async () => {
+    loadDashboardRunDetailMock.mockResolvedValue(
+      createRunDetail({
+        run: {
+          id: 413,
+          status: 'pending',
+          startedAt: null,
+          completedAt: null,
+        },
+        nodes: [],
+        artifacts: [],
+        routingDecisions: [],
+        worktrees: [],
+      }),
+    );
+    loadDashboardRepositoriesMock.mockResolvedValue([createRepository({ id: 1, name: 'demo-repo' })]);
+
+    render(await RunDetailPage({ params: Promise.resolve({ runId: '413' }) }));
+
+    expect(screen.getByText('Not started')).toBeInTheDocument();
+    expect(screen.queryByText('Run started.')).toBeNull();
+    expect(screen.getByText('No lifecycle events captured yet.')).toBeInTheDocument();
+  });
+
   it('routes invalid run ids to not-found', async () => {
     await expect(RunDetailPage({ params: Promise.resolve({ runId: 'not-a-number' }) })).rejects.toThrow(
       NOT_FOUND_ERROR,

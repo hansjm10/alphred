@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import type {
   DashboardRepositoryState,
   DashboardRunLaunchResult,
@@ -158,6 +158,10 @@ export function RunsPageContent({
     () => runState.filter((run) => includesRunByFilter(run, activeFilter)),
     [activeFilter, runState],
   );
+
+  useEffect(() => {
+    setRunState(sortRunsForDashboard(runs));
+  }, [runs]);
 
   async function refreshRunState(): Promise<void> {
     const response = await fetch(`/api/dashboard/runs?limit=${DEFAULT_RUN_LIST_LIMIT}`, { method: 'GET' });
