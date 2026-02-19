@@ -9,7 +9,7 @@ type RepositoriesPageProps = Readonly<{
   authGate?: GitHubAuthGate;
 }>;
 
-export { RepositoriesPageContent };
+export { RepositoriesPageContent } from './repositories-client';
 
 export default async function RepositoriesPage({
   repositories,

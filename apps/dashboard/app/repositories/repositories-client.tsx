@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useMemo, useState, type ReactNode } from 'react';
 import type {
   DashboardCreateRepositoryResult,
   DashboardRepositoryState,
@@ -92,6 +92,123 @@ function filterRepository(
   );
 }
 
+function getAddFormHint(syncBlocked: boolean): string {
+  if (syncBlocked) {
+    return 'Dashboard add is blocked until GitHub authentication is restored. Use CLI commands below or re-authenticate.';
+  }
+
+  return 'Add Repository registers a GitHub repository and starts sync automatically.';
+}
+
+function resolveSyncErrorMessage(
+  repository: DashboardRepositoryState,
+  syncErrors: Readonly<Record<string, string>>,
+): string | null {
+  const syncError = syncErrors[repository.name];
+  if (syncError) {
+    return syncError;
+  }
+
+  if (repository.cloneStatus === 'error') {
+    return 'Latest sync failed. Retry to recover.';
+  }
+
+  return null;
+}
+
+function resolveSyncLabel(
+  repository: DashboardRepositoryState,
+  lastSyncLabels: Readonly<Record<string, string>>,
+): string {
+  const lastSyncLabel = lastSyncLabels[repository.name];
+  if (lastSyncLabel) {
+    return lastSyncLabel;
+  }
+
+  if (repository.cloneStatus === 'cloned') {
+    return 'Available';
+  }
+
+  return 'Not synced';
+}
+
+function renderSyncBanner(syncBanner: SyncBanner | null): ReactNode {
+  if (!syncBanner) {
+    return null;
+  }
+
+  if (syncBanner.tone === 'error') {
+    return (
+      <p className={`repo-banner repo-banner--${syncBanner.tone}`} role="alert">
+        {syncBanner.message}
+      </p>
+    );
+  }
+
+  return (
+    <output className={`repo-banner repo-banner--${syncBanner.tone}`} aria-live="polite">
+      {syncBanner.message}
+    </output>
+  );
+}
+
+function renderLocalPath(localPath: string | null, syncErrorMessage: string | null): ReactNode {
+  if (localPath) {
+    return <code className="repo-path">{localPath}</code>;
+  }
+
+  if (syncErrorMessage) {
+    return <p className="repo-cell-error">{syncErrorMessage}</p>;
+  }
+
+  return <span className="meta-text">Path unavailable</span>;
+}
+
+function renderSelectedRepositoryDetails(
+  selectedRepository: DashboardRepositoryState | null,
+): ReactNode {
+  if (!selectedRepository) {
+    return <p>Select a repository to inspect details.</p>;
+  }
+
+  return (
+    <ul className="entity-list repo-detail-list">
+      <li>
+        <span>Name</span>
+        <span>{selectedRepository.name}</span>
+      </li>
+      <li>
+        <span>Provider</span>
+        <span>{selectedRepository.provider}</span>
+      </li>
+      <li>
+        <span>Remote</span>
+        <span>{selectedRepository.remoteRef}</span>
+      </li>
+      <li>
+        <span>Local path</span>
+        <span>{selectedRepository.localPath ?? 'Not available'}</span>
+      </li>
+    </ul>
+  );
+}
+
+function renderLaunchAction(canLaunchWithSelectedRepository: boolean): ReactNode {
+  if (canLaunchWithSelectedRepository) {
+    return (
+      <ButtonLink href="/runs" tone="primary">
+        Launch Run with this repo
+      </ButtonLink>
+    );
+  }
+
+  return (
+    <ActionButton tone="primary" disabled aria-disabled="true">
+      Launch Run with this repo
+    </ActionButton>
+  );
+}
+
 export function RepositoriesPageContent({
   repositories,
   authGate,
@@ -123,9 +240,7 @@ export function RepositoriesPageContent({
   const selectedRepositorySyncError = selectedRepository ? syncErrors[selectedRepository.name] : undefined;
   const canLaunchWithSelectedRepository =
     selectedRepository !== null && selectedRepository.cloneStatus === 'cloned' && authGate.canMutate;
-  const addFormHint = syncBlocked
-    ? 'Dashboard add is blocked until GitHub authentication is restored. Use CLI commands below or re-authenticate.'
-    : 'Add Repository registers a GitHub repository and starts sync automatically.';
+  const addFormHint = getAddFormHint(syncBlocked);
 
   async function handleSync(repository: DashboardRepositoryState): Promise<void> {
     if (syncBlocked || syncingRepositoryName !== null || isAddingRepository) {
@@ -268,6 +383,99 @@ export function RepositoriesPageContent({
     }
   }
 
+  let repositoriesContent: ReactNode;
+  if (repositoryState.length === 0) {
+    repositoriesContent = (
+      <div className="page-stack">
+        <h3>No repositories configured</h3>
+        <p>Add a GitHub repository to register it and trigger sync from the dashboard.</p>
+        <div className="action-row">
+          <ActionButton
+            tone="primary"
+            disabled={actionBlocked}
+            aria-disabled={actionBlocked}
+            onClick={() => {
+              handleOpenAddForm();
+            }}
+          >
+            Add Repository
+          </ActionButton>
+        </div>
+        <p className="meta-text repo-add-hint">{addFormHint}</p>
+      </div>
+    );
+  } else if (filteredRepositories.length === 0) {
+    repositoriesContent = <p>No repositories match this filter.</p>;
+  } else {
+    repositoriesContent = (
+      <div className="repositories-table-wrapper">
+        <table className="repositories-table">
+          <thead>
+            <tr>
+              <th scope="col">Repository</th>
+              <th scope="col">Provider</th>
+              <th scope="col">Clone status</th>
+              <th scope="col">Local path</th>
+              <th scope="col">Last sync</th>
+              <th scope="col">Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {filteredRepositories.map((repository) => {
+              const isSyncing = syncingRepositoryName === repository.name;
+              const cloneStatus = isSyncing ? 'syncing' : repository.cloneStatus;
+              const badge = mapCloneStatusToBadge(cloneStatus);
+              const syncErrorMessage = resolveSyncErrorMessage(repository, syncErrors);
+              const actionLabel = repository.cloneStatus === 'error' ? 'Retry' : 'Sync';
+              const actionText = isSyncing ? 'Syncing...' : actionLabel;
+              const syncLabel = resolveSyncLabel(repository, lastSyncLabels);
+              const selected = selectedRepository?.name === repository.name;
+              let rowClassName: string | undefined;
+
+              if (selected) {
+                rowClassName = 'repositories-row--selected';
+              }
+
+              return (
+                <tr key={repository.id} className={rowClassName}>
+                  <td>
+                    <button
+                      className="repo-name-button"
+                      onClick={() => {
+                        setSelectedRepositoryName(repository.name);
+                      }}
+                      type="button"
+                    >
+                      {repository.name}
+                    </button>
+                  </td>
+                  <td>{repository.provider}</td>
+                  <td>
+                    <StatusBadge status={badge.status} label={badge.label} />
+                  </td>
+                  <td>{renderLocalPath(repository.localPath, syncErrorMessage)}</td>
+                  <td className="meta-text">{syncLabel}</td>
+                  <td>
+                    <ActionButton
+                      aria-label={`${actionLabel} ${repository.name}`}
+                      disabled={actionBlocked}
+                      aria-disabled={actionBlocked}
+                      onClick={() => {
+                        void handleSync(repository);
+                      }}
+                    >
+                      {actionText}
+                    </ActionButton>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    );
+  }
+
   return (
     <div className="page-stack">
       <section className="page-heading">
@@ -280,14 +488,7 @@ export function RepositoriesPageContent({
           title="Repositories"
           description="Name, provider, clone state, local path, and sync actions."
         >
-          {syncBanner ? (
-            <p
-              className={`repo-banner repo-banner--${syncBanner.tone}`}
-              role={syncBanner.tone === 'error' ? 'alert' : 'status'}
-            >
-              {syncBanner.message}
-            </p>
-          ) : null}
+          {renderSyncBanner(syncBanner)}
 
           <div className="repositories-toolbar">
             <label className="repositories-search" htmlFor="repositories-search">
@@ -304,131 +505,15 @@ export function RepositoriesPageContent({
             </label>
           </div>
 
-          {repositoryState.length === 0 ? (
-            <div className="page-stack">
-              <h3>No repositories configured</h3>
-              <p>Add a GitHub repository to register it and trigger sync from the dashboard.</p>
-              <div className="action-row">
-                <ActionButton
-                  tone="primary"
-                  disabled={actionBlocked}
-                  aria-disabled={actionBlocked}
-                  onClick={() => {
-                    handleOpenAddForm();
-                  }}
-                >
-                  Add Repository
-                </ActionButton>
-              </div>
-              <p className="meta-text repo-add-hint">{addFormHint}</p>
-            </div>
-          ) : filteredRepositories.length === 0 ? (
-            <p>No repositories match this filter.</p>
-          ) : (
-            <div className="repositories-table-wrapper">
-              <table className="repositories-table">
-                <thead>
-                  <tr>
-                    <th scope="col">Repository</th>
-                    <th scope="col">Provider</th>
-                    <th scope="col">Clone status</th>
-                    <th scope="col">Local path</th>
-                    <th scope="col">Last sync</th>
-                    <th scope="col">Actions</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {filteredRepositories.map((repository) => {
-                    const isSyncing = syncingRepositoryName === repository.name;
-                    const cloneStatus = isSyncing ? 'syncing' : repository.cloneStatus;
-                    const badge = mapCloneStatusToBadge(cloneStatus);
-                    const syncErrorMessage =
-                      syncErrors[repository.name] ??
-                      (repository.cloneStatus === 'error' ? 'Latest sync failed. Retry to recover.' : null);
-                    const actionLabel = repository.cloneStatus === 'error' ? 'Retry' : 'Sync';
-                    const actionText = isSyncing ? 'Syncing...' : actionLabel;
-                    const syncLabel = lastSyncLabels[repository.name] ?? (repository.cloneStatus === 'cloned'
-                      ? 'Available'
-                      : 'Not synced');
-                    const selected = selectedRepository?.name === repository.name;
-
-                    return (
-                      <tr key={repository.id} className={selected ? 'repositories-row--selected' : undefined}>
-                        <td>
-                          <button
-                            className="repo-name-button"
-                            onClick={() => {
-                              setSelectedRepositoryName(repository.name);
-                            }}
-                            type="button"
-                          >
-                            {repository.name}
-                          </button>
-                        </td>
-                        <td>{repository.provider}</td>
-                        <td>
-                          <StatusBadge status={badge.status} label={badge.label} />
-                        </td>
-                        <td>
-                          {repository.localPath ? (
-                            <code className="repo-path">{repository.localPath}</code>
-                          ) : syncErrorMessage ? (
-                            <p className="repo-cell-error">{syncErrorMessage}</p>
-                          ) : (
-                            <span className="meta-text">Path unavailable</span>
-                          )}
-                        </td>
-                        <td className="meta-text">{syncLabel}</td>
-                        <td>
-                          <ActionButton
-                            aria-label={`${actionLabel} ${repository.name}`}
-                            disabled={actionBlocked}
-                            aria-disabled={actionBlocked}
-                            onClick={() => {
-                              void handleSync(repository);
-                            }}
-                          >
-                            {actionText}
-                          </ActionButton>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          )}
+          {repositoriesContent}
         </Card>
 
         <Panel title="Repository actions" description="Select a row to inspect details and run sync.">
           <p className="meta-text">{`GitHub auth: ${authGate.badge.label}`}</p>
 
-          {selectedRepository ? (
-            <ul className="entity-list repo-detail-list">
-              <li>
-                <span>Name</span>
-                <span>{selectedRepository.name}</span>
-              </li>
-              <li>
-                <span>Provider</span>
-                <span>{selectedRepository.provider}</span>
-              </li>
-              <li>
-                <span>Remote</span>
-                <span>{selectedRepository.remoteRef}</span>
-              </li>
-              <li>
-                <span>Local path</span>
-                <span>{selectedRepository.localPath ?? 'Not available'}</span>
-              </li>
-            </ul>
-          ) : (
-            <p>Select a repository to inspect details.</p>
-          )}
+          {renderSelectedRepositoryDetails(selectedRepository)}
 
-          {selectedRepository && selectedRepositorySyncError ? (
-            <p className="repo-cell-error">{selectedRepositorySyncError}</p>
-          ) : null}
+          {selectedRepositorySyncError ? <p className="repo-cell-error">{selectedRepositorySyncError}</p> : null}
 
           <div className="action-row">
             <ActionButton
@@ -454,15 +539,7 @@ export function RepositoriesPageContent({
               Add Repository
             </ActionButton>
 
-            {canLaunchWithSelectedRepository ? (
-              <ButtonLink href="/runs" tone="primary">
-                Launch Run with this repo
-              </ButtonLink>
-            ) : (
-              <ActionButton tone="primary" disabled aria-disabled="true">
-                Launch Run with this repo
-              </ActionButton>
-            )}
+            {renderLaunchAction(canLaunchWithSelectedRepository)}
           </div>
           <p className="meta-text repo-add-hint">{addFormHint}</p>
 
