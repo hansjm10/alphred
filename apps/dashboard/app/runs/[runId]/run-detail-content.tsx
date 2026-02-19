@@ -446,6 +446,7 @@ export function RunDetailContent({
       setChannelState('disabled');
       setIsRefreshing(false);
       setNextRetryAtMs(null);
+      setUpdateError(null);
       return;
     }
 
@@ -663,7 +664,7 @@ export function RunDetailContent({
             </span>
           </output>
 
-          {updateError && channelState !== 'live' ? (
+          {updateError && (channelState === 'reconnecting' || channelState === 'stale') ? (
             <output className="run-realtime-warning" aria-live="polite">
               {`Update channel degraded: ${updateError}`}
             </output>

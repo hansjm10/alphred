@@ -133,6 +133,7 @@ describe('RunDetailContent realtime updates', () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     vi.unstubAllGlobals();
   });
 
@@ -191,6 +192,62 @@ describe('RunDetailContent realtime updates', () => {
 
     await waitFor(() => {
       expect(screen.getByText(/Live updates every 1s/)).toBeInTheDocument();
+    }, { timeout: 2_000 });
+  });
+
+  it('transitions to stale after prolonged reconnect failures', async () => {
+    vi.useFakeTimers();
+    fetchMock.mockRejectedValue(new Error('network down'));
+
+    render(
+      <RunDetailContent
+        initialDetail={createRunDetail()}
+        repositories={[createRepository()]}
+        pollIntervalMs={1_000}
+      />,
+    );
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(screen.getByText(/Connection interrupted\. Retrying in/i)).toBeInTheDocument();
+
+    await vi.advanceTimersByTimeAsync(2_000);
+    await vi.advanceTimersByTimeAsync(4_000);
+    await vi.advanceTimersByTimeAsync(8_000);
+    await vi.advanceTimersByTimeAsync(8_000);
+
+    expect(fetchMock).toHaveBeenCalledTimes(5);
+    expect(screen.getByText(/Latest data is stale\. Reconnect attempt in/i)).toBeInTheDocument();
+    expect(screen.getByText(/Update channel degraded: network down/i)).toBeInTheDocument();
+  });
+
+  it('clears degraded warning when realtime is disabled after an error', async () => {
+    const initialDetail = createRunDetail();
+    fetchMock.mockRejectedValue(new Error('network down'));
+
+    const { rerender } = render(
+      <RunDetailContent
+        initialDetail={initialDetail}
+        repositories={[createRepository()]}
+        pollIntervalMs={50}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText(/Update channel degraded: network down/i)).toBeInTheDocument();
+    }, { timeout: 2_000 });
+
+    rerender(
+      <RunDetailContent
+        initialDetail={initialDetail}
+        repositories={[createRepository()]}
+        enableRealtime={false}
+        pollIntervalMs={50}
+      />,
+    );
+
+    expect(screen.getByText(/Realtime updates are paused for this run state\./i)).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.queryByText(/Update channel degraded:/i)).toBeNull();
     }, { timeout: 2_000 });
   });
 
