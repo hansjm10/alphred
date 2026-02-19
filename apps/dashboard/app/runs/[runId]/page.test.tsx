@@ -194,6 +194,46 @@ describe('RunDetailPage', () => {
     expect(screen.getByText('Routing decision: approved.')).toBeInTheDocument();
   });
 
+  it('uses the newest removed worktree for repository context when no active worktree exists', async () => {
+    loadDashboardRunDetailMock.mockResolvedValue(
+      createRunDetail({
+        worktrees: [
+          {
+            id: 100,
+            runId: 412,
+            repositoryId: 7,
+            path: '/tmp/worktrees/demo-tree-412-old',
+            branch: 'alphred/demo-tree/412-old',
+            commitHash: null,
+            status: 'removed',
+            createdAt: '2026-02-18T00:00:00.000Z',
+            removedAt: '2026-02-18T00:01:00.000Z',
+          },
+          {
+            id: 101,
+            runId: 412,
+            repositoryId: 8,
+            path: '/tmp/worktrees/demo-tree-412-new',
+            branch: 'alphred/demo-tree/412-new',
+            commitHash: null,
+            status: 'removed',
+            createdAt: '2026-02-18T00:02:00.000Z',
+            removedAt: '2026-02-18T00:03:00.000Z',
+          },
+        ],
+      }),
+    );
+    loadDashboardRepositoriesMock.mockResolvedValue([
+      createRepository({ id: 7, name: 'old-repo' }),
+      createRepository({ id: 8, name: 'new-repo' }),
+    ]);
+
+    render(await RunDetailPage({ params: Promise.resolve({ runId: '412' }) }));
+
+    expect(screen.getByText('new-repo')).toBeInTheDocument();
+    expect(screen.queryByText('old-repo')).toBeNull();
+  });
+
   it('does not render a synthetic start event when run has not started', async () => {
     loadDashboardRunDetailMock.mockResolvedValue(
       createRunDetail({

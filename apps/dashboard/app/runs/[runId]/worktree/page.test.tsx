@@ -167,6 +167,43 @@ describe('RunWorktreePage', () => {
     expect(screen.getByRole('link', { name: 'Back to Run' })).toHaveAttribute('href', '/runs/2');
   });
 
+  it('uses the newest removed worktree metadata when no active worktree exists', async () => {
+    loadDashboardRunDetailMock.mockResolvedValue(
+      createRunDetail({
+        worktrees: [
+          {
+            id: 300,
+            runId: 2,
+            repositoryId: 1,
+            path: '/tmp/worktrees/test-flow-2-old',
+            branch: 'alphred/test_flow/2-old',
+            commitHash: 'aaa111',
+            status: 'removed',
+            createdAt: '2026-02-19T00:00:00.000Z',
+            removedAt: '2026-02-19T00:01:00.000Z',
+          },
+          {
+            id: 301,
+            runId: 2,
+            repositoryId: 1,
+            path: '/tmp/worktrees/test-flow-2-new',
+            branch: 'alphred/test_flow/2-new',
+            commitHash: 'bbb222',
+            status: 'removed',
+            createdAt: '2026-02-19T00:02:00.000Z',
+            removedAt: '2026-02-19T00:03:00.000Z',
+          },
+        ],
+      }),
+    );
+
+    render(await RunWorktreePage({ params: Promise.resolve({ runId: '2' }) }));
+
+    expect(screen.getByText('/tmp/worktrees/test-flow-2-new')).toBeInTheDocument();
+    expect(screen.getByText('alphred/test_flow/2-new')).toBeInTheDocument();
+    expect(screen.queryByText('/tmp/worktrees/test-flow-2-old')).toBeNull();
+  });
+
   it('prefers persisted run data over fixture content when ids collide', async () => {
     loadDashboardRunDetailMock.mockResolvedValue(
       createRunDetail({

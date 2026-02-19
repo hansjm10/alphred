@@ -162,12 +162,17 @@ function resolveRepositoryContext(
   }
 
   const repositoryNameById = new Map(repositories.map((repository) => [repository.id, repository.name]));
-  const activeWorktree = detail.worktrees.find((worktree) => worktree.status === 'active') ?? detail.worktrees[0];
-  if (!activeWorktree) {
+  const repositoryContextWorktree =
+    detail.worktrees.find((worktree) => worktree.status === 'active') ??
+    detail.worktrees[detail.worktrees.length - 1];
+  if (!repositoryContextWorktree) {
     return 'Not attached';
   }
 
-  return repositoryNameById.get(activeWorktree.repositoryId) ?? `Repository #${activeWorktree.repositoryId}`;
+  return (
+    repositoryNameById.get(repositoryContextWorktree.repositoryId) ??
+    `Repository #${repositoryContextWorktree.repositoryId}`
+  );
 }
 
 function resolvePrimaryAction(
