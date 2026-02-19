@@ -26,7 +26,7 @@ function parseRunId(value: string): number | null {
 function resolvePrimaryWorktree(detail: DashboardRunDetail): DashboardRunDetail['worktrees'][number] | null {
   return (
     detail.worktrees.find((worktree) => worktree.status === 'active') ??
-    detail.worktrees[detail.worktrees.length - 1] ??
+    detail.worktrees.at(-1) ??
     null
   );
 }

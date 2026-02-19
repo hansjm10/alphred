@@ -164,7 +164,7 @@ function resolveRepositoryContext(
   const repositoryNameById = new Map(repositories.map((repository) => [repository.id, repository.name]));
   const repositoryContextWorktree =
     detail.worktrees.find((worktree) => worktree.status === 'active') ??
-    detail.worktrees[detail.worktrees.length - 1];
+    detail.worktrees.at(-1);
   if (!repositoryContextWorktree) {
     return 'Not attached';
   }

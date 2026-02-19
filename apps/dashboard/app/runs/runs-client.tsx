@@ -194,8 +194,8 @@ function parseLaunchResult(payload: unknown): DashboardRunLaunchResult | null {
     mode: mode as DashboardRunLaunchResult['mode'],
     status: status as DashboardRunLaunchResult['status'],
     runStatus: runStatus as DashboardRunLaunchResult['runStatus'],
-    executionOutcome: executionOutcome as string | null,
-    executedNodes: executedNodes as number | null,
+    executionOutcome,
+    executedNodes,
   };
 }
 
