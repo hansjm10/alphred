@@ -3,6 +3,7 @@
 import { render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { DashboardRepositoryState, DashboardRunDetail } from '../../../src/server/dashboard-contracts';
+import { DashboardIntegrationError } from '../../../src/server/dashboard-errors';
 
 const { NOT_FOUND_ERROR, notFoundMock, loadDashboardRunDetailMock, loadDashboardRepositoriesMock } = vi.hoisted(() => {
   const error = new Error('NEXT_NOT_FOUND');
@@ -256,6 +257,59 @@ describe('RunDetailPage', () => {
     expect(screen.getByText('Not started')).toBeInTheDocument();
     expect(screen.queryByText('Run started.')).toBeNull();
     expect(screen.getByText('No lifecycle events captured yet.')).toBeInTheDocument();
+  });
+
+  it('renders cancelled run actions and truncates long artifact previews', async () => {
+    const longPreview = `   ${'x'.repeat(200)}   `;
+    const expectedPreview = `${'x'.repeat(137)}...`;
+    loadDashboardRunDetailMock.mockResolvedValue(
+      createRunDetail({
+        run: {
+          id: 414,
+          status: 'cancelled',
+          completedAt: '2026-02-18T00:05:00.000Z',
+        },
+        artifacts: [
+          {
+            id: 5,
+            runNodeId: 1,
+            artifactType: 'report',
+            contentType: 'markdown',
+            contentPreview: longPreview,
+            createdAt: '2026-02-18T00:05:00.000Z',
+          },
+        ],
+      }),
+    );
+    loadDashboardRepositoriesMock.mockResolvedValue([createRepository({ id: 1, name: 'demo-repo' })]);
+
+    render(await RunDetailPage({ params: Promise.resolve({ runId: '414' }) }));
+
+    expect(screen.getByRole('button', { name: 'Run Cancelled' })).toBeDisabled();
+    expect(screen.getByText('Cancelled runs cannot be resumed from this view.')).toBeInTheDocument();
+    expect(screen.getByText(expectedPreview)).toBeInTheDocument();
+    expect(screen.queryByText(longPreview)).toBeNull();
+  });
+
+  it('routes missing persisted run ids to not-found', async () => {
+    loadDashboardRunDetailMock.mockRejectedValue(
+      new DashboardIntegrationError('not_found', 'Workflow run was not found.', { status: 404 }),
+    );
+
+    await expect(RunDetailPage({ params: Promise.resolve({ runId: '9999' }) })).rejects.toThrow(
+      NOT_FOUND_ERROR,
+    );
+    expect(notFoundMock).toHaveBeenCalled();
+  });
+
+  it('rethrows unexpected persisted run loader failures', async () => {
+    const failure = new Error('Run detail loader exploded.');
+    loadDashboardRunDetailMock.mockRejectedValue(failure);
+
+    await expect(RunDetailPage({ params: Promise.resolve({ runId: '412' }) })).rejects.toThrow(
+      failure,
+    );
+    expect(notFoundMock).not.toHaveBeenCalled();
   });
 
   it('routes invalid run ids to not-found', async () => {

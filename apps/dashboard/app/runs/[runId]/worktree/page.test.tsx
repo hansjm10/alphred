@@ -232,6 +232,21 @@ describe('RunWorktreePage', () => {
     expect(screen.queryByRole('heading', { name: 'Changed files' })).toBeNull();
   });
 
+  it('renders persisted no-worktree state when run metadata has no captured worktree', async () => {
+    loadDashboardRunDetailMock.mockResolvedValue(
+      createRunDetail({
+        run: { id: 2 },
+        worktrees: [],
+      }),
+    );
+
+    render(await RunWorktreePage({ params: Promise.resolve({ runId: '2' }) }));
+
+    expect(screen.getByRole('heading', { name: 'No changed files' })).toBeInTheDocument();
+    expect(screen.getByText('This run does not have a captured worktree.')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Back to Run' })).toHaveAttribute('href', '/runs/2');
+  });
+
   it('routes missing persisted run ids to not-found', async () => {
     loadDashboardRunDetailMock.mockRejectedValue(
       new DashboardIntegrationError('not_found', 'Run was not found.', { status: 404 }),
@@ -241,6 +256,16 @@ describe('RunWorktreePage', () => {
       RunWorktreePage({ params: Promise.resolve({ runId: '9999' }) }),
     ).rejects.toThrow(NOT_FOUND_ERROR);
     expect(notFoundMock).toHaveBeenCalled();
+  });
+
+  it('rethrows unexpected persisted run loader failures', async () => {
+    const failure = new Error('Service unavailable');
+    loadDashboardRunDetailMock.mockRejectedValue(failure);
+
+    await expect(
+      RunWorktreePage({ params: Promise.resolve({ runId: '2' }) }),
+    ).rejects.toThrow(failure);
+    expect(notFoundMock).not.toHaveBeenCalled();
   });
 
   it('routes invalid run ids to not-found before loading persisted data', async () => {

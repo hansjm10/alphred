@@ -702,6 +702,110 @@ describe('createDashboardService', () => {
     }
   });
 
+  it('rejects invalid executionMode input when launching runs', () => {
+    const { dependencies } = createHarness();
+    const service = createDashboardService({ dependencies });
+
+    try {
+      service.launchWorkflowRun({
+        treeKey: 'demo-tree',
+        executionMode: 'queued' as unknown as 'async',
+      });
+      throw new Error('Expected launchWorkflowRun to throw for invalid executionMode input.');
+    } catch (error) {
+      expect(error).toMatchObject({
+        name: 'DashboardIntegrationError',
+        code: 'invalid_request',
+        status: 400,
+        message: 'executionMode must be "async" or "sync".',
+      });
+    }
+  });
+
+  it('returns not_found when launching a repository-scoped run for a missing repository', async () => {
+    const { db, dependencies } = createHarness();
+    seedRunData(db);
+    const service = createDashboardService({ dependencies });
+
+    await expect(
+      service.launchWorkflowRun({
+        treeKey: 'demo-tree',
+        repositoryName: 'missing-repo',
+        executionMode: 'sync',
+      }),
+    ).rejects.toMatchObject({
+      name: 'DashboardIntegrationError',
+      code: 'not_found',
+      status: 404,
+      message: 'Repository "missing-repo" was not found.',
+    });
+  });
+
+  it('returns sync launch execution details when executor completes', async () => {
+    const executeRun = vi.fn(async () => ({
+      finalStep: {
+        runStatus: 'completed',
+        outcome: 'completed',
+      },
+      executedNodes: 3,
+    }));
+    const { db, dependencies } = createHarness({
+      createSqlWorkflowExecutor: () =>
+        ({ executeRun }) as unknown as ReturnType<DashboardServiceDependencies['createSqlWorkflowExecutor']>,
+    });
+    seedRunData(db);
+    const service = createDashboardService({ dependencies });
+
+    const result = await service.launchWorkflowRun({
+      treeKey: 'demo-tree',
+      executionMode: 'sync',
+    });
+
+    expect(executeRun).toHaveBeenCalledTimes(1);
+    expect(result).toEqual({
+      workflowRunId: result.workflowRunId,
+      mode: 'sync',
+      status: 'completed',
+      runStatus: 'completed',
+      executionOutcome: 'completed',
+      executedNodes: 3,
+    });
+  });
+
+  it('reports background execution count while async run execution is in flight', async () => {
+    const executeRun = vi.fn(async () => {
+      await new Promise(resolve => setTimeout(resolve, 20));
+      return {
+        finalStep: {
+          runStatus: 'completed',
+          outcome: 'completed',
+        },
+        executedNodes: 1,
+      };
+    });
+    const { db, dependencies } = createHarness({
+      createSqlWorkflowExecutor: () =>
+        ({ executeRun }) as unknown as ReturnType<DashboardServiceDependencies['createSqlWorkflowExecutor']>,
+    });
+    seedRunData(db);
+    const service = createDashboardService({ dependencies });
+
+    expect(service.getBackgroundExecutionCount()).toBe(0);
+
+    const result = await service.launchWorkflowRun({
+      treeKey: 'demo-tree',
+      executionMode: 'async',
+    });
+
+    expect(service.getBackgroundExecutionCount()).toBe(1);
+    expect(service.hasBackgroundExecution(result.workflowRunId)).toBe(true);
+
+    await waitForBackgroundExecution(service, result.workflowRunId);
+
+    expect(service.getBackgroundExecutionCount()).toBe(0);
+    expect(service.hasBackgroundExecution(result.workflowRunId)).toBe(false);
+  });
+
   it('checks github auth status through scm provider adapter', async () => {
     const checkAuth = vi.fn(async () => ({
       authenticated: false,
