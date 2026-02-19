@@ -277,6 +277,16 @@ output {
   color: var(--accent-warning);
 }
 
+.status-badge--skipped {
+  border-color: color-mix(in srgb, var(--text-muted) 50%, var(--border-default));
+  color: var(--text-muted);
+}
+
+.status-badge--cancelled {
+  border-color: color-mix(in srgb, var(--accent-danger) 42%, var(--border-default));
+  color: color-mix(in srgb, var(--accent-danger) 78%, var(--text-primary));
+}
+
 .button-link {
   align-items: center;
   border: 1px solid var(--border-default);
@@ -383,7 +393,9 @@ output {
 
 .repositories-search input:focus-visible,
 .repo-name-button:focus-visible,
-.repo-add-form__field input:focus-visible {
+.repo-add-form__field input:focus-visible,
+.run-launch-form__field input:focus-visible,
+.run-launch-form__field select:focus-visible {
   outline: 2px solid var(--accent-active);
   outline-offset: 2px;
 }
@@ -478,6 +490,90 @@ output {
 .repo-banner--error {
   border-color: color-mix(in srgb, var(--accent-danger) 50%, var(--border-default));
   color: var(--accent-danger);
+}
+
+.run-launch-form {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.run-launch-form__field {
+  display: grid;
+  gap: 4px;
+}
+
+.run-launch-form__field input,
+.run-launch-form__field select {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  font: 400 14px/20px var(--font-body);
+  padding: 8px 10px;
+}
+
+.run-launch-banner {
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  display: block;
+  font: 600 13px/20px var(--font-data);
+  margin-top: var(--space-1);
+  padding: 8px 10px;
+}
+
+.run-launch-banner--success {
+  border-color: color-mix(in srgb, var(--accent-success) 50%, var(--border-default));
+  color: var(--accent-success);
+}
+
+.run-launch-banner--error {
+  border-color: color-mix(in srgb, var(--accent-danger) 50%, var(--border-default));
+  color: var(--accent-danger);
+}
+
+.run-launch-banner__note {
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+
+.run-inline-link {
+  color: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.runs-table-wrapper {
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  overflow-x: auto;
+}
+
+.runs-table {
+  border-collapse: collapse;
+  min-width: 920px;
+  width: 100%;
+}
+
+.runs-table th,
+.runs-table td {
+  border-bottom: 1px solid var(--border-default);
+  padding: 10px;
+  text-align: left;
+  vertical-align: top;
+}
+
+.runs-table th {
+  background: var(--bg-subtle);
+  color: var(--text-secondary);
+  font: 600 13px/18px var(--font-data);
+}
+
+.runs-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.run-action-feedback {
+  margin-top: var(--space-2);
 }
 
 .meta-text {

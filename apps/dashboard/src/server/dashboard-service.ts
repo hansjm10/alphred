@@ -10,6 +10,7 @@ import {
   listRunWorktreesForRun,
   migrateDatabase,
   phaseArtifacts,
+  repositories as repositoryTable,
   routingDecisions,
   runNodes,
   runWorktrees,
@@ -455,10 +456,31 @@ export function createDashboardService(options: {
       .all();
 
     const latestNodes = selectLatestNodeAttempts(runNodeRows);
+    const repositoryContextRows = db
+      .select({
+        repositoryId: runWorktrees.repositoryId,
+        repositoryName: repositoryTable.name,
+        worktreeStatus: runWorktrees.status,
+      })
+      .from(runWorktrees)
+      .innerJoin(repositoryTable, eq(runWorktrees.repositoryId, repositoryTable.id))
+      .where(eq(runWorktrees.workflowRunId, run.id))
+      .orderBy(asc(runWorktrees.createdAt), asc(runWorktrees.id))
+      .all();
+
+    const repositoryContext =
+      repositoryContextRows.find(row => row.worktreeStatus === 'active') ??
+      repositoryContextRows[repositoryContextRows.length - 1];
 
     return {
       id: run.id,
       tree,
+      repository: repositoryContext
+        ? {
+          id: repositoryContext.repositoryId,
+          name: repositoryContext.repositoryName,
+        }
+        : null,
       status: run.status as RunStatus,
       startedAt: run.startedAt,
       completedAt: run.completedAt,

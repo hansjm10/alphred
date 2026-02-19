@@ -37,6 +37,10 @@ export type DashboardRunSummary = {
     version: number;
     name: string;
   };
+  repository: {
+    id: number;
+    name: string;
+  } | null;
   status: 'pending' | 'running' | 'paused' | 'completed' | 'failed' | 'cancelled';
   startedAt: string | null;
   completedAt: string | null;

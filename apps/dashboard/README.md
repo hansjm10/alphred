@@ -173,6 +173,10 @@ Response `200`:
         "version": 1,
         "name": "Demo Tree"
       },
+      "repository": {
+        "id": 1,
+        "name": "demo-repo"
+      },
       "status": "completed",
       "startedAt": "2026-02-17T20:01:00.000Z",
       "completedAt": "2026-02-17T20:02:00.000Z",
@@ -191,6 +195,10 @@ Response `200`:
 ```
 
 Type: `{ runs: DashboardRunSummary[] }`.
+
+Notes:
+- `repository` reflects the active run worktree repository when present.
+- `repository` is `null` when a run has no associated worktree/repository context.
 
 ### `POST /runs`
 
@@ -263,6 +271,15 @@ Response `200`:
 ```
 
 Type: `{ worktrees: DashboardRunWorktreeMetadata[] }`.
+
+## UI Route Notes
+
+### `/runs/[runId]/worktree`
+
+- The page loads persisted run detail first via dashboard service APIs.
+- If persisted run detail is not found, the page falls back to fixture-backed previews for known fixture run IDs.
+- For persisted runs, the page renders worktree metadata (status, branch, path, commit) only.
+- File preview/diff UI is fixture-only; persisted runs show a "File preview unavailable" panel.
 
 ## Source of Truth
 
