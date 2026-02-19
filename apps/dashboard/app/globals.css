@@ -608,6 +608,7 @@ output {
   border: 1px solid color-mix(in srgb, var(--accent-danger) 45%, var(--border-default));
   border-radius: var(--radius-sm);
   color: var(--accent-danger);
+  display: block;
   font: 600 13px/20px var(--font-data);
   margin-top: var(--space-2);
   padding: 8px 10px;

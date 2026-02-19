@@ -451,14 +451,85 @@ export function RunDetailContent({
 
     let cancelled = false;
     const abortController = new AbortController();
-    let timeoutId: number | null = null;
+    let timeoutId: ReturnType<typeof globalThis.setTimeout> | null = null;
     let consecutiveFailures = 0;
     const shouldSkipUpdate = (): boolean => cancelled || abortController.signal.aborted;
 
     const scheduleNextPoll = (delayMs: number): void => {
-      timeoutId = window.setTimeout(() => {
+      timeoutId = globalThis.setTimeout(() => {
         void pollRunDetail();
       }, delayMs);
+    };
+
+    const fetchLatestRunDetail = async (): Promise<DashboardRunDetail | null> => {
+      const response = await fetch(`/api/dashboard/runs/${detail.run.id}`, {
+        method: 'GET',
+        headers: {
+          accept: 'application/json',
+        },
+        signal: abortController.signal,
+      });
+      if (shouldSkipUpdate()) {
+        return null;
+      }
+
+      const payload = (await response.json().catch(() => null)) as unknown;
+      if (shouldSkipUpdate()) {
+        return null;
+      }
+      if (!response.ok) {
+        throw new Error(resolveApiErrorMessage(response.status, payload, 'Unable to refresh run timeline'));
+      }
+
+      const parsedDetail = parseRunDetailPayload(payload, detail.run.id);
+      if (parsedDetail === null) {
+        throw new Error('Realtime run detail response was malformed.');
+      }
+
+      return shouldSkipUpdate() ? null : parsedDetail;
+    };
+
+    const applySuccessfulPoll = (parsedDetail: DashboardRunDetail): void => {
+      consecutiveFailures = 0;
+      setDetail(parsedDetail);
+      setUpdateError(null);
+      setIsRefreshing(false);
+      setLastUpdatedAtMs(Date.now());
+      setNextRetryAtMs(null);
+
+      if (!ACTIVE_RUN_STATUSES.has(parsedDetail.run.status)) {
+        setChannelState('disabled');
+        return;
+      }
+
+      setChannelState('live');
+      if (!cancelled) {
+        scheduleNextPoll(pollIntervalMs);
+      }
+    };
+
+    const handlePollFailure = (error: unknown): void => {
+      const isAbortError = error instanceof Error && error.name === 'AbortError';
+      if (shouldSkipUpdate() || isAbortError) {
+        return;
+      }
+
+      consecutiveFailures += 1;
+      const retryDelayMs = Math.min(
+        pollIntervalMs * 2 ** Math.max(0, consecutiveFailures - 1),
+        RUN_DETAIL_POLL_BACKOFF_MAX_MS,
+      );
+      const retryAt = Date.now() + retryDelayMs;
+      const stale = Date.now() - lastUpdatedAtRef.current >= RUN_DETAIL_STALE_THRESHOLD_MS;
+
+      setChannelState(stale ? 'stale' : 'reconnecting');
+      setNextRetryAtMs(retryAt);
+      setIsRefreshing(false);
+      setUpdateError(error instanceof Error ? error.message : 'Unable to refresh run timeline.');
+
+      if (!cancelled) {
+        scheduleNextPoll(retryDelayMs);
+      }
     };
 
     const pollRunDetail = async (): Promise<void> => {
@@ -468,69 +539,14 @@ export function RunDetailContent({
 
       setIsRefreshing(true);
       try {
-        const response = await fetch(`/api/dashboard/runs/${detail.run.id}`, {
-          method: 'GET',
-          headers: {
-            accept: 'application/json',
-          },
-          signal: abortController.signal,
-        });
-        if (shouldSkipUpdate()) {
-          return;
-        }
-
-        const payload = (await response.json().catch(() => null)) as unknown;
-        if (shouldSkipUpdate()) {
-          return;
-        }
-        if (!response.ok) {
-          throw new Error(resolveApiErrorMessage(response.status, payload, 'Unable to refresh run timeline'));
-        }
-
-        const parsedDetail = parseRunDetailPayload(payload, detail.run.id);
+        const parsedDetail = await fetchLatestRunDetail();
         if (parsedDetail === null) {
-          throw new Error('Realtime run detail response was malformed.');
-        }
-        if (shouldSkipUpdate()) {
           return;
         }
 
-        consecutiveFailures = 0;
-        setDetail(parsedDetail);
-        setUpdateError(null);
-        setIsRefreshing(false);
-        setLastUpdatedAtMs(Date.now());
-        setNextRetryAtMs(null);
-
-        if (ACTIVE_RUN_STATUSES.has(parsedDetail.run.status)) {
-          setChannelState('live');
-          if (!cancelled) {
-            scheduleNextPoll(pollIntervalMs);
-          }
-        } else {
-          setChannelState('disabled');
-        }
+        applySuccessfulPoll(parsedDetail);
       } catch (error) {
-        const isAbortError = error instanceof Error && error.name === 'AbortError';
-        if (shouldSkipUpdate() || isAbortError) {
-          return;
-        }
-        consecutiveFailures += 1;
-        const retryDelayMs = Math.min(
-          pollIntervalMs * 2 ** Math.max(0, consecutiveFailures - 1),
-          RUN_DETAIL_POLL_BACKOFF_MAX_MS,
-        );
-        const retryAt = Date.now() + retryDelayMs;
-        const stale = Date.now() - lastUpdatedAtRef.current >= RUN_DETAIL_STALE_THRESHOLD_MS;
-
-        setChannelState(stale ? 'stale' : 'reconnecting');
-        setNextRetryAtMs(retryAt);
-        setIsRefreshing(false);
-        setUpdateError(error instanceof Error ? error.message : 'Unable to refresh run timeline.');
-
-        if (!cancelled) {
-          scheduleNextPoll(retryDelayMs);
-        }
+        handlePollFailure(error);
       }
     };
 
@@ -557,7 +573,7 @@ export function RunDetailContent({
     };
 
     updateCountdown();
-    const intervalId = window.setInterval(updateCountdown, 250);
+    const intervalId = globalThis.setInterval(updateCountdown, 250);
 
     return () => {
       clearInterval(intervalId);
@@ -638,19 +654,19 @@ export function RunDetailContent({
           </div>
           {primaryAction.disabledReason ? <p className="meta-text run-action-feedback">{primaryAction.disabledReason}</p> : null}
 
-          <div className={`run-realtime-status run-realtime-status--${channelState}`} role="status" aria-live="polite">
-            <p className="run-realtime-status__badge">{realtimeLabel.badgeLabel}</p>
-            <p className="meta-text">{realtimeLabel.detail}</p>
-            <p className="meta-text">
+          <output className={`run-realtime-status run-realtime-status--${channelState}`} aria-live="polite">
+            <span className="run-realtime-status__badge">{realtimeLabel.badgeLabel}</span>
+            <span className="meta-text">{realtimeLabel.detail}</span>
+            <span className="meta-text">
               {`Last updated ${formatLastUpdated(lastUpdatedAtMs, hasHydrated)}.`}
               {isRefreshing ? ' Refreshing timeline...' : ''}
-            </p>
-          </div>
+            </span>
+          </output>
 
           {updateError && channelState !== 'live' ? (
-            <p className="run-realtime-warning" role="status" aria-live="polite">
+            <output className="run-realtime-warning" aria-live="polite">
               {`Update channel degraded: ${updateError}`}
-            </p>
+            </output>
           ) : null}
         </Panel>
       </div>
