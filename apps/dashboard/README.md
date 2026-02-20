@@ -278,8 +278,15 @@ Type: `{ worktrees: DashboardRunWorktreeMetadata[] }`.
 
 - The page loads persisted run detail first via dashboard service APIs.
 - If persisted run detail is not found, the page falls back to fixture-backed previews for known fixture run IDs.
-- For persisted runs, the page renders worktree metadata (status, branch, path, commit) only.
-- File preview/diff UI is fixture-only; persisted runs show a "File preview unavailable" panel.
+- Both persisted and fixture-backed runs use a split-pane explorer: left file tree, right preview.
+- Default file selection prioritizes the first changed file, then falls back to the first tracked file.
+- Preview supports `view=diff` and `view=content` modes while preserving `path` deep links.
+- Changed-file emphasis is always visible in tree entries.
+- If selected-path preview retrieval fails, the page shows an in-context retry action for that path.
+- Performance envelope for medium repositories:
+  - Up to ~2,500 tracked paths should remain interactive for server-rendered tree loading.
+  - Diff and content preview panes are truncated at 14,000 characters.
+  - Content reads are capped at 96,000 bytes per selected file before truncation messaging.
 
 ## Source of Truth
 

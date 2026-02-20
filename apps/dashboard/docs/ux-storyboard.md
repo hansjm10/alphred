@@ -158,8 +158,18 @@ Top-level routes:
   - Repeated values use the first value.
 - `/runs/[runId]/worktree?path=<file-path>`
   - If `path` matches a tracked worktree file, that file is selected.
-  - If `path` is missing or unsupported, selection falls back to the first tracked file.
+  - If `path` is missing or unsupported, selection falls back to the first changed file; if no changed file exists, use the first tracked file.
   - Repeated values use the first value before fallback rules are applied.
+
+### 4.3 Worktree Performance Envelope
+
+- Medium repository target:
+  - Up to ~2,500 tracked paths in the run-scoped explorer tree.
+  - Diff and content preview panes truncate at 14,000 characters.
+  - File-content reads cap at 96,000 bytes for selected-path preview with explicit truncation messaging.
+- UX expectations under this envelope:
+  - Tree navigation and preview mode toggles (`view=diff|content`) should remain responsive on desktop and mobile.
+  - If selected-path preview retrieval fails, show an in-context retry action without leaving the run-scoped route.
 
 Navigation pattern:
 - Persistent left rail for primary areas.

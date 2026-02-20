@@ -4,8 +4,14 @@ import { render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { DashboardRunDetail } from '../../../../src/server/dashboard-contracts';
 import { DashboardIntegrationError } from '../../../../src/server/dashboard-errors';
+import type { PersistedRunWorktreeExplorer } from './load-persisted-worktree-explorer';
 
-const { NOT_FOUND_ERROR, notFoundMock, loadDashboardRunDetailMock } = vi.hoisted(() => {
+const {
+  NOT_FOUND_ERROR,
+  notFoundMock,
+  loadDashboardRunDetailMock,
+  loadPersistedRunWorktreeExplorerMock,
+} = vi.hoisted(() => {
   const error = new Error('NEXT_NOT_FOUND');
 
   return {
@@ -14,6 +20,7 @@ const { NOT_FOUND_ERROR, notFoundMock, loadDashboardRunDetailMock } = vi.hoisted
       throw error;
     }),
     loadDashboardRunDetailMock: vi.fn(),
+    loadPersistedRunWorktreeExplorerMock: vi.fn(),
   };
 });
 
@@ -25,11 +32,17 @@ vi.mock('../../load-dashboard-runs', () => ({
   loadDashboardRunDetail: loadDashboardRunDetailMock,
 }));
 
+vi.mock('./load-persisted-worktree-explorer', () => ({
+  loadPersistedRunWorktreeExplorer: loadPersistedRunWorktreeExplorerMock,
+}));
+
 import RunWorktreePage from './page';
 
 type RunDetailOverrides = Omit<Partial<DashboardRunDetail>, 'run'> & Readonly<{
   run?: Partial<DashboardRunDetail['run']>;
 }>;
+
+type PersistedExplorerOverrides = Partial<PersistedRunWorktreeExplorer>;
 
 function createRunDetail(overrides: RunDetailOverrides = {}): DashboardRunDetail {
   return {
@@ -75,6 +88,29 @@ function createRunDetail(overrides: RunDetailOverrides = {}): DashboardRunDetail
   };
 }
 
+function createPersistedExplorer(
+  overrides: PersistedExplorerOverrides = {},
+): PersistedRunWorktreeExplorer {
+  return {
+    files: overrides.files ?? [
+      { path: 'src/core/engine.ts', changed: true },
+      { path: 'README.md', changed: false },
+    ],
+    changedFileCount: overrides.changedFileCount ?? 1,
+    selectedPath: overrides.selectedPath ?? 'src/core/engine.ts',
+    preview: overrides.preview ?? {
+      path: 'src/core/engine.ts',
+      changed: true,
+      diff: 'diff --git a/src/core/engine.ts b/src/core/engine.ts\n+ emitLifecycleCheckpoint(runId)',
+      diffMessage: null,
+      content: 'export function emitLifecycleCheckpoint(runId: number) {\n  return runId;\n}',
+      contentMessage: null,
+      binary: false,
+    },
+    previewError: overrides.previewError ?? null,
+  };
+}
+
 describe('RunWorktreePage', () => {
   beforeEach(() => {
     notFoundMock.mockClear();
@@ -82,23 +118,31 @@ describe('RunWorktreePage', () => {
     loadDashboardRunDetailMock.mockRejectedValue(
       new DashboardIntegrationError('not_found', 'Run was not found.', { status: 404 }),
     );
+
+    loadPersistedRunWorktreeExplorerMock.mockReset();
+    loadPersistedRunWorktreeExplorerMock.mockResolvedValue(createPersistedExplorer());
   });
 
-  it('renders changed files and default preview selection', async () => {
+  it('renders changed files and default preview selection for fixture-backed runs', async () => {
     render(await RunWorktreePage({ params: Promise.resolve({ runId: '412' }) }));
 
     expect(screen.getByRole('heading', { name: 'Run #412 worktree' })).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'src/core/engine.ts *' })).toHaveAttribute(
+    expect(
+      screen.getByText('Branch alphred/demo-tree/412 with 2 changed files across 3 paths.'),
+    ).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Open src/core/engine.ts preview' })).toHaveAttribute(
       'href',
       '/runs/412/worktree?path=src%2Fcore%2Fengine.ts',
     );
+    expect(screen.getByLabelText('src/core/engine.ts changed')).toHaveTextContent('Changed');
     expect(screen.getByLabelText('File diff preview')).toHaveTextContent(
       'emitLifecycleCheckpoint',
     );
     expect(loadDashboardRunDetailMock).toHaveBeenCalledWith(412);
+    expect(loadPersistedRunWorktreeExplorerMock).not.toHaveBeenCalled();
   });
 
-  it('uses the deep-linked path when provided', async () => {
+  it('uses the deep-linked path when provided for fixture-backed runs', async () => {
     render(
       await RunWorktreePage({
         params: Promise.resolve({ runId: '412' }),
@@ -111,7 +155,7 @@ describe('RunWorktreePage', () => {
     );
   });
 
-  it('falls back to the first tracked file when the requested path is unknown', async () => {
+  it('falls back to the first changed file when the requested path is unknown', async () => {
     render(
       await RunWorktreePage({
         params: Promise.resolve({ runId: '412' }),
@@ -124,7 +168,7 @@ describe('RunWorktreePage', () => {
     );
     expect(screen.getByRole('link', { name: 'View Diff' })).toHaveAttribute(
       'href',
-      '/runs/412/worktree?path=src%2Fcore%2Fengine.ts',
+      '/runs/412/worktree?path=src%2Fcore%2Fengine.ts&view=diff',
     );
   });
 
@@ -143,31 +187,123 @@ describe('RunWorktreePage', () => {
     );
     expect(screen.getByRole('link', { name: 'View Diff' })).toHaveAttribute(
       'href',
-      '/runs/412/worktree?path=src%2Fcore%2Fengine.ts',
+      '/runs/412/worktree?path=src%2Fcore%2Fengine.ts&view=diff',
     );
   });
 
-  it('renders empty state when the fixture run has no changed files', async () => {
-    render(await RunWorktreePage({ params: Promise.resolve({ runId: '410' }) }));
+  it('renders content preview mode when requested', async () => {
+    render(
+      await RunWorktreePage({
+        params: Promise.resolve({ runId: '412' }),
+        searchParams: Promise.resolve({
+          path: 'apps/dashboard/app/runs/page.tsx',
+          view: 'content',
+        }),
+      }),
+    );
 
-    expect(screen.getByRole('heading', { name: 'No changed files' })).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'Back to Run' })).toHaveAttribute('href', '/runs/410');
+    expect(screen.getByLabelText('File content preview')).toHaveTextContent(
+      'Runs table now links to canonical run detail routes.',
+    );
+    expect(screen.queryByLabelText('File diff preview')).toBeNull();
+    expect(screen.getByRole('link', { name: 'Open src/core/engine.ts preview' })).toHaveAttribute(
+      'href',
+      '/runs/412/worktree?path=src%2Fcore%2Fengine.ts&view=content',
+    );
   });
 
-  it('renders persisted run worktree metadata for non-fixture run ids', async () => {
+  it('renders fixture explorer when run has tracked files but no changed files', async () => {
+    render(await RunWorktreePage({ params: Promise.resolve({ runId: '410' }) }));
+
+    expect(screen.getByRole('heading', { name: 'Changed files' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Open reports/final-summary.md preview' })).toHaveAttribute(
+      'href',
+      '/runs/410/worktree?path=reports%2Ffinal-summary.md',
+    );
+    expect(screen.getByText('No diff is available because this file is unchanged in the fixture snapshot.')).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'No changed files' })).toBeNull();
+  });
+
+  it('falls back to first tracked file when fixture run has no changed files and requested path is unknown', async () => {
+    render(
+      await RunWorktreePage({
+        params: Promise.resolve({ runId: '410' }),
+        searchParams: Promise.resolve({ path: 'does/not/exist.md' }),
+      }),
+    );
+
+    expect(screen.getByRole('link', { name: 'Open reports/final-summary.md preview' })).toHaveAttribute(
+      'href',
+      '/runs/410/worktree?path=reports%2Ffinal-summary.md',
+    );
+    expect(screen.getByText('No diff is available because this file is unchanged in the fixture snapshot.')).toBeInTheDocument();
+  });
+
+  it('renders persisted run worktree explorer for non-fixture runs', async () => {
     loadDashboardRunDetailMock.mockResolvedValue(createRunDetail());
 
     render(await RunWorktreePage({ params: Promise.resolve({ runId: '2' }) }));
 
     expect(loadDashboardRunDetailMock).toHaveBeenCalledWith(2);
+    expect(loadPersistedRunWorktreeExplorerMock).toHaveBeenCalledWith('/tmp/worktrees/test-flow-2', undefined, 'diff');
     expect(screen.getByRole('heading', { name: 'Run #2 worktree' })).toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: 'Worktree metadata' })).toBeInTheDocument();
-    expect(screen.getByText('/tmp/worktrees/test-flow-2')).toBeInTheDocument();
-    expect(screen.getByText('alphred/test_flow/2')).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'Back to Run' })).toHaveAttribute('href', '/runs/2');
+    expect(screen.getByRole('heading', { name: 'Changed files' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Open src/core/engine.ts preview' })).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Worktree metadata' })).toBeNull();
   });
 
-  it('uses the newest removed worktree metadata when no active worktree exists', async () => {
+  it('passes content preview mode to persisted loader when requested', async () => {
+    loadDashboardRunDetailMock.mockResolvedValue(createRunDetail());
+
+    render(
+      await RunWorktreePage({
+        params: Promise.resolve({ runId: '2' }),
+        searchParams: Promise.resolve({
+          path: 'src/core/engine.ts',
+          view: 'content',
+        }),
+      }),
+    );
+
+    expect(loadPersistedRunWorktreeExplorerMock).toHaveBeenCalledWith(
+      '/tmp/worktrees/test-flow-2',
+      'src/core/engine.ts',
+      'content',
+    );
+  });
+
+  it('renders empty-string persisted content previews without fallback messaging', async () => {
+    loadDashboardRunDetailMock.mockResolvedValue(createRunDetail());
+    loadPersistedRunWorktreeExplorerMock.mockResolvedValue(
+      createPersistedExplorer({
+        selectedPath: 'README.md',
+        preview: {
+          path: 'README.md',
+          changed: false,
+          diff: null,
+          diffMessage: 'No diff available because this file is unchanged in this worktree snapshot.',
+          content: '',
+          contentMessage: null,
+          binary: false,
+        },
+      }),
+    );
+
+    render(
+      await RunWorktreePage({
+        params: Promise.resolve({ runId: '2' }),
+        searchParams: Promise.resolve({
+          path: 'README.md',
+          view: 'content',
+        }),
+      }),
+    );
+
+    expect(screen.getByLabelText('File content preview')).toBeEmptyDOMElement();
+    expect(screen.queryByText('No content preview is available for this file.')).toBeNull();
+  });
+
+  it('uses newest removed worktree metadata when no active worktree exists', async () => {
     loadDashboardRunDetailMock.mockResolvedValue(
       createRunDetail({
         worktrees: [
@@ -199,9 +335,7 @@ describe('RunWorktreePage', () => {
 
     render(await RunWorktreePage({ params: Promise.resolve({ runId: '2' }) }));
 
-    expect(screen.getByText('/tmp/worktrees/test-flow-2-new')).toBeInTheDocument();
-    expect(screen.getByText('alphred/test_flow/2-new')).toBeInTheDocument();
-    expect(screen.queryByText('/tmp/worktrees/test-flow-2-old')).toBeNull();
+    expect(loadPersistedRunWorktreeExplorerMock).toHaveBeenCalledWith('/tmp/worktrees/test-flow-2-new', undefined, 'diff');
   });
 
   it('prefers persisted run data over fixture content when ids collide', async () => {
@@ -227,9 +361,37 @@ describe('RunWorktreePage', () => {
     render(await RunWorktreePage({ params: Promise.resolve({ runId: '412' }) }));
 
     expect(loadDashboardRunDetailMock).toHaveBeenCalledWith(412);
-    expect(screen.getByRole('heading', { name: 'Worktree metadata' })).toBeInTheDocument();
-    expect(screen.getByText('alphred/persisted/412')).toBeInTheDocument();
-    expect(screen.queryByRole('heading', { name: 'Changed files' })).toBeNull();
+    expect(loadPersistedRunWorktreeExplorerMock).toHaveBeenCalledWith('/tmp/worktrees/persisted-412', undefined, 'diff');
+    expect(screen.getByRole('heading', { name: 'Changed files' })).toBeInTheDocument();
+  });
+
+  it('renders persisted tracked-file explorer when changed-file count is zero', async () => {
+    loadDashboardRunDetailMock.mockResolvedValue(createRunDetail());
+    loadPersistedRunWorktreeExplorerMock.mockResolvedValue(
+      createPersistedExplorer({
+        files: [{ path: 'README.md', changed: false }],
+        changedFileCount: 0,
+        selectedPath: 'README.md',
+        preview: {
+          path: 'README.md',
+          changed: false,
+          diff: null,
+          diffMessage: 'No diff available because this file is unchanged in this worktree snapshot.',
+          content: '# Alphred\n',
+          contentMessage: null,
+          binary: false,
+        },
+      }),
+    );
+
+    render(await RunWorktreePage({ params: Promise.resolve({ runId: '2' }) }));
+
+    expect(screen.getByRole('heading', { name: 'Changed files' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Open README.md preview' })).toHaveAttribute(
+      'href',
+      '/runs/2/worktree?path=README.md',
+    );
+    expect(screen.queryByRole('heading', { name: 'No changed files' })).toBeNull();
   });
 
   it('renders persisted no-worktree state when run metadata has no captured worktree', async () => {
@@ -244,7 +406,46 @@ describe('RunWorktreePage', () => {
 
     expect(screen.getByRole('heading', { name: 'No changed files' })).toBeInTheDocument();
     expect(screen.getByText('This run does not have a captured worktree.')).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'Back to Run' })).toHaveAttribute('href', '/runs/2');
+    expect(loadPersistedRunWorktreeExplorerMock).not.toHaveBeenCalled();
+  });
+
+  it('renders path-scoped retry state when persisted explorer loader fails', async () => {
+    loadDashboardRunDetailMock.mockResolvedValue(createRunDetail());
+    loadPersistedRunWorktreeExplorerMock.mockRejectedValue(new Error('worktree load failed'));
+
+    render(
+      await RunWorktreePage({
+        params: Promise.resolve({ runId: '2' }),
+        searchParams: Promise.resolve({ path: 'src/core/engine.ts' }),
+      }),
+    );
+
+    expect(screen.getByRole('heading', { name: 'Unable to load worktree files' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Retry Path' })).toHaveAttribute(
+      'href',
+      '/runs/2/worktree?path=src%2Fcore%2Fengine.ts&view=diff',
+    );
+  });
+
+  it('renders path-scoped preview retry state when preview retrieval fails', async () => {
+    loadDashboardRunDetailMock.mockResolvedValue(createRunDetail());
+    loadPersistedRunWorktreeExplorerMock.mockResolvedValue(
+      createPersistedExplorer({
+        selectedPath: 'src/core/engine.ts',
+        preview: null,
+        previewError: 'Unable to load preview data for the selected path. Retry this path or choose another file.',
+      }),
+    );
+
+    render(await RunWorktreePage({ params: Promise.resolve({ runId: '2' }) }));
+
+    expect(
+      screen.getByText('Unable to load preview data for the selected path. Retry this path or choose another file.'),
+    ).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Retry Path' })).toHaveAttribute(
+      'href',
+      '/runs/2/worktree?path=src%2Fcore%2Fengine.ts&view=diff',
+    );
   });
 
   it('routes missing persisted run ids to not-found', async () => {
