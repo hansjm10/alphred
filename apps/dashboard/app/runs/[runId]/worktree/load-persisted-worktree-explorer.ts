@@ -50,13 +50,12 @@ function parseStatusPaths(statusOutput: string): Set<string> {
     }
 
     const status = entry.slice(0, 2);
-    let path = entry.slice(3);
+    const path = entry.slice(3);
 
     const renamedOrCopied = status.includes('R') || status.includes('C');
     if (renamedOrCopied) {
       const nextEntry = entries[index + 1];
       if (nextEntry && nextEntry.length > 0) {
-        path = nextEntry;
         index += 1;
       }
     }

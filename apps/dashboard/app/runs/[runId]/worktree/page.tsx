@@ -153,6 +153,7 @@ function renderTreeChildren(
   node: FileTreeNode,
   runId: number,
   selectedPath: string | null,
+  previewMode: ExplorerPreviewMode,
 ): ReactNode {
   const sortedDirectories = [...node.directories.values()].sort((left, right) =>
     left.name.localeCompare(right.name),
@@ -173,7 +174,7 @@ function renderTreeChildren(
                 <span className="worktree-tree-directory-name">{directory.name}</span>
                 <span className="meta-text">{`${directory.changedFileCount} changed`}</span>
               </summary>
-              {renderTreeChildren(directory, runId, selectedPath)}
+              {renderTreeChildren(directory, runId, selectedPath, previewMode)}
             </details>
           </li>
         );
@@ -189,7 +190,11 @@ function renderTreeChildren(
             className={file.changed ? 'worktree-tree-file-item worktree-tree-file-item--changed' : 'worktree-tree-file-item'}
           >
             <ButtonLink
-              href={buildRunWorktreeHref(runId, file.path)}
+              href={
+                previewMode === 'content'
+                  ? buildRunWorktreeViewHref(runId, file.path, previewMode)
+                  : buildRunWorktreeHref(runId, file.path)
+              }
               tone={selected ? 'primary' : 'secondary'}
               aria-current={selected ? 'page' : undefined}
               aria-label={`Open ${file.path} preview`}
@@ -308,7 +313,7 @@ function renderWorktreeExplorer(model: ExplorerViewModel, previewMode: ExplorerP
 
       <div className="worktree-grid">
         <Card title="Changed files" description="Default selection prioritizes changed files before tracked-file fallback.">
-          {renderTreeChildren(fileTree, model.runId, model.selectedPath)}
+          {renderTreeChildren(fileTree, model.runId, model.selectedPath, previewMode)}
         </Card>
 
         <Panel title="Preview" description="Toggle between diff and content previews for the selected file.">

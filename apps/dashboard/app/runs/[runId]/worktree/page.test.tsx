@@ -202,6 +202,10 @@ describe('RunWorktreePage', () => {
       'Runs table now links to canonical run detail routes.',
     );
     expect(screen.queryByLabelText('File diff preview')).toBeNull();
+    expect(screen.getByRole('link', { name: 'Open src/core/engine.ts preview' })).toHaveAttribute(
+      'href',
+      '/runs/412/worktree?path=src%2Fcore%2Fengine.ts&view=content',
+    );
   });
 
   it('renders empty state when fixture run has no changed files', async () => {

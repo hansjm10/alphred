@@ -1,7 +1,7 @@
 // @vitest-environment node
 
 import { execFile } from 'node:child_process';
-import { mkdtemp, mkdir, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, rename, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -93,5 +93,31 @@ describe('loadPersistedRunWorktreeExplorer', () => {
     expect(explorer.preview?.contentMessage).toBe(
       'File content is unavailable because this path resolves outside the worktree root.',
     );
+  });
+
+  it('tracks renamed destination paths as changed entries', async () => {
+    const tempRoot = await mkdtemp(join(tmpdir(), 'alphred-worktree-loader-rename-'));
+    tempDirectories.push(tempRoot);
+    const worktreePath = join(tempRoot, 'repo');
+
+    await mkdir(worktreePath);
+    await runGit(worktreePath, ['init']);
+    await runGit(worktreePath, ['config', 'user.name', 'Test Runner']);
+    await runGit(worktreePath, ['config', 'user.email', 'test@example.com']);
+
+    await writeFile(join(worktreePath, 'old.txt'), 'old-content\n');
+    await runGit(worktreePath, ['add', 'old.txt']);
+    await runGit(worktreePath, ['commit', '-m', 'add old']);
+
+    await rename(join(worktreePath, 'old.txt'), join(worktreePath, 'new.txt'));
+    await runGit(worktreePath, ['add', '-A']);
+
+    const explorer = await loadPersistedRunWorktreeExplorer(worktreePath, undefined);
+
+    expect(explorer.changedFileCount).toBe(1);
+    expect(explorer.selectedPath).toBe('new.txt');
+    expect(explorer.files.some((file) => file.path === 'new.txt' && file.changed)).toBe(true);
+    expect(explorer.files.some((file) => file.path === 'old.txt')).toBe(false);
+    expect(explorer.preview?.path).toBe('new.txt');
   });
 });
