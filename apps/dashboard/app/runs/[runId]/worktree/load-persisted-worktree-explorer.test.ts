@@ -85,7 +85,7 @@ describe('loadPersistedRunWorktreeExplorer', () => {
     await runGit(worktreePath, ['add', 'leak.txt']);
     await runGit(worktreePath, ['commit', '-m', 'track symlink']);
 
-    const explorer = await loadPersistedRunWorktreeExplorer(worktreePath, 'leak.txt');
+    const explorer = await loadPersistedRunWorktreeExplorer(worktreePath, 'leak.txt', 'content');
 
     expect(explorer.selectedPath).toBe('leak.txt');
     expect(explorer.previewError).toBeNull();
@@ -119,5 +119,56 @@ describe('loadPersistedRunWorktreeExplorer', () => {
     expect(explorer.files.some((file) => file.path === 'new.txt' && file.changed)).toBe(true);
     expect(explorer.files.some((file) => file.path === 'old.txt')).toBe(false);
     expect(explorer.preview?.path).toBe('new.txt');
+  });
+
+  it('loads only diff data in diff mode and only content data in content mode', async () => {
+    const tempRoot = await mkdtemp(join(tmpdir(), 'alphred-worktree-loader-preview-mode-'));
+    tempDirectories.push(tempRoot);
+    const worktreePath = join(tempRoot, 'repo');
+
+    await mkdir(worktreePath);
+    await runGit(worktreePath, ['init']);
+    await runGit(worktreePath, ['config', 'user.name', 'Test Runner']);
+    await runGit(worktreePath, ['config', 'user.email', 'test@example.com']);
+
+    await writeFile(join(worktreePath, 'target.ts'), 'export const value = 1;\n');
+    await runGit(worktreePath, ['add', 'target.ts']);
+    await runGit(worktreePath, ['commit', '-m', 'add target']);
+    await writeFile(join(worktreePath, 'target.ts'), 'export const value = 2;\n');
+
+    const diffModeExplorer = await loadPersistedRunWorktreeExplorer(worktreePath, 'target.ts', 'diff');
+    expect(diffModeExplorer.previewError).toBeNull();
+    expect(diffModeExplorer.preview?.diff).toContain('export const value = 2;');
+    expect(diffModeExplorer.preview?.content).toBeNull();
+    expect(diffModeExplorer.preview?.contentMessage).toBe('Content preview is available in content view.');
+
+    const contentModeExplorer = await loadPersistedRunWorktreeExplorer(worktreePath, 'target.ts', 'content');
+    expect(contentModeExplorer.previewError).toBeNull();
+    expect(contentModeExplorer.preview?.content).toContain('export const value = 2;');
+    expect(contentModeExplorer.preview?.diff).toBeNull();
+    expect(contentModeExplorer.preview?.diffMessage).toBe('Diff summary is available in diff view.');
+  });
+
+  it('truncates large content preview payloads', async () => {
+    const tempRoot = await mkdtemp(join(tmpdir(), 'alphred-worktree-loader-content-truncation-'));
+    tempDirectories.push(tempRoot);
+    const worktreePath = join(tempRoot, 'repo');
+
+    await mkdir(worktreePath);
+    await runGit(worktreePath, ['init']);
+    await runGit(worktreePath, ['config', 'user.name', 'Test Runner']);
+    await runGit(worktreePath, ['config', 'user.email', 'test@example.com']);
+
+    const largeContent = `${'abcdefghijklmnopqrstuvwxyz'.repeat(4_000)}\n`;
+    await writeFile(join(worktreePath, 'large.txt'), largeContent);
+    await runGit(worktreePath, ['add', 'large.txt']);
+    await runGit(worktreePath, ['commit', '-m', 'add large file']);
+
+    const explorer = await loadPersistedRunWorktreeExplorer(worktreePath, 'large.txt', 'content');
+
+    expect(explorer.previewError).toBeNull();
+    expect(explorer.preview?.binary).toBe(false);
+    expect(explorer.preview?.contentMessage).toBe('Content preview is truncated for performance.');
+    expect(explorer.preview?.content?.length ?? 0).toBeLessThanOrEqual(14_002);
   });
 });

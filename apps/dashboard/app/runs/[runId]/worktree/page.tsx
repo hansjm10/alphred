@@ -9,6 +9,7 @@ import {
   loadPersistedRunWorktreeExplorer,
   type PersistedRunWorktreeExplorer,
   type PersistedRunWorktreeExplorerFile,
+  type PersistedRunWorktreePreviewMode,
   type PersistedRunWorktreePreview,
 } from './load-persisted-worktree-explorer';
 
@@ -22,7 +23,7 @@ type RunWorktreePageProps = Readonly<{
   }>;
 }>;
 
-type ExplorerPreviewMode = 'diff' | 'content';
+type ExplorerPreviewMode = PersistedRunWorktreePreviewMode;
 
 type ExplorerFile = PersistedRunWorktreeExplorerFile;
 
@@ -418,7 +419,7 @@ async function renderPersistedWorktreePage(
 
   let explorer: PersistedRunWorktreeExplorer;
   try {
-    explorer = await loadPersistedRunWorktreeExplorer(worktree.path, searchPath);
+    explorer = await loadPersistedRunWorktreeExplorer(worktree.path, searchPath, previewMode);
   } catch {
     return (
       <div className="worktree-layout">

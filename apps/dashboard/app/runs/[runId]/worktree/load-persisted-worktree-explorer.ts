@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { readFile, realpath } from 'node:fs/promises';
+import { open, realpath } from 'node:fs/promises';
 import { resolve, sep } from 'node:path';
 import { promisify } from 'node:util';
 
@@ -32,6 +32,8 @@ export type PersistedRunWorktreeExplorer = Readonly<{
   preview: PersistedRunWorktreePreview | null;
   previewError: string | null;
 }>;
+
+export type PersistedRunWorktreePreviewMode = 'diff' | 'content';
 
 function parseNullSeparatedList(output: string): string[] {
   return output
@@ -203,10 +205,33 @@ async function readContentPreview(
       };
     }
 
-    const buffer = await readFile(absolutePath);
-    const truncated = buffer.length > MAX_CONTENT_BYTES ? buffer.subarray(0, MAX_CONTENT_BYTES) : buffer;
+    const fileHandle = await open(absolutePath, 'r');
+    const readBuffer = Buffer.alloc(MAX_CONTENT_BYTES + 1);
+    let bytesReadTotal = 0;
+    try {
+      while (bytesReadTotal < readBuffer.length) {
+        const readResult = await fileHandle.read(
+          readBuffer,
+          bytesReadTotal,
+          readBuffer.length - bytesReadTotal,
+          bytesReadTotal,
+        );
+        if (readResult.bytesRead === 0) {
+          break;
+        }
 
-    if (truncated.includes(0)) {
+        bytesReadTotal += readResult.bytesRead;
+      }
+    } finally {
+      await fileHandle.close();
+    }
+
+    const truncatedByBytes = bytesReadTotal > MAX_CONTENT_BYTES;
+    const contentBuffer = truncatedByBytes
+      ? readBuffer.subarray(0, MAX_CONTENT_BYTES)
+      : readBuffer.subarray(0, bytesReadTotal);
+
+    if (contentBuffer.includes(0)) {
       return {
         content: null,
         message: 'Binary file preview is unavailable. Use local tools to inspect this file.',
@@ -214,8 +239,8 @@ async function readContentPreview(
       };
     }
 
-    const text = truncated.toString('utf8');
-    if (buffer.length > MAX_CONTENT_BYTES || text.length > MAX_CONTENT_CHARS) {
+    const text = contentBuffer.toString('utf8');
+    if (truncatedByBytes || text.length > MAX_CONTENT_CHARS) {
       return {
         content: truncate(text, MAX_CONTENT_CHARS),
         message: 'Content preview is truncated for performance.',
@@ -244,6 +269,7 @@ async function readContentPreview(
 export async function loadPersistedRunWorktreeExplorer(
   worktreePath: string,
   requestedPath: string | string[] | undefined,
+  previewMode: PersistedRunWorktreePreviewMode = 'diff',
 ): Promise<PersistedRunWorktreeExplorer> {
   const trackedPaths = parseNullSeparatedList(await runGit(worktreePath, ['ls-files', '-z']));
   const trackedPathSet = new Set(trackedPaths);
@@ -280,10 +306,23 @@ export async function loadPersistedRunWorktreeExplorer(
   }
 
   try {
-    const [diffPreview, contentPreview] = await Promise.all([
-      readDiffPreview(worktreePath, selectedFile.path, selectedFile.changed, trackedPathSet.has(selectedFile.path)),
-      readContentPreview(worktreePath, selectedFile.path),
-    ]);
+    const diffPreview =
+      previewMode === 'diff'
+        ? await readDiffPreview(worktreePath, selectedFile.path, selectedFile.changed, trackedPathSet.has(selectedFile.path))
+        : {
+            diff: null,
+            message: selectedFile.changed
+              ? 'Diff summary is available in diff view.'
+              : 'No diff available because this file is unchanged in this worktree snapshot.',
+          };
+    const contentPreview =
+      previewMode === 'content'
+        ? await readContentPreview(worktreePath, selectedFile.path)
+        : {
+            content: null,
+            message: 'Content preview is available in content view.',
+            binary: false,
+          };
 
     return {
       files,

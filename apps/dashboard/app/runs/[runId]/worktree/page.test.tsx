@@ -221,11 +221,31 @@ describe('RunWorktreePage', () => {
     render(await RunWorktreePage({ params: Promise.resolve({ runId: '2' }) }));
 
     expect(loadDashboardRunDetailMock).toHaveBeenCalledWith(2);
-    expect(loadPersistedRunWorktreeExplorerMock).toHaveBeenCalledWith('/tmp/worktrees/test-flow-2', undefined);
+    expect(loadPersistedRunWorktreeExplorerMock).toHaveBeenCalledWith('/tmp/worktrees/test-flow-2', undefined, 'diff');
     expect(screen.getByRole('heading', { name: 'Run #2 worktree' })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Changed files' })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Open src/core/engine.ts preview' })).toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: 'Worktree metadata' })).toBeNull();
+  });
+
+  it('passes content preview mode to persisted loader when requested', async () => {
+    loadDashboardRunDetailMock.mockResolvedValue(createRunDetail());
+
+    render(
+      await RunWorktreePage({
+        params: Promise.resolve({ runId: '2' }),
+        searchParams: Promise.resolve({
+          path: 'src/core/engine.ts',
+          view: 'content',
+        }),
+      }),
+    );
+
+    expect(loadPersistedRunWorktreeExplorerMock).toHaveBeenCalledWith(
+      '/tmp/worktrees/test-flow-2',
+      'src/core/engine.ts',
+      'content',
+    );
   });
 
   it('uses newest removed worktree metadata when no active worktree exists', async () => {
@@ -260,7 +280,7 @@ describe('RunWorktreePage', () => {
 
     render(await RunWorktreePage({ params: Promise.resolve({ runId: '2' }) }));
 
-    expect(loadPersistedRunWorktreeExplorerMock).toHaveBeenCalledWith('/tmp/worktrees/test-flow-2-new', undefined);
+    expect(loadPersistedRunWorktreeExplorerMock).toHaveBeenCalledWith('/tmp/worktrees/test-flow-2-new', undefined, 'diff');
   });
 
   it('prefers persisted run data over fixture content when ids collide', async () => {
@@ -286,7 +306,7 @@ describe('RunWorktreePage', () => {
     render(await RunWorktreePage({ params: Promise.resolve({ runId: '412' }) }));
 
     expect(loadDashboardRunDetailMock).toHaveBeenCalledWith(412);
-    expect(loadPersistedRunWorktreeExplorerMock).toHaveBeenCalledWith('/tmp/worktrees/persisted-412', undefined);
+    expect(loadPersistedRunWorktreeExplorerMock).toHaveBeenCalledWith('/tmp/worktrees/persisted-412', undefined, 'diff');
     expect(screen.getByRole('heading', { name: 'Changed files' })).toBeInTheDocument();
   });
 
