@@ -21,6 +21,11 @@ type RunsPageContentProps = Readonly<{
   activeFilter: RunRouteFilter;
 }>;
 
+type LaunchBannerState = {
+  workflowRunId: number;
+  runStatus: DashboardRunSummary['status'] | null;
+};
+
 type ErrorEnvelope = {
   error?: {
     message?: string;
@@ -213,7 +218,7 @@ export function RunsPageContent({
   const [isLaunching, setIsLaunching] = useState<boolean>(false);
   const [launchError, setLaunchError] = useState<string | null>(null);
   const [launchRefreshWarning, setLaunchRefreshWarning] = useState<string | null>(null);
-  const [launchResult, setLaunchResult] = useState<DashboardRunLaunchResult | null>(null);
+  const [launchResult, setLaunchResult] = useState<LaunchBannerState | null>(null);
 
   const launchBlockedReason = getLaunchBlockedReason(authGate, workflows);
   const activeHref = resolveRunFilterHref(normalizeRunFilter(activeFilter));
@@ -234,7 +239,7 @@ export function RunsPageContent({
     setRunState(sortRunsForDashboard(runs));
   }, [runs]);
 
-  async function refreshRunState(): Promise<void> {
+  async function refreshRunState(): Promise<readonly DashboardRunSummary[]> {
     const response = await fetch(`/api/dashboard/runs?limit=${DEFAULT_RUN_LIST_LIMIT}`, { method: 'GET' });
     const payload = (await response.json().catch(() => null)) as unknown;
     if (!response.ok) {
@@ -250,7 +255,9 @@ export function RunsPageContent({
       throw new Error('Run refresh response was malformed.');
     }
 
-    setRunState(sortRunsForDashboard((payload as { runs: DashboardRunSummary[] }).runs));
+    const refreshedRuns = sortRunsForDashboard((payload as { runs: DashboardRunSummary[] }).runs);
+    setRunState(refreshedRuns);
+    return refreshedRuns;
   }
 
   async function handleLaunchRun(): Promise<void> {
@@ -286,10 +293,20 @@ export function RunsPageContent({
         throw new Error('Run launch response was malformed.');
       }
 
-      setLaunchResult(parsedResult);
+      setLaunchResult({
+        workflowRunId: parsedResult.workflowRunId,
+        runStatus: null,
+      });
 
       try {
-        await refreshRunState();
+        const refreshedRuns = await refreshRunState();
+        const refreshedLaunchRun = refreshedRuns.find((run) => run.id === parsedResult.workflowRunId);
+        if (refreshedLaunchRun) {
+          setLaunchResult({
+            workflowRunId: parsedResult.workflowRunId,
+            runStatus: refreshedLaunchRun.status,
+          });
+        }
       } catch (error) {
         const message = error instanceof Error ? error.message : 'Unable to refresh run lifecycle state.';
         setLaunchRefreshWarning(`Run accepted, but lifecycle refresh failed: ${message}`);
@@ -391,7 +408,9 @@ export function RunsPageContent({
           ) : null}
           {launchResult ? (
             <output className="run-launch-banner run-launch-banner--success" aria-live="polite">
-              {`Run #${launchResult.workflowRunId} accepted with status ${launchResult.runStatus}. `}
+              {launchResult.runStatus === null
+                ? `Run #${launchResult.workflowRunId} accepted. `
+                : `Run #${launchResult.workflowRunId} accepted. Current status: ${launchResult.runStatus}. `}
               <Link className="run-inline-link" href={`/runs/${launchResult.workflowRunId}`}>
                 Open run detail
               </Link>
