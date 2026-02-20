@@ -139,6 +139,10 @@ output {
   min-width: 0;
 }
 
+.shell-main > * {
+  min-width: 0;
+}
+
 .shell-topbar {
   align-items: center;
   background: var(--bg-surface);
@@ -177,9 +181,17 @@ output {
   width: 100%;
 }
 
+.shell-content > * {
+  min-width: 0;
+}
+
 .page-stack {
   display: grid;
   gap: var(--space-3);
+}
+
+.page-stack > * {
+  min-width: 0;
 }
 
 .page-heading h2 {
@@ -197,6 +209,10 @@ output {
   grid-template-columns: repeat(12, minmax(0, 1fr));
 }
 
+.page-grid > * {
+  min-width: 0;
+}
+
 .surface {
   border: 1px solid var(--border-default);
   border-radius: var(--radius-md);
@@ -205,6 +221,10 @@ output {
   gap: var(--space-3);
   min-width: 0;
   padding: var(--space-3);
+}
+
+.surface > * {
+  min-width: 0;
 }
 
 .surface--default {
@@ -457,7 +477,9 @@ output {
   display: inline-block;
   font: 400 12px/18px var(--font-data);
   max-width: 100%;
+  overflow-wrap: anywhere;
   padding: 2px 6px;
+  word-break: break-word;
 }
 
 .repo-cell-error {
@@ -471,6 +493,15 @@ output {
 
 .repo-detail-list li {
   align-items: flex-start;
+}
+
+.repo-detail-list li > * {
+  min-width: 0;
+}
+
+.repo-detail-list li > :last-child {
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .repo-add-hint {
@@ -856,6 +887,7 @@ output {
 
   .shell-nav-list {
     display: flex;
+    max-width: 100%;
     overflow-x: auto;
   }
 

@@ -21,3 +21,25 @@ test('renders the error boundary fallback when a route throws', async ({ page })
   await page.getByRole('button', { name: 'Try again' }).click();
   await expect(page.getByRole('heading', { name: 'Dashboard error' })).toBeVisible();
 });
+
+test('keeps repositories and runs usable on mobile without document-level horizontal overflow', async ({ page }) => {
+  await page.setViewportSize({ width: 375, height: 812 });
+
+  for (const [route, headingName] of [
+    ['/repositories', 'Repository registry'],
+    ['/runs', 'Run lifecycle'],
+  ] as const) {
+    await page.goto(route);
+    await expect(page.getByRole('heading', { name: headingName })).toBeVisible();
+
+    const metrics = await page.evaluate(() => ({
+      bodyScrollWidth: document.body.scrollWidth,
+      docScrollWidth: document.documentElement.scrollWidth,
+      innerWidth: window.innerWidth,
+    }));
+    const maxAllowedScrollWidth = metrics.innerWidth + 1;
+
+    expect(metrics.docScrollWidth).toBeLessThanOrEqual(maxAllowedScrollWidth);
+    expect(metrics.bodyScrollWidth).toBeLessThanOrEqual(maxAllowedScrollWidth);
+  }
+});
