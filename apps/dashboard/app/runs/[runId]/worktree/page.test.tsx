@@ -127,6 +127,9 @@ describe('RunWorktreePage', () => {
     render(await RunWorktreePage({ params: Promise.resolve({ runId: '412' }) }));
 
     expect(screen.getByRole('heading', { name: 'Run #412 worktree' })).toBeInTheDocument();
+    expect(
+      screen.getByText('Branch alphred/demo-tree/412 with 2 changed files across 3 paths.'),
+    ).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Open src/core/engine.ts preview' })).toHaveAttribute(
       'href',
       '/runs/412/worktree?path=src%2Fcore%2Fengine.ts',

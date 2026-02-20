@@ -298,7 +298,7 @@ function renderWorktreeExplorer(model: ExplorerViewModel, previewMode: ExplorerP
     <div className="worktree-layout">
       <section className="page-heading">
         <h2>{`Run #${model.runId} worktree`}</h2>
-        <p>{`Branch ${model.branch} with ${model.changedFileCount} changed file${model.changedFileCount === 1 ? '' : 's'} across ${model.files.length} tracked paths.`}</p>
+        <p>{`Branch ${model.branch} with ${model.changedFileCount} changed file${model.changedFileCount === 1 ? '' : 's'} across ${model.files.length} paths.`}</p>
       </section>
 
       <Card tone="subtle" title="Run context" description="Run-linked file snapshot for this worktree.">

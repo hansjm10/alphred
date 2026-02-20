@@ -149,6 +149,43 @@ describe('loadPersistedRunWorktreeExplorer', () => {
     expect(contentModeExplorer.preview?.diffMessage).toBe('Diff summary is available in diff view.');
   });
 
+  it('returns deleted-file diff output and content unavailability messaging', async () => {
+    const tempRoot = await mkdtemp(join(tmpdir(), 'alphred-worktree-loader-deleted-file-'));
+    tempDirectories.push(tempRoot);
+    const worktreePath = join(tempRoot, 'repo');
+
+    await mkdir(worktreePath);
+    await runGit(worktreePath, ['init']);
+    await runGit(worktreePath, ['config', 'user.name', 'Test Runner']);
+    await runGit(worktreePath, ['config', 'user.email', 'test@example.com']);
+
+    await writeFile(join(worktreePath, 'delete-me.txt'), 'before-delete\n');
+    await runGit(worktreePath, ['add', 'delete-me.txt']);
+    await runGit(worktreePath, ['commit', '-m', 'add deletable file']);
+
+    await rm(join(worktreePath, 'delete-me.txt'));
+    await runGit(worktreePath, ['add', '-A']);
+
+    const diffModeExplorer = await loadPersistedRunWorktreeExplorer(worktreePath, 'delete-me.txt', 'diff');
+    expect(diffModeExplorer.previewError).toBeNull();
+    expect(diffModeExplorer.selectedPath).toBe('delete-me.txt');
+    expect(diffModeExplorer.preview?.changed).toBe(true);
+    expect(diffModeExplorer.preview?.diff).toContain('delete-me.txt');
+    expect(diffModeExplorer.preview?.diff).toContain('before-delete');
+    expect(diffModeExplorer.preview?.content).toBeNull();
+    expect(diffModeExplorer.preview?.contentMessage).toBe('Content preview is available in content view.');
+
+    const contentModeExplorer = await loadPersistedRunWorktreeExplorer(worktreePath, 'delete-me.txt', 'content');
+    expect(contentModeExplorer.previewError).toBeNull();
+    expect(contentModeExplorer.preview?.diff).toBeNull();
+    expect(contentModeExplorer.preview?.diffMessage).toBe('Diff summary is available in diff view.');
+    expect(contentModeExplorer.preview?.content).toBeNull();
+    expect(contentModeExplorer.preview?.contentMessage).toBe(
+      'File content is unavailable because this path no longer resolves in the worktree.',
+    );
+    expect(contentModeExplorer.preview?.binary).toBe(false);
+  });
+
   it('truncates large content preview payloads', async () => {
     const tempRoot = await mkdtemp(join(tmpdir(), 'alphred-worktree-loader-content-truncation-'));
     tempDirectories.push(tempRoot);
