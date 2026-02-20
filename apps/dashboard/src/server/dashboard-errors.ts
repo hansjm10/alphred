@@ -56,6 +56,19 @@ function isJsonParseError(error: unknown, normalizedMessage: string): boolean {
   return error instanceof SyntaxError && normalizedMessage.includes('json');
 }
 
+function resolveBranchConflictRemediationMessage(message: string): string | null {
+  const branchMatch =
+    /branch named ['"]([^'"]+)['"] already exists/i.exec(message) ??
+    /branch ['"]([^'"]+)['"] already exists/i.exec(message);
+
+  if (branchMatch === null) {
+    return null;
+  }
+
+  const branchName = branchMatch[1]?.trim() || 'the selected branch';
+  return `Branch "${branchName}" already exists. Choose a different branch name, or leave Branch empty to let Alphred generate one.`;
+}
+
 export function toDashboardIntegrationError(
   error: unknown,
   fallbackMessage = 'Dashboard integration request failed.',
@@ -105,6 +118,14 @@ export function toDashboardIntegrationError(
   ) {
     return new DashboardIntegrationError('invalid_request', message, {
       status: 400,
+      cause: error,
+    });
+  }
+
+  const branchConflictRemediationMessage = resolveBranchConflictRemediationMessage(message);
+  if (branchConflictRemediationMessage !== null) {
+    return new DashboardIntegrationError('conflict', branchConflictRemediationMessage, {
+      status: 409,
       cause: error,
     });
   }
