@@ -272,6 +272,37 @@ describe('RunWorktreePage', () => {
     );
   });
 
+  it('renders empty-string persisted content previews without fallback messaging', async () => {
+    loadDashboardRunDetailMock.mockResolvedValue(createRunDetail());
+    loadPersistedRunWorktreeExplorerMock.mockResolvedValue(
+      createPersistedExplorer({
+        selectedPath: 'README.md',
+        preview: {
+          path: 'README.md',
+          changed: false,
+          diff: null,
+          diffMessage: 'No diff available because this file is unchanged in this worktree snapshot.',
+          content: '',
+          contentMessage: null,
+          binary: false,
+        },
+      }),
+    );
+
+    render(
+      await RunWorktreePage({
+        params: Promise.resolve({ runId: '2' }),
+        searchParams: Promise.resolve({
+          path: 'README.md',
+          view: 'content',
+        }),
+      }),
+    );
+
+    expect(screen.getByLabelText('File content preview')).toBeEmptyDOMElement();
+    expect(screen.queryByText('No content preview is available for this file.')).toBeNull();
+  });
+
   it('uses newest removed worktree metadata when no active worktree exists', async () => {
     loadDashboardRunDetailMock.mockResolvedValue(
       createRunDetail({

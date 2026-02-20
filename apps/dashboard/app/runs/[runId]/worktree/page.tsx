@@ -278,7 +278,7 @@ function renderPreviewBody(
       {showContent ? (
         <section className="worktree-preview-section">
           <h4>File content</h4>
-          {preview.content ? (
+          {preview.content !== null ? (
             <pre className="code-preview" aria-label="File content preview">
               {preview.content}
             </pre>

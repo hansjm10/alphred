@@ -186,6 +186,29 @@ describe('loadPersistedRunWorktreeExplorer', () => {
     expect(contentModeExplorer.preview?.binary).toBe(false);
   });
 
+  it('preserves empty tracked file content as an empty-string preview payload', async () => {
+    const tempRoot = await mkdtemp(join(tmpdir(), 'alphred-worktree-loader-empty-file-'));
+    tempDirectories.push(tempRoot);
+    const worktreePath = join(tempRoot, 'repo');
+
+    await mkdir(worktreePath);
+    await runGit(worktreePath, ['init']);
+    await runGit(worktreePath, ['config', 'user.name', 'Test Runner']);
+    await runGit(worktreePath, ['config', 'user.email', 'test@example.com']);
+
+    await writeFile(join(worktreePath, 'empty.txt'), '');
+    await runGit(worktreePath, ['add', 'empty.txt']);
+    await runGit(worktreePath, ['commit', '-m', 'add empty file']);
+
+    const explorer = await loadPersistedRunWorktreeExplorer(worktreePath, 'empty.txt', 'content');
+
+    expect(explorer.previewError).toBeNull();
+    expect(explorer.selectedPath).toBe('empty.txt');
+    expect(explorer.preview?.content).toBe('');
+    expect(explorer.preview?.contentMessage).toBeNull();
+    expect(explorer.preview?.binary).toBe(false);
+  });
+
   it('truncates large content preview payloads', async () => {
     const tempRoot = await mkdtemp(join(tmpdir(), 'alphred-worktree-loader-content-truncation-'));
     tempDirectories.push(tempRoot);
