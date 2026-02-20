@@ -344,8 +344,7 @@ async function renderFixtureWorktreePage(
     notFound();
   }
 
-  const changedFileCount = fixtureRun.worktree.files.filter((file) => file.changed).length;
-  if (changedFileCount === 0) {
+  if (fixtureRun.worktree.files.length === 0) {
     return (
       <div className="worktree-layout">
         <section className="page-heading">
@@ -353,7 +352,7 @@ async function renderFixtureWorktreePage(
           <p>Changed-file explorer scoped to this run.</p>
         </section>
 
-        <Card title="No changed files" description="This run completed without file changes.">
+        <Card title="No changed files" description="No tracked files were captured for this fixture run.">
           <div className="action-row">
             <ButtonLink href={`/runs/${fixtureRun.id}`}>Back to Run</ButtonLink>
           </div>
@@ -362,6 +361,7 @@ async function renderFixtureWorktreePage(
     );
   }
 
+  const changedFileCount = fixtureRun.worktree.files.filter((file) => file.changed).length;
   const selectedPath = resolveWorktreePath(fixtureRun, searchPath);
   const selectedFile = fixtureRun.worktree.files.find((file) => file.path === selectedPath) ?? null;
 

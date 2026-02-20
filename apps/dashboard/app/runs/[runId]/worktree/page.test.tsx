@@ -208,11 +208,31 @@ describe('RunWorktreePage', () => {
     );
   });
 
-  it('renders empty state when fixture run has no changed files', async () => {
+  it('renders fixture explorer when run has tracked files but no changed files', async () => {
     render(await RunWorktreePage({ params: Promise.resolve({ runId: '410' }) }));
 
-    expect(screen.getByRole('heading', { name: 'No changed files' })).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'Back to Run' })).toHaveAttribute('href', '/runs/410');
+    expect(screen.getByRole('heading', { name: 'Changed files' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Open reports/final-summary.md preview' })).toHaveAttribute(
+      'href',
+      '/runs/410/worktree?path=reports%2Ffinal-summary.md',
+    );
+    expect(screen.getByText('No diff is available because this file is unchanged in the fixture snapshot.')).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'No changed files' })).toBeNull();
+  });
+
+  it('falls back to first tracked file when fixture run has no changed files and requested path is unknown', async () => {
+    render(
+      await RunWorktreePage({
+        params: Promise.resolve({ runId: '410' }),
+        searchParams: Promise.resolve({ path: 'does/not/exist.md' }),
+      }),
+    );
+
+    expect(screen.getByRole('link', { name: 'Open reports/final-summary.md preview' })).toHaveAttribute(
+      'href',
+      '/runs/410/worktree?path=reports%2Ffinal-summary.md',
+    );
+    expect(screen.getByText('No diff is available because this file is unchanged in the fixture snapshot.')).toBeInTheDocument();
   });
 
   it('renders persisted run worktree explorer for non-fixture runs', async () => {

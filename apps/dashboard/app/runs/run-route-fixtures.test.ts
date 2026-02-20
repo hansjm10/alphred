@@ -73,4 +73,16 @@ describe('run-route-fixtures helpers', () => {
     expect(resolveWorktreePath(run, undefined)).toBe('src/core/engine.ts');
     expect(resolveWorktreePath(run, 'does/not/exist.ts')).toBe('src/core/engine.ts');
   });
+
+  it('falls back to the first tracked file when a run has no changed files', () => {
+    const run = RUN_ROUTE_FIXTURES.find((candidate) => candidate.id === 410);
+    expect(run).toBeDefined();
+
+    if (!run) {
+      return;
+    }
+
+    expect(resolveWorktreePath(run, undefined)).toBe('reports/final-summary.md');
+    expect(resolveWorktreePath(run, 'does/not/exist.md')).toBe('reports/final-summary.md');
+  });
 });

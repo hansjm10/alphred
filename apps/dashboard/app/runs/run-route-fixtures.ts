@@ -155,7 +155,14 @@ export const RUN_ROUTE_FIXTURES: readonly RunRouteRecord[] = [
     nodes: createNodeSnapshots('completed', 'completed', 'completed'),
     artifacts: ['Summary report (markdown)'],
     routingDecisions: ['review -> approved'],
-    worktree: createWorktree('alphred/demo-tree/410', []),
+    worktree: createWorktree('alphred/demo-tree/410', [
+      {
+        path: 'reports/final-summary.md',
+        changed: false,
+        preview: 'Run 410 completed with no file modifications.',
+        diff: '',
+      },
+    ]),
   }),
 ];
 
