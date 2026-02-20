@@ -566,6 +566,25 @@ State behavior:
 - Error: show if run could not be loaded vs events stream failed.
 - Stale stream: non-blocking warning with reconnect countdown.
 
+Realtime channel semantics:
+- `Live`
+  - Meaning: Active run detail is refreshing on schedule.
+  - Default cadence: poll every `4s`.
+- `Reconnecting`
+  - Meaning: A refresh attempt failed and retry is scheduled.
+  - Behavior: retry delay uses bounded exponential backoff.
+- `Stale`
+  - Meaning: No successful refresh within `15s` while run remains active.
+  - Behavior: preserve visible run context and show reconnect countdown.
+- `Idle`
+  - Meaning: Realtime updates are paused because the run is terminal or realtime is disabled.
+  - Behavior: no retry countdown and no degraded warning banner.
+
+Realtime thresholds:
+- Base interval: `4s`.
+- Backoff cap: `20s`.
+- Stale threshold: `15s` since the last successful refresh.
+
 ### 13.5 Run Worktree (`/runs/[runId]/worktree`)
 
 Primary user question:
