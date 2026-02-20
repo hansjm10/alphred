@@ -47,4 +47,30 @@ describe('run-route-fixtures helpers', () => {
       'src/core/engine.ts',
     );
   });
+
+  it('defaults to the first changed file when the first tracked file is unchanged', () => {
+    const run = {
+      ...RUN_ROUTE_FIXTURES[0],
+      worktree: {
+        branch: 'alphred/demo-tree/custom',
+        files: [
+          {
+            path: 'README.md',
+            changed: false,
+            preview: 'Readme only.',
+            diff: '',
+          },
+          {
+            path: 'src/core/engine.ts',
+            changed: true,
+            preview: 'Engine changes.',
+            diff: '+ new engine change',
+          },
+        ],
+      },
+    };
+
+    expect(resolveWorktreePath(run, undefined)).toBe('src/core/engine.ts');
+    expect(resolveWorktreePath(run, 'does/not/exist.ts')).toBe('src/core/engine.ts');
+  });
 });

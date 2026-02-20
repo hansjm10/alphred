@@ -210,12 +210,16 @@ export function resolveWorktreePath(
   run: RunRouteRecord,
   path: string | string[] | undefined,
 ): string | null {
+  const defaultPath =
+    run.worktree.files.find((file) => file.changed)?.path ??
+    run.worktree.files[0]?.path ??
+    null;
   const requestedPath = Array.isArray(path) ? path[0] : path;
   if (!requestedPath) {
-    return run.worktree.files[0]?.path ?? null;
+    return defaultPath;
   }
 
   return run.worktree.files.some((file) => file.path === requestedPath)
     ? requestedPath
-    : (run.worktree.files[0]?.path ?? null);
+    : defaultPath;
 }
