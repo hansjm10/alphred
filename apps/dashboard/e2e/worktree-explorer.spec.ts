@@ -34,7 +34,17 @@ test('supports desktop worktree navigation and preview mode toggles', async ({ p
   await page.goto('/runs/412/worktree');
 
   await expect(page.getByRole('heading', { name: 'Run #412 worktree' })).toBeVisible();
-  await expect(page.getByLabel('src/core/engine.ts changed')).toBeVisible();
+  const changedBadge = page.getByLabel('src/core/engine.ts changed');
+  await expect(changedBadge).toBeVisible();
+  const changedBadgeStyles = await changedBadge.evaluate((element) => {
+    const styles = window.getComputedStyle(element);
+    return {
+      borderTopLeftRadius: styles.borderTopLeftRadius,
+      backgroundColor: styles.backgroundColor,
+    };
+  });
+  expect(changedBadgeStyles.borderTopLeftRadius).toBe('999px');
+  expect(changedBadgeStyles.backgroundColor).not.toBe('rgba(0, 0, 0, 0)');
 
   await page.getByRole('link', { name: 'Open README.md preview' }).click();
   await expect(page).toHaveURL(/path=README\.md/);
