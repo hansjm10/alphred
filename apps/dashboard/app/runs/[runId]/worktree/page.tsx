@@ -201,9 +201,15 @@ function renderTreeChildren(
               aria-label={`Open ${file.path} preview`}
             >
               {fileName}
-              {file.changed ? ' *' : ''}
             </ButtonLink>
-            <span className="meta-text">{file.path}</span>
+            <div className="worktree-tree-file-meta">
+              {file.changed ? (
+                <span className="worktree-change-badge" aria-label={`${file.path} changed`}>
+                  Changed
+                </span>
+              ) : null}
+              <span className="meta-text">{file.path}</span>
+            </div>
           </li>
         );
       })}

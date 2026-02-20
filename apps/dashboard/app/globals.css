@@ -752,6 +752,13 @@ output {
   gap: 4px;
 }
 
+.worktree-tree-file-meta {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
 .worktree-tree-file-item .button-link {
   justify-content: flex-start;
   width: fit-content;
@@ -759,6 +766,16 @@ output {
 
 .worktree-tree-file-item--changed .meta-text {
   color: var(--accent-info);
+}
+
+.worktree-change-badge {
+  background: color-mix(in srgb, var(--accent-info) 16%, var(--bg-surface));
+  border: 1px solid color-mix(in srgb, var(--accent-info) 42%, var(--border-default));
+  border-radius: var(--radius-pill);
+  color: var(--text-primary);
+  font: 600 11px/16px var(--font-display);
+  padding: 1px 8px;
+  text-transform: uppercase;
 }
 
 .worktree-preview-section {

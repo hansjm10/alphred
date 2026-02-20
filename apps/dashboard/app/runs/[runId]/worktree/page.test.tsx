@@ -131,6 +131,7 @@ describe('RunWorktreePage', () => {
       'href',
       '/runs/412/worktree?path=src%2Fcore%2Fengine.ts',
     );
+    expect(screen.getByLabelText('src/core/engine.ts changed')).toHaveTextContent('Changed');
     expect(screen.getByLabelText('File diff preview')).toHaveTextContent(
       'emitLifecycleCheckpoint',
     );
