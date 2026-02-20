@@ -158,7 +158,7 @@ Top-level routes:
   - Repeated values use the first value.
 - `/runs/[runId]/worktree?path=<file-path>`
   - If `path` matches a tracked worktree file, that file is selected.
-  - If `path` is missing or unsupported, selection falls back to the first tracked file.
+  - If `path` is missing or unsupported, selection falls back to the first changed file; if no changed file exists, use the first tracked file.
   - Repeated values use the first value before fallback rules are applied.
 
 Navigation pattern:
