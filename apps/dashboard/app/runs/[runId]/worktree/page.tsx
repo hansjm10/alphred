@@ -440,7 +440,7 @@ async function renderPersistedWorktreePage(
     );
   }
 
-  if (explorer.changedFileCount === 0) {
+  if (explorer.files.length === 0) {
     return (
       <div className="worktree-layout">
         <section className="page-heading">
@@ -448,7 +448,7 @@ async function renderPersistedWorktreePage(
           <p>{`Branch ${worktree.branch}`}</p>
         </section>
 
-        <Card title="No changed files" description="No changed files were detected in this worktree snapshot.">
+        <Card title="No changed files" description="No tracked or changed files were detected in this worktree snapshot.">
           <div className="action-row">
             <ButtonLink href={`/runs/${detail.run.id}`}>Back to Run</ButtonLink>
           </div>

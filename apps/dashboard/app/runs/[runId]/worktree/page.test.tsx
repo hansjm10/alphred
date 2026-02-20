@@ -286,6 +286,35 @@ describe('RunWorktreePage', () => {
     expect(screen.getByRole('heading', { name: 'Changed files' })).toBeInTheDocument();
   });
 
+  it('renders persisted tracked-file explorer when changed-file count is zero', async () => {
+    loadDashboardRunDetailMock.mockResolvedValue(createRunDetail());
+    loadPersistedRunWorktreeExplorerMock.mockResolvedValue(
+      createPersistedExplorer({
+        files: [{ path: 'README.md', changed: false }],
+        changedFileCount: 0,
+        selectedPath: 'README.md',
+        preview: {
+          path: 'README.md',
+          changed: false,
+          diff: null,
+          diffMessage: 'No diff available because this file is unchanged in this worktree snapshot.',
+          content: '# Alphred\n',
+          contentMessage: null,
+          binary: false,
+        },
+      }),
+    );
+
+    render(await RunWorktreePage({ params: Promise.resolve({ runId: '2' }) }));
+
+    expect(screen.getByRole('heading', { name: 'Changed files' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Open README.md preview' })).toHaveAttribute(
+      'href',
+      '/runs/2/worktree?path=README.md',
+    );
+    expect(screen.queryByRole('heading', { name: 'No changed files' })).toBeNull();
+  });
+
   it('renders persisted no-worktree state when run metadata has no captured worktree', async () => {
     loadDashboardRunDetailMock.mockResolvedValue(
       createRunDetail({

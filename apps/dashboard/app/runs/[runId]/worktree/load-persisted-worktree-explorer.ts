@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { readFile } from 'node:fs/promises';
+import { readFile, realpath } from 'node:fs/promises';
 import { resolve, sep } from 'node:path';
 import { promisify } from 'node:util';
 
@@ -8,6 +8,7 @@ const execFileAsync = promisify(execFile);
 const MAX_DIFF_CHARS = 14_000;
 const MAX_CONTENT_BYTES = 96_000;
 const MAX_CONTENT_CHARS = 14_000;
+const GIT_MAX_BUFFER_BYTES = 16 * 1024 * 1024;
 
 export type PersistedRunWorktreeExplorerFile = Readonly<{
   path: string;
@@ -95,15 +96,17 @@ function truncate(value: string, limit: number): string {
 function resolveWorktreeFilePath(worktreePath: string, relativePath: string): string {
   const resolvedWorktreeRoot = resolve(worktreePath);
   const absolutePath = resolve(resolvedWorktreeRoot, relativePath);
-  const normalizedRoot = resolvedWorktreeRoot.endsWith(sep)
-    ? resolvedWorktreeRoot
-    : `${resolvedWorktreeRoot}${sep}`;
 
-  if (absolutePath !== resolvedWorktreeRoot && !absolutePath.startsWith(normalizedRoot)) {
+  if (!pathWithinRoot(resolvedWorktreeRoot, absolutePath)) {
     throw new Error(`Rejected worktree file path outside worktree root: ${relativePath}`);
   }
 
   return absolutePath;
+}
+
+function pathWithinRoot(rootPath: string, candidatePath: string): boolean {
+  const normalizedRoot = rootPath.endsWith(sep) ? rootPath : `${rootPath}${sep}`;
+  return candidatePath === rootPath || candidatePath.startsWith(normalizedRoot);
 }
 
 function isErrnoException(error: unknown): error is NodeJS.ErrnoException {
@@ -113,6 +116,7 @@ function isErrnoException(error: unknown): error is NodeJS.ErrnoException {
 async function runGit(worktreePath: string, args: readonly string[]): Promise<string> {
   const { stdout } = await execFileAsync('git', ['-C', worktreePath, ...args], {
     encoding: 'utf8',
+    maxBuffer: GIT_MAX_BUFFER_BYTES,
   });
 
   return stdout;
@@ -190,6 +194,16 @@ async function readContentPreview(
   const absolutePath = resolveWorktreeFilePath(worktreePath, path);
 
   try {
+    const resolvedWorktreeRoot = await realpath(resolve(worktreePath));
+    const resolvedAbsolutePath = await realpath(absolutePath);
+    if (!pathWithinRoot(resolvedWorktreeRoot, resolvedAbsolutePath)) {
+      return {
+        content: null,
+        message: 'File content is unavailable because this path resolves outside the worktree root.',
+        binary: false,
+      };
+    }
+
     const buffer = await readFile(absolutePath);
     const truncated = buffer.length > MAX_CONTENT_BYTES ? buffer.subarray(0, MAX_CONTENT_BYTES) : buffer;
 
