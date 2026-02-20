@@ -262,9 +262,42 @@ describe('RunsPage', () => {
       });
     });
 
-    expect(await screen.findByText(/Run #600 accepted with status running./)).toBeInTheDocument();
+    expect(await screen.findByText(/Run #600 accepted. Current status: running./)).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Open run detail' })).toHaveAttribute('href', '/runs/600');
     expect(screen.getByText('#600 Other Tree')).toBeInTheDocument();
+  });
+
+  it('uses refreshed run status in launch accepted messaging', async () => {
+    const fetchMock = vi.mocked(global.fetch);
+    fetchMock
+      .mockResolvedValueOnce(createJsonResponse({
+        workflowRunId: 611,
+        mode: 'async',
+        status: 'accepted',
+        runStatus: 'running',
+        executionOutcome: null,
+        executedNodes: null,
+      }, { status: 202 }))
+      .mockResolvedValueOnce(createJsonResponse({
+        runs: [createRunSummary({ id: 611, status: 'completed', completedAt: '2026-02-18T00:03:00.000Z' })],
+      }));
+
+    const user = userEvent.setup();
+    render(
+      <RunsPageContent
+        runs={[createRunSummary({ id: 412, status: 'running' })]}
+        workflows={[createWorkflow(), createWorkflow({ id: 2, treeKey: 'other-tree', name: 'Other Tree' })]}
+        repositories={[createRepository({ name: 'demo-repo', cloneStatus: 'cloned' })]}
+        authGate={createAuthenticatedAuthGate()}
+        activeFilter="all"
+      />,
+    );
+
+    await user.selectOptions(screen.getByLabelText('Workflow'), 'other-tree');
+    await user.click(screen.getByRole('button', { name: 'Launch Run' }));
+
+    expect(await screen.findByText(/Run #611 accepted. Current status: completed./)).toBeInTheDocument();
+    expect(screen.queryByText(/Run #611 accepted. Current status: running./)).toBeNull();
   });
 
   it('keeps launch accepted messaging when lifecycle refresh fails', async () => {
@@ -303,7 +336,7 @@ describe('RunsPage', () => {
       expect(fetchMock).toHaveBeenNthCalledWith(2, '/api/dashboard/runs?limit=50', { method: 'GET' });
     });
 
-    expect(await screen.findByText(/Run #700 accepted with status running./)).toBeInTheDocument();
+    expect(await screen.findByText(/Run #700 accepted./)).toBeInTheDocument();
     expect(
       screen.getByText(/Run accepted, but lifecycle refresh failed: Refresh unavailable\./),
     ).toBeInTheDocument();
