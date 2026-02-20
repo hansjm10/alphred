@@ -44,22 +44,25 @@ function parseNullSeparatedList(output: string): string[] {
 function parseStatusPaths(statusOutput: string): Set<string> {
   const entries = statusOutput.split('\u0000');
   const paths = new Set<string>();
+  let skipNextEntry = false;
 
-  for (let index = 0; index < entries.length; index += 1) {
-    const entry = entries[index];
+  for (const entry of entries) {
+    if (skipNextEntry) {
+      skipNextEntry = false;
+      continue;
+    }
+
     if (entry.length < 4) {
       continue;
     }
 
     const status = entry.slice(0, 2);
     const path = entry.slice(3);
+    const statusCodes = new Set(status);
 
-    const renamedOrCopied = status.includes('R') || status.includes('C');
+    const renamedOrCopied = statusCodes.has('R') || statusCodes.has('C');
     if (renamedOrCopied) {
-      const nextEntry = entries[index + 1];
-      if (nextEntry && nextEntry.length > 0) {
-        index += 1;
-      }
+      skipNextEntry = true;
     }
 
     if (path.length > 0) {

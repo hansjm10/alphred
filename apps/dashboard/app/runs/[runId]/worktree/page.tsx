@@ -23,6 +23,8 @@ type RunWorktreePageProps = Readonly<{
   }>;
 }>;
 
+type SearchParamValue = string | string[] | undefined;
+
 type ExplorerPreviewMode = PersistedRunWorktreePreviewMode;
 
 type ExplorerFile = PersistedRunWorktreeExplorerFile;
@@ -64,7 +66,7 @@ function resolvePrimaryWorktree(detail: DashboardRunDetail): DashboardRunDetail[
   );
 }
 
-function resolvePreviewMode(value: string | string[] | undefined): ExplorerPreviewMode {
+function resolvePreviewMode(value: SearchParamValue): ExplorerPreviewMode {
   const resolved = Array.isArray(value) ? value[0] : value;
   if (resolved === 'content') {
     return 'content';
@@ -73,7 +75,7 @@ function resolvePreviewMode(value: string | string[] | undefined): ExplorerPrevi
   return 'diff';
 }
 
-function resolveRequestedPath(value: string | string[] | undefined): string | undefined {
+function resolveRequestedPath(value: SearchParamValue): string | undefined {
   const resolved = Array.isArray(value) ? value[0] : value;
   if (!resolved || resolved.length === 0) {
     return undefined;
@@ -103,48 +105,58 @@ function createRootNode(): FileTreeNode {
   };
 }
 
+function createDirectoryNode(
+  name: string,
+  pathPrefix: string,
+  changed: boolean,
+): FileTreeNode {
+  return {
+    name,
+    pathPrefix,
+    changedFileCount: changed ? 1 : 0,
+    directories: new Map(),
+    files: [],
+  };
+}
+
+function appendFileToTree(root: FileTreeNode, file: ExplorerFile): void {
+  const segments = file.path.split('/').filter((segment) => segment.length > 0);
+  const fileName = segments.pop();
+  if (!fileName) {
+    return;
+  }
+
+  if (file.changed) {
+    root.changedFileCount += 1;
+  }
+
+  let currentNode = root;
+  let currentPrefix = '';
+
+  for (const segment of segments) {
+    currentPrefix = currentPrefix.length > 0 ? `${currentPrefix}/${segment}` : segment;
+    const existing = currentNode.directories.get(segment);
+    if (existing) {
+      if (file.changed) {
+        existing.changedFileCount += 1;
+      }
+      currentNode = existing;
+      continue;
+    }
+
+    const created = createDirectoryNode(segment, currentPrefix, file.changed);
+    currentNode.directories.set(segment, created);
+    currentNode = created;
+  }
+
+  currentNode.files.push(file);
+}
+
 function buildFileTree(files: readonly ExplorerFile[]): FileTreeNode {
   const root = createRootNode();
 
   for (const file of files) {
-    const segments = file.path.split('/').filter((segment) => segment.length > 0);
-    const fileName = segments.pop();
-
-    if (!fileName) {
-      continue;
-    }
-
-    if (file.changed) {
-      root.changedFileCount += 1;
-    }
-
-    let currentNode = root;
-    let currentPrefix = '';
-
-    for (const segment of segments) {
-      currentPrefix = currentPrefix.length > 0 ? `${currentPrefix}/${segment}` : segment;
-      const existing = currentNode.directories.get(segment);
-      if (existing) {
-        if (file.changed) {
-          existing.changedFileCount += 1;
-        }
-
-        currentNode = existing;
-        continue;
-      }
-
-      const created: FileTreeNode = {
-        name: segment,
-        pathPrefix: currentPrefix,
-        changedFileCount: file.changed ? 1 : 0,
-        directories: new Map(),
-        files: [],
-      };
-      currentNode.directories.set(segment, created);
-      currentNode = created;
-    }
-
-    currentNode.files.push(file);
+    appendFileToTree(root, file);
   }
 
   return root;
@@ -278,12 +290,12 @@ function renderPreviewBody(
       {showContent ? (
         <section className="worktree-preview-section">
           <h4>File content</h4>
-          {preview.content !== null ? (
+          {preview.content === null ? (
+            <p>{preview.contentMessage ?? 'No content preview is available for this file.'}</p>
+          ) : (
             <pre className="code-preview" aria-label="File content preview">
               {preview.content}
             </pre>
-          ) : (
-            <p>{preview.contentMessage ?? 'No content preview is available for this file.'}</p>
           )}
         </section>
       ) : null}
@@ -342,7 +354,7 @@ function renderWorktreeExplorer(model: ExplorerViewModel, previewMode: ExplorerP
 
 async function renderFixtureWorktreePage(
   runIdParam: string,
-  searchPath: string | string[] | undefined,
+  searchPath: SearchParamValue,
   previewMode: ExplorerPreviewMode,
 ): Promise<ReactNode> {
   const fixtureRun = findRunByParam(runIdParam);
@@ -402,7 +414,7 @@ async function renderFixtureWorktreePage(
 
 async function renderPersistedWorktreePage(
   detail: DashboardRunDetail,
-  searchPath: string | string[] | undefined,
+  searchPath: SearchParamValue,
   previewMode: ExplorerPreviewMode,
 ): Promise<ReactNode> {
   const worktree = resolvePrimaryWorktree(detail);
