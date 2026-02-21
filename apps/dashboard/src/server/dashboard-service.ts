@@ -793,15 +793,22 @@ export function createDashboardService(options: {
         });
       }
 
-      const priorities = prioritiesBySource.get(edge.sourceNodeKey) ?? new Set<number>();
-      if (priorities.has(edge.priority)) {
+      if (!Number.isFinite(edge.priority) || !Number.isInteger(edge.priority) || edge.priority < 0) {
         errors.push({
-          code: 'duplicate_transition_priority',
-          message: `Duplicate transition priority ${edge.priority} from "${edge.sourceNodeKey}".`,
+          code: 'transition_priority_invalid',
+          message: `Transition priority ${edge.priority} from "${edge.sourceNodeKey}" must be a non-negative integer.`,
         });
+      } else {
+        const priorities = prioritiesBySource.get(edge.sourceNodeKey) ?? new Set<number>();
+        if (priorities.has(edge.priority)) {
+          errors.push({
+            code: 'duplicate_transition_priority',
+            message: `Duplicate transition priority ${edge.priority} from "${edge.sourceNodeKey}".`,
+          });
+        }
+        priorities.add(edge.priority);
+        prioritiesBySource.set(edge.sourceNodeKey, priorities);
       }
-      priorities.add(edge.priority);
-      prioritiesBySource.set(edge.sourceNodeKey, priorities);
 
       if (edge.auto) {
         if (edge.guardExpression !== null) {

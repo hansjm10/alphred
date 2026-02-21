@@ -661,6 +661,63 @@ describe('createDashboardService', () => {
     });
   });
 
+  it('rejects saving drafts with negative transition priorities', async () => {
+    const { db, dependencies } = createHarness();
+    migrateDatabase(db);
+
+    const service = createDashboardService({ dependencies });
+
+    await service.createWorkflowDraft({
+      template: 'blank',
+      name: 'Priority Tree',
+      treeKey: 'priority-tree',
+    });
+
+    await expect(
+      service.saveWorkflowDraft('priority-tree', 1, {
+        draftRevision: 1,
+        name: 'Priority Tree',
+        nodes: [
+          {
+            nodeKey: 'a',
+            displayName: 'A',
+            nodeType: 'agent',
+            provider: 'codex',
+            maxRetries: 0,
+            sequenceIndex: 10,
+            position: null,
+            promptTemplate: { content: 'A prompt', contentType: 'markdown' },
+          },
+          {
+            nodeKey: 'b',
+            displayName: 'B',
+            nodeType: 'agent',
+            provider: 'codex',
+            maxRetries: 0,
+            sequenceIndex: 20,
+            position: null,
+            promptTemplate: { content: 'B prompt', contentType: 'markdown' },
+          },
+        ],
+        edges: [
+          {
+            sourceNodeKey: 'a',
+            targetNodeKey: 'b',
+            priority: -1,
+            auto: true,
+            guardExpression: null,
+          },
+        ],
+      }),
+    ).rejects.toMatchObject({
+      code: 'invalid_request',
+      status: 400,
+      details: expect.objectContaining({
+        errors: expect.arrayContaining([expect.objectContaining({ code: 'transition_priority_invalid' })]),
+      }),
+    });
+  });
+
   it('syncs repositories through ensureRepositoryClone and auth check adapters', async () => {
     const checkAuth = vi.fn(async () => ({
       authenticated: true,
