@@ -372,6 +372,61 @@ describe('RepositoriesPage', () => {
     expect(screen.getByRole('button', { name: 'service' })).toBeInTheDocument();
   });
 
+  it('clears selected repository actions when the filter has no visible rows', async () => {
+    const user = userEvent.setup();
+    const fetchMock = vi.mocked(global.fetch);
+    render(
+      <RepositoriesPageContent
+        repositories={[
+          createRepository({ id: 1, name: 'alphred' }),
+          createRepository({ id: 2, name: 'service' }),
+        ]}
+        authGate={createAuthenticatedAuthGate()}
+      />,
+    );
+
+    await user.type(screen.getByRole('textbox', { name: 'Search repositories' }), 'zzzz-no-match');
+
+    expect(screen.getByText('No repositories match this filter.')).toBeInTheDocument();
+    expect(screen.getByText('Select a repository to inspect details.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Sync Selected' })).toBeDisabled();
+
+    await user.click(screen.getByRole('button', { name: 'Sync Selected' }));
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('targets a visible filtered repository when syncing from side-panel action', async () => {
+    const fetchMock = vi.mocked(global.fetch);
+    fetchMock.mockResolvedValueOnce(createJsonResponse({
+      action: 'fetched',
+      repository: createRepository({
+        id: 2,
+        name: 'beta-repo',
+        cloneStatus: 'cloned',
+      }),
+    }));
+
+    const user = userEvent.setup();
+    render(
+      <RepositoriesPageContent
+        repositories={[
+          createRepository({ id: 1, name: 'alphred' }),
+          createRepository({ id: 2, name: 'beta-repo' }),
+        ]}
+        authGate={createAuthenticatedAuthGate()}
+      />,
+    );
+
+    await user.type(screen.getByRole('textbox', { name: 'Search repositories' }), 'beta');
+    await user.click(screen.getByRole('button', { name: 'Sync Selected' }));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith('/api/dashboard/repositories/beta-repo/sync', {
+        method: 'POST',
+      });
+    });
+  });
+
   it('gates launch action by selected repository clone status and auth mutability', async () => {
     const repositories = [
       createRepository({
