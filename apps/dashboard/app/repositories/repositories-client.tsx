@@ -321,13 +321,13 @@ function RepositoriesListCard({
                     <ActionButton
                       aria-label={`${actionLabel} ${repository.name}`}
                       disabled={actionBlocked}
-                      aria-disabled={actionBlocked}
-                      onClick={() => {
-                        void onSyncRepository(repository);
-                      }}
-                    >
-                      {actionText}
-                    </ActionButton>
+	                      aria-disabled={actionBlocked}
+	                      onClick={() => {
+	                        onSyncRepository(repository);
+	                      }}
+	                    >
+	                      {actionText}
+	                    </ActionButton>
                   </td>
                 </tr>
               );
@@ -420,13 +420,13 @@ function RepositoriesAddForm({
         <ActionButton
           tone="primary"
           disabled={actionBlocked}
-          aria-disabled={actionBlocked}
-          onClick={() => {
-            void onAddRepository();
-          }}
-        >
-          {isAddingRepository ? 'Adding...' : 'Add and Sync'}
-        </ActionButton>
+	          aria-disabled={actionBlocked}
+	          onClick={() => {
+	            onAddRepository();
+	          }}
+	        >
+	          {isAddingRepository ? 'Adding...' : 'Add and Sync'}
+	        </ActionButton>
         <ActionButton
           disabled={isAddingRepository}
           aria-disabled={isAddingRepository}
@@ -501,15 +501,15 @@ function RepositoriesActionsPanel({
         <ActionButton
           tone={syncSelectedTone}
           disabled={syncSelectedDisabled}
-          aria-disabled={syncSelectedDisabled}
-          onClick={() => {
-            if (selectedRepository) {
-              void onSyncRepository(selectedRepository);
-            }
-          }}
-        >
-          {syncingRepositoryName === selectedRepository?.name ? 'Syncing...' : 'Sync Selected'}
-        </ActionButton>
+	          aria-disabled={syncSelectedDisabled}
+	          onClick={() => {
+	            if (selectedRepository) {
+	              onSyncRepository(selectedRepository);
+	            }
+	          }}
+	        >
+	          {syncingRepositoryName === selectedRepository?.name ? 'Syncing...' : 'Sync Selected'}
+	        </ActionButton>
 
         {shouldRenderAddRepositoryButton ? (
           <ActionButton
