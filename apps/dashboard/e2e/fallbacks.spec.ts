@@ -60,3 +60,40 @@ test('keeps repositories and runs usable on mobile without document-level horizo
     expect(metrics.bodyScrollWidth).toBeLessThanOrEqual(maxAllowedScrollWidth);
   }
 });
+
+test('keeps primary navigation discoverable on mobile widths', async ({ page }) => {
+  await page.setViewportSize({ width: 375, height: 812 });
+  await page.goto('/runs');
+
+  const nav = page.getByRole('navigation', { name: 'Primary navigation' });
+  await expect(nav).toBeVisible();
+
+  const navLinks = {
+    overview: nav.getByRole('link', { name: 'Overview' }),
+    repositories: nav.getByRole('link', { name: 'Repositories' }),
+    runs: nav.getByRole('link', { name: 'Runs' }),
+    integrations: nav.getByRole('link', { name: 'Integrations' }),
+  } as const;
+
+  for (const link of Object.values(navLinks)) {
+    await expect(link).toBeVisible();
+  }
+
+  await expect(navLinks.runs).toHaveAttribute('aria-current', 'page');
+  await expect(navLinks.overview).not.toHaveAttribute('aria-current', 'page');
+
+  await navLinks.overview.focus();
+  await expect(navLinks.overview).toBeFocused();
+  await page.keyboard.press('Tab');
+  await expect(navLinks.repositories).toBeFocused();
+  await page.keyboard.press('Tab');
+  await expect(navLinks.runs).toBeFocused();
+  await page.keyboard.press('Tab');
+  await expect(navLinks.integrations).toBeFocused();
+
+  const navListMetrics = await page.locator('.shell-nav-list').evaluate((element) => ({
+    scrollWidth: element.scrollWidth,
+    clientWidth: element.clientWidth,
+  }));
+  expect(navListMetrics.scrollWidth).toBeLessThanOrEqual(navListMetrics.clientWidth + 1);
+});
