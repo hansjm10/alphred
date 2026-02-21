@@ -240,8 +240,15 @@ export function RepositoriesPageContent({
     [normalizedQuery, repositoryState],
   );
 
-  const selectedRepository =
-    repositoryState.find(repository => repository.name === selectedRepositoryName) ?? repositoryState[0] ?? null;
+  const selectedRepository = useMemo(() => {
+    if (filteredRepositories.length === 0) {
+      return null;
+    }
+
+    return (
+      filteredRepositories.find(repository => repository.name === selectedRepositoryName) ?? filteredRepositories[0] ?? null
+    );
+  }, [filteredRepositories, selectedRepositoryName]);
   const selectedRepositorySyncError = selectedRepository ? syncErrors[selectedRepository.name] : undefined;
   const canLaunchWithSelectedRepository =
     selectedRepository !== null && selectedRepository.cloneStatus === 'cloned' && authGate.canMutate;
