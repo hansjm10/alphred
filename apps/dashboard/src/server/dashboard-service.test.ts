@@ -531,6 +531,104 @@ describe('createDashboardService', () => {
     expect(runsResponse[0]?.repository).toBeNull();
   });
 
+  it('rejects publishing drafts that contain unsupported node types', async () => {
+    const { db, dependencies } = createHarness();
+    migrateDatabase(db);
+
+    const service = createDashboardService({ dependencies });
+
+    await service.createWorkflowDraft({
+      template: 'blank',
+      name: 'Demo Tree',
+      treeKey: 'demo-tree',
+    });
+
+    await service.saveWorkflowDraft('demo-tree', 1, {
+      name: 'Demo Tree',
+      nodes: [
+        {
+          nodeKey: 'human-review',
+          displayName: 'Human Review',
+          nodeType: 'human',
+          provider: null,
+          maxRetries: 0,
+          sequenceIndex: 10,
+          position: null,
+          promptTemplate: null,
+        },
+      ],
+      edges: [],
+    });
+
+    await expect(service.validateWorkflowDraft('demo-tree', 1)).resolves.toMatchObject({
+      errors: expect.arrayContaining([expect.objectContaining({ code: 'unsupported_node_type' })]),
+    });
+
+    await expect(service.publishWorkflowDraft('demo-tree', 1, {})).rejects.toMatchObject({
+      code: 'invalid_request',
+      status: 400,
+      details: expect.objectContaining({
+        errors: expect.arrayContaining([expect.objectContaining({ code: 'unsupported_node_type' })]),
+      }),
+    });
+  });
+
+  it('rejects saving drafts with invalid guard expressions', async () => {
+    const { db, dependencies } = createHarness();
+    migrateDatabase(db);
+
+    const service = createDashboardService({ dependencies });
+
+    await service.createWorkflowDraft({
+      template: 'blank',
+      name: 'Guard Tree',
+      treeKey: 'guard-tree',
+    });
+
+    await expect(
+      service.saveWorkflowDraft('guard-tree', 1, {
+        name: 'Guard Tree',
+        nodes: [
+          {
+            nodeKey: 'a',
+            displayName: 'A',
+            nodeType: 'agent',
+            provider: 'codex',
+            maxRetries: 0,
+            sequenceIndex: 10,
+            position: null,
+            promptTemplate: { content: 'A prompt', contentType: 'markdown' },
+          },
+          {
+            nodeKey: 'b',
+            displayName: 'B',
+            nodeType: 'agent',
+            provider: 'codex',
+            maxRetries: 0,
+            sequenceIndex: 20,
+            position: null,
+            promptTemplate: { content: 'B prompt', contentType: 'markdown' },
+          },
+        ],
+        edges: [
+          {
+            sourceNodeKey: 'a',
+            targetNodeKey: 'b',
+            priority: 10,
+            auto: false,
+            guardExpression: { nope: true },
+          },
+        ],
+      }),
+    ).rejects.toMatchObject({
+      code: 'invalid_request',
+      status: 400,
+      details: expect.objectContaining({
+        errors: expect.arrayContaining([expect.objectContaining({ code: 'guard_invalid' })]),
+      }),
+    });
+  });
+
   it('syncs repositories through ensureRepositoryClone and auth check adapters', async () => {
     const checkAuth = vi.fn(async () => ({
       authenticated: true,

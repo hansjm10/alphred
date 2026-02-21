@@ -192,10 +192,64 @@ export function WorkflowEditorPageContent({ initialDraft }: Readonly<{ initialDr
   const draftNodesForSave = useMemo(() => nodes.map(mapNodeFromReactFlow), [nodes]);
   const draftEdgesForSave = useMemo(() => edges.map(mapEdgeFromReactFlow), [edges]);
 
+  const latestDraftStateRef = useRef<{
+    name: string;
+    description: string;
+    nodes: DashboardWorkflowDraftNode[];
+    edges: DashboardWorkflowDraftEdge[];
+  }>({
+    name: initialDraft.name,
+    description: initialDraft.description ?? '',
+    nodes: buildReactFlowNodes(initialDraft).map(mapNodeFromReactFlow),
+    edges: buildReactFlowEdges(initialDraft).map(mapEdgeFromReactFlow),
+  });
+
+  useEffect(() => {
+    latestDraftStateRef.current = {
+      name: workflowName,
+      description: workflowDescription,
+      nodes: draftNodesForSave,
+      edges: draftEdgesForSave,
+    };
+  }, [draftEdgesForSave, draftNodesForSave, workflowDescription, workflowName]);
+
   const initialRunnableNodeKeys = useMemo(() => {
     const incoming = new Set(draftEdgesForSave.map(edge => edge.targetNodeKey));
     return draftNodesForSave.filter(node => !incoming.has(node.nodeKey)).map(node => node.nodeKey);
   }, [draftEdgesForSave, draftNodesForSave]);
+
+  const saveDraft = useCallback(async (): Promise<void> => {
+    setSaveError(null);
+    setSaveState('saving');
+
+    const latest = latestDraftStateRef.current;
+    const payload: DashboardSaveWorkflowDraftRequest = {
+      name: latest.name,
+      description: latest.description.trim().length > 0 ? latest.description : undefined,
+      nodes: latest.nodes,
+      edges: latest.edges,
+    };
+
+    try {
+      const response = await fetch(`/api/dashboard/workflows/${encodeURIComponent(treeKey)}/draft?version=${version}`, {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+
+      const json = await response.json().catch(() => null);
+      if (!response.ok) {
+        setSaveState('error');
+        setSaveError(resolveApiError(response.status, json, 'Autosave failed'));
+        return;
+      }
+
+      setSaveState('saved');
+    } catch (failure) {
+      setSaveState('error');
+      setSaveError(failure instanceof Error ? failure.message : 'Autosave failed.');
+    }
+  }, [treeKey, version]);
 
   const scheduleSave = useCallback(() => {
     if (pendingSaveRef.current !== null) {
@@ -206,7 +260,7 @@ export function WorkflowEditorPageContent({ initialDraft }: Readonly<{ initialDr
       pendingSaveRef.current = null;
       void saveDraft();
     }, 1000);
-  }, []);
+  }, [saveDraft]);
 
   const scheduleHistoryCommit = useCallback(() => {
     if (applyingHistoryRef.current) {
@@ -544,38 +598,6 @@ export function WorkflowEditorPageContent({ initialDraft }: Readonly<{ initialDr
 
     handleAddNodeAtPosition(nodeType as DashboardWorkflowDraftNode['nodeType'], position);
   }, [handleAddNodeAtPosition, reactFlowInstance]);
-
-  async function saveDraft(): Promise<void> {
-    setSaveError(null);
-    setSaveState('saving');
-
-    const payload: DashboardSaveWorkflowDraftRequest = {
-      name: workflowName,
-      description: workflowDescription.trim().length > 0 ? workflowDescription : undefined,
-      nodes: draftNodesForSave,
-      edges: draftEdgesForSave,
-    };
-
-    try {
-      const response = await fetch(`/api/dashboard/workflows/${encodeURIComponent(treeKey)}/draft?version=${version}`, {
-        method: 'PUT',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(payload),
-      });
-
-      const json = await response.json().catch(() => null);
-      if (!response.ok) {
-        setSaveState('error');
-        setSaveError(resolveApiError(response.status, json, 'Autosave failed'));
-        return;
-      }
-
-      setSaveState('saved');
-    } catch (failure) {
-      setSaveState('error');
-      setSaveError(failure instanceof Error ? failure.message : 'Autosave failed.');
-    }
-  }
 
   async function runValidation(): Promise<void> {
     setValidationError(null);

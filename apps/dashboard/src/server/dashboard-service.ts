@@ -614,6 +614,41 @@ export function createDashboardService(options: {
 
   const utcNow = sql`(strftime('%Y-%m-%dT%H:%M:%fZ','now'))`;
 
+  const workflowNodeTypes = new Set(['agent', 'human', 'tool']);
+  const guardOperators = new Set(['==', '!=', '>', '<', '>=', '<=']);
+
+  function isRecord(value: unknown): value is Record<string, unknown> {
+    return value !== null && typeof value === 'object' && !Array.isArray(value);
+  }
+
+  function isGuardExpression(value: unknown): boolean {
+    if (!isRecord(value)) {
+      return false;
+    }
+
+    if ('logic' in value) {
+      if ((value.logic !== 'and' && value.logic !== 'or') || !Array.isArray(value.conditions)) {
+        return false;
+      }
+
+      return value.conditions.every(isGuardExpression);
+    }
+
+    if (!('field' in value) || !('operator' in value) || !('value' in value)) {
+      return false;
+    }
+
+    if (typeof value.field !== 'string') {
+      return false;
+    }
+
+    if (typeof value.operator !== 'string' || !guardOperators.has(value.operator)) {
+      return false;
+    }
+
+    return ['string', 'number', 'boolean'].includes(typeof value.value);
+  }
+
   function normalizeWorkflowTreeKey(rawValue: string): string {
     const value = rawValue.trim();
     if (value.length === 0) {
@@ -687,6 +722,7 @@ export function createDashboardService(options: {
 
   function validateDraftTopology(
     topology: Pick<DashboardWorkflowDraftTopology, 'nodes' | 'edges'>,
+    mode: 'save' | 'publish',
   ): DashboardWorkflowValidationResult {
     const errors: DashboardWorkflowValidationIssue[] = [];
     const warnings: DashboardWorkflowValidationIssue[] = [];
@@ -697,6 +733,11 @@ export function createDashboardService(options: {
 
     const nodeKeys = new Set<string>();
     for (const node of topology.nodes) {
+      if (!workflowNodeTypes.has(node.nodeType)) {
+        errors.push({ code: 'node_type_invalid', message: `Node type "${node.nodeType}" is not supported.` });
+        continue;
+      }
+
       const trimmedKey = node.nodeKey.trim();
       if (trimmedKey.length === 0) {
         errors.push({ code: 'node_key_missing', message: 'Node key is required.' });
@@ -710,6 +751,13 @@ export function createDashboardService(options: {
       const trimmedName = node.displayName.trim();
       if (trimmedName.length === 0) {
         errors.push({ code: 'node_name_missing', message: `Node "${trimmedKey}" must have a display name.` });
+      }
+
+      if (mode === 'publish' && node.nodeType !== 'agent') {
+        errors.push({
+          code: 'unsupported_node_type',
+          message: `Node "${trimmedKey}" has unsupported type "${node.nodeType}" and cannot be published yet.`,
+        });
       }
 
       if (node.nodeType === 'agent') {
@@ -754,11 +802,18 @@ export function createDashboardService(options: {
             message: `Auto transition ${edge.sourceNodeKey} → ${edge.targetNodeKey} must not have a guard.`,
           });
         }
-      } else if (edge.guardExpression === null) {
-        errors.push({
-          code: 'guard_missing',
-          message: `Guarded transition ${edge.sourceNodeKey} → ${edge.targetNodeKey} must include a guard definition.`,
-        });
+      } else {
+        if (edge.guardExpression === null) {
+          errors.push({
+            code: 'guard_missing',
+            message: `Guarded transition ${edge.sourceNodeKey} → ${edge.targetNodeKey} must include a guard definition.`,
+          });
+        } else if (!isGuardExpression(edge.guardExpression)) {
+          errors.push({
+            code: 'guard_invalid',
+            message: `Guard expression for ${edge.sourceNodeKey} → ${edge.targetNodeKey} must be parseable.`,
+          });
+        }
       }
     }
 
@@ -1406,10 +1461,10 @@ export function createDashboardService(options: {
       });
     },
 
-	    async saveWorkflowDraft(
-	      treeKeyRaw: string,
-	      version: number,
-	      request: DashboardSaveWorkflowDraftRequest,
+    async saveWorkflowDraft(
+      treeKeyRaw: string,
+      version: number,
+      request: DashboardSaveWorkflowDraftRequest,
 	    ): Promise<DashboardWorkflowDraftTopology> {
 	      const treeKey = normalizeWorkflowTreeKey(treeKeyRaw);
 	      if (!Number.isInteger(version) || version < 1) {
@@ -1423,7 +1478,7 @@ export function createDashboardService(options: {
 	        throw new DashboardIntegrationError('invalid_request', 'Workflow name cannot be empty.', { status: 400 });
 	      }
 
-	      const draftValidation = validateDraftTopology({ nodes: request.nodes, edges: request.edges });
+	      const draftValidation = validateDraftTopology({ nodes: request.nodes, edges: request.edges }, 'save');
 	      if (draftValidation.errors.length > 0) {
 	        throw new DashboardIntegrationError('invalid_request', 'Draft workflow failed validation and cannot be saved.', {
 	          status: 400,
@@ -1609,7 +1664,7 @@ export function createDashboardService(options: {
         }
 
         const topology = loadDraftTopologyByTreeId(db, tree.id);
-        return validateDraftTopology({ nodes: topology.nodes, edges: topology.edges });
+        return validateDraftTopology({ nodes: topology.nodes, edges: topology.edges }, 'publish');
       });
     },
 
@@ -1642,7 +1697,7 @@ export function createDashboardService(options: {
         }
 
         const topology = loadDraftTopologyByTreeId(db, tree.id);
-        const validation = validateDraftTopology({ nodes: topology.nodes, edges: topology.edges });
+        const validation = validateDraftTopology({ nodes: topology.nodes, edges: topology.edges }, 'publish');
         if (validation.errors.length > 0) {
           throw new DashboardIntegrationError('invalid_request', 'Draft workflow failed validation and cannot be published.', {
             status: 400,
