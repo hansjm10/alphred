@@ -176,6 +176,22 @@ export function normalizeRunFilter(status: string | string[] | undefined): RunRo
   return 'all';
 }
 
+export function normalizeRunRepositoryParam(
+  repository: string | string[] | undefined,
+): string | null {
+  const normalized = Array.isArray(repository) ? repository[0] : repository;
+  if (typeof normalized !== 'string') {
+    return null;
+  }
+
+  const trimmed = normalized.trim();
+  if (trimmed.length === 0) {
+    return null;
+  }
+
+  return trimmed;
+}
+
 export function resolveRunFilterHref(filter: RunRouteFilter): string {
   if (filter === 'all') {
     return '/runs';

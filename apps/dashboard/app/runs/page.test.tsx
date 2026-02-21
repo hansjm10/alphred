@@ -149,6 +149,24 @@ describe('RunsPage', () => {
     expect(screen.getAllByRole('link', { name: 'Open' })[0]).toHaveAttribute('href', '/runs/412');
   });
 
+  it('prefills repository context when an initial repository name is provided', () => {
+    render(
+      <RunsPageContent
+        runs={[createRunSummary({ id: 412, status: 'running' })]}
+        workflows={[createWorkflow()]}
+        repositories={[
+          createRepository({ name: 'demo-repo', cloneStatus: 'cloned' }),
+          createRepository({ id: 2, name: 'sample-repo', cloneStatus: 'cloned' }),
+        ]}
+        authGate={createAuthenticatedAuthGate()}
+        activeFilter="all"
+        initialRepositoryName="sample-repo"
+      />,
+    );
+
+    expect(screen.getByLabelText('Repository context')).toHaveValue('sample-repo');
+  });
+
   it('treats running filter as active lifecycle states', () => {
     render(
       <RunsPageContent
@@ -420,6 +438,7 @@ describe('RunsPage', () => {
       repositories: readonly DashboardRepositoryState[];
       authGate: GitHubAuthGate;
       activeFilter: 'all' | 'running' | 'failed';
+      initialRepositoryName: string | null;
     }>;
 
     expect(loadDashboardRunSummariesMock).toHaveBeenCalledTimes(1);
@@ -432,9 +451,10 @@ describe('RunsPage', () => {
     expect(root.props.repositories).toEqual(repositories);
     expect(root.props.authGate).toEqual(authGate);
     expect(root.props.activeFilter).toBe('all');
+    expect(root.props.initialRepositoryName).toBeNull();
   });
 
-  it('uses provided props without invoking loaders', async () => {
+  it('uses provided props without invoking loaders and resolves query-driven prefill', async () => {
     const runs = [createRunSummary({ id: 514 })];
     const workflows = [createWorkflow({ id: 2, treeKey: 'other-tree' })];
     const repositories = [createRepository({ id: 2, name: 'sample-repo' })];
@@ -445,13 +465,17 @@ describe('RunsPage', () => {
       workflows,
       repositories,
       authGate,
-      searchParams: Promise.resolve({ status: ['failed', 'running'] }),
+      searchParams: Promise.resolve({
+        status: ['failed', 'running'],
+        repository: ['sample-repo', 'demo-repo'],
+      }),
     })) as ReactElement<{
       runs: readonly DashboardRunSummary[];
       workflows: readonly DashboardWorkflowTreeSummary[];
       repositories: readonly DashboardRepositoryState[];
       authGate: GitHubAuthGate;
       activeFilter: 'all' | 'running' | 'failed';
+      initialRepositoryName: string | null;
     }>;
 
     expect(loadDashboardRunSummariesMock).not.toHaveBeenCalled();
@@ -464,5 +488,31 @@ describe('RunsPage', () => {
     expect(root.props.repositories).toEqual(repositories);
     expect(root.props.authGate).toEqual(authGate);
     expect(root.props.activeFilter).toBe('failed');
+    expect(root.props.initialRepositoryName).toBe('sample-repo');
+  });
+
+  it('drops repository prefill when query repository is not cloned', async () => {
+    const runs = [createRunSummary({ id: 518 })];
+    const workflows = [createWorkflow()];
+    const repositories = [createRepository({ id: 7, name: 'pending-repo', cloneStatus: 'pending', localPath: null })];
+    const authGate = createAuthenticatedAuthGate();
+
+    const root = (await RunsPage({
+      runs,
+      workflows,
+      repositories,
+      authGate,
+      searchParams: Promise.resolve({ repository: 'pending-repo' }),
+    })) as ReactElement<{
+      runs: readonly DashboardRunSummary[];
+      workflows: readonly DashboardWorkflowTreeSummary[];
+      repositories: readonly DashboardRepositoryState[];
+      authGate: GitHubAuthGate;
+      activeFilter: 'all' | 'running' | 'failed';
+      initialRepositoryName: string | null;
+    }>;
+
+    expect(root.type).toBe(RunsPageContent);
+    expect(root.props.initialRepositoryName).toBeNull();
   });
 });

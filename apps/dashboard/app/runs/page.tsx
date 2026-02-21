@@ -7,7 +7,7 @@ import type { GitHubAuthGate } from '../ui/github-auth';
 import { loadGitHubAuthGate } from '../ui/load-github-auth-gate';
 import { loadDashboardRepositories } from '../repositories/load-dashboard-repositories';
 import { loadDashboardRunSummaries, loadDashboardWorkflowTrees } from './load-dashboard-runs';
-import { normalizeRunFilter } from './run-route-fixtures';
+import { normalizeRunFilter, normalizeRunRepositoryParam } from './run-route-fixtures';
 import { RunsPageContent } from './runs-client';
 
 type RunsPageProps = Readonly<{
@@ -17,8 +17,10 @@ type RunsPageProps = Readonly<{
   authGate?: GitHubAuthGate;
   searchParams?: Promise<{
     status?: string | string[];
+    repository?: string | string[];
   }> | {
     status?: string | string[];
+    repository?: string | string[];
   };
 }>;
 
@@ -33,12 +35,21 @@ export default async function RunsPage({
 }: RunsPageProps = {}) {
   const resolvedSearchParams = await searchParams;
   const activeFilter = normalizeRunFilter(resolvedSearchParams?.status);
+  const requestedRepository = normalizeRunRepositoryParam(resolvedSearchParams?.repository);
   const [resolvedRuns, resolvedWorkflows, resolvedRepositories, resolvedAuthGate] = await Promise.all([
     runs ?? loadDashboardRunSummaries(),
     workflows ?? loadDashboardWorkflowTrees(),
     repositories ?? loadDashboardRepositories(),
     authGate ?? loadGitHubAuthGate(),
   ]);
+  const initialRepositoryName =
+    requestedRepository !== null &&
+    resolvedRepositories.some(
+      (repository) =>
+        repository.cloneStatus === 'cloned' && repository.name === requestedRepository,
+    )
+      ? requestedRepository
+      : null;
 
   return (
     <RunsPageContent
@@ -47,6 +58,7 @@ export default async function RunsPage({
       repositories={resolvedRepositories}
       authGate={resolvedAuthGate}
       activeFilter={activeFilter}
+      initialRepositoryName={initialRepositoryName}
     />
   );
 }
