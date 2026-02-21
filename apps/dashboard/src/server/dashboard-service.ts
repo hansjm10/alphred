@@ -45,15 +45,17 @@ import type {
   DashboardRunLaunchRequest,
   DashboardRunLaunchResult,
   DashboardRunNodeSnapshot,
-  DashboardRunSummary,
-  DashboardRunWorktreeMetadata,
-  DashboardCreateWorkflowRequest,
-  DashboardCreateWorkflowResult,
-  DashboardPublishWorkflowDraftRequest,
-  DashboardSaveWorkflowDraftRequest,
-  DashboardWorkflowCatalogItem,
-  DashboardWorkflowDraftTopology,
-  DashboardWorkflowTreeSnapshot,
+	  DashboardRunSummary,
+	  DashboardRunWorktreeMetadata,
+	  DashboardCreateWorkflowRequest,
+	  DashboardCreateWorkflowResult,
+	  DashboardDuplicateWorkflowRequest,
+	  DashboardDuplicateWorkflowResult,
+	  DashboardPublishWorkflowDraftRequest,
+	  DashboardSaveWorkflowDraftRequest,
+	  DashboardWorkflowCatalogItem,
+	  DashboardWorkflowDraftTopology,
+	  DashboardWorkflowTreeSnapshot,
   DashboardWorkflowValidationIssue,
   DashboardWorkflowValidationResult,
   DashboardWorkflowTreeSummary,
@@ -1123,11 +1125,11 @@ export function createDashboardService(options: {
 	      });
 	    },
 
-    async createWorkflowDraft(request: DashboardCreateWorkflowRequest): Promise<DashboardCreateWorkflowResult> {
-      const name = request.name.trim();
-      if (name.length === 0) {
-        throw new DashboardIntegrationError('invalid_request', 'Workflow name cannot be empty.', { status: 400 });
-      }
+	    async createWorkflowDraft(request: DashboardCreateWorkflowRequest): Promise<DashboardCreateWorkflowResult> {
+	      const name = request.name.trim();
+	      if (name.length === 0) {
+	        throw new DashboardIntegrationError('invalid_request', 'Workflow name cannot be empty.', { status: 400 });
+	      }
 
       const treeKey = normalizeWorkflowTreeKey(request.treeKey);
       const description = request.description?.trim() ?? null;
@@ -1259,13 +1261,178 @@ export function createDashboardService(options: {
 
           return { treeKey, draftVersion: 1 };
         }),
-      );
-    },
+	      );
+	    },
 
-    async getOrCreateWorkflowDraft(treeKeyRaw: string): Promise<DashboardWorkflowDraftTopology> {
-      const treeKey = normalizeWorkflowTreeKey(treeKeyRaw);
+	    async duplicateWorkflowTree(
+	      sourceTreeKeyRaw: string,
+	      request: DashboardDuplicateWorkflowRequest,
+	    ): Promise<DashboardDuplicateWorkflowResult> {
+	      const sourceTreeKey = normalizeWorkflowTreeKey(sourceTreeKeyRaw);
 
-      return withDatabase(async db => {
+	      const name = request.name.trim();
+	      if (name.length === 0) {
+	        throw new DashboardIntegrationError('invalid_request', 'Workflow name cannot be empty.', { status: 400 });
+	      }
+
+	      const treeKey = normalizeWorkflowTreeKey(request.treeKey);
+	      const description = request.description?.trim() ?? null;
+
+	      return withDatabase(async db =>
+	        db.transaction((tx) => {
+	          const existing = tx
+	            .select({ id: workflowTrees.id })
+	            .from(workflowTrees)
+	            .where(eq(workflowTrees.treeKey, treeKey))
+	            .get();
+	          if (existing) {
+	            throw new DashboardIntegrationError('conflict', `Workflow tree "${treeKey}" already exists.`, { status: 409 });
+	          }
+
+	          const draftSource = tx
+	            .select({ id: workflowTrees.id })
+	            .from(workflowTrees)
+	            .where(and(eq(workflowTrees.treeKey, sourceTreeKey), eq(workflowTrees.status, 'draft')))
+	            .orderBy(desc(workflowTrees.version), desc(workflowTrees.id))
+	            .get();
+
+	          const publishedSource = draftSource
+	            ? null
+	            : tx
+	                .select({ id: workflowTrees.id })
+	                .from(workflowTrees)
+	                .where(and(eq(workflowTrees.treeKey, sourceTreeKey), eq(workflowTrees.status, 'published')))
+	                .orderBy(desc(workflowTrees.version), desc(workflowTrees.id))
+	                .get();
+
+	          const sourceRecord = draftSource ?? publishedSource;
+	          if (!sourceRecord) {
+	            throw new DashboardIntegrationError('not_found', `Workflow tree "${sourceTreeKey}" was not found.`, {
+	              status: 404,
+	            });
+	          }
+
+	          const topology = loadDraftTopologyByTreeId(tx, sourceRecord.id);
+
+	          const insertedTree = tx
+	            .insert(workflowTrees)
+	            .values({
+	              treeKey,
+	              version: 1,
+	              status: 'draft',
+	              name,
+	              description,
+	              versionNotes: null,
+	              draftRevision: 0,
+	            })
+	            .returning({ id: workflowTrees.id })
+	            .get();
+
+	          const promptTemplateIdByNodeKey = new Map<string, number>();
+	          for (const node of topology.nodes) {
+	            if (!node.promptTemplate) {
+	              continue;
+	            }
+	            const inserted = tx
+	              .insert(promptTemplates)
+	              .values({
+	                templateKey: `${treeKey}/v1/${node.nodeKey}/prompt`,
+	                version: 1,
+	                content: node.promptTemplate.content,
+	                contentType: node.promptTemplate.contentType,
+	              })
+	              .returning({ id: promptTemplates.id })
+	              .get();
+	            promptTemplateIdByNodeKey.set(node.nodeKey, inserted.id);
+	          }
+
+	          const nodeIdByKey = new Map<string, number>();
+	          for (const node of topology.nodes) {
+	            const inserted = tx
+	              .insert(treeNodes)
+	              .values({
+	                workflowTreeId: insertedTree.id,
+	                nodeKey: node.nodeKey,
+	                displayName: node.displayName,
+	                nodeType: node.nodeType,
+	                provider: node.provider,
+	                promptTemplateId: promptTemplateIdByNodeKey.get(node.nodeKey) ?? null,
+	                maxRetries: node.maxRetries,
+	                sequenceIndex: node.sequenceIndex,
+	                positionX: node.position?.x ?? null,
+	                positionY: node.position?.y ?? null,
+	              })
+	              .returning({ id: treeNodes.id })
+	              .get();
+	            nodeIdByKey.set(node.nodeKey, inserted.id);
+	          }
+
+	          const guardDefinitionIdByKey = new Map<string, number>();
+	          for (const edge of topology.edges) {
+	            if (edge.auto || edge.guardExpression === null) {
+	              continue;
+	            }
+	            const key = `${edge.sourceNodeKey}->${edge.targetNodeKey}/priority-${edge.priority}`;
+	            const inserted = tx
+	              .insert(guardDefinitions)
+	              .values({
+	                guardKey: `${treeKey}/v1/${key}`,
+	                version: 1,
+	                expression: edge.guardExpression,
+	                description: null,
+	              })
+	              .returning({ id: guardDefinitions.id })
+	              .get();
+	            guardDefinitionIdByKey.set(key, inserted.id);
+	          }
+
+	          for (const edge of topology.edges) {
+	            const sourceNodeId = nodeIdByKey.get(edge.sourceNodeKey);
+	            const targetNodeId = nodeIdByKey.get(edge.targetNodeKey);
+	            if (!sourceNodeId || !targetNodeId) {
+	              throw new DashboardIntegrationError(
+	                'internal_error',
+	                `Failed to resolve node IDs for transition ${edge.sourceNodeKey} → ${edge.targetNodeKey}.`,
+	                {
+	                  status: 500,
+	                  details: { sourceNodeKey: edge.sourceNodeKey, targetNodeKey: edge.targetNodeKey },
+	                },
+	              );
+	            }
+
+	            const key = `${edge.sourceNodeKey}->${edge.targetNodeKey}/priority-${edge.priority}`;
+	            if (!edge.auto && !guardDefinitionIdByKey.has(key)) {
+	              throw new DashboardIntegrationError(
+	                'internal_error',
+	                `Failed to resolve guard definition for transition ${edge.sourceNodeKey} → ${edge.targetNodeKey} (priority ${edge.priority}).`,
+	                {
+	                  status: 500,
+	                  details: { transitionKey: key },
+	                },
+	              );
+	            }
+
+	            tx.insert(treeEdges)
+	              .values({
+	                workflowTreeId: insertedTree.id,
+	                sourceNodeId,
+	                targetNodeId,
+	                priority: edge.priority,
+	                auto: edge.auto ? 1 : 0,
+	                guardDefinitionId: edge.auto ? null : (guardDefinitionIdByKey.get(key) ?? null),
+	              })
+	              .run();
+	          }
+
+	          return { treeKey, draftVersion: 1 };
+	        }),
+	      );
+	    },
+
+	    async getOrCreateWorkflowDraft(treeKeyRaw: string): Promise<DashboardWorkflowDraftTopology> {
+	      const treeKey = normalizeWorkflowTreeKey(treeKeyRaw);
+
+	      return withDatabase(async db => {
 	        const existingDraft = db
 	          .select({
 	            id: workflowTrees.id,

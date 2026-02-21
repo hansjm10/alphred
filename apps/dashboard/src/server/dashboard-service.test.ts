@@ -574,6 +574,36 @@ describe('createDashboardService', () => {
     });
   });
 
+  it('duplicates workflow trees into a new draft v1', async () => {
+    const { db, dependencies } = createHarness();
+    migrateDatabase(db);
+
+    const service = createDashboardService({ dependencies });
+
+    await service.createWorkflowDraft({
+      template: 'design-implement-review',
+      name: 'Demo Tree',
+      treeKey: 'demo-tree',
+    });
+
+    await expect(
+      service.duplicateWorkflowTree('demo-tree', {
+        name: 'Demo Tree Copy',
+        treeKey: 'demo-tree-copy',
+        description: 'Copied workflow',
+      }),
+    ).resolves.toEqual({
+      treeKey: 'demo-tree-copy',
+      draftVersion: 1,
+    });
+
+    const draft = await service.getOrCreateWorkflowDraft('demo-tree-copy');
+    expect(draft.version).toBe(1);
+    expect(draft.treeKey).toBe('demo-tree-copy');
+    expect(draft.nodes.map(node => node.nodeKey)).toEqual(expect.arrayContaining(['design', 'implement', 'review']));
+    expect(draft.edges.length).toBeGreaterThan(0);
+  });
+
   it('rejects saving drafts with invalid guard expressions', async () => {
     const { db, dependencies } = createHarness();
     migrateDatabase(db);

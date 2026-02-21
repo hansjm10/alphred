@@ -215,6 +215,37 @@ Response `201`:
 
 Type: `{ workflow: DashboardCreateWorkflowResult }`.
 
+### `POST /workflows/[treeKey]/duplicate`
+
+Duplicates an existing workflow tree into a new **draft** v1.
+
+Notes:
+- Copies the latest **draft** topology for `treeKey` when one exists; otherwise copies the latest **published** version.
+- The duplicated workflow is always created as `status = 'draft'` and `version = 1`.
+
+Request body (`DashboardDuplicateWorkflowRequest`):
+
+```json
+{
+  "name": "Design → Implement → Review (Copy)",
+  "treeKey": "design-implement-review-copy",
+  "description": "Optional description"
+}
+```
+
+Response `201`:
+
+```json
+{
+  "workflow": {
+    "treeKey": "design-implement-review-copy",
+    "draftVersion": 1
+  }
+}
+```
+
+Type: `{ workflow: DashboardDuplicateWorkflowResult }`.
+
 ### `GET /workflows/[treeKey]/draft`
 
 Fetches the current draft for a tree key, creating a new draft from the latest published version when needed.

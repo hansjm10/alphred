@@ -1,8 +1,9 @@
 'use client';
 
-import { useMemo, useState, type ReactNode } from 'react';
+import { useMemo, useState, type FormEvent, type ReactNode } from 'react';
+import { useRouter } from 'next/navigation';
 import type { DashboardWorkflowCatalogItem } from '../../src/server/dashboard-contracts';
-import { ButtonLink, Card, Panel } from '../ui/primitives';
+import { ActionButton, ButtonLink, Card, Panel } from '../ui/primitives';
 
 type WorkflowsPageContentProps = Readonly<{
   workflows: readonly DashboardWorkflowCatalogItem[];
@@ -44,8 +45,51 @@ function renderVersionCell(workflow: DashboardWorkflowCatalogItem): ReactNode {
   return <span className="meta-text">—</span>;
 }
 
+type DuplicateDialogState = {
+  open: boolean;
+  sourceTreeKey: string;
+  sourceName: string;
+  name: string;
+  treeKey: string;
+  description: string;
+  submitting: boolean;
+  error: string | null;
+};
+
+function slugifyTreeKey(value: string): string {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 64);
+}
+
+type ApiErrorEnvelope = {
+  error?: {
+    message?: string;
+  };
+};
+
+function resolveApiError(status: number, payload: unknown, fallback: string): string {
+  if (
+    typeof payload === 'object' &&
+    payload !== null &&
+    'error' in payload &&
+    typeof (payload as ApiErrorEnvelope).error === 'object' &&
+    (payload as ApiErrorEnvelope).error !== null &&
+    typeof (payload as ApiErrorEnvelope).error?.message === 'string'
+  ) {
+    return (payload as ApiErrorEnvelope).error?.message as string;
+  }
+
+  return `${fallback} (HTTP ${status}).`;
+}
+
 export function WorkflowsPageContent({ workflows }: WorkflowsPageContentProps) {
+  const router = useRouter();
   const [searchQuery, setSearchQuery] = useState('');
+  const [duplicateDialog, setDuplicateDialog] = useState<DuplicateDialogState | null>(null);
   const normalizedQuery = searchQuery.trim().toLowerCase();
 
   const filteredWorkflows = useMemo(() => {
@@ -61,6 +105,69 @@ export function WorkflowsPageContent({ workflows }: WorkflowsPageContentProps) {
   }, [normalizedQuery, workflows]);
 
   const hasWorkflows = workflows.length > 0;
+
+  async function submitDuplicate(event: FormEvent) {
+    event.preventDefault();
+    if (!duplicateDialog || duplicateDialog.submitting) return;
+
+    const name = duplicateDialog.name.trim();
+    const treeKey = duplicateDialog.treeKey.trim().length > 0 ? duplicateDialog.treeKey.trim() : slugifyTreeKey(name);
+    if (name.length === 0 || treeKey.length === 0) {
+      setDuplicateDialog(current =>
+        current
+          ? {
+              ...current,
+              error: 'Name and tree key are required.',
+            }
+          : current,
+      );
+      return;
+    }
+
+    setDuplicateDialog(current => (current ? { ...current, submitting: true, error: null } : current));
+
+    try {
+      const response = await fetch(
+        `/api/dashboard/workflows/${encodeURIComponent(duplicateDialog.sourceTreeKey)}/duplicate`,
+        {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            name,
+            treeKey,
+            description: duplicateDialog.description.trim().length > 0 ? duplicateDialog.description : undefined,
+          }),
+        },
+      );
+
+      const json = await response.json().catch(() => null);
+      if (!response.ok) {
+        setDuplicateDialog(current =>
+          current
+            ? {
+                ...current,
+                submitting: false,
+                error: resolveApiError(response.status, json, 'Workflow duplicate failed'),
+              }
+            : current,
+        );
+        return;
+      }
+
+      setDuplicateDialog(null);
+      router.push(`/workflows/${encodeURIComponent(treeKey)}/edit`);
+    } catch (failure) {
+      setDuplicateDialog(current =>
+        current
+          ? {
+              ...current,
+              submitting: false,
+              error: failure instanceof Error ? failure.message : 'Workflow duplicate failed.',
+            }
+          : current,
+      );
+    }
+  }
 
   return (
     <div className="page-stack">
@@ -118,7 +225,25 @@ export function WorkflowsPageContent({ workflows }: WorkflowsPageContentProps) {
                       <td>
                         <div className="workflow-actions">
                           <ButtonLink href={editHref}>Edit</ButtonLink>
-                          <ButtonLink href={viewHref}>View</ButtonLink>
+                          <ActionButton
+                            onClick={() => {
+                              const suggestedName = `${workflow.name} copy`;
+                              const suggestedKey = slugifyTreeKey(`${workflow.treeKey}-copy`) || `${workflow.treeKey}-copy`;
+                              setDuplicateDialog({
+                                open: true,
+                                sourceTreeKey: workflow.treeKey,
+                                sourceName: workflow.name,
+                                name: suggestedName,
+                                treeKey: suggestedKey,
+                                description: workflow.description ?? '',
+                                submitting: false,
+                                error: null,
+                              });
+                            }}
+                          >
+                            Duplicate
+                          </ActionButton>
+                          <ButtonLink href={viewHref}>View JSON</ButtonLink>
                         </div>
                       </td>
                     </tr>
@@ -136,6 +261,78 @@ export function WorkflowsPageContent({ workflows }: WorkflowsPageContentProps) {
           <li>Edit always works against a draft of the next version.</li>
         </ul>
       </Panel>
+
+      {duplicateDialog?.open ? (
+        <div
+          className="workflow-overlay"
+          role="presentation"
+          onMouseDown={() => setDuplicateDialog(null)}
+        >
+          <div
+            className="workflow-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Duplicate workflow"
+            onMouseDown={(event) => event.stopPropagation()}
+          >
+            <header className="workflow-dialog__header">
+              <h3>Duplicate workflow</h3>
+              <p className="meta-text">Creates a new draft v1 from “{duplicateDialog.sourceName}”.</p>
+            </header>
+
+            <form className="workflow-dialog__form" onSubmit={submitDuplicate}>
+              <label className="workflow-dialog__field">
+                <span>Name</span>
+                <input
+                  value={duplicateDialog.name}
+                  onChange={(event) =>
+                    setDuplicateDialog((current) => (current ? { ...current, name: event.target.value } : current))
+                  }
+                  placeholder="Workflow name"
+                  autoFocus
+                />
+              </label>
+
+              <label className="workflow-dialog__field">
+                <span>Tree key</span>
+                <input
+                  value={duplicateDialog.treeKey}
+                  onChange={(event) =>
+                    setDuplicateDialog((current) => (current ? { ...current, treeKey: event.target.value } : current))
+                  }
+                  placeholder={slugifyTreeKey(duplicateDialog.name) || 'tree-key'}
+                />
+                <span className="meta-text">Lowercase a-z, 0-9, hyphens. Unique across workflows.</span>
+              </label>
+
+              <label className="workflow-dialog__field">
+                <span>Description</span>
+                <textarea
+                  value={duplicateDialog.description}
+                  onChange={(event) =>
+                    setDuplicateDialog((current) => (current ? { ...current, description: event.target.value } : current))
+                  }
+                  placeholder="Optional one-line description"
+                  rows={3}
+                />
+              </label>
+
+              {duplicateDialog.error ? (
+                <p className="run-launch-banner--error" role="alert">{duplicateDialog.error}</p>
+              ) : null}
+
+              <div className="workflow-dialog__actions">
+                <ActionButton onClick={() => setDuplicateDialog(null)} disabled={duplicateDialog.submitting}>
+                  Cancel
+                </ActionButton>
+                <ActionButton tone="primary" type="submit" disabled={duplicateDialog.submitting}>
+                  {duplicateDialog.submitting ? 'Duplicating...' : 'Duplicate and open builder'}
+                </ActionButton>
+              </div>
+            </form>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

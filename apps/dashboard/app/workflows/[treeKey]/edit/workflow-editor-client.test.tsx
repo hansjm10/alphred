@@ -95,4 +95,31 @@ describe('WorkflowEditorPageContent', () => {
     const payload = JSON.parse(body as string) as { name?: string };
     expect(payload.name).toBe('Updated Tree');
   });
+
+  it('opens the add-node palette on N and closes on Escape', async () => {
+    const fetchMock = vi.fn(async () => createJsonResponse({ draft: {} }, { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(
+      <WorkflowEditorPageContent
+        initialDraft={{
+          treeKey: 'demo-tree',
+          version: 1,
+          draftRevision: 0,
+          name: 'Demo Tree',
+          description: null,
+          versionNotes: null,
+          nodes: [],
+          edges: [],
+          initialRunnableNodeKeys: [],
+        }}
+      />,
+    );
+
+    fireEvent.keyDown(window, { key: 'n' });
+    expect(screen.getByRole('dialog', { name: 'Add node' })).toBeTruthy();
+
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(screen.queryByRole('dialog', { name: 'Add node' })).toBeNull();
+  });
 });

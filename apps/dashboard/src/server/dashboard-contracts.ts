@@ -42,6 +42,14 @@ export type DashboardCreateWorkflowResult = {
   draftVersion: number;
 };
 
+export type DashboardDuplicateWorkflowRequest = {
+  name: string;
+  treeKey: string;
+  description?: string;
+};
+
+export type DashboardDuplicateWorkflowResult = DashboardCreateWorkflowResult;
+
 export type DashboardWorkflowDraftNode = {
   nodeKey: string;
   displayName: string;

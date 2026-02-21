@@ -2,6 +2,7 @@ import { notFound } from 'next/navigation';
 import { createDashboardService } from '../../../../../src/server/dashboard-service';
 import { DashboardIntegrationError } from '../../../../../src/server/dashboard-errors';
 import { ButtonLink, Card, Panel } from '../../../../ui/primitives';
+import { WorkflowJsonCopyActions } from '../../../workflow-json-copy-client';
 
 type WorkflowVersionPageProps = Readonly<{
   params: Promise<{
@@ -46,6 +47,9 @@ export default async function WorkflowVersionPage({ params }: WorkflowVersionPag
           </div>
 
           <Panel title="View JSON">
+            <div className="workflows-toolbar">
+              <WorkflowJsonCopyActions json={json} />
+            </div>
             <pre className="workflow-json" aria-label="Workflow JSON">{json}</pre>
           </Panel>
         </Card>

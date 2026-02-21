@@ -1006,6 +1006,105 @@ output {
   margin-bottom: var(--space-2);
 }
 
+.workflow-json-actions {
+  align-items: center;
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+}
+
+.workflow-overlay {
+  background: color-mix(in srgb, var(--bg-canvas) 22%, transparent);
+  inset: 0;
+  position: fixed;
+  display: grid;
+  padding: var(--space-4);
+  place-items: center;
+  z-index: 50;
+}
+
+.workflow-dialog {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  box-shadow: 0 14px 40px rgba(0, 0, 0, 0.35);
+  display: grid;
+  gap: var(--space-3);
+  max-width: 560px;
+  padding: var(--space-4);
+  width: min(560px, 92vw);
+}
+
+.workflow-dialog__header h3 {
+  font: 700 18px/26px var(--font-display);
+}
+
+.workflow-dialog__form {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.workflow-dialog__field {
+  display: grid;
+  gap: 6px;
+}
+
+.workflow-dialog__field input,
+.workflow-dialog__field textarea {
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  font: 400 14px/20px var(--font-body);
+  padding: 8px 10px;
+}
+
+.workflow-dialog__field input:focus-visible,
+.workflow-dialog__field textarea:focus-visible {
+  outline: 2px solid var(--accent-active);
+  outline-offset: 2px;
+}
+
+.workflow-dialog__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  justify-content: flex-end;
+}
+
+.workflow-command-palette {
+  max-width: 520px;
+}
+
+.workflow-command-palette__options {
+  display: grid;
+  gap: 10px;
+}
+
+.workflow-command-palette__option {
+  align-items: flex-start;
+  background: var(--bg-canvas);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  display: grid;
+  gap: 4px;
+  padding: 12px 14px;
+  text-align: left;
+}
+
+.workflow-command-palette__option strong {
+  font: 600 14px/20px var(--font-display);
+}
+
+.workflow-command-palette__option span {
+  color: var(--text-secondary);
+  font: 400 13px/18px var(--font-body);
+}
+
+.workflow-command-palette__option:focus-visible {
+  outline: 2px solid var(--accent-active);
+  outline-offset: 2px;
+}
+
 .workflow-version-cell {
   display: grid;
   gap: 4px;

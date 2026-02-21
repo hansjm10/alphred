@@ -169,6 +169,8 @@ export function WorkflowEditorPageContent({ initialDraft }: Readonly<{ initialDr
   const [validation, setValidation] = useState<DashboardWorkflowValidationResult | null>(null);
   const [validationError, setValidationError] = useState<string | null>(null);
   const [publishError, setPublishError] = useState<string | null>(null);
+  const [addNodePaletteOpen, setAddNodePaletteOpen] = useState(false);
+  const addNodePaletteFirstRef = useRef<HTMLButtonElement | null>(null);
 
   const pendingSaveRef = useRef<number | null>(null);
   const inFlightSaveAbortRef = useRef<AbortController | null>(null);
@@ -192,6 +194,18 @@ export function WorkflowEditorPageContent({ initialDraft }: Readonly<{ initialDr
 
   const selectedNode = useMemo(() => nodes.find(node => node.id === selectedNodeId) ?? null, [nodes, selectedNodeId]);
   const selectedEdge = useMemo(() => edges.find(edge => edge.id === selectedEdgeId) ?? null, [edges, selectedEdgeId]);
+
+  useEffect(() => {
+    if (!addNodePaletteOpen) {
+      return;
+    }
+
+    const timeout = window.setTimeout(() => {
+      addNodePaletteFirstRef.current?.focus();
+    }, 0);
+
+    return () => window.clearTimeout(timeout);
+  }, [addNodePaletteOpen]);
 
   const draftNodesForSave = useMemo(() => nodes.map(mapNodeFromReactFlow), [nodes]);
   const draftEdgesForSave = useMemo(() => edges.map(mapEdgeFromReactFlow), [edges]);
@@ -544,14 +558,22 @@ export function WorkflowEditorPageContent({ initialDraft }: Readonly<{ initialDr
       return tag === 'input' || tag === 'textarea' || tag === 'select' || target.isContentEditable;
     }
 
-    function handleKeyDown(event: KeyboardEvent) {
-      if (isTypingTarget(event.target)) {
-        return;
-      }
+	    function handleKeyDown(event: KeyboardEvent) {
+	      if (isTypingTarget(event.target)) {
+	        return;
+	      }
 
-      const key = event.key.toLowerCase();
-      const isUndo = (event.metaKey || event.ctrlKey) && key === 'z' && !event.shiftKey;
-      const isRedo = (event.metaKey || event.ctrlKey) && ((key === 'z' && event.shiftKey) || key === 'y');
+	      if (addNodePaletteOpen) {
+	        if (event.key === 'Escape') {
+	          event.preventDefault();
+	          setAddNodePaletteOpen(false);
+	        }
+	        return;
+	      }
+
+	      const key = event.key.toLowerCase();
+	      const isUndo = (event.metaKey || event.ctrlKey) && key === 'z' && !event.shiftKey;
+	      const isRedo = (event.metaKey || event.ctrlKey) && ((key === 'z' && event.shiftKey) || key === 'y');
 
       if (isUndo) {
         event.preventDefault();
@@ -593,24 +615,25 @@ export function WorkflowEditorPageContent({ initialDraft }: Readonly<{ initialDr
         }
       }
 
-      if (!event.metaKey && !event.ctrlKey && key === 'n') {
-        event.preventDefault();
-        handleAddNode('agent');
-      }
-    }
+	      if (!event.metaKey && !event.ctrlKey && key === 'n') {
+	        event.preventDefault();
+	        setAddNodePaletteOpen(true);
+	      }
+	    }
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [
-    edges,
-    handleAddNode,
-    redo,
-    scheduleHistoryCommit,
-    scheduleSave,
-    selectedEdgeId,
-    selectedNodeId,
-    undo,
-  ]);
+	  }, [
+	    addNodePaletteOpen,
+	    edges,
+	    handleAddNode,
+	    redo,
+	    scheduleHistoryCommit,
+	    scheduleSave,
+	    selectedEdgeId,
+	    selectedNodeId,
+	    undo,
+	  ]);
 
   const onDragOver = useCallback((event: DragEvent) => {
     event.preventDefault();
@@ -777,13 +800,76 @@ export function WorkflowEditorPageContent({ initialDraft }: Readonly<{ initialDr
     </div>
   );
 
-  return (
-    <div className="workflow-editor-shell">
-      <header className="workflow-editor-topbar">
-        <div className="workflow-editor-topbar__meta">
-          <p className="meta-text">Workflows / {treeKey}</p>
-          <h2>{workflowName}</h2>
-        </div>
+	return (
+	    <div className="workflow-editor-shell">
+	      {addNodePaletteOpen ? (
+	        <div
+	          className="workflow-overlay"
+	          role="presentation"
+	          onMouseDown={() => setAddNodePaletteOpen(false)}
+	        >
+	          <div
+	            className="workflow-dialog workflow-command-palette"
+	            role="dialog"
+	            aria-modal="true"
+	            aria-label="Add node"
+	            onMouseDown={(event) => event.stopPropagation()}
+	          >
+	            <header className="workflow-dialog__header">
+	              <h3>Add node</h3>
+	              <p className="meta-text">Choose a node type to add to the canvas. Press Escape to close.</p>
+	            </header>
+
+	            <div className="workflow-command-palette__options" role="list">
+	              <button
+	                ref={addNodePaletteFirstRef}
+	                type="button"
+	                className="workflow-command-palette__option"
+	                onClick={() => {
+	                  setAddNodePaletteOpen(false);
+	                  handleAddNode('agent');
+	                }}
+	              >
+	                <strong>Agent node</strong>
+	                <span>Provider-backed phase with a prompt template.</span>
+	              </button>
+
+	              <button
+	                type="button"
+	                className="workflow-command-palette__option"
+	                onClick={() => {
+	                  setAddNodePaletteOpen(false);
+	                  handleAddNode('human');
+	                }}
+	              >
+	                <strong>Human node</strong>
+	                <span>Draft placeholder (publish may be blocked by validation).</span>
+	              </button>
+
+	              <button
+	                type="button"
+	                className="workflow-command-palette__option"
+	                onClick={() => {
+	                  setAddNodePaletteOpen(false);
+	                  handleAddNode('tool');
+	                }}
+	              >
+	                <strong>Tool node</strong>
+	                <span>Draft placeholder for tool execution (publish may be blocked by validation).</span>
+	              </button>
+	            </div>
+
+	            <div className="workflow-dialog__actions">
+	              <ActionButton onClick={() => setAddNodePaletteOpen(false)}>Close</ActionButton>
+	            </div>
+	          </div>
+	        </div>
+	      ) : null}
+	      <header className="workflow-editor-topbar">
+	        <div className="workflow-editor-topbar__meta">
+	          <p className="meta-text">Workflows / {treeKey}</p>
+	          <h2>{workflowName}</h2>
+	        </div>
         <div className="workflow-editor-topbar__actions">
           <StatusBadge status={statusBadge.status} label={statusBadge.label} />
           <ActionButton onClick={runValidation}>Validate</ActionButton>
