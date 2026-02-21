@@ -7,6 +7,7 @@ import type {
   DashboardRunSummary,
 } from '../../../src/server/dashboard-contracts';
 import { ActionButton, ButtonLink, Card, Panel, StatusBadge } from '../../ui/primitives';
+import { isActiveRunStatus } from '../run-summary-utils';
 
 type TimelineItem = Readonly<{
   key: string;
@@ -36,7 +37,6 @@ type ErrorEnvelope = {
   };
 };
 
-const ACTIVE_RUN_STATUSES = new Set<DashboardRunSummary['status']>(['pending', 'running', 'paused']);
 const RUN_STATUSES = new Set<DashboardRunSummary['status']>([
   'pending',
   'running',
@@ -576,7 +576,7 @@ export function RunDetailContent({
   const [detail, setDetail] = useState<DashboardRunDetail>(initialDetail);
   const [updateError, setUpdateError] = useState<string | null>(null);
   const [channelState, setChannelState] = useState<RealtimeChannelState>(() =>
-    enableRealtime && ACTIVE_RUN_STATUSES.has(initialDetail.run.status) ? 'live' : 'disabled',
+    enableRealtime && isActiveRunStatus(initialDetail.run.status) ? 'live' : 'disabled',
   );
   const [isRefreshing, setIsRefreshing] = useState<boolean>(false);
   const [highlightedNodeId, setHighlightedNodeId] = useState<number | null>(null);
@@ -599,7 +599,7 @@ export function RunDetailContent({
     setNextRetryAtMs(null);
     setRetryCountdownSeconds(null);
     setLastUpdatedAtMs(Date.now());
-    setChannelState(enableRealtime && ACTIVE_RUN_STATUSES.has(initialDetail.run.status) ? 'live' : 'disabled');
+    setChannelState(enableRealtime && isActiveRunStatus(initialDetail.run.status) ? 'live' : 'disabled');
   }, [enableRealtime, initialDetail]);
 
   useEffect(() => {
@@ -617,7 +617,7 @@ export function RunDetailContent({
   }, [detail.nodes, filteredNodeId, highlightedNodeId]);
 
   useEffect(() => {
-    if (!enableRealtime || !ACTIVE_RUN_STATUSES.has(detail.run.status)) {
+    if (!enableRealtime || !isActiveRunStatus(detail.run.status)) {
       setChannelState('disabled');
       setIsRefreshing(false);
       setNextRetryAtMs(null);
@@ -673,7 +673,7 @@ export function RunDetailContent({
       setLastUpdatedAtMs(Date.now());
       setNextRetryAtMs(null);
 
-      if (!ACTIVE_RUN_STATUSES.has(parsedDetail.run.status)) {
+      if (!isActiveRunStatus(parsedDetail.run.status)) {
         setChannelState('disabled');
         return;
       }

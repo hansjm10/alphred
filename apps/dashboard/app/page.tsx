@@ -1,26 +1,20 @@
 import Link from 'next/link';
 import type { ReactNode } from 'react';
-import {
-  RUN_ROUTE_FIXTURES,
-  buildRunDetailHref,
-  type RunRouteRecord,
-} from './runs/run-route-fixtures';
+import type { DashboardRunSummary } from '../src/server/dashboard-contracts';
+import { loadDashboardRunSummaries } from './runs/load-dashboard-runs';
+import { isActiveRunStatus, sortRunsForDashboard } from './runs/run-summary-utils';
 import { AuthRemediation } from './ui/auth-remediation';
 import type { GitHubAuthGate } from './ui/github-auth';
 import { loadGitHubAuthGate } from './ui/load-github-auth-gate';
 import { ActionButton, ButtonLink, Card, Panel, StatusBadge } from './ui/primitives';
 
 type PageProps = Readonly<{
-  activeRuns?: readonly RunRouteRecord[];
+  activeRuns?: readonly DashboardRunSummary[];
   authGate?: GitHubAuthGate;
 }>;
 
-function listDefaultActiveRuns(): readonly RunRouteRecord[] {
-  return RUN_ROUTE_FIXTURES.filter((run) => run.status === 'running' || run.status === 'paused');
-}
-
 export function OverviewPageContent({ activeRuns, authGate }: Readonly<{
-  activeRuns: readonly RunRouteRecord[];
+  activeRuns: readonly DashboardRunSummary[];
   authGate: GitHubAuthGate;
 }>) {
   let launchAction: ReactNode;
@@ -88,7 +82,7 @@ export function OverviewPageContent({ activeRuns, authGate }: Readonly<{
             <ul className="entity-list">
               {activeRuns.map((run) => (
                 <li key={run.id}>
-                  <Link href={buildRunDetailHref(run.id)}>{`Run #${run.id} ${run.workflow}`}</Link>
+                  <Link href={`/runs/${run.id}`}>{`Run #${run.id} ${run.tree.treeKey}`}</Link>
                   <StatusBadge status={run.status} />
                 </li>
               ))}
@@ -110,8 +104,11 @@ export function OverviewPageContent({ activeRuns, authGate }: Readonly<{
 }
 
 export default async function Page({ activeRuns, authGate }: PageProps = {}) {
-  const visibleActiveRuns = activeRuns ?? listDefaultActiveRuns();
-  const resolvedAuthGate = authGate ?? (await loadGitHubAuthGate());
+  const [resolvedAuthGate, resolvedRuns] = await Promise.all([
+    authGate ?? loadGitHubAuthGate(),
+    activeRuns ?? loadDashboardRunSummaries(),
+  ]);
+  const visibleActiveRuns = sortRunsForDashboard(resolvedRuns).filter((run) => isActiveRunStatus(run.status));
 
   return (
     <OverviewPageContent
