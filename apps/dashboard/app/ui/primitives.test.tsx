@@ -18,6 +18,17 @@ describe('primitives', () => {
     expect(badge).toHaveClass('status-badge--failed');
   });
 
+  it('renders status badge icon as aria-hidden svg (no glyph text)', () => {
+    const { container } = render(<StatusBadge status="completed" />);
+
+    expect(screen.getByText('Completed')).toBeInTheDocument();
+    expect(screen.queryByText('*')).not.toBeInTheDocument();
+
+    const icon = container.querySelector('svg.status-badge__icon');
+    expect(icon).toBeTruthy();
+    expect(icon).toHaveAttribute('aria-hidden', 'true');
+  });
+
   it('marks active tabs using aria-current', () => {
     render(<Tabs items={ITEMS} activeHref="/runs" ariaLabel="Run tabs" />);
 

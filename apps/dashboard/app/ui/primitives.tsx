@@ -49,14 +49,14 @@ type TabsProps = Readonly<{
   ariaLabel?: string;
 }>;
 
-const STATUS_VARIANTS: Record<StatusVariant, { icon: string; label: string }> = {
-  pending: { icon: 'o', label: 'Pending' },
-  running: { icon: '>', label: 'Running' },
-  completed: { icon: '*', label: 'Completed' },
-  failed: { icon: 'x', label: 'Failed' },
-  paused: { icon: '||', label: 'Paused' },
-  skipped: { icon: '-', label: 'Skipped' },
-  cancelled: { icon: '!', label: 'Cancelled' },
+const STATUS_LABELS: Record<StatusVariant, string> = {
+  pending: 'Pending',
+  running: 'Running',
+  completed: 'Completed',
+  failed: 'Failed',
+  paused: 'Paused',
+  skipped: 'Skipped',
+  cancelled: 'Cancelled',
 };
 
 function classNames(...parts: (string | undefined | false)[]): string {
@@ -85,6 +85,72 @@ function SurfaceHeader({
       {description ? <p>{description}</p> : null}
     </header>
   );
+}
+
+function StatusIcon({ status }: Readonly<{ status: StatusVariant }>) {
+  const common = {
+    className: 'status-badge__icon',
+    width: 14,
+    height: 14,
+    viewBox: '0 0 16 16',
+    fill: 'none',
+    stroke: 'currentColor',
+    strokeWidth: 2,
+    strokeLinecap: 'round' as const,
+    strokeLinejoin: 'round' as const,
+    'aria-hidden': true,
+    focusable: false,
+  };
+
+  switch (status) {
+    case 'pending':
+      return (
+        <svg {...common}>
+          <circle cx="8" cy="8" r="5" />
+        </svg>
+      );
+    case 'running':
+      return (
+        <svg {...common}>
+          <path d="M3 8h7" />
+          <path d="M8 5l3 3-3 3" />
+        </svg>
+      );
+    case 'completed':
+      return (
+        <svg {...common}>
+          <path d="M3.5 8.5l2.5 2.5 6.5-6.5" />
+        </svg>
+      );
+    case 'failed':
+      return (
+        <svg {...common}>
+          <path d="M5 5l6 6" />
+          <path d="M11 5l-6 6" />
+        </svg>
+      );
+    case 'paused':
+      return (
+        <svg {...common}>
+          <path d="M6 5v6" />
+          <path d="M10 5v6" />
+        </svg>
+      );
+    case 'skipped':
+      return (
+        <svg {...common}>
+          <path d="M4 8h8" />
+        </svg>
+      );
+    case 'cancelled':
+      return (
+        <svg {...common}>
+          <circle cx="8" cy="8" r="5" />
+          <path d="M8 5.25v4.25" />
+          <path d="M8 11.5h0.01" />
+        </svg>
+      );
+  }
 }
 
 export function Card({
@@ -126,17 +192,13 @@ export function Panel({
 }
 
 export function StatusBadge({ status, label, className }: StatusBadgeProps) {
-  const variant = STATUS_VARIANTS[status];
-
   return (
     <span
       className={classNames('status-badge', `status-badge--${status}`, className)}
       data-status={status}
     >
-      <span className="status-badge__icon" aria-hidden="true">
-        {variant.icon}
-      </span>
-      <span>{label ?? variant.label}</span>
+      <StatusIcon status={status} />
+      <span>{label ?? STATUS_LABELS[status]}</span>
     </span>
   );
 }

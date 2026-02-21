@@ -269,8 +269,7 @@ output {
 }
 
 .status-badge__icon {
-  font-weight: 600;
-  line-height: 1;
+  display: block;
 }
 
 .status-badge--pending {
