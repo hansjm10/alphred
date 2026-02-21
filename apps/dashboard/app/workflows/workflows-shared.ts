@@ -5,7 +5,17 @@ export type ApiErrorEnvelope = {
 };
 
 function trimHyphens(value: string): string {
-  return value.replace(/^-+/g, '').replace(/-+$/g, '');
+  let start = 0;
+  while (start < value.length && value[start] === '-') {
+    start += 1;
+  }
+
+  let end = value.length;
+  while (end > start && value[end - 1] === '-') {
+    end -= 1;
+  }
+
+  return start === 0 && end === value.length ? value : value.slice(start, end);
 }
 
 export function slugifyKey(value: string, maxLength: number): string {
@@ -29,4 +39,3 @@ export function resolveApiError(status: number, payload: unknown, fallback: stri
 
   return `${fallback} (HTTP ${status}).`;
 }
-
