@@ -765,11 +765,16 @@ export function WorkflowEditorPageContent({ initialDraft }: Readonly<{ initialDr
             </div>
           </Card>
 
-          <Panel title="Draft version">
-            <p className="meta-text">v{version} (unpublished)</p>
-            {saveError ? <p className="run-launch-banner--error" role="alert">{saveError}</p> : null}
-          </Panel>
-        </aside>
+	          <Panel title="Draft version">
+	            <p className="meta-text">v{version} (unpublished)</p>
+	            {saveError ? <p className="run-launch-banner--error" role="alert">{saveError}</p> : null}
+	            {saveState === 'error' ? (
+	              <ActionButton onClick={() => void saveDraft()}>
+	                Retry save
+	              </ActionButton>
+	            ) : null}
+	          </Panel>
+	        </aside>
 
         <section className="workflow-editor-canvas" aria-label="Workflow canvas">
           <ReactFlow

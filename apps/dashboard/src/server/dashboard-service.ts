@@ -1406,28 +1406,36 @@ export function createDashboardService(options: {
       });
     },
 
-    async saveWorkflowDraft(
-      treeKeyRaw: string,
-      version: number,
-      request: DashboardSaveWorkflowDraftRequest,
-    ): Promise<DashboardWorkflowDraftTopology> {
-      const treeKey = normalizeWorkflowTreeKey(treeKeyRaw);
-      if (!Number.isInteger(version) || version < 1) {
-        throw new DashboardIntegrationError('invalid_request', 'Workflow version must be a positive integer.', {
-          status: 400,
-        });
-      }
+	    async saveWorkflowDraft(
+	      treeKeyRaw: string,
+	      version: number,
+	      request: DashboardSaveWorkflowDraftRequest,
+	    ): Promise<DashboardWorkflowDraftTopology> {
+	      const treeKey = normalizeWorkflowTreeKey(treeKeyRaw);
+	      if (!Number.isInteger(version) || version < 1) {
+	        throw new DashboardIntegrationError('invalid_request', 'Workflow version must be a positive integer.', {
+	          status: 400,
+	        });
+	      }
 
-      const name = request.name.trim();
-      if (name.length === 0) {
-        throw new DashboardIntegrationError('invalid_request', 'Workflow name cannot be empty.', { status: 400 });
-      }
+	      const name = request.name.trim();
+	      if (name.length === 0) {
+	        throw new DashboardIntegrationError('invalid_request', 'Workflow name cannot be empty.', { status: 400 });
+	      }
 
-      const description = request.description?.trim() ?? null;
+	      const draftValidation = validateDraftTopology({ nodes: request.nodes, edges: request.edges });
+	      if (draftValidation.errors.length > 0) {
+	        throw new DashboardIntegrationError('invalid_request', 'Draft workflow failed validation and cannot be saved.', {
+	          status: 400,
+	          details: draftValidation as unknown as Record<string, unknown>,
+	        });
+	      }
 
-      return withDatabase(async db =>
-        db.transaction((tx) => {
-          const tree = tx
+	      const description = request.description?.trim() ?? null;
+
+	      return withDatabase(async db =>
+	        db.transaction((tx) => {
+	          const tree = tx
             .select({
               id: workflowTrees.id,
             })
@@ -1531,25 +1539,42 @@ export function createDashboardService(options: {
             guardDefinitionIdByKey.set(key, inserted.id);
           }
 
-          for (const edge of request.edges) {
-            const sourceNodeId = nodeIdByKey.get(edge.sourceNodeKey);
-            const targetNodeId = nodeIdByKey.get(edge.targetNodeKey);
-            if (!sourceNodeId || !targetNodeId) {
-              continue;
-            }
+	          for (const edge of request.edges) {
+	            const sourceNodeId = nodeIdByKey.get(edge.sourceNodeKey);
+	            const targetNodeId = nodeIdByKey.get(edge.targetNodeKey);
+	            if (!sourceNodeId || !targetNodeId) {
+	              throw new DashboardIntegrationError(
+	                'internal_error',
+	                `Failed to resolve node IDs for transition ${edge.sourceNodeKey} → ${edge.targetNodeKey}.`,
+	                {
+	                  status: 500,
+	                  details: { sourceNodeKey: edge.sourceNodeKey, targetNodeKey: edge.targetNodeKey },
+	                },
+	              );
+	            }
 
-            const key = `${edge.sourceNodeKey}->${edge.targetNodeKey}/priority-${edge.priority}`;
-            tx.insert(treeEdges)
-              .values({
-                workflowTreeId: tree.id,
-                sourceNodeId,
-                targetNodeId,
-                priority: edge.priority,
-                auto: edge.auto ? 1 : 0,
-                guardDefinitionId: edge.auto ? null : (guardDefinitionIdByKey.get(key) ?? null),
-              })
-              .run();
-          }
+	            const key = `${edge.sourceNodeKey}->${edge.targetNodeKey}/priority-${edge.priority}`;
+	            if (!edge.auto && !guardDefinitionIdByKey.has(key)) {
+	              throw new DashboardIntegrationError(
+	                'internal_error',
+	                `Failed to resolve guard definition for transition ${edge.sourceNodeKey} → ${edge.targetNodeKey} (priority ${edge.priority}).`,
+	                {
+	                  status: 500,
+	                  details: { transitionKey: key },
+	                },
+	              );
+	            }
+	            tx.insert(treeEdges)
+	              .values({
+	                workflowTreeId: tree.id,
+	                sourceNodeId,
+	                targetNodeId,
+	                priority: edge.priority,
+	                auto: edge.auto ? 1 : 0,
+	                guardDefinitionId: edge.auto ? null : (guardDefinitionIdByKey.get(key) ?? null),
+	              })
+	              .run();
+	          }
 
           const topology = loadDraftTopologyByTreeId(tx, tree.id);
           return {

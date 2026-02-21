@@ -57,20 +57,23 @@ describe('Route /api/dashboard/repositories', () => {
       expect(listRepositoriesMock).toHaveBeenCalledTimes(1);
     });
 
-    it('maps service failures to integration error responses', async () => {
-      listRepositoriesMock.mockRejectedValue(new Error('cannot connect'));
+	    it('maps service failures to integration error responses', async () => {
+	      listRepositoriesMock.mockRejectedValue(new Error('cannot connect'));
 
-      const response = await GET();
+	      const response = await GET();
 
-      expect(response.status).toBe(500);
-      await expect(response.json()).resolves.toEqual({
-        error: {
-          code: 'internal_error',
-          message: 'Dashboard integration request failed.',
-        },
-      });
-    });
-  });
+	      expect(response.status).toBe(500);
+	      await expect(response.json()).resolves.toEqual({
+	        error: {
+	          code: 'internal_error',
+	          message: 'Dashboard integration request failed.',
+	          details: {
+	            cause: 'cannot connect',
+	          },
+	        },
+	      });
+	    });
+	  });
 
   describe('POST', () => {
     it('creates a repository through the dashboard service', async () => {
@@ -185,8 +188,8 @@ describe('Route /api/dashboard/repositories', () => {
       });
     });
 
-    it('maps unhandled service failures to 500 responses', async () => {
-      createRepositoryMock.mockRejectedValue(new Error('cannot create'));
+	    it('maps unhandled service failures to 500 responses', async () => {
+	      createRepositoryMock.mockRejectedValue(new Error('cannot create'));
 
       const response = await POST(
         createJsonRequest({
@@ -196,13 +199,16 @@ describe('Route /api/dashboard/repositories', () => {
         }),
       );
 
-      expect(response.status).toBe(500);
-      await expect(response.json()).resolves.toEqual({
-        error: {
-          code: 'internal_error',
-          message: 'Dashboard integration request failed.',
-        },
-      });
-    });
-  });
-});
+	      expect(response.status).toBe(500);
+	      await expect(response.json()).resolves.toEqual({
+	        error: {
+	          code: 'internal_error',
+	          message: 'Dashboard integration request failed.',
+	          details: {
+	            cause: 'cannot create',
+	          },
+	        },
+	      });
+	    });
+	  });
+	});

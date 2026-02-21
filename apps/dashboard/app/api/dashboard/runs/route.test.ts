@@ -207,21 +207,24 @@ describe('Route /api/dashboard/runs', () => {
       });
     });
 
-    it('maps service failures to integration error responses', async () => {
-      launchWorkflowRunMock.mockRejectedValue(new Error('launch failed'));
+	    it('maps service failures to integration error responses', async () => {
+	      launchWorkflowRunMock.mockRejectedValue(new Error('launch failed'));
 
       const response = await POST(createJsonRequest('http://localhost/api/dashboard/runs', {
         treeKey: 'default',
       }));
 
-      expect(response.status).toBe(500);
-      await expect(response.json()).resolves.toEqual({
-        error: {
-          code: 'internal_error',
-          message: 'Dashboard integration request failed.',
-        },
-      });
-    });
+	      expect(response.status).toBe(500);
+	      await expect(response.json()).resolves.toEqual({
+	        error: {
+	          code: 'internal_error',
+	          message: 'Dashboard integration request failed.',
+	          details: {
+	            cause: 'launch failed',
+	          },
+	        },
+	      });
+	    });
 
     it('returns guided remediation when launch fails with an existing branch conflict', async () => {
       launchWorkflowRunMock.mockRejectedValue(new Error("fatal: a branch named 'main' already exists"));

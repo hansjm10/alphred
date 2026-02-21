@@ -54,17 +54,20 @@ describe('POST /api/dashboard/auth/github/check', () => {
     expect(checkGitHubAuthMock).toHaveBeenCalledTimes(1);
   });
 
-  it('maps service failures to integration error responses', async () => {
-    checkGitHubAuthMock.mockRejectedValue(new Error('kaboom'));
+	  it('maps service failures to integration error responses', async () => {
+	    checkGitHubAuthMock.mockRejectedValue(new Error('kaboom'));
 
-    const response = await POST();
+	    const response = await POST();
 
-    expect(response.status).toBe(500);
-    await expect(response.json()).resolves.toEqual({
-      error: {
-        code: 'internal_error',
-        message: 'Dashboard integration request failed.',
-      },
-    });
-  });
-});
+	    expect(response.status).toBe(500);
+	    await expect(response.json()).resolves.toEqual({
+	      error: {
+	        code: 'internal_error',
+	        message: 'Dashboard integration request failed.',
+	        details: {
+	          cause: 'kaboom',
+	        },
+	      },
+	    });
+	  });
+	});

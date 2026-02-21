@@ -45,20 +45,23 @@ describe('GET /api/dashboard/workflows', () => {
     expect(listWorkflowTreesMock).toHaveBeenCalledTimes(1);
   });
 
-  it('maps service failures to integration error responses', async () => {
-    listWorkflowTreesMock.mockRejectedValue(new Error('workflow query failed'));
+	  it('maps service failures to integration error responses', async () => {
+	    listWorkflowTreesMock.mockRejectedValue(new Error('workflow query failed'));
 
-    const response = await GET();
+	    const response = await GET();
 
-    expect(response.status).toBe(500);
-    await expect(response.json()).resolves.toEqual({
-      error: {
-        code: 'internal_error',
-        message: 'Dashboard integration request failed.',
-      },
-    });
-  });
-});
+	    expect(response.status).toBe(500);
+	    await expect(response.json()).resolves.toEqual({
+	      error: {
+	        code: 'internal_error',
+	        message: 'Dashboard integration request failed.',
+	        details: {
+	          cause: 'workflow query failed',
+	        },
+	      },
+	    });
+	  });
+	});
 
 describe('POST /api/dashboard/workflows', () => {
   beforeEach(() => {

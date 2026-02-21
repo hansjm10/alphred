@@ -15,10 +15,14 @@ All route-level errors return this envelope:
 {
   "error": {
     "code": "invalid_request | not_found | auth_required | conflict | internal_error",
-    "message": "human-readable message"
+    "message": "human-readable message",
+    "details": {}
   }
 }
 ```
+
+Notes:
+- `details` is optional and may contain structured data (for example, validation errors) when available.
 
 ## Endpoints
 
