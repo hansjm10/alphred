@@ -105,4 +105,21 @@ describe('AppShell', () => {
     expect(screen.queryByRole('link', { name: 'Launch Run' })).not.toBeInTheDocument();
     expect(screen.getByText('Unauthenticated')).toBeInTheDocument();
   });
+
+  it('avoids duplicating the primary CTA in the top bar on non-overview routes', () => {
+    testPathname.value = '/runs';
+    render(
+      <AppShell authGate={createGitHubAuthGate({
+        authenticated: true,
+        user: 'octocat',
+        scopes: ['repo'],
+        error: null,
+      })}>
+        <p>route content</p>
+      </AppShell>,
+    );
+
+    expect(screen.queryByRole('link', { name: 'Launch Run' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'Connect GitHub' })).not.toBeInTheDocument();
+  });
 });

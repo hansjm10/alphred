@@ -104,7 +104,9 @@ describe('RepositoriesPage', () => {
     );
 
     expect(screen.getByRole('heading', { name: 'No repositories configured' })).toBeInTheDocument();
-    expect(screen.getAllByRole('button', { name: 'Add Repository' })).toHaveLength(2);
+    expect(screen.getAllByRole('button', { name: 'Add Repository' })).toHaveLength(1);
+    expect(screen.getByRole('heading', { name: 'Add repository' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Add and Sync' })).toBeEnabled();
     expect(screen.getByRole('button', { name: 'Sync Selected' })).toBeDisabled();
   });
 

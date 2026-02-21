@@ -201,14 +201,14 @@ function renderLaunchAction(
     const launchHref = `/runs?repository=${encodeURIComponent(selectedRepository.name)}`;
 
     return (
-      <ButtonLink href={launchHref} tone="primary">
+      <ButtonLink href={launchHref}>
         Launch Run with this repo
       </ButtonLink>
     );
   }
 
   return (
-    <ActionButton tone="primary" disabled aria-disabled="true">
+    <ActionButton disabled aria-disabled="true">
       Launch Run with this repo
     </ActionButton>
   );
@@ -234,6 +234,7 @@ export function RepositoriesPageContent({
   const syncBlocked = !authGate.canMutate;
   const actionBlocked = syncBlocked || syncingRepositoryName !== null || isAddingRepository;
   const normalizedQuery = searchQuery.trim().toLowerCase();
+  const hasRepositories = repositoryState.length > 0;
 
   const filteredRepositories = useMemo(
     () => repositoryState.filter(repository => filterRepository(repository, normalizedQuery)),
@@ -396,14 +397,14 @@ export function RepositoriesPageContent({
   }
 
   let repositoriesContent: ReactNode;
-  if (repositoryState.length === 0) {
+  if (!hasRepositories) {
     repositoriesContent = (
       <div className="page-stack">
         <h3>No repositories configured</h3>
         <p>Add a GitHub repository to register it and trigger sync from the dashboard.</p>
         <div className="action-row">
           <ActionButton
-            tone="primary"
+            tone={isAddFormOpen ? 'secondary' : 'primary'}
             disabled={actionBlocked}
             aria-disabled={actionBlocked}
             onClick={() => {
@@ -529,6 +530,7 @@ export function RepositoriesPageContent({
 
           <div className="action-row">
             <ActionButton
+              tone={!isAddFormOpen ? 'primary' : undefined}
               disabled={selectedRepository === null || actionBlocked}
               aria-disabled={selectedRepository === null || actionBlocked}
               onClick={() => {
@@ -540,18 +542,21 @@ export function RepositoriesPageContent({
               {syncingRepositoryName === selectedRepository?.name ? 'Syncing...' : 'Sync Selected'}
             </ActionButton>
 
-            <ActionButton
-              tone="primary"
-              disabled={actionBlocked}
-              aria-disabled={actionBlocked}
-              onClick={() => {
-                handleOpenAddForm();
-              }}
-            >
-              Add Repository
-            </ActionButton>
+            {hasRepositories && !isAddFormOpen ? (
+              <ActionButton
+                disabled={actionBlocked}
+                aria-disabled={actionBlocked}
+                onClick={() => {
+                  handleOpenAddForm();
+                }}
+              >
+                Add Repository
+              </ActionButton>
+            ) : null}
 
-            {renderLaunchAction(canLaunchWithSelectedRepository, selectedRepository)}
+            {hasRepositories && !isAddFormOpen
+              ? renderLaunchAction(canLaunchWithSelectedRepository, selectedRepository)
+              : null}
           </div>
           <p className="meta-text repo-add-hint">{addFormHint}</p>
 
