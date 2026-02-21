@@ -1,5 +1,17 @@
 import { expect, test } from '@playwright/test';
 
+test('sets viewport meta for mobile responsiveness', async ({ page }) => {
+  await page.goto('/runs');
+
+  const viewportMeta = page.locator('meta[name="viewport"]');
+  await expect(viewportMeta).toHaveCount(1);
+
+  const content = await viewportMeta.getAttribute('content');
+  expect(content).toBeTruthy();
+  expect(content ?? '').toContain('width=device-width');
+  expect(content ?? '').toContain('initial-scale=1');
+});
+
 test('serves favicon without 404', async ({ page }) => {
   const response = await page.request.get('/favicon.ico');
   expect(response.ok()).toBeTruthy();
