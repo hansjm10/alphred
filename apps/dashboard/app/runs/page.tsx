@@ -7,7 +7,12 @@ import type { GitHubAuthGate } from '../ui/github-auth';
 import { loadGitHubAuthGate } from '../ui/load-github-auth-gate';
 import { loadDashboardRepositories } from '../repositories/load-dashboard-repositories';
 import { loadDashboardRunSummaries, loadDashboardWorkflowTrees } from './load-dashboard-runs';
-import { normalizeRunFilter, normalizeRunRepositoryParam } from './run-route-fixtures';
+import {
+  normalizeRunFilter,
+  normalizeRunRepositoryParam,
+  normalizeRunTimeWindowParam,
+  normalizeRunWorkflowParam,
+} from './run-route-fixtures';
 import { RunsPageContent } from './runs-client';
 
 type RunsPageProps = Readonly<{
@@ -17,10 +22,14 @@ type RunsPageProps = Readonly<{
   authGate?: GitHubAuthGate;
   searchParams?: Promise<{
     status?: string | string[];
+    workflow?: string | string[];
     repository?: string | string[];
+    window?: string | string[];
   }> | {
     status?: string | string[];
+    workflow?: string | string[];
     repository?: string | string[];
+    window?: string | string[];
   };
 }>;
 
@@ -36,6 +45,8 @@ export default async function RunsPage({
   const resolvedSearchParams = await searchParams;
   const activeFilter = normalizeRunFilter(resolvedSearchParams?.status);
   const requestedRepository = normalizeRunRepositoryParam(resolvedSearchParams?.repository);
+  const requestedWorkflow = normalizeRunWorkflowParam(resolvedSearchParams?.workflow);
+  const activeWindow = normalizeRunTimeWindowParam(resolvedSearchParams?.window);
   const [resolvedRuns, resolvedWorkflows, resolvedRepositories, resolvedAuthGate] = await Promise.all([
     runs ?? loadDashboardRunSummaries(),
     workflows ?? loadDashboardWorkflowTrees(),
@@ -50,6 +61,11 @@ export default async function RunsPage({
     )
       ? requestedRepository
       : null;
+  const activeWorkflowKey =
+    requestedWorkflow !== null &&
+    resolvedWorkflows.some((workflow) => workflow.treeKey === requestedWorkflow)
+      ? requestedWorkflow
+      : null;
 
   return (
     <RunsPageContent
@@ -58,7 +74,9 @@ export default async function RunsPage({
       repositories={resolvedRepositories}
       authGate={resolvedAuthGate}
       activeFilter={activeFilter}
-      initialRepositoryName={initialRepositoryName}
+      activeRepositoryName={initialRepositoryName}
+      activeWorkflowKey={activeWorkflowKey}
+      activeWindow={activeWindow}
     />
   );
 }

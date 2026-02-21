@@ -1,6 +1,7 @@
 'use client';
 
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { useEffect, useMemo, useState } from 'react';
 import type {
   DashboardRepositoryState,
@@ -11,7 +12,12 @@ import type {
 import { AuthRemediation } from '../ui/auth-remediation';
 import type { GitHubAuthGate } from '../ui/github-auth';
 import { ActionButton, Card, Panel, StatusBadge, Tabs, type TabItem } from '../ui/primitives';
-import { normalizeRunFilter, resolveRunFilterHref, type RunRouteFilter } from './run-route-fixtures';
+import {
+  buildRunsListHref,
+  normalizeRunFilter,
+  type RunRouteFilter,
+  type RunRouteTimeWindow,
+} from './run-route-fixtures';
 import { isActiveRunStatus, sortRunsForDashboard } from './run-summary-utils';
 
 type RunsPageContentProps = Readonly<{
@@ -20,7 +26,9 @@ type RunsPageContentProps = Readonly<{
   repositories: readonly DashboardRepositoryState[];
   authGate: GitHubAuthGate;
   activeFilter: RunRouteFilter;
-  initialRepositoryName?: string | null;
+  activeRepositoryName: string | null;
+  activeWorkflowKey: string | null;
+  activeWindow: RunRouteTimeWindow;
 }>;
 
 type LaunchBannerState = {
@@ -33,12 +41,6 @@ type ErrorEnvelope = {
     message?: string;
   };
 };
-
-const RUN_FILTER_TABS: readonly TabItem[] = [
-  { href: '/runs', label: 'All Runs' },
-  { href: '/runs?status=running', label: 'Running' },
-  { href: '/runs?status=failed', label: 'Failed' },
-];
 
 const DEFAULT_RUN_LIST_LIMIT = 50;
 const LAUNCH_RESULT_MODES = new Set<DashboardRunLaunchResult['mode']>(['async', 'sync']);
@@ -97,6 +99,88 @@ function includesRunByFilter(run: DashboardRunSummary, filter: RunRouteFilter): 
   }
 
   return run.status === 'failed';
+}
+
+function resolveRunTimestampMs(run: DashboardRunSummary): number | null {
+  const raw = run.completedAt ?? run.startedAt ?? run.createdAt;
+  const timestamp = new Date(raw).getTime();
+  return Number.isNaN(timestamp) ? null : timestamp;
+}
+
+function resolveRunDurationMs(run: DashboardRunSummary): number | null {
+  if (!run.startedAt || !run.completedAt) {
+    return null;
+  }
+
+  const startedAt = new Date(run.startedAt).getTime();
+  const completedAt = new Date(run.completedAt).getTime();
+  if (Number.isNaN(startedAt) || Number.isNaN(completedAt) || completedAt < startedAt) {
+    return null;
+  }
+
+  return completedAt - startedAt;
+}
+
+function formatDurationMs(durationMs: number): string {
+  const totalSeconds = Math.floor(durationMs / 1000);
+  const seconds = totalSeconds % 60;
+  const totalMinutes = Math.floor(totalSeconds / 60);
+  const minutes = totalMinutes % 60;
+  const hours = Math.floor(totalMinutes / 60);
+
+  if (hours > 0) {
+    return `${hours}h ${String(minutes).padStart(2, '0')}m`;
+  }
+
+  if (totalMinutes > 0) {
+    return `${totalMinutes}m ${String(seconds).padStart(2, '0')}s`;
+  }
+
+  return `${seconds}s`;
+}
+
+function resolveMedianDurationLabel(runs: readonly DashboardRunSummary[]): string {
+  const durations = runs
+    .map(resolveRunDurationMs)
+    .filter((value): value is number => typeof value === 'number')
+    .sort((left, right) => left - right);
+
+  if (durations.length === 0) {
+    return '—';
+  }
+
+  const midpoint = Math.floor(durations.length / 2);
+  const median =
+    durations.length % 2 === 1 ? durations[midpoint] : (durations[midpoint - 1] + durations[midpoint]) / 2;
+
+  return formatDurationMs(median);
+}
+
+function resolveWindowCutoffMs(window: RunRouteTimeWindow, nowMs: number): number | null {
+  switch (window) {
+    case '24h':
+      return nowMs - 24 * 60 * 60 * 1000;
+    case '7d':
+      return nowMs - 7 * 24 * 60 * 60 * 1000;
+    case '30d':
+      return nowMs - 30 * 24 * 60 * 60 * 1000;
+    case 'all':
+      return null;
+  }
+}
+
+function includesRunByWindow(run: DashboardRunSummary, window: RunRouteTimeWindow, nowMs: number): boolean {
+  const cutoff = resolveWindowCutoffMs(window, nowMs);
+  if (cutoff === null) {
+    return true;
+  }
+
+  const timestamp = resolveRunTimestampMs(run);
+  if (timestamp === null) {
+    return true;
+  }
+
+  return timestamp >= cutoff;
 }
 
 function formatNodeSummary(run: DashboardRunSummary): string {
@@ -183,11 +267,14 @@ export function RunsPageContent({
   repositories,
   authGate,
   activeFilter,
-  initialRepositoryName = null,
+  activeRepositoryName,
+  activeWorkflowKey,
+  activeWindow,
 }: RunsPageContentProps) {
+  const router = useRouter();
   const [runState, setRunState] = useState<readonly DashboardRunSummary[]>(sortRunsForDashboard(runs));
   const [selectedTreeKey, setSelectedTreeKey] = useState<string>(workflows[0]?.treeKey ?? '');
-  const [selectedRepositoryName, setSelectedRepositoryName] = useState<string>(initialRepositoryName ?? '');
+  const [selectedRepositoryName, setSelectedRepositoryName] = useState<string>(activeRepositoryName ?? '');
   const [branch, setBranch] = useState<string>('');
   const [isLaunching, setIsLaunching] = useState<boolean>(false);
   const [launchError, setLaunchError] = useState<string | null>(null);
@@ -195,7 +282,14 @@ export function RunsPageContent({
   const [launchResult, setLaunchResult] = useState<LaunchBannerState | null>(null);
 
   const launchBlockedReason = getLaunchBlockedReason(authGate, workflows);
-  const activeHref = resolveRunFilterHref(normalizeRunFilter(activeFilter));
+  const nowMs = Date.now();
+  const normalizedFilter = normalizeRunFilter(activeFilter);
+  const activeHref = buildRunsListHref({
+    status: normalizedFilter,
+    workflow: activeWorkflowKey,
+    repository: activeRepositoryName,
+    window: activeWindow,
+  });
   const launchDisabled = isLaunching || launchBlockedReason !== null || selectedTreeKey.trim().length === 0;
   const launchButtonLabel = isLaunching ? 'Launching...' : 'Launch Run';
 
@@ -204,14 +298,89 @@ export function RunsPageContent({
     [repositories],
   );
 
-  const visibleRuns = useMemo(
-    () => runState.filter((run) => includesRunByFilter(run, activeFilter)),
-    [activeFilter, runState],
+  const runFilterTabs = useMemo<readonly TabItem[]>(() => ([
+    {
+      href: buildRunsListHref({
+        status: 'all',
+        workflow: activeWorkflowKey,
+        repository: activeRepositoryName,
+        window: activeWindow,
+      }),
+      label: 'All Runs',
+    },
+    {
+      href: buildRunsListHref({
+        status: 'running',
+        workflow: activeWorkflowKey,
+        repository: activeRepositoryName,
+        window: activeWindow,
+      }),
+      label: 'Running',
+    },
+    {
+      href: buildRunsListHref({
+        status: 'failed',
+        workflow: activeWorkflowKey,
+        repository: activeRepositoryName,
+        window: activeWindow,
+      }),
+      label: 'Failed',
+    },
+  ]), [activeRepositoryName, activeWindow, activeWorkflowKey]);
+
+  const filteredRunsForKpis = useMemo(() => {
+    return runState.filter((run) => {
+      if (activeWorkflowKey && run.tree.treeKey !== activeWorkflowKey) {
+        return false;
+      }
+
+      if (activeRepositoryName && run.repository?.name !== activeRepositoryName) {
+        return false;
+      }
+
+      return includesRunByWindow(run, activeWindow, nowMs);
+    });
+  }, [activeRepositoryName, activeWindow, activeWorkflowKey, nowMs, runState]);
+
+  const visibleRuns = useMemo(() => {
+    return filteredRunsForKpis.filter((run) => includesRunByFilter(run, normalizedFilter));
+  }, [filteredRunsForKpis, normalizedFilter]);
+
+  const activeRunCount = useMemo(
+    () => filteredRunsForKpis.filter((run) => isActiveRunStatus(run.status)).length,
+    [filteredRunsForKpis],
   );
+
+  const failureCount24h = useMemo(() => {
+    const cutoff = nowMs - 24 * 60 * 60 * 1000;
+    return filteredRunsForKpis.filter((run) => {
+      if (run.status !== 'failed') {
+        return false;
+      }
+
+      const timestamp = resolveRunTimestampMs(run);
+      return timestamp !== null && timestamp >= cutoff;
+    }).length;
+  }, [filteredRunsForKpis, nowMs]);
+
+  const medianDurationLabel = useMemo(
+    () => resolveMedianDurationLabel(filteredRunsForKpis),
+    [filteredRunsForKpis],
+  );
+
+  const hasActiveFilters =
+    normalizedFilter !== 'all' ||
+    activeWorkflowKey !== null ||
+    activeRepositoryName !== null ||
+    activeWindow !== 'all';
 
   useEffect(() => {
     setRunState(sortRunsForDashboard(runs));
   }, [runs]);
+
+  useEffect(() => {
+    setSelectedRepositoryName(activeRepositoryName ?? '');
+  }, [activeRepositoryName]);
 
   async function refreshRunState(): Promise<readonly DashboardRunSummary[]> {
     const response = await fetch(`/api/dashboard/runs?limit=${DEFAULT_RUN_LIST_LIMIT}`, { method: 'GET' });
@@ -415,60 +584,177 @@ export function RunsPageContent({
             context="Run launch is blocked until GitHub authentication is available."
           />
         </Panel>
-      </div>
+	      </div>
 
-      <Tabs items={RUN_FILTER_TABS} activeHref={activeHref} ariaLabel="Run status filters" />
+	      <Card title="Runs" description="Filter run activity and open detail timelines.">
+	        <div className="run-filter-bar" role="region" aria-label="Run filters">
+	          <div className="run-filter-bar__fields">
+	            <label className="run-filter-bar__field" htmlFor="runs-filter-workflow">
+	              <span className="meta-text">Workflow filter</span>
+	              <select
+	                id="runs-filter-workflow"
+	                value={activeWorkflowKey ?? ''}
+	                onChange={(event) => {
+	                  const workflow = event.currentTarget.value.trim();
+	                  router.push(buildRunsListHref({
+	                    status: normalizedFilter,
+	                    workflow: workflow.length === 0 ? null : workflow,
+	                    repository: activeRepositoryName,
+	                    window: activeWindow,
+	                  }));
+	                }}
+	              >
+	                <option value="">All workflows</option>
+	                {workflows.map((workflow) => (
+	                  <option key={`${workflow.treeKey}-${workflow.id}`} value={workflow.treeKey}>
+	                    {workflow.name}
+	                  </option>
+	                ))}
+	              </select>
+	            </label>
 
-      <Card title="Recent runs" description="Run lifecycle and node progress from persisted snapshots.">
-        {visibleRuns.length === 0 ? (
-          <div className="page-stack">
-            <p>No runs match this filter.</p>
-            <div className="action-row">
-              <Link className="button-link button-link--secondary" href="/runs">
-                Clear Filters
-              </Link>
-            </div>
-          </div>
-        ) : (
-          <div className="runs-table-wrapper">
-            <table className="runs-table">
-              <thead>
-                <tr>
-                  <th scope="col">Run</th>
-                  <th scope="col">Repository</th>
-                  <th scope="col">Status</th>
+	            <label className="run-filter-bar__field" htmlFor="runs-filter-repository">
+	              <span className="meta-text">Repository filter</span>
+	              <select
+	                id="runs-filter-repository"
+	                value={activeRepositoryName ?? ''}
+	                onChange={(event) => {
+	                  const repository = event.currentTarget.value.trim();
+	                  router.push(buildRunsListHref({
+	                    status: normalizedFilter,
+	                    workflow: activeWorkflowKey,
+	                    repository: repository.length === 0 ? null : repository,
+	                    window: activeWindow,
+	                  }));
+	                }}
+	              >
+	                <option value="">All repositories</option>
+	                {clonedRepositories.map((repository) => (
+	                  <option key={repository.id} value={repository.name}>
+	                    {repository.name}
+	                  </option>
+	                ))}
+	              </select>
+	            </label>
+
+	            <label className="run-filter-bar__field" htmlFor="runs-filter-window">
+	              <span className="meta-text">Time window</span>
+	              <select
+	                id="runs-filter-window"
+	                value={activeWindow}
+	                onChange={(event) => {
+	                  router.push(buildRunsListHref({
+	                    status: normalizedFilter,
+	                    workflow: activeWorkflowKey,
+	                    repository: activeRepositoryName,
+	                    window: event.currentTarget.value as RunRouteTimeWindow,
+	                  }));
+	                }}
+	              >
+	                <option value="all">All time</option>
+	                <option value="24h">Last 24h</option>
+	                <option value="7d">Last 7d</option>
+	                <option value="30d">Last 30d</option>
+	              </select>
+	            </label>
+	          </div>
+
+	          {hasActiveFilters ? (
+	            <div className="action-row">
+	              <Link className="button-link button-link--secondary" href="/runs">
+	                Clear Filters
+	              </Link>
+	            </div>
+	          ) : null}
+	        </div>
+
+	        <Tabs items={runFilterTabs} activeHref={activeHref} ariaLabel="Run status filters" />
+
+	        {visibleRuns.length === 0 ? (
+	          <div className="page-stack">
+	            <p>{hasActiveFilters ? 'No runs match these filters.' : 'No runs are available yet.'}</p>
+	            {hasActiveFilters ? (
+	              <div className="action-row">
+	                <Link className="button-link button-link--secondary" href="/runs">
+	                  Clear Filters
+	                </Link>
+	              </div>
+	            ) : null}
+	          </div>
+	        ) : (
+	          <div className="runs-table-wrapper">
+	            <table className="runs-table runs-table--clickable">
+	              <thead>
+	                <tr>
+	                  <th scope="col">Run</th>
+	                  <th scope="col">Repository</th>
+	                  <th scope="col">Status</th>
                   <th scope="col">Started</th>
                   <th scope="col">Completed</th>
                   <th scope="col">Node lifecycle</th>
                   <th scope="col">Actions</th>
                 </tr>
-              </thead>
-              <tbody>
-                {visibleRuns.map((run) => (
-                  <tr key={run.id}>
-                    <td>
-                      <p>{`#${run.id} ${run.tree.name}`}</p>
-                      <p className="meta-text">{run.tree.treeKey}</p>
-                    </td>
-                    <td className="meta-text">{run.repository?.name ?? 'Not attached'}</td>
+	              </thead>
+	              <tbody>
+	                {visibleRuns.map((run) => (
+	                  <tr
+	                    key={run.id}
+	                    className="runs-table__row"
+	                    tabIndex={0}
+	                    onClick={() => {
+	                      router.push(`/runs/${run.id}`);
+	                    }}
+	                    onKeyDown={(event) => {
+	                      if (event.key === 'Enter' || event.key === ' ') {
+	                        event.preventDefault();
+	                        router.push(`/runs/${run.id}`);
+	                      }
+	                    }}
+	                  >
+	                    <td>
+	                      <p>{`#${run.id} ${run.tree.name}`}</p>
+	                      <p className="meta-text">{run.tree.treeKey}</p>
+	                    </td>
+	                    <td className="meta-text">{run.repository?.name ?? 'Not attached'}</td>
                     <td>
                       <StatusBadge status={run.status} />
                     </td>
                     <td className="meta-text">{normalizeDateTimeLabel(run.startedAt, 'Not started')}</td>
-                    <td className="meta-text">{normalizeDateTimeLabel(run.completedAt, 'In progress')}</td>
-                    <td className="meta-text">{formatNodeSummary(run)}</td>
-                    <td>
-                      <Link className="button-link button-link--secondary" href={`/runs/${run.id}`}>
-                        Open
-                      </Link>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </Card>
-    </div>
-  );
+	                    <td className="meta-text">{normalizeDateTimeLabel(run.completedAt, 'In progress')}</td>
+	                    <td className="meta-text">{formatNodeSummary(run)}</td>
+	                    <td>
+	                      <Link
+	                        className="button-link button-link--secondary"
+	                        href={`/runs/${run.id}`}
+	                        onClick={(event) => {
+	                          event.stopPropagation();
+	                        }}
+	                      >
+	                        Open
+	                      </Link>
+	                    </td>
+	                  </tr>
+	                ))}
+	              </tbody>
+	            </table>
+	          </div>
+	        )}
+
+	        <dl className="run-kpi-strip" aria-label="Run KPIs">
+	          <div className="run-kpi-strip__item">
+	            <dt>Active</dt>
+	            <dd>{activeRunCount}</dd>
+	          </div>
+	          <div className="run-kpi-strip__item">
+	            <dt>Failures (24h)</dt>
+	            <dd>{failureCount24h}</dd>
+	          </div>
+	          <div className="run-kpi-strip__item">
+	            <dt>Median duration</dt>
+	            <dd>{medianDurationLabel}</dd>
+	          </div>
+	        </dl>
+	      </Card>
+	    </div>
+	  );
 }

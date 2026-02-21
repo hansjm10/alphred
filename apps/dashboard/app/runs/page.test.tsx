@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { ReactElement } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -23,6 +23,16 @@ const {
   loadDashboardRunSummariesMock: vi.fn(),
   loadDashboardWorkflowTreesMock: vi.fn(),
   loadDashboardRepositoriesMock: vi.fn(),
+}));
+
+const { pushMock } = vi.hoisted(() => ({
+  pushMock: vi.fn(),
+}));
+
+vi.mock('next/navigation', () => ({
+  useRouter: () => ({
+    push: pushMock,
+  }),
 }));
 
 vi.mock('../ui/load-github-auth-gate', () => ({
@@ -112,6 +122,7 @@ function createJsonResponse(payload: unknown, init?: ResponseInit): Response {
 
 describe('RunsPage', () => {
   beforeEach(() => {
+    pushMock.mockReset();
     loadGitHubAuthGateMock.mockReset();
     loadDashboardRunSummariesMock.mockReset();
     loadDashboardWorkflowTreesMock.mockReset();
@@ -134,6 +145,9 @@ describe('RunsPage', () => {
         repositories={[createRepository()]}
         authGate={createAuthenticatedAuthGate()}
         activeFilter="all"
+        activeRepositoryName={null}
+        activeWorkflowKey={null}
+        activeWindow="all"
       />,
     );
 
@@ -160,7 +174,9 @@ describe('RunsPage', () => {
         ]}
         authGate={createAuthenticatedAuthGate()}
         activeFilter="all"
-        initialRepositoryName="sample-repo"
+        activeRepositoryName="sample-repo"
+        activeWorkflowKey={null}
+        activeWindow="all"
       />,
     );
 
@@ -180,6 +196,9 @@ describe('RunsPage', () => {
         repositories={[createRepository()]}
         authGate={createAuthenticatedAuthGate()}
         activeFilter="running"
+        activeRepositoryName={null}
+        activeWorkflowKey={null}
+        activeWindow="all"
       />,
     );
 
@@ -188,6 +207,148 @@ describe('RunsPage', () => {
     expect(screen.getByText('#414 Demo Tree')).toBeInTheDocument();
     expect(screen.queryByText('#415 Demo Tree')).toBeNull();
     expect(screen.getByRole('link', { name: 'Running' })).toHaveAttribute('aria-current', 'page');
+  });
+
+  it('pushes updated query params when filter bar changes', async () => {
+    const user = userEvent.setup();
+    const { rerender } = render(
+      <RunsPageContent
+        runs={[createRunSummary({ id: 412, status: 'running' })]}
+        workflows={[
+          createWorkflow({ id: 1, treeKey: 'demo-tree', name: 'Demo Tree' }),
+          createWorkflow({ id: 2, treeKey: 'other-tree', name: 'Other Tree' }),
+        ]}
+        repositories={[
+          createRepository({ id: 1, name: 'demo-repo', cloneStatus: 'cloned' }),
+          createRepository({ id: 2, name: 'sample-repo', cloneStatus: 'cloned' }),
+        ]}
+        authGate={createAuthenticatedAuthGate()}
+        activeFilter="failed"
+        activeRepositoryName={null}
+        activeWorkflowKey={null}
+        activeWindow="all"
+      />,
+    );
+
+    await user.selectOptions(screen.getByLabelText('Workflow filter'), 'demo-tree');
+    expect(pushMock).toHaveBeenCalledWith('/runs?status=failed&workflow=demo-tree');
+
+    rerender(
+      <RunsPageContent
+        runs={[createRunSummary({ id: 412, status: 'running' })]}
+        workflows={[
+          createWorkflow({ id: 1, treeKey: 'demo-tree', name: 'Demo Tree' }),
+          createWorkflow({ id: 2, treeKey: 'other-tree', name: 'Other Tree' }),
+        ]}
+        repositories={[
+          createRepository({ id: 1, name: 'demo-repo', cloneStatus: 'cloned' }),
+          createRepository({ id: 2, name: 'sample-repo', cloneStatus: 'cloned' }),
+        ]}
+        authGate={createAuthenticatedAuthGate()}
+        activeFilter="failed"
+        activeRepositoryName={null}
+        activeWorkflowKey="demo-tree"
+        activeWindow="all"
+      />,
+    );
+
+    await user.selectOptions(screen.getByLabelText('Time window'), '24h');
+    expect(pushMock).toHaveBeenLastCalledWith('/runs?status=failed&workflow=demo-tree&window=24h');
+
+    rerender(
+      <RunsPageContent
+        runs={[createRunSummary({ id: 412, status: 'running' })]}
+        workflows={[
+          createWorkflow({ id: 1, treeKey: 'demo-tree', name: 'Demo Tree' }),
+          createWorkflow({ id: 2, treeKey: 'other-tree', name: 'Other Tree' }),
+        ]}
+        repositories={[
+          createRepository({ id: 1, name: 'demo-repo', cloneStatus: 'cloned' }),
+          createRepository({ id: 2, name: 'sample-repo', cloneStatus: 'cloned' }),
+        ]}
+        authGate={createAuthenticatedAuthGate()}
+        activeFilter="failed"
+        activeRepositoryName="sample-repo"
+        activeWorkflowKey="demo-tree"
+        activeWindow="24h"
+      />,
+    );
+
+    await user.selectOptions(screen.getByLabelText('Repository filter'), 'demo-repo');
+    expect(pushMock).toHaveBeenLastCalledWith(
+      '/runs?status=failed&workflow=demo-tree&repository=demo-repo&window=24h',
+    );
+  });
+
+  it('navigates to run detail on row click', async () => {
+    const user = userEvent.setup();
+    render(
+      <RunsPageContent
+        runs={[createRunSummary({ id: 412, status: 'running' })]}
+        workflows={[createWorkflow()]}
+        repositories={[createRepository()]}
+        authGate={createAuthenticatedAuthGate()}
+        activeFilter="all"
+        activeRepositoryName={null}
+        activeWorkflowKey={null}
+        activeWindow="all"
+      />,
+    );
+
+    await user.click(screen.getByText('#412 Demo Tree'));
+    expect(pushMock).toHaveBeenCalledWith('/runs/412');
+  });
+
+  it('renders a compact KPI strip for the current filter context', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-02-18T00:10:00.000Z'));
+
+    try {
+      render(
+        <RunsPageContent
+          runs={[
+            createRunSummary({
+              id: 412,
+              status: 'running',
+              startedAt: '2026-02-18T00:05:00.000Z',
+              createdAt: '2026-02-18T00:05:00.000Z',
+              completedAt: null,
+            }),
+            createRunSummary({
+              id: 411,
+              status: 'failed',
+              startedAt: '2026-02-18T00:00:00.000Z',
+              completedAt: '2026-02-18T00:02:00.000Z',
+              createdAt: '2026-02-18T00:00:00.000Z',
+            }),
+            createRunSummary({
+              id: 410,
+              status: 'completed',
+              startedAt: '2026-02-17T23:40:00.000Z',
+              completedAt: '2026-02-17T23:50:00.000Z',
+              createdAt: '2026-02-17T23:40:00.000Z',
+            }),
+          ]}
+          workflows={[createWorkflow()]}
+          repositories={[createRepository()]}
+          authGate={createAuthenticatedAuthGate()}
+          activeFilter="all"
+          activeRepositoryName={null}
+          activeWorkflowKey={null}
+          activeWindow="all"
+        />,
+      );
+
+      const kpis = within(screen.getByLabelText('Run KPIs'));
+      expect(kpis.getByText('Active')).toBeInTheDocument();
+      expect(kpis.getByText('Failures (24h)')).toBeInTheDocument();
+      expect(kpis.getByText('Median duration')).toBeInTheDocument();
+      expect(screen.getByLabelText('Run KPIs')).toHaveTextContent(/Active\s*1/);
+      expect(screen.getByLabelText('Run KPIs')).toHaveTextContent(/Failures \(24h\)\s*1/);
+      expect(screen.getByLabelText('Run KPIs')).toHaveTextContent(/Median duration\s*6m 00s/);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('re-syncs visible rows when server-provided runs props change', () => {
@@ -201,6 +362,9 @@ describe('RunsPage', () => {
         repositories={[createRepository()]}
         authGate={createAuthenticatedAuthGate()}
         activeFilter="all"
+        activeRepositoryName={null}
+        activeWorkflowKey={null}
+        activeWindow="all"
       />,
     );
 
@@ -213,6 +377,9 @@ describe('RunsPage', () => {
         repositories={[createRepository()]}
         authGate={createAuthenticatedAuthGate()}
         activeFilter="all"
+        activeRepositoryName={null}
+        activeWorkflowKey={null}
+        activeWindow="all"
       />,
     );
 
@@ -254,6 +421,9 @@ describe('RunsPage', () => {
         repositories={[createRepository({ name: 'demo-repo', cloneStatus: 'cloned' })]}
         authGate={createAuthenticatedAuthGate()}
         activeFilter="all"
+        activeRepositoryName={null}
+        activeWorkflowKey={null}
+        activeWindow="all"
       />,
     );
 
@@ -308,6 +478,9 @@ describe('RunsPage', () => {
         repositories={[createRepository({ name: 'demo-repo', cloneStatus: 'cloned' })]}
         authGate={createAuthenticatedAuthGate()}
         activeFilter="all"
+        activeRepositoryName={null}
+        activeWorkflowKey={null}
+        activeWindow="all"
       />,
     );
 
@@ -343,6 +516,9 @@ describe('RunsPage', () => {
         repositories={[createRepository({ name: 'demo-repo', cloneStatus: 'cloned' })]}
         authGate={createAuthenticatedAuthGate()}
         activeFilter="all"
+        activeRepositoryName={null}
+        activeWorkflowKey={null}
+        activeWindow="all"
       />,
     );
 
@@ -375,6 +551,9 @@ describe('RunsPage', () => {
         repositories={[createRepository({ name: 'demo-repo', cloneStatus: 'cloned' })]}
         authGate={createAuthenticatedAuthGate()}
         activeFilter="all"
+        activeRepositoryName={null}
+        activeWorkflowKey={null}
+        activeWindow="all"
       />,
     );
 
@@ -394,6 +573,9 @@ describe('RunsPage', () => {
         repositories={[createRepository()]}
         authGate={createAuthenticatedAuthGate()}
         activeFilter="all"
+        activeRepositoryName={null}
+        activeWorkflowKey={null}
+        activeWindow="all"
       />,
     );
 
@@ -414,6 +596,9 @@ describe('RunsPage', () => {
           error: 'Run gh auth login before launching.',
         })}
         activeFilter="all"
+        activeRepositoryName={null}
+        activeWorkflowKey={null}
+        activeWindow="all"
       />,
     );
 
@@ -438,7 +623,9 @@ describe('RunsPage', () => {
       repositories: readonly DashboardRepositoryState[];
       authGate: GitHubAuthGate;
       activeFilter: 'all' | 'running' | 'failed';
-      initialRepositoryName: string | null;
+      activeRepositoryName: string | null;
+      activeWorkflowKey: string | null;
+      activeWindow: 'all' | '24h' | '7d' | '30d';
     }>;
 
     expect(loadDashboardRunSummariesMock).toHaveBeenCalledTimes(1);
@@ -451,7 +638,9 @@ describe('RunsPage', () => {
     expect(root.props.repositories).toEqual(repositories);
     expect(root.props.authGate).toEqual(authGate);
     expect(root.props.activeFilter).toBe('all');
-    expect(root.props.initialRepositoryName).toBeNull();
+    expect(root.props.activeRepositoryName).toBeNull();
+    expect(root.props.activeWorkflowKey).toBeNull();
+    expect(root.props.activeWindow).toBe('all');
   });
 
   it('uses provided props without invoking loaders and resolves query-driven prefill', async () => {
@@ -467,7 +656,9 @@ describe('RunsPage', () => {
       authGate,
       searchParams: Promise.resolve({
         status: ['failed', 'running'],
+        workflow: ['other-tree', 'demo-tree'],
         repository: ['sample-repo', 'demo-repo'],
+        window: ['7d', '24h'],
       }),
     })) as ReactElement<{
       runs: readonly DashboardRunSummary[];
@@ -475,7 +666,9 @@ describe('RunsPage', () => {
       repositories: readonly DashboardRepositoryState[];
       authGate: GitHubAuthGate;
       activeFilter: 'all' | 'running' | 'failed';
-      initialRepositoryName: string | null;
+      activeRepositoryName: string | null;
+      activeWorkflowKey: string | null;
+      activeWindow: 'all' | '24h' | '7d' | '30d';
     }>;
 
     expect(loadDashboardRunSummariesMock).not.toHaveBeenCalled();
@@ -488,7 +681,9 @@ describe('RunsPage', () => {
     expect(root.props.repositories).toEqual(repositories);
     expect(root.props.authGate).toEqual(authGate);
     expect(root.props.activeFilter).toBe('failed');
-    expect(root.props.initialRepositoryName).toBe('sample-repo');
+    expect(root.props.activeRepositoryName).toBe('sample-repo');
+    expect(root.props.activeWorkflowKey).toBe('other-tree');
+    expect(root.props.activeWindow).toBe('7d');
   });
 
   it('drops repository prefill when query repository is not cloned', async () => {
@@ -509,10 +704,14 @@ describe('RunsPage', () => {
       repositories: readonly DashboardRepositoryState[];
       authGate: GitHubAuthGate;
       activeFilter: 'all' | 'running' | 'failed';
-      initialRepositoryName: string | null;
+      activeRepositoryName: string | null;
+      activeWorkflowKey: string | null;
+      activeWindow: 'all' | '24h' | '7d' | '30d';
     }>;
 
     expect(root.type).toBe(RunsPageContent);
-    expect(root.props.initialRepositoryName).toBeNull();
+    expect(root.props.activeRepositoryName).toBeNull();
+    expect(root.props.activeWorkflowKey).toBeNull();
+    expect(root.props.activeWindow).toBe('all');
   });
 });

@@ -544,6 +544,36 @@ output {
   padding: 8px 10px;
 }
 
+.run-filter-bar {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.run-filter-bar__fields {
+  display: grid;
+  gap: var(--space-2);
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+}
+
+.run-filter-bar__field {
+  display: grid;
+  gap: 4px;
+}
+
+.run-filter-bar__field select {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  font: 400 14px/20px var(--font-body);
+  padding: 8px 10px;
+}
+
+.run-filter-bar__field select:focus-visible {
+  outline: 2px solid var(--accent-active);
+  outline-offset: 2px;
+}
+
 .run-launch-banner {
   border: 1px solid var(--border-default);
   border-radius: var(--radius-sm);
@@ -602,6 +632,46 @@ output {
 
 .runs-table tbody tr:last-child td {
   border-bottom: 0;
+}
+
+.runs-table--clickable .runs-table__row {
+  cursor: pointer;
+}
+
+.runs-table--clickable .runs-table__row:hover {
+  background: color-mix(in srgb, var(--accent-active) 6%, var(--bg-surface));
+}
+
+.runs-table--clickable .runs-table__row:focus-visible {
+  outline: 2px solid var(--accent-active);
+  outline-offset: -2px;
+}
+
+.run-kpi-strip {
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  display: grid;
+  gap: var(--space-2);
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin-top: var(--space-2);
+  padding: var(--space-2);
+}
+
+.run-kpi-strip__item {
+  display: grid;
+  gap: 4px;
+}
+
+.run-kpi-strip dt {
+  color: var(--text-secondary);
+  font: 600 12px/18px var(--font-data);
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.run-kpi-strip dd {
+  font: 600 18px/24px var(--font-display);
+  margin: 0;
 }
 
 .run-action-feedback {
