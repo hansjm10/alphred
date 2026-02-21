@@ -191,9 +191,20 @@ export function WorkflowEditorPageContent({ initialDraft }: Readonly<{ initialDr
     future: [],
   });
   const applyingHistoryRef = useRef(false);
+  const latestWorkflowSnapshotRef = useRef<WorkflowSnapshot>(workflowHistoryRef.current.present);
 
   const selectedNode = useMemo(() => nodes.find(node => node.id === selectedNodeId) ?? null, [nodes, selectedNodeId]);
   const selectedEdge = useMemo(() => edges.find(edge => edge.id === selectedEdgeId) ?? null, [edges, selectedEdgeId]);
+
+  useEffect(() => {
+    latestWorkflowSnapshotRef.current = {
+      name: workflowName,
+      description: workflowDescription,
+      versionNotes: workflowVersionNotes,
+      nodes,
+      edges,
+    };
+  }, [edges, nodes, workflowDescription, workflowName, workflowVersionNotes]);
 
   useEffect(() => {
     if (!addNodePaletteOpen) {
@@ -319,17 +330,12 @@ export function WorkflowEditorPageContent({ initialDraft }: Readonly<{ initialDr
       pendingHistoryCommitRef.current = null;
 
       const history = workflowHistoryRef.current;
+      const snapshot = latestWorkflowSnapshotRef.current;
       history.past = [...history.past, history.present].slice(-50);
-      history.present = {
-        name: workflowName,
-        description: workflowDescription,
-        versionNotes: workflowVersionNotes,
-        nodes,
-        edges,
-      };
+      history.present = snapshot;
       history.future = [];
     }, 400);
-  }, [edges, nodes, workflowDescription, workflowName, workflowVersionNotes]);
+  }, []);
 
   useEffect(() => {
     return () => {
@@ -744,6 +750,7 @@ export function WorkflowEditorPageContent({ initialDraft }: Readonly<{ initialDr
               );
               setSaveState('draft');
               scheduleSave();
+              scheduleHistoryCommit();
             }}
           />
         ) : null}
@@ -766,33 +773,37 @@ export function WorkflowEditorPageContent({ initialDraft }: Readonly<{ initialDr
               );
               setSaveState('draft');
               scheduleSave();
+              scheduleHistoryCommit();
             }}
           />
         ) : null}
 
-	        {activeTab === 'workflow' ? (
-	          <WorkflowInspector
-	            name={workflowName}
-	            description={workflowDescription}
-	            versionNotes={workflowVersionNotes}
-	            onNameChange={(event) => {
-	              setWorkflowName(event.target.value);
-	              setSaveState('draft');
-	              scheduleSave();
-	            }}
-	            onDescriptionChange={(event) => {
-	              setWorkflowDescription(event.target.value);
-	              setSaveState('draft');
-	              scheduleSave();
-	            }}
-	            onVersionNotesChange={(event) => {
-	              setWorkflowVersionNotes(event.target.value);
-	              setSaveState('draft');
-	              scheduleSave();
-	            }}
-	            initialRunnableNodeKeys={validation?.initialRunnableNodeKeys ?? initialRunnableNodeKeys}
-	            validation={validation}
-	            validationError={validationError}
+		        {activeTab === 'workflow' ? (
+		          <WorkflowInspector
+		            name={workflowName}
+		            description={workflowDescription}
+		            versionNotes={workflowVersionNotes}
+		            onNameChange={(event) => {
+		              setWorkflowName(event.target.value);
+		              setSaveState('draft');
+		              scheduleSave();
+		              scheduleHistoryCommit();
+		            }}
+		            onDescriptionChange={(event) => {
+		              setWorkflowDescription(event.target.value);
+		              setSaveState('draft');
+		              scheduleSave();
+		              scheduleHistoryCommit();
+		            }}
+		            onVersionNotesChange={(event) => {
+		              setWorkflowVersionNotes(event.target.value);
+		              setSaveState('draft');
+		              scheduleSave();
+		              scheduleHistoryCommit();
+		            }}
+		            initialRunnableNodeKeys={validation?.initialRunnableNodeKeys ?? initialRunnableNodeKeys}
+		            validation={validation}
+		            validationError={validationError}
 	            publishError={publishError}
 	          />
 	        ) : null}
