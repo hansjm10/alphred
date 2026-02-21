@@ -10,6 +10,8 @@ export function migrateDatabase(db: AlphredDatabase): void {
     status TEXT NOT NULL DEFAULT 'published',
     name TEXT NOT NULL,
     description TEXT,
+    version_notes TEXT,
+    draft_revision INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
     updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
     CONSTRAINT workflow_trees_status_ck
@@ -21,6 +23,20 @@ export function migrateDatabase(db: AlphredDatabase): void {
     )?.count ?? 0;
   if (hasWorkflowTreeStatusColumn === 0) {
     tx.run(sql`ALTER TABLE workflow_trees ADD COLUMN status TEXT NOT NULL DEFAULT 'published'`);
+  }
+  const hasWorkflowTreeVersionNotesColumn =
+    tx.get<{ count: number }>(
+      sql`SELECT COUNT(*) AS count FROM pragma_table_info('workflow_trees') WHERE name = 'version_notes'`,
+    )?.count ?? 0;
+  if (hasWorkflowTreeVersionNotesColumn === 0) {
+    tx.run(sql`ALTER TABLE workflow_trees ADD COLUMN version_notes TEXT`);
+  }
+  const hasWorkflowTreeDraftRevisionColumn =
+    tx.get<{ count: number }>(
+      sql`SELECT COUNT(*) AS count FROM pragma_table_info('workflow_trees') WHERE name = 'draft_revision'`,
+    )?.count ?? 0;
+  if (hasWorkflowTreeDraftRevisionColumn === 0) {
+    tx.run(sql`ALTER TABLE workflow_trees ADD COLUMN draft_revision INTEGER NOT NULL DEFAULT 0`);
   }
   tx.run(sql`CREATE UNIQUE INDEX IF NOT EXISTS workflow_trees_tree_key_version_uq
     ON workflow_trees(tree_key, version)`);

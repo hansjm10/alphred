@@ -68,5 +68,26 @@ describe('POST /api/dashboard/workflows/[treeKey]/draft/publish', () => {
     });
     expect(publishWorkflowDraftMock).toHaveBeenCalledTimes(1);
   });
-});
 
+  it('returns 400 when publish payload is invalid', async () => {
+    const request = new Request('http://localhost/api/dashboard/workflows/demo-tree/draft/publish?version=2', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ versionNotes: 123 }),
+    });
+
+    const response = await POST(request, { params: Promise.resolve({ treeKey: 'demo-tree' }) });
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      error: {
+        code: 'invalid_request',
+        message: 'Publish versionNotes must be a string when provided.',
+        details: {
+          field: 'versionNotes',
+        },
+      },
+    });
+    expect(publishWorkflowDraftMock).not.toHaveBeenCalled();
+  });
+});

@@ -12,6 +12,8 @@ export const workflowTrees = sqliteTable(
     status: text('status').notNull().default('published'),
     name: text('name').notNull(),
     description: text('description'),
+    versionNotes: text('version_notes'),
+    draftRevision: integer('draft_revision').notNull().default(0),
     createdAt: text('created_at').notNull().default(utcNow),
     updatedAt: text('updated_at').notNull().default(utcNow),
   },

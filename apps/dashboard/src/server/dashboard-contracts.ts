@@ -69,8 +69,10 @@ export type DashboardWorkflowDraftEdge = {
 export type DashboardWorkflowDraftTopology = {
   treeKey: string;
   version: number;
+  draftRevision: number;
   name: string;
   description: string | null;
+  versionNotes: string | null;
   nodes: DashboardWorkflowDraftNode[];
   edges: DashboardWorkflowDraftEdge[];
   initialRunnableNodeKeys: string[];
@@ -81,8 +83,10 @@ export type DashboardWorkflowTreeSnapshot = DashboardWorkflowDraftTopology & {
 };
 
 export type DashboardSaveWorkflowDraftRequest = {
+  draftRevision: number;
   name: string;
   description?: string;
+  versionNotes?: string;
   nodes: DashboardWorkflowDraftNode[];
   edges: DashboardWorkflowDraftEdge[];
 };

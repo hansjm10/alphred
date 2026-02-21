@@ -53,22 +53,22 @@ describe('GET /api/dashboard/runs/[runId]', () => {
     });
   });
 
-	  it('maps service failures to integration error responses', async () => {
-	    getWorkflowRunDetailMock.mockRejectedValue(new Error('lookup failed'));
+  it('maps service failures to integration error responses', async () => {
+    getWorkflowRunDetailMock.mockRejectedValue(new Error('lookup failed'));
 
     const response = await GET(new Request('http://localhost/api/dashboard/runs/11'), {
       params: Promise.resolve({ runId: '11' }),
     });
 
-	    expect(response.status).toBe(500);
-	    await expect(response.json()).resolves.toEqual({
-	      error: {
-	        code: 'internal_error',
-	        message: 'Dashboard integration request failed.',
-	        details: {
-	          cause: 'lookup failed',
-	        },
-	      },
-	    });
-	  });
-	});
+    expect(response.status).toBe(500);
+    await expect(response.json()).resolves.toEqual({
+      error: {
+        code: 'internal_error',
+        message: 'Dashboard integration request failed.',
+        details: {
+          cause: 'lookup failed',
+        },
+      },
+    });
+  });
+});

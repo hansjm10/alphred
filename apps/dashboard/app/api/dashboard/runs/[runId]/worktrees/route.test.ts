@@ -59,22 +59,22 @@ describe('GET /api/dashboard/runs/[runId]/worktrees', () => {
     });
   });
 
-	  it('maps service failures to integration error responses', async () => {
-	    getRunWorktreesMock.mockRejectedValue(new Error('worktree fetch failed'));
+  it('maps service failures to integration error responses', async () => {
+    getRunWorktreesMock.mockRejectedValue(new Error('worktree fetch failed'));
 
     const response = await GET(new Request('http://localhost/api/dashboard/runs/21/worktrees'), {
       params: Promise.resolve({ runId: '21' }),
     });
 
-	    expect(response.status).toBe(500);
-	    await expect(response.json()).resolves.toEqual({
-	      error: {
-	        code: 'internal_error',
-	        message: 'Dashboard integration request failed.',
-	        details: {
-	          cause: 'worktree fetch failed',
-	        },
-	      },
-	    });
-	  });
-	});
+    expect(response.status).toBe(500);
+    await expect(response.json()).resolves.toEqual({
+      error: {
+        code: 'internal_error',
+        message: 'Dashboard integration request failed.',
+        details: {
+          cause: 'worktree fetch failed',
+        },
+      },
+    });
+  });
+});

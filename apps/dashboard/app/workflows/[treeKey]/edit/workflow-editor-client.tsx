@@ -41,6 +41,7 @@ type InspectorTab = 'node' | 'transition' | 'workflow';
 type WorkflowSnapshot = Readonly<{
   name: string;
   description: string;
+  versionNotes: string;
   nodes: Node[];
   edges: Edge[];
 }>;
@@ -156,6 +157,7 @@ export function WorkflowEditorPageContent({ initialDraft }: Readonly<{ initialDr
 
   const [workflowName, setWorkflowName] = useState(initialDraft.name);
   const [workflowDescription, setWorkflowDescription] = useState(initialDraft.description ?? '');
+  const [workflowVersionNotes, setWorkflowVersionNotes] = useState(initialDraft.versionNotes ?? '');
   const [nodes, setNodes] = useState<Node[]>(() => buildReactFlowNodes(initialDraft));
   const [edges, setEdges] = useState<Edge[]>(() => buildReactFlowEdges(initialDraft));
   const [reactFlowInstance, setReactFlowInstance] = useState<ReactFlowInstance | null>(null);
@@ -169,6 +171,7 @@ export function WorkflowEditorPageContent({ initialDraft }: Readonly<{ initialDr
   const [publishError, setPublishError] = useState<string | null>(null);
 
   const pendingSaveRef = useRef<number | null>(null);
+  const inFlightSaveAbortRef = useRef<AbortController | null>(null);
   const pendingHistoryCommitRef = useRef<number | null>(null);
   const workflowHistoryRef = useRef<{
     past: WorkflowSnapshot[];
@@ -179,6 +182,7 @@ export function WorkflowEditorPageContent({ initialDraft }: Readonly<{ initialDr
     present: {
       name: initialDraft.name,
       description: initialDraft.description ?? '',
+      versionNotes: initialDraft.versionNotes ?? '',
       nodes: buildReactFlowNodes(initialDraft),
       edges: buildReactFlowEdges(initialDraft),
     },
@@ -193,25 +197,31 @@ export function WorkflowEditorPageContent({ initialDraft }: Readonly<{ initialDr
   const draftEdgesForSave = useMemo(() => edges.map(mapEdgeFromReactFlow), [edges]);
 
   const latestDraftStateRef = useRef<{
+    draftRevision: number;
     name: string;
     description: string;
+    versionNotes: string;
     nodes: DashboardWorkflowDraftNode[];
     edges: DashboardWorkflowDraftEdge[];
   }>({
+    draftRevision: initialDraft.draftRevision,
     name: initialDraft.name,
     description: initialDraft.description ?? '',
+    versionNotes: initialDraft.versionNotes ?? '',
     nodes: buildReactFlowNodes(initialDraft).map(mapNodeFromReactFlow),
     edges: buildReactFlowEdges(initialDraft).map(mapEdgeFromReactFlow),
   });
 
   useEffect(() => {
     latestDraftStateRef.current = {
+      draftRevision: latestDraftStateRef.current.draftRevision,
       name: workflowName,
       description: workflowDescription,
+      versionNotes: workflowVersionNotes,
       nodes: draftNodesForSave,
       edges: draftEdgesForSave,
     };
-  }, [draftEdgesForSave, draftNodesForSave, workflowDescription, workflowName]);
+  }, [draftEdgesForSave, draftNodesForSave, workflowDescription, workflowName, workflowVersionNotes]);
 
   const initialRunnableNodeKeys = useMemo(() => {
     const incoming = new Set(draftEdgesForSave.map(edge => edge.targetNodeKey));
@@ -222,19 +232,30 @@ export function WorkflowEditorPageContent({ initialDraft }: Readonly<{ initialDr
     setSaveError(null);
     setSaveState('saving');
 
-    const latest = latestDraftStateRef.current;
+    const snapshot = latestDraftStateRef.current;
+    const nextDraftRevision = snapshot.draftRevision + 1;
+    latestDraftStateRef.current = { ...snapshot, draftRevision: nextDraftRevision };
     const payload: DashboardSaveWorkflowDraftRequest = {
-      name: latest.name,
-      description: latest.description.trim().length > 0 ? latest.description : undefined,
-      nodes: latest.nodes,
-      edges: latest.edges,
+      draftRevision: nextDraftRevision,
+      name: snapshot.name,
+      description: snapshot.description.trim().length > 0 ? snapshot.description : undefined,
+      versionNotes: snapshot.versionNotes.trim().length > 0 ? snapshot.versionNotes : undefined,
+      nodes: snapshot.nodes,
+      edges: snapshot.edges,
     };
 
     try {
+      if (inFlightSaveAbortRef.current) {
+        inFlightSaveAbortRef.current.abort();
+      }
+      const abortController = new AbortController();
+      inFlightSaveAbortRef.current = abortController;
+
       const response = await fetch(`/api/dashboard/workflows/${encodeURIComponent(treeKey)}/draft?version=${version}`, {
         method: 'PUT',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify(payload),
+        signal: abortController.signal,
       });
 
       const json = await response.json().catch(() => null);
@@ -244,8 +265,17 @@ export function WorkflowEditorPageContent({ initialDraft }: Readonly<{ initialDr
         return;
       }
 
+      if (json && typeof json === 'object' && 'draft' in json) {
+        const draftRevision = (json as { draft?: { draftRevision?: unknown } }).draft?.draftRevision;
+        if (typeof draftRevision === 'number' && Number.isInteger(draftRevision) && draftRevision > latestDraftStateRef.current.draftRevision) {
+          latestDraftStateRef.current = { ...latestDraftStateRef.current, draftRevision };
+        }
+      }
       setSaveState('saved');
     } catch (failure) {
+      if (failure instanceof DOMException && failure.name === 'AbortError') {
+        return;
+      }
       setSaveState('error');
       setSaveError(failure instanceof Error ? failure.message : 'Autosave failed.');
     }
@@ -279,17 +309,22 @@ export function WorkflowEditorPageContent({ initialDraft }: Readonly<{ initialDr
       history.present = {
         name: workflowName,
         description: workflowDescription,
+        versionNotes: workflowVersionNotes,
         nodes,
         edges,
       };
       history.future = [];
     }, 400);
-  }, [edges, nodes, workflowDescription, workflowName]);
+  }, [edges, nodes, workflowDescription, workflowName, workflowVersionNotes]);
 
   useEffect(() => {
     return () => {
       if (pendingSaveRef.current !== null) {
         window.clearTimeout(pendingSaveRef.current);
+      }
+      if (inFlightSaveAbortRef.current) {
+        inFlightSaveAbortRef.current.abort();
+        inFlightSaveAbortRef.current = null;
       }
       if (pendingHistoryCommitRef.current !== null) {
         window.clearTimeout(pendingHistoryCommitRef.current);
@@ -459,6 +494,7 @@ export function WorkflowEditorPageContent({ initialDraft }: Readonly<{ initialDr
     applyingHistoryRef.current = true;
     setWorkflowName(previous.name);
     setWorkflowDescription(previous.description);
+    setWorkflowVersionNotes(previous.versionNotes);
     setNodes(previous.nodes);
     setEdges(previous.edges);
     setSelectedNodeId(null);
@@ -485,6 +521,7 @@ export function WorkflowEditorPageContent({ initialDraft }: Readonly<{ initialDr
     applyingHistoryRef.current = true;
     setWorkflowName(next.name);
     setWorkflowDescription(next.description);
+    setWorkflowVersionNotes(next.versionNotes);
     setNodes(next.nodes);
     setEdges(next.edges);
     setSelectedNodeId(null);
@@ -625,9 +662,14 @@ export function WorkflowEditorPageContent({ initialDraft }: Readonly<{ initialDr
     setPublishError(null);
 
     try {
+      const versionNotes = workflowVersionNotes.trim();
       const response = await fetch(
         `/api/dashboard/workflows/${encodeURIComponent(treeKey)}/draft/publish?version=${version}`,
-        { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({}) },
+        {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(versionNotes.length > 0 ? { versionNotes } : {}),
+        },
       );
       const json = await response.json().catch(() => null);
       if (!response.ok) {
@@ -705,26 +747,32 @@ export function WorkflowEditorPageContent({ initialDraft }: Readonly<{ initialDr
           />
         ) : null}
 
-        {activeTab === 'workflow' ? (
-          <WorkflowInspector
-            name={workflowName}
-            description={workflowDescription}
-            onNameChange={(event) => {
-              setWorkflowName(event.target.value);
-              setSaveState('draft');
-              scheduleSave();
-            }}
-            onDescriptionChange={(event) => {
-              setWorkflowDescription(event.target.value);
-              setSaveState('draft');
-              scheduleSave();
-            }}
-            initialRunnableNodeKeys={validation?.initialRunnableNodeKeys ?? initialRunnableNodeKeys}
-            validation={validation}
-            validationError={validationError}
-            publishError={publishError}
-          />
-        ) : null}
+	        {activeTab === 'workflow' ? (
+	          <WorkflowInspector
+	            name={workflowName}
+	            description={workflowDescription}
+	            versionNotes={workflowVersionNotes}
+	            onNameChange={(event) => {
+	              setWorkflowName(event.target.value);
+	              setSaveState('draft');
+	              scheduleSave();
+	            }}
+	            onDescriptionChange={(event) => {
+	              setWorkflowDescription(event.target.value);
+	              setSaveState('draft');
+	              scheduleSave();
+	            }}
+	            onVersionNotesChange={(event) => {
+	              setWorkflowVersionNotes(event.target.value);
+	              setSaveState('draft');
+	              scheduleSave();
+	            }}
+	            initialRunnableNodeKeys={validation?.initialRunnableNodeKeys ?? initialRunnableNodeKeys}
+	            validation={validation}
+	            validationError={validationError}
+	            publishError={publishError}
+	          />
+	        ) : null}
       </div>
     </div>
   );
@@ -994,8 +1042,10 @@ function EdgeInspector({
 function WorkflowInspector({
   name,
   description,
+  versionNotes,
   onNameChange,
   onDescriptionChange,
+  onVersionNotesChange,
   initialRunnableNodeKeys,
   validation,
   validationError,
@@ -1003,8 +1053,10 @@ function WorkflowInspector({
 }: Readonly<{
   name: string;
   description: string;
+  versionNotes: string;
   onNameChange: (event: ChangeEvent<HTMLInputElement>) => void;
   onDescriptionChange: (event: ChangeEvent<HTMLTextAreaElement>) => void;
+  onVersionNotesChange: (event: ChangeEvent<HTMLTextAreaElement>) => void;
   initialRunnableNodeKeys: readonly string[];
   validation: DashboardWorkflowValidationResult | null;
   validationError: string | null;
@@ -1024,6 +1076,12 @@ function WorkflowInspector({
       <label className="workflow-inspector-field">
         <span>Description</span>
         <textarea rows={3} value={description} onChange={onDescriptionChange} />
+      </label>
+
+      <label className="workflow-inspector-field">
+        <span>Version notes</span>
+        <textarea rows={3} value={versionNotes} onChange={onVersionNotesChange} />
+        <span className="meta-text">Optional notes to attach to this version when publishing.</span>
       </label>
 
       <Panel title="Initial runnable nodes">

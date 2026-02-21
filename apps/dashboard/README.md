@@ -226,8 +226,10 @@ Response `200`:
   "draft": {
     "treeKey": "demo-tree",
     "version": 3,
+    "draftRevision": 0,
     "name": "Demo Tree",
     "description": null,
+    "versionNotes": null,
     "nodes": [],
     "edges": [],
     "initialRunnableNodeKeys": []
@@ -241,12 +243,17 @@ Type: `{ draft: DashboardWorkflowDraftTopology }`.
 
 Saves the draft topology (used by the workflow builder autosave loop).
 
+Notes:
+- `draftRevision` must be a positive integer that increases on every save attempt (used for optimistic concurrency).
+
 Request body (`DashboardSaveWorkflowDraftRequest`):
 
 ```json
 {
+  "draftRevision": 1,
   "name": "Demo Tree",
   "description": "Optional description",
+  "versionNotes": "Optional version notes",
   "nodes": [],
   "edges": []
 }
@@ -259,8 +266,10 @@ Response `200`:
   "draft": {
     "treeKey": "demo-tree",
     "version": 3,
+    "draftRevision": 1,
     "name": "Demo Tree",
     "description": null,
+    "versionNotes": null,
     "nodes": [],
     "edges": [],
     "initialRunnableNodeKeys": []

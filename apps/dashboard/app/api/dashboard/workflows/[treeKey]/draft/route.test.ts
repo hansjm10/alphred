@@ -27,8 +27,10 @@ describe('GET /api/dashboard/workflows/[treeKey]/draft', () => {
     getOrCreateWorkflowDraftMock.mockResolvedValue({
       treeKey: 'demo-tree',
       version: 2,
+      draftRevision: 0,
       name: 'Demo Tree',
       description: null,
+      versionNotes: null,
       nodes: [],
       edges: [],
       initialRunnableNodeKeys: [],
@@ -43,8 +45,10 @@ describe('GET /api/dashboard/workflows/[treeKey]/draft', () => {
       draft: {
         treeKey: 'demo-tree',
         version: 2,
+        draftRevision: 0,
         name: 'Demo Tree',
         description: null,
+        versionNotes: null,
         nodes: [],
         edges: [],
         initialRunnableNodeKeys: [],
@@ -69,7 +73,7 @@ describe('PUT /api/dashboard/workflows/[treeKey]/draft', () => {
     const request = new Request('http://localhost/api/dashboard/workflows/demo-tree/draft?version=0', {
       method: 'PUT',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ name: 'Demo', nodes: [], edges: [] }),
+      body: JSON.stringify({ draftRevision: 0, name: 'Demo', nodes: [], edges: [] }),
     });
 
     const response = await PUT(request, { params: Promise.resolve({ treeKey: 'demo-tree' }) });
@@ -84,12 +88,36 @@ describe('PUT /api/dashboard/workflows/[treeKey]/draft', () => {
     expect(saveWorkflowDraftMock).not.toHaveBeenCalled();
   });
 
+  it('returns 400 when draft payload is invalid', async () => {
+    const request = new Request('http://localhost/api/dashboard/workflows/demo-tree/draft?version=1', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ draftRevision: 1, name: 123, nodes: [], edges: [] }),
+    });
+
+    const response = await PUT(request, { params: Promise.resolve({ treeKey: 'demo-tree' }) });
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      error: {
+        code: 'invalid_request',
+        message: 'Draft name must be a string.',
+        details: {
+          field: 'name',
+        },
+      },
+    });
+    expect(saveWorkflowDraftMock).not.toHaveBeenCalled();
+  });
+
   it('saves workflow drafts via the dashboard service', async () => {
     saveWorkflowDraftMock.mockResolvedValue({
       treeKey: 'demo-tree',
       version: 3,
+      draftRevision: 1,
       name: 'Demo Tree',
       description: null,
+      versionNotes: null,
       nodes: [],
       edges: [],
       initialRunnableNodeKeys: [],
@@ -98,7 +126,7 @@ describe('PUT /api/dashboard/workflows/[treeKey]/draft', () => {
     const request = new Request('http://localhost/api/dashboard/workflows/demo-tree/draft?version=3', {
       method: 'PUT',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ name: 'Demo Tree', nodes: [], edges: [] }),
+      body: JSON.stringify({ draftRevision: 1, name: 'Demo Tree', nodes: [], edges: [] }),
     });
 
     const response = await PUT(request, { params: Promise.resolve({ treeKey: 'demo-tree' }) });
@@ -108,8 +136,10 @@ describe('PUT /api/dashboard/workflows/[treeKey]/draft', () => {
       draft: {
         treeKey: 'demo-tree',
         version: 3,
+        draftRevision: 1,
         name: 'Demo Tree',
         description: null,
+        versionNotes: null,
         nodes: [],
         edges: [],
         initialRunnableNodeKeys: [],
@@ -124,13 +154,14 @@ describe('PUT /api/dashboard/workflows/[treeKey]/draft', () => {
     const request = new Request('http://localhost/api/dashboard/workflows/demo-tree/draft?version=1', {
       method: 'PUT',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ name: 'Demo Tree', nodes: [], edges: [] }),
+      body: JSON.stringify({ draftRevision: 1, name: 'Demo Tree', nodes: [], edges: [] }),
     });
 
     const response = await PUT(request, { params: Promise.resolve({ treeKey: 'demo-tree' }) });
+    const body = await response.json();
 
     expect(response.status).toBe(500);
-    await expect(response.json()).resolves.toEqual({
+    expect(body).toEqual({
       error: {
         code: 'internal_error',
         message: 'Dashboard integration request failed.',
@@ -141,4 +172,3 @@ describe('PUT /api/dashboard/workflows/[treeKey]/draft', () => {
     });
   });
 });
-

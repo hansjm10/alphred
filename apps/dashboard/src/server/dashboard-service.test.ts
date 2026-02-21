@@ -544,6 +544,7 @@ describe('createDashboardService', () => {
     });
 
     await service.saveWorkflowDraft('demo-tree', 1, {
+      draftRevision: 1,
       name: 'Demo Tree',
       nodes: [
         {
@@ -587,6 +588,7 @@ describe('createDashboardService', () => {
 
     await expect(
       service.saveWorkflowDraft('guard-tree', 1, {
+        draftRevision: 1,
         name: 'Guard Tree',
         nodes: [
           {

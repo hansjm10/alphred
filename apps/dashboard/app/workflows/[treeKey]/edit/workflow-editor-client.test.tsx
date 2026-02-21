@@ -58,8 +58,10 @@ describe('WorkflowEditorPageContent', () => {
         initialDraft={{
           treeKey: 'demo-tree',
           version: 1,
+          draftRevision: 0,
           name: 'Demo Tree',
           description: null,
+          versionNotes: null,
           nodes: [
             {
               nodeKey: 'design',

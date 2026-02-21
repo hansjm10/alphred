@@ -649,7 +649,13 @@ export function createDashboardService(options: {
     return ['string', 'number', 'boolean'].includes(typeof value.value);
   }
 
-  function normalizeWorkflowTreeKey(rawValue: string): string {
+  function normalizeWorkflowTreeKey(rawValue: unknown): string {
+    if (typeof rawValue !== 'string') {
+      throw new DashboardIntegrationError('invalid_request', 'Workflow tree key must be a string.', {
+        status: 400,
+      });
+    }
+
     const value = rawValue.trim();
     if (value.length === 0) {
       throw new DashboardIntegrationError('invalid_request', 'Workflow tree key cannot be empty.', {
@@ -1017,37 +1023,41 @@ export function createDashboardService(options: {
       });
     },
 
-    async getWorkflowTreeSnapshot(treeKeyRaw: string): Promise<DashboardWorkflowTreeSnapshot> {
-      const treeKey = normalizeWorkflowTreeKey(treeKeyRaw);
+	    async getWorkflowTreeSnapshot(treeKeyRaw: string): Promise<DashboardWorkflowTreeSnapshot> {
+	      const treeKey = normalizeWorkflowTreeKey(treeKeyRaw);
 
-      return withDatabase(async db => {
-        const draft = db
-          .select({
-            id: workflowTrees.id,
-            version: workflowTrees.version,
-            status: workflowTrees.status,
-            name: workflowTrees.name,
-            description: workflowTrees.description,
-          })
-          .from(workflowTrees)
-          .where(and(eq(workflowTrees.treeKey, treeKey), eq(workflowTrees.status, 'draft')))
-          .orderBy(desc(workflowTrees.version), desc(workflowTrees.id))
-          .get();
+	      return withDatabase(async db => {
+	        const draft = db
+	          .select({
+	            id: workflowTrees.id,
+	            version: workflowTrees.version,
+	            status: workflowTrees.status,
+	            name: workflowTrees.name,
+	            description: workflowTrees.description,
+              versionNotes: workflowTrees.versionNotes,
+              draftRevision: workflowTrees.draftRevision,
+	          })
+	          .from(workflowTrees)
+	          .where(and(eq(workflowTrees.treeKey, treeKey), eq(workflowTrees.status, 'draft')))
+	          .orderBy(desc(workflowTrees.version), desc(workflowTrees.id))
+	          .get();
 
         const published = draft
           ? null
           : db
-              .select({
-                id: workflowTrees.id,
-                version: workflowTrees.version,
-                status: workflowTrees.status,
-                name: workflowTrees.name,
-                description: workflowTrees.description,
-              })
-              .from(workflowTrees)
-              .where(and(eq(workflowTrees.treeKey, treeKey), eq(workflowTrees.status, 'published')))
-              .orderBy(desc(workflowTrees.version), desc(workflowTrees.id))
-              .get();
+	              .select({
+	                id: workflowTrees.id,
+	                version: workflowTrees.version,
+	                status: workflowTrees.status,
+	                name: workflowTrees.name,
+	                description: workflowTrees.description,
+                  versionNotes: workflowTrees.versionNotes,
+                  draftRevision: workflowTrees.draftRevision,
+	              })
+	              .from(workflowTrees)
+	              .where(and(eq(workflowTrees.treeKey, treeKey), eq(workflowTrees.status, 'published')))
+	              .orderBy(desc(workflowTrees.version), desc(workflowTrees.id))
+	              .get();
 
         const record = draft ?? published;
         if (!record) {
@@ -1056,17 +1066,19 @@ export function createDashboardService(options: {
           });
         }
 
-        const topology = loadDraftTopologyByTreeId(db, record.id);
-        return {
-          status: record.status as 'draft' | 'published',
-          treeKey,
-          version: record.version,
-          name: record.name,
-          description: record.description,
-          ...topology,
-        };
-      });
-    },
+	        const topology = loadDraftTopologyByTreeId(db, record.id);
+	        return {
+	          status: record.status as 'draft' | 'published',
+	          treeKey,
+	          version: record.version,
+            draftRevision: record.draftRevision,
+	          name: record.name,
+	          description: record.description,
+            versionNotes: record.versionNotes,
+	          ...topology,
+	        };
+	      });
+	    },
 
     async getWorkflowTreeVersionSnapshot(treeKeyRaw: string, version: number): Promise<DashboardWorkflowTreeSnapshot> {
       const treeKey = normalizeWorkflowTreeKey(treeKeyRaw);
@@ -1076,18 +1088,20 @@ export function createDashboardService(options: {
         });
       }
 
-      return withDatabase(async db => {
-        const record = db
-          .select({
-            id: workflowTrees.id,
-            version: workflowTrees.version,
-            status: workflowTrees.status,
-            name: workflowTrees.name,
-            description: workflowTrees.description,
-          })
-          .from(workflowTrees)
-          .where(and(eq(workflowTrees.treeKey, treeKey), eq(workflowTrees.version, version)))
-          .get();
+	      return withDatabase(async db => {
+	        const record = db
+	          .select({
+	            id: workflowTrees.id,
+	            version: workflowTrees.version,
+	            status: workflowTrees.status,
+	            name: workflowTrees.name,
+	            description: workflowTrees.description,
+              versionNotes: workflowTrees.versionNotes,
+              draftRevision: workflowTrees.draftRevision,
+	          })
+	          .from(workflowTrees)
+	          .where(and(eq(workflowTrees.treeKey, treeKey), eq(workflowTrees.version, version)))
+	          .get();
 
         if (!record) {
           throw new DashboardIntegrationError('not_found', `Workflow tree "${treeKey}" v${version} was not found.`, {
@@ -1095,17 +1109,19 @@ export function createDashboardService(options: {
           });
         }
 
-        const topology = loadDraftTopologyByTreeId(db, record.id);
-        return {
-          status: record.status as 'draft' | 'published',
-          treeKey,
-          version: record.version,
-          name: record.name,
-          description: record.description,
-          ...topology,
-        };
-      });
-    },
+	        const topology = loadDraftTopologyByTreeId(db, record.id);
+	        return {
+	          status: record.status as 'draft' | 'published',
+	          treeKey,
+	          version: record.version,
+            draftRevision: record.draftRevision,
+	          name: record.name,
+	          description: record.description,
+            versionNotes: record.versionNotes,
+	          ...topology,
+	        };
+	      });
+	    },
 
     async createWorkflowDraft(request: DashboardCreateWorkflowRequest): Promise<DashboardCreateWorkflowResult> {
       const name = request.name.trim();
@@ -1127,17 +1143,19 @@ export function createDashboardService(options: {
             throw new DashboardIntegrationError('conflict', `Workflow tree "${treeKey}" already exists.`, { status: 409 });
           }
 
-          const tree = tx
-            .insert(workflowTrees)
-            .values({
-              treeKey,
-              version: 1,
-              status: 'draft',
-              name,
-              description,
-            })
-            .returning({ id: workflowTrees.id })
-            .get();
+	          const tree = tx
+	            .insert(workflowTrees)
+	            .values({
+	              treeKey,
+	              version: 1,
+	              status: 'draft',
+	              name,
+	              description,
+                versionNotes: null,
+                draftRevision: 0,
+	            })
+	            .returning({ id: workflowTrees.id })
+	            .get();
 
           if (request.template === 'design-implement-review') {
             const nodeSpecs: {
@@ -1248,36 +1266,40 @@ export function createDashboardService(options: {
       const treeKey = normalizeWorkflowTreeKey(treeKeyRaw);
 
       return withDatabase(async db => {
-        const existingDraft = db
-          .select({
-            id: workflowTrees.id,
-            version: workflowTrees.version,
-            name: workflowTrees.name,
-            description: workflowTrees.description,
-          })
-          .from(workflowTrees)
-          .where(and(eq(workflowTrees.treeKey, treeKey), eq(workflowTrees.status, 'draft')))
-          .orderBy(desc(workflowTrees.version), desc(workflowTrees.id))
-          .get();
+	        const existingDraft = db
+	          .select({
+	            id: workflowTrees.id,
+	            version: workflowTrees.version,
+	            name: workflowTrees.name,
+	            description: workflowTrees.description,
+              versionNotes: workflowTrees.versionNotes,
+              draftRevision: workflowTrees.draftRevision,
+	          })
+	          .from(workflowTrees)
+	          .where(and(eq(workflowTrees.treeKey, treeKey), eq(workflowTrees.status, 'draft')))
+	          .orderBy(desc(workflowTrees.version), desc(workflowTrees.id))
+	          .get();
 
         if (existingDraft) {
-          const topology = loadDraftTopologyByTreeId(db, existingDraft.id);
-          return {
-            treeKey,
-            version: existingDraft.version,
-            name: existingDraft.name,
-            description: existingDraft.description,
-            ...topology,
-          };
-        }
+	          const topology = loadDraftTopologyByTreeId(db, existingDraft.id);
+	          return {
+	            treeKey,
+	            version: existingDraft.version,
+              draftRevision: existingDraft.draftRevision,
+	            name: existingDraft.name,
+	            description: existingDraft.description,
+              versionNotes: existingDraft.versionNotes,
+	            ...topology,
+	          };
+	        }
 
-        const published = db
-          .select({
-            id: workflowTrees.id,
-            version: workflowTrees.version,
-            name: workflowTrees.name,
-            description: workflowTrees.description,
-          })
+	        const published = db
+	          .select({
+	            id: workflowTrees.id,
+	            version: workflowTrees.version,
+	            name: workflowTrees.name,
+	            description: workflowTrees.description,
+	          })
           .from(workflowTrees)
           .where(and(eq(workflowTrees.treeKey, treeKey), eq(workflowTrees.status, 'published')))
           .orderBy(desc(workflowTrees.version), desc(workflowTrees.id))
@@ -1289,17 +1311,19 @@ export function createDashboardService(options: {
         }
 
         const draftVersion = published.version + 1;
-        const draftTree = db
-          .insert(workflowTrees)
-          .values({
-            treeKey,
-            version: draftVersion,
-            status: 'draft',
-            name: published.name,
-            description: published.description,
-          })
-          .returning({ id: workflowTrees.id })
-          .get();
+	        const draftTree = db
+	          .insert(workflowTrees)
+	          .values({
+	            treeKey,
+	            version: draftVersion,
+	            status: 'draft',
+	            name: published.name,
+	            description: published.description,
+              versionNotes: null,
+              draftRevision: 0,
+	          })
+	          .returning({ id: workflowTrees.id })
+	          .get();
 
         const publishedNodes = db
           .select({
@@ -1450,21 +1474,23 @@ export function createDashboardService(options: {
             .run();
         }
 
-        const topology = loadDraftTopologyByTreeId(db, draftTree.id);
-        return {
-          treeKey,
-          version: draftVersion,
-          name: published.name,
-          description: published.description,
-          ...topology,
-        };
-      });
-    },
+	        const topology = loadDraftTopologyByTreeId(db, draftTree.id);
+	        return {
+	          treeKey,
+	          version: draftVersion,
+            draftRevision: 0,
+	          name: published.name,
+	          description: published.description,
+            versionNotes: null,
+	          ...topology,
+	        };
+	      });
+	    },
 
-    async saveWorkflowDraft(
-      treeKeyRaw: string,
-      version: number,
-      request: DashboardSaveWorkflowDraftRequest,
+	    async saveWorkflowDraft(
+	      treeKeyRaw: string,
+	      version: number,
+	      request: DashboardSaveWorkflowDraftRequest,
 	    ): Promise<DashboardWorkflowDraftTopology> {
 	      const treeKey = normalizeWorkflowTreeKey(treeKeyRaw);
 	      if (!Number.isInteger(version) || version < 1) {
@@ -1478,6 +1504,12 @@ export function createDashboardService(options: {
 	        throw new DashboardIntegrationError('invalid_request', 'Workflow name cannot be empty.', { status: 400 });
 	      }
 
+	      if (!Number.isInteger(request.draftRevision) || request.draftRevision < 1) {
+	        throw new DashboardIntegrationError('invalid_request', 'Draft revision must be a positive integer.', {
+	          status: 400,
+	        });
+	      }
+
 	      const draftValidation = validateDraftTopology({ nodes: request.nodes, edges: request.edges }, 'save');
 	      if (draftValidation.errors.length > 0) {
 	        throw new DashboardIntegrationError('invalid_request', 'Draft workflow failed validation and cannot be saved.', {
@@ -1487,28 +1519,43 @@ export function createDashboardService(options: {
 	      }
 
 	      const description = request.description?.trim() ?? null;
+	      const versionNotes = request.versionNotes?.trim() ?? null;
 
 	      return withDatabase(async db =>
 	        db.transaction((tx) => {
 	          const tree = tx
-            .select({
-              id: workflowTrees.id,
-            })
-            .from(workflowTrees)
-            .where(
-              and(eq(workflowTrees.treeKey, treeKey), eq(workflowTrees.version, version), eq(workflowTrees.status, 'draft')),
-            )
-            .get();
-          if (!tree) {
-            throw new DashboardIntegrationError('not_found', `Draft workflow tree "${treeKey}" v${version} was not found.`, {
-              status: 404,
-            });
-          }
+	            .select({
+	              id: workflowTrees.id,
+	              draftRevision: workflowTrees.draftRevision,
+	            })
+	            .from(workflowTrees)
+	            .where(and(eq(workflowTrees.treeKey, treeKey), eq(workflowTrees.version, version), eq(workflowTrees.status, 'draft')))
+	            .get();
+	          if (!tree) {
+	            throw new DashboardIntegrationError('not_found', `Draft workflow tree "${treeKey}" v${version} was not found.`, {
+	              status: 404,
+	            });
+	          }
 
-          tx.update(workflowTrees)
-            .set({ name, description, updatedAt: utcNow })
-            .where(eq(workflowTrees.id, tree.id))
-            .run();
+	          if (request.draftRevision <= tree.draftRevision) {
+	            throw new DashboardIntegrationError(
+	              'conflict',
+	              'Draft workflow is out of date. Refresh the editor before saving again.',
+	              {
+	                status: 409,
+	                details: {
+	                  currentDraftRevision: tree.draftRevision,
+	                  receivedDraftRevision: request.draftRevision,
+	                  expectedMinDraftRevision: tree.draftRevision + 1,
+	                },
+	              },
+	            );
+	          }
+
+	          tx.update(workflowTrees)
+	            .set({ name, description, versionNotes, draftRevision: request.draftRevision, updatedAt: utcNow })
+	            .where(eq(workflowTrees.id, tree.id))
+	            .run();
 
           const existingPromptTemplateIds = tx
             .select({ id: treeNodes.promptTemplateId })
@@ -1631,17 +1678,19 @@ export function createDashboardService(options: {
 	              .run();
 	          }
 
-          const topology = loadDraftTopologyByTreeId(tx, tree.id);
-          return {
-            treeKey,
-            version,
-            name,
-            description,
-            ...topology,
-          };
-        }),
-      );
-    },
+	          const topology = loadDraftTopologyByTreeId(tx, tree.id);
+	          return {
+	            treeKey,
+	            version,
+	            draftRevision: request.draftRevision,
+	            name,
+	            description,
+	            versionNotes,
+	            ...topology,
+	          };
+	        }),
+	      );
+	    },
 
     async validateWorkflowDraft(treeKeyRaw: string, version: number): Promise<DashboardWorkflowValidationResult> {
       const treeKey = normalizeWorkflowTreeKey(treeKeyRaw);
@@ -1668,14 +1717,14 @@ export function createDashboardService(options: {
       });
     },
 
-    async publishWorkflowDraft(
-      treeKeyRaw: string,
-      version: number,
-      _request: DashboardPublishWorkflowDraftRequest,
-    ): Promise<DashboardWorkflowTreeSummary> {
-      const treeKey = normalizeWorkflowTreeKey(treeKeyRaw);
-      if (!Number.isInteger(version) || version < 1) {
-        throw new DashboardIntegrationError('invalid_request', 'Workflow version must be a positive integer.', {
+	    async publishWorkflowDraft(
+	      treeKeyRaw: string,
+	      version: number,
+	      request: DashboardPublishWorkflowDraftRequest,
+	    ): Promise<DashboardWorkflowTreeSummary> {
+	      const treeKey = normalizeWorkflowTreeKey(treeKeyRaw);
+	      if (!Number.isInteger(version) || version < 1) {
+	        throw new DashboardIntegrationError('invalid_request', 'Workflow version must be a positive integer.', {
           status: 400,
         });
       }
@@ -1705,10 +1754,18 @@ export function createDashboardService(options: {
           });
         }
 
-        db.update(workflowTrees)
-          .set({ status: 'published', updatedAt: utcNow })
-          .where(eq(workflowTrees.id, tree.id))
-          .run();
+	        const nextVersionNotes =
+	          request.versionNotes === undefined ? undefined : (request.versionNotes.trim().length > 0 ? request.versionNotes.trim() : null);
+
+	        db.update(workflowTrees)
+	          .set({
+	            status: 'published',
+	            updatedAt: utcNow,
+	            draftRevision: 0,
+	            ...(nextVersionNotes === undefined ? {} : { versionNotes: nextVersionNotes }),
+	          })
+	          .where(eq(workflowTrees.id, tree.id))
+	          .run();
 
         return {
           id: tree.id,

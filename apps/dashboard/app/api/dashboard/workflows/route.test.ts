@@ -45,23 +45,23 @@ describe('GET /api/dashboard/workflows', () => {
     expect(listWorkflowTreesMock).toHaveBeenCalledTimes(1);
   });
 
-	  it('maps service failures to integration error responses', async () => {
-	    listWorkflowTreesMock.mockRejectedValue(new Error('workflow query failed'));
+  it('maps service failures to integration error responses', async () => {
+    listWorkflowTreesMock.mockRejectedValue(new Error('workflow query failed'));
 
-	    const response = await GET();
+    const response = await GET();
 
-	    expect(response.status).toBe(500);
-	    await expect(response.json()).resolves.toEqual({
-	      error: {
-	        code: 'internal_error',
-	        message: 'Dashboard integration request failed.',
-	        details: {
-	          cause: 'workflow query failed',
-	        },
-	      },
-	    });
-	  });
-	});
+    expect(response.status).toBe(500);
+    await expect(response.json()).resolves.toEqual({
+      error: {
+        code: 'internal_error',
+        message: 'Dashboard integration request failed.',
+        details: {
+          cause: 'workflow query failed',
+        },
+      },
+    });
+  });
+});
 
 describe('POST /api/dashboard/workflows', () => {
   beforeEach(() => {
@@ -96,5 +96,27 @@ describe('POST /api/dashboard/workflows', () => {
       },
     });
     expect(createWorkflowDraftMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('returns 400 when workflow creation payload is invalid', async () => {
+    const request = new Request('http://localhost/api/dashboard/workflows', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ template: 'nope', name: 'New Tree', treeKey: 'new-tree' }),
+    });
+
+    const response = await POST(request);
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      error: {
+        code: 'invalid_request',
+        message: 'Workflow template is invalid.',
+        details: {
+          field: 'template',
+        },
+      },
+    });
+    expect(createWorkflowDraftMock).not.toHaveBeenCalled();
   });
 });
