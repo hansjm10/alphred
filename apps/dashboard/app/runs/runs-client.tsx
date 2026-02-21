@@ -12,6 +12,7 @@ import { AuthRemediation } from '../ui/auth-remediation';
 import type { GitHubAuthGate } from '../ui/github-auth';
 import { ActionButton, Card, Panel, StatusBadge, Tabs, type TabItem } from '../ui/primitives';
 import { normalizeRunFilter, resolveRunFilterHref, type RunRouteFilter } from './run-route-fixtures';
+import { isActiveRunStatus, sortRunsForDashboard } from './run-summary-utils';
 
 type RunsPageContentProps = Readonly<{
   runs: readonly DashboardRunSummary[];
@@ -40,7 +41,6 @@ const RUN_FILTER_TABS: readonly TabItem[] = [
 ];
 
 const DEFAULT_RUN_LIST_LIMIT = 50;
-const ACTIVE_RUN_STATUSES = new Set<DashboardRunSummary['status']>(['pending', 'running', 'paused']);
 const LAUNCH_RESULT_MODES = new Set<DashboardRunLaunchResult['mode']>(['async', 'sync']);
 const LAUNCH_RESULT_STATUSES = new Set<DashboardRunLaunchResult['status']>(['accepted', 'completed']);
 const LAUNCH_RESULT_RUN_STATUSES = new Set<DashboardRunLaunchResult['runStatus']>([
@@ -87,41 +87,13 @@ function normalizeDateTimeLabel(value: string | null, fallback: string): string 
   return `${year}-${month}-${day} ${hours}:${minutes}:${seconds} UTC`;
 }
 
-function sortRunsForDashboard(
-  input: readonly DashboardRunSummary[],
-): DashboardRunSummary[] {
-  const statusPriority: Record<DashboardRunSummary['status'], number> = {
-    running: 0,
-    paused: 1,
-    pending: 2,
-    failed: 3,
-    completed: 4,
-    cancelled: 5,
-  };
-
-  return [...input].sort((left, right) => {
-    const statusDifference = statusPriority[left.status] - statusPriority[right.status];
-    if (statusDifference !== 0) {
-      return statusDifference;
-    }
-
-    const leftTimestamp = new Date(left.startedAt ?? left.createdAt).getTime();
-    const rightTimestamp = new Date(right.startedAt ?? right.createdAt).getTime();
-    if (leftTimestamp !== rightTimestamp) {
-      return rightTimestamp - leftTimestamp;
-    }
-
-    return right.id - left.id;
-  });
-}
-
 function includesRunByFilter(run: DashboardRunSummary, filter: RunRouteFilter): boolean {
   if (filter === 'all') {
     return true;
   }
 
   if (filter === 'running') {
-    return ACTIVE_RUN_STATUSES.has(run.status);
+    return isActiveRunStatus(run.status);
   }
 
   return run.status === 'failed';
