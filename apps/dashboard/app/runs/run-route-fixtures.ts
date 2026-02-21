@@ -35,6 +35,7 @@ export type RunRouteRecord = Readonly<{
 }>;
 
 export type RunRouteFilter = 'all' | 'running' | 'failed';
+type RunRouteQueryParam = string | string[] | undefined;
 
 type CreateRunRouteRecordInput = Omit<RunRouteRecord, 'workflow'> & Readonly<{ workflow?: string }>;
 
@@ -166,7 +167,7 @@ export const RUN_ROUTE_FIXTURES: readonly RunRouteRecord[] = [
   }),
 ];
 
-export function normalizeRunFilter(status: string | string[] | undefined): RunRouteFilter {
+export function normalizeRunFilter(status: RunRouteQueryParam): RunRouteFilter {
   const normalized = Array.isArray(status) ? status[0] : status;
 
   if (normalized === 'running' || normalized === 'failed') {
@@ -177,7 +178,7 @@ export function normalizeRunFilter(status: string | string[] | undefined): RunRo
 }
 
 export function normalizeRunRepositoryParam(
-  repository: string | string[] | undefined,
+  repository: RunRouteQueryParam,
 ): string | null {
   const normalized = Array.isArray(repository) ? repository[0] : repository;
   if (typeof normalized !== 'string') {
@@ -231,7 +232,7 @@ export function buildRunWorktreeHref(runId: number, path?: string): string {
 
 export function resolveWorktreePath(
   run: RunRouteRecord,
-  path: string | string[] | undefined,
+  path: RunRouteQueryParam,
 ): string | null {
   const defaultPath =
     run.worktree.files.find((file) => file.changed)?.path ??
