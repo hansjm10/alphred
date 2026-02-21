@@ -586,12 +586,12 @@ export function RunsPageContent({
         </Panel>
 	      </div>
 
-	      <Card title="Runs" description="Filter run activity and open detail timelines.">
-	        <div className="run-filter-bar" role="region" aria-label="Run filters">
-	          <div className="run-filter-bar__fields">
-	            <label className="run-filter-bar__field" htmlFor="runs-filter-workflow">
-	              <span className="meta-text">Workflow filter</span>
-	              <select
+		      <Card title="Runs" description="Filter run activity and open detail timelines.">
+		        <section className="run-filter-bar" aria-label="Run filters">
+		          <div className="run-filter-bar__fields">
+		            <label className="run-filter-bar__field" htmlFor="runs-filter-workflow">
+		              <span className="meta-text">Workflow filter</span>
+		              <select
 	                id="runs-filter-workflow"
 	                value={activeWorkflowKey ?? ''}
 	                onChange={(event) => {
@@ -659,14 +659,14 @@ export function RunsPageContent({
 	            </label>
 	          </div>
 
-	          {hasActiveFilters ? (
-	            <div className="action-row">
-	              <Link className="button-link button-link--secondary" href="/runs">
-	                Clear Filters
-	              </Link>
-	            </div>
-	          ) : null}
-	        </div>
+		          {hasActiveFilters ? (
+		            <div className="action-row">
+		              <Link className="button-link button-link--secondary" href="/runs">
+		                Clear Filters
+		              </Link>
+		            </div>
+		          ) : null}
+		        </section>
 
 	        <Tabs items={runFilterTabs} activeHref={activeHref} ariaLabel="Run status filters" />
 
