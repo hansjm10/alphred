@@ -1167,6 +1167,30 @@ output {
   padding: var(--space-3);
 }
 
+.workflow-palette-draggable-list {
+  display: grid;
+  gap: 10px;
+}
+
+.workflow-palette-draggable {
+  background: var(--bg-canvas);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  cursor: grab;
+  font: 600 14px/20px var(--font-display);
+  padding: 10px 12px;
+  user-select: none;
+}
+
+.workflow-palette-draggable:active {
+  cursor: grabbing;
+}
+
+.workflow-palette-actions {
+  display: grid;
+  gap: 10px;
+}
+
 .workflow-editor-palette {
   border-right: 1px solid var(--border-default);
 }

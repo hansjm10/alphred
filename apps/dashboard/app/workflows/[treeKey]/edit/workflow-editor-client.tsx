@@ -9,6 +9,7 @@ import {
   useRef,
   useState,
   type ChangeEvent,
+  type DragEvent,
 } from 'react';
 import { useRouter } from 'next/navigation';
 import {
@@ -24,6 +25,7 @@ import {
   type EdgeChange,
   type Node,
   type NodeChange,
+  type ReactFlowInstance,
 } from '@xyflow/react';
 import type {
   DashboardSaveWorkflowDraftRequest,
@@ -36,12 +38,37 @@ import { ActionButton, ButtonLink, Card, Panel, StatusBadge } from '../../../ui/
 
 type SaveState = 'draft' | 'saving' | 'saved' | 'error';
 type InspectorTab = 'node' | 'transition' | 'workflow';
+type WorkflowSnapshot = Readonly<{
+  name: string;
+  description: string;
+  nodes: Node[];
+  edges: Edge[];
+}>;
 
 type ApiErrorEnvelope = {
   error?: {
     message?: string;
   };
 };
+
+type FlowPoint = Readonly<{ x: number; y: number }>;
+
+function toFlowPosition(instance: ReactFlowInstance, point: FlowPoint): FlowPoint | null {
+  const maybe = instance as unknown as {
+    screenToFlowPosition?: (input: FlowPoint) => FlowPoint;
+    project?: (input: FlowPoint) => FlowPoint;
+  };
+
+  if (typeof maybe.screenToFlowPosition === 'function') {
+    return maybe.screenToFlowPosition(point);
+  }
+
+  if (typeof maybe.project === 'function') {
+    return maybe.project(point);
+  }
+
+  return null;
+}
 
 function slugifyNodeKey(value: string): string {
   return value
@@ -131,6 +158,7 @@ export function WorkflowEditorPageContent({ initialDraft }: Readonly<{ initialDr
   const [workflowDescription, setWorkflowDescription] = useState(initialDraft.description ?? '');
   const [nodes, setNodes] = useState<Node[]>(() => buildReactFlowNodes(initialDraft));
   const [edges, setEdges] = useState<Edge[]>(() => buildReactFlowEdges(initialDraft));
+  const [reactFlowInstance, setReactFlowInstance] = useState<ReactFlowInstance | null>(null);
   const [saveState, setSaveState] = useState<SaveState>('draft');
   const [saveError, setSaveError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<InspectorTab>('workflow');
@@ -141,6 +169,22 @@ export function WorkflowEditorPageContent({ initialDraft }: Readonly<{ initialDr
   const [publishError, setPublishError] = useState<string | null>(null);
 
   const pendingSaveRef = useRef<number | null>(null);
+  const pendingHistoryCommitRef = useRef<number | null>(null);
+  const workflowHistoryRef = useRef<{
+    past: WorkflowSnapshot[];
+    present: WorkflowSnapshot;
+    future: WorkflowSnapshot[];
+  }>({
+    past: [],
+    present: {
+      name: initialDraft.name,
+      description: initialDraft.description ?? '',
+      nodes: buildReactFlowNodes(initialDraft),
+      edges: buildReactFlowEdges(initialDraft),
+    },
+    future: [],
+  });
+  const applyingHistoryRef = useRef(false);
 
   const selectedNode = useMemo(() => nodes.find(node => node.id === selectedNodeId) ?? null, [nodes, selectedNodeId]);
   const selectedEdge = useMemo(() => edges.find(edge => edge.id === selectedEdgeId) ?? null, [edges, selectedEdgeId]);
@@ -164,10 +208,37 @@ export function WorkflowEditorPageContent({ initialDraft }: Readonly<{ initialDr
     }, 1000);
   }, []);
 
+  const scheduleHistoryCommit = useCallback(() => {
+    if (applyingHistoryRef.current) {
+      return;
+    }
+
+    if (pendingHistoryCommitRef.current !== null) {
+      window.clearTimeout(pendingHistoryCommitRef.current);
+    }
+
+    pendingHistoryCommitRef.current = window.setTimeout(() => {
+      pendingHistoryCommitRef.current = null;
+
+      const history = workflowHistoryRef.current;
+      history.past = [...history.past, history.present].slice(-50);
+      history.present = {
+        name: workflowName,
+        description: workflowDescription,
+        nodes,
+        edges,
+      };
+      history.future = [];
+    }, 400);
+  }, [edges, nodes, workflowDescription, workflowName]);
+
   useEffect(() => {
     return () => {
       if (pendingSaveRef.current !== null) {
         window.clearTimeout(pendingSaveRef.current);
+      }
+      if (pendingHistoryCommitRef.current !== null) {
+        window.clearTimeout(pendingHistoryCommitRef.current);
       }
     };
   }, []);
@@ -176,13 +247,15 @@ export function WorkflowEditorPageContent({ initialDraft }: Readonly<{ initialDr
     setNodes((current) => applyNodeChanges(changes, current));
     setSaveState('draft');
     scheduleSave();
-  }, [scheduleSave]);
+    scheduleHistoryCommit();
+  }, [scheduleHistoryCommit, scheduleSave]);
 
   const onEdgesChange = useCallback((changes: EdgeChange[]) => {
     setEdges((current) => applyEdgeChanges(changes, current));
     setSaveState('draft');
     scheduleSave();
-  }, [scheduleSave]);
+    scheduleHistoryCommit();
+  }, [scheduleHistoryCommit, scheduleSave]);
 
   const onConnect = useCallback((connection: Connection) => {
     if (!connection.source || !connection.target) {
@@ -210,7 +283,8 @@ export function WorkflowEditorPageContent({ initialDraft }: Readonly<{ initialDr
 
     setSaveState('draft');
     scheduleSave();
-  }, [scheduleSave]);
+    scheduleHistoryCommit();
+  }, [scheduleHistoryCommit, scheduleSave]);
 
   const handleSelectionChange = useCallback((params: { nodes: Node[]; edges: Edge[] }) => {
     const nextNode = params.nodes[0]?.id ?? null;
@@ -266,7 +340,210 @@ export function WorkflowEditorPageContent({ initialDraft }: Readonly<{ initialDr
     setActiveTab('node');
     setSaveState('draft');
     scheduleSave();
-  }, [draftNodesForSave, nodes, scheduleSave]);
+    scheduleHistoryCommit();
+  }, [draftNodesForSave, nodes, scheduleHistoryCommit, scheduleSave]);
+
+  const handleAddNodeAtPosition = useCallback((
+    nodeType: DashboardWorkflowDraftNode['nodeType'],
+    position: { x: number; y: number },
+  ) => {
+    const baseName = nodeType === 'agent' ? 'Agent' : nodeType === 'human' ? 'Human' : 'Tool';
+    const keyBase = slugifyNodeKey(baseName) || nodeType;
+    const existingKeys = new Set(nodes.map(node => node.id));
+    let nodeKey = keyBase;
+    let counter = 2;
+    while (existingKeys.has(nodeKey)) {
+      nodeKey = `${keyBase}-${counter}`;
+      counter += 1;
+    }
+
+    const sequenceIndex = (draftNodesForSave.at(-1)?.sequenceIndex ?? 0) + 10;
+
+    const newNode: DashboardWorkflowDraftNode = {
+      nodeKey,
+      displayName: baseName,
+      nodeType,
+      provider: nodeType === 'agent' ? 'codex' : null,
+      maxRetries: 0,
+      sequenceIndex,
+      position: { x: Math.round(position.x), y: Math.round(position.y) },
+      promptTemplate:
+        nodeType === 'agent'
+          ? { content: 'Describe what to do for this workflow phase.', contentType: 'markdown' }
+          : null,
+    };
+
+    setNodes((current) => [
+      ...current,
+      {
+        id: newNode.nodeKey,
+        position: newNode.position ?? { x: 0, y: 0 },
+        data: newNode,
+      },
+    ]);
+
+    setSelectedNodeId(newNode.nodeKey);
+    setSelectedEdgeId(null);
+    setActiveTab('node');
+    setSaveState('draft');
+    scheduleSave();
+    scheduleHistoryCommit();
+  }, [draftNodesForSave, nodes, scheduleHistoryCommit, scheduleSave]);
+
+  const undo = useCallback(() => {
+    const history = workflowHistoryRef.current;
+    if (history.past.length === 0) {
+      return;
+    }
+
+    const previous = history.past[history.past.length - 1];
+    const remaining = history.past.slice(0, -1);
+    history.past = remaining;
+    history.future = [history.present, ...history.future];
+    history.present = previous;
+
+    applyingHistoryRef.current = true;
+    setWorkflowName(previous.name);
+    setWorkflowDescription(previous.description);
+    setNodes(previous.nodes);
+    setEdges(previous.edges);
+    setSelectedNodeId(null);
+    setSelectedEdgeId(null);
+    setActiveTab('workflow');
+    setSaveState('draft');
+    scheduleSave();
+    window.setTimeout(() => {
+      applyingHistoryRef.current = false;
+    }, 0);
+  }, [scheduleSave]);
+
+  const redo = useCallback(() => {
+    const history = workflowHistoryRef.current;
+    if (history.future.length === 0) {
+      return;
+    }
+
+    const next = history.future[0];
+    history.future = history.future.slice(1);
+    history.past = [...history.past, history.present].slice(-50);
+    history.present = next;
+
+    applyingHistoryRef.current = true;
+    setWorkflowName(next.name);
+    setWorkflowDescription(next.description);
+    setNodes(next.nodes);
+    setEdges(next.edges);
+    setSelectedNodeId(null);
+    setSelectedEdgeId(null);
+    setActiveTab('workflow');
+    setSaveState('draft');
+    scheduleSave();
+    window.setTimeout(() => {
+      applyingHistoryRef.current = false;
+    }, 0);
+  }, [scheduleSave]);
+
+  useEffect(() => {
+    function isTypingTarget(target: EventTarget | null): boolean {
+      if (!target || !(target instanceof HTMLElement)) {
+        return false;
+      }
+
+      const tag = target.tagName.toLowerCase();
+      return tag === 'input' || tag === 'textarea' || tag === 'select' || target.isContentEditable;
+    }
+
+    function handleKeyDown(event: KeyboardEvent) {
+      if (isTypingTarget(event.target)) {
+        return;
+      }
+
+      const key = event.key.toLowerCase();
+      const isUndo = (event.metaKey || event.ctrlKey) && key === 'z' && !event.shiftKey;
+      const isRedo = (event.metaKey || event.ctrlKey) && ((key === 'z' && event.shiftKey) || key === 'y');
+
+      if (isUndo) {
+        event.preventDefault();
+        undo();
+        return;
+      }
+
+      if (isRedo) {
+        event.preventDefault();
+        redo();
+        return;
+      }
+
+      if (event.key === 'Delete' || event.key === 'Backspace') {
+        if (selectedEdgeId) {
+          event.preventDefault();
+          setEdges((current) => current.filter(edge => edge.id !== selectedEdgeId));
+          setSelectedEdgeId(null);
+          setSaveState('draft');
+          scheduleSave();
+          scheduleHistoryCommit();
+          return;
+        }
+
+        if (selectedNodeId) {
+          event.preventDefault();
+          const connectedEdges = edges.filter(edge => edge.source === selectedNodeId || edge.target === selectedNodeId);
+          const requiresConfirm = connectedEdges.length > 0;
+          if (requiresConfirm && !window.confirm('Delete this node and its connected transitions?')) {
+            return;
+          }
+
+          setEdges((current) => current.filter(edge => edge.source !== selectedNodeId && edge.target !== selectedNodeId));
+          setNodes((current) => current.filter(node => node.id !== selectedNodeId));
+          setSelectedNodeId(null);
+          setSaveState('draft');
+          scheduleSave();
+          scheduleHistoryCommit();
+        }
+      }
+
+      if (!event.metaKey && !event.ctrlKey && key === 'n') {
+        event.preventDefault();
+        handleAddNode('agent');
+      }
+    }
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [
+    edges,
+    handleAddNode,
+    redo,
+    scheduleHistoryCommit,
+    scheduleSave,
+    selectedEdgeId,
+    selectedNodeId,
+    undo,
+  ]);
+
+  const onDragOver = useCallback((event: DragEvent) => {
+    event.preventDefault();
+    event.dataTransfer.dropEffect = 'move';
+  }, []);
+
+  const onDrop = useCallback((event: DragEvent) => {
+    event.preventDefault();
+    const nodeType = event.dataTransfer.getData('application/alphred-workflow-node');
+    if (!nodeType) {
+      return;
+    }
+
+    if (!reactFlowInstance) {
+      return;
+    }
+
+    const position = toFlowPosition(reactFlowInstance, { x: event.clientX, y: event.clientY });
+    if (!position) {
+      return;
+    }
+
+    handleAddNodeAtPosition(nodeType as DashboardWorkflowDraftNode['nodeType'], position);
+  }, [handleAddNodeAtPosition, reactFlowInstance]);
 
   async function saveDraft(): Promise<void> {
     setSaveError(null);
@@ -448,6 +725,39 @@ export function WorkflowEditorPageContent({ initialDraft }: Readonly<{ initialDr
       <div className="workflow-editor-body">
         <aside className="workflow-editor-palette" aria-label="Node palette">
           <Card title="Node palette" description="Drag onto canvas or click to add.">
+            <div className="workflow-palette-draggable-list">
+              <div
+                className="workflow-palette-draggable"
+                draggable
+                onDragStart={(event) => {
+                  event.dataTransfer.setData('application/alphred-workflow-node', 'agent');
+                  event.dataTransfer.effectAllowed = 'move';
+                }}
+              >
+                Agent node
+              </div>
+              <div
+                className="workflow-palette-draggable"
+                draggable
+                onDragStart={(event) => {
+                  event.dataTransfer.setData('application/alphred-workflow-node', 'human');
+                  event.dataTransfer.effectAllowed = 'move';
+                }}
+              >
+                Human node
+              </div>
+              <div
+                className="workflow-palette-draggable"
+                draggable
+                onDragStart={(event) => {
+                  event.dataTransfer.setData('application/alphred-workflow-node', 'tool');
+                  event.dataTransfer.effectAllowed = 'move';
+                }}
+              >
+                Tool node
+              </div>
+            </div>
+
             <div className="workflow-palette-actions">
               <ActionButton onClick={() => handleAddNode('agent')}>Add agent</ActionButton>
               <ActionButton onClick={() => handleAddNode('human')}>Add human</ActionButton>
@@ -469,6 +779,9 @@ export function WorkflowEditorPageContent({ initialDraft }: Readonly<{ initialDr
             onEdgesChange={onEdgesChange}
             onConnect={onConnect}
             onSelectionChange={handleSelectionChange}
+            onInit={setReactFlowInstance}
+            onDrop={onDrop}
+            onDragOver={onDragOver}
             fitView
           >
             <Background />
