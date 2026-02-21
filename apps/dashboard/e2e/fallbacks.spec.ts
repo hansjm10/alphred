@@ -1,5 +1,10 @@
 import { expect, test } from '@playwright/test';
 
+test('serves favicon without 404', async ({ page }) => {
+  const response = await page.request.get('/favicon.ico');
+  expect(response.ok()).toBeTruthy();
+});
+
 test('renders loading and not-found fallbacks under navigation', async ({ page }) => {
   await page.goto('/test');
 
