@@ -235,11 +235,11 @@ output {
   background: var(--bg-subtle);
 }
 
-.surface-card {
+.page-grid .surface-card {
   grid-column: span 8;
 }
 
-.surface-panel {
+.page-grid .surface-panel {
   grid-column: span 4;
 }
 
@@ -901,8 +901,8 @@ output {
     flex-direction: column;
   }
 
-  .surface-card,
-  .surface-panel {
+  .page-grid .surface-card,
+  .page-grid .surface-panel {
     grid-column: span 12;
   }
 
