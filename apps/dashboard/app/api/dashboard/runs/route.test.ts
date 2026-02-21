@@ -222,5 +222,23 @@ describe('Route /api/dashboard/runs', () => {
         },
       });
     });
+
+    it('returns guided remediation when launch fails with an existing branch conflict', async () => {
+      launchWorkflowRunMock.mockRejectedValue(new Error("fatal: a branch named 'main' already exists"));
+
+      const response = await POST(createJsonRequest('http://localhost/api/dashboard/runs', {
+        treeKey: 'default',
+        branch: 'main',
+      }));
+
+      expect(response.status).toBe(409);
+      await expect(response.json()).resolves.toEqual({
+        error: {
+          code: 'conflict',
+          message:
+            'Branch "main" already exists. Choose a different branch name, or leave Branch empty to let Alphred generate one.',
+        },
+      });
+    });
   });
 });

@@ -48,6 +48,26 @@ describe('toDashboardIntegrationError', () => {
     expect(mapped.status).toBe(400);
   });
 
+  it('maps git branch conflicts to a guided conflict message', () => {
+    const mapped = toDashboardIntegrationError(
+      new Error("fatal: a branch named 'main' already exists"),
+    );
+
+    expect(mapped.code).toBe('conflict');
+    expect(mapped.status).toBe(409);
+    expect(mapped.message).toBe(
+      'Branch "main" already exists. Choose a different branch name, or leave Branch empty to let Alphred generate one.',
+    );
+  });
+
+  it('keeps non-branch conflict messages unchanged', () => {
+    const mapped = toDashboardIntegrationError(new Error('repository already exists'));
+
+    expect(mapped.code).toBe('conflict');
+    expect(mapped.status).toBe(409);
+    expect(mapped.message).toBe('repository already exists');
+  });
+
   it('maps unknown errors to internal_error with fallback message', () => {
     const mapped = toDashboardIntegrationError(new Error('completely unexpected'), 'fallback');
 
