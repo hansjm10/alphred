@@ -35,6 +35,7 @@ export type RunRouteRecord = Readonly<{
 }>;
 
 export type RunRouteFilter = 'all' | 'running' | 'failed';
+export type RunRouteTimeWindow = 'all' | '24h' | '7d' | '30d';
 type RunRouteQueryParam = string | string[] | undefined;
 
 type CreateRunRouteRecordInput = Omit<RunRouteRecord, 'workflow'> & Readonly<{ workflow?: string }>;
@@ -193,12 +194,51 @@ export function normalizeRunRepositoryParam(
   return trimmed;
 }
 
-export function resolveRunFilterHref(filter: RunRouteFilter): string {
-  if (filter === 'all') {
-    return '/runs';
+export function normalizeRunWorkflowParam(workflow: RunRouteQueryParam): string | null {
+  const normalized = Array.isArray(workflow) ? workflow[0] : workflow;
+  if (typeof normalized !== 'string') {
+    return null;
   }
 
-  return `/runs?status=${filter}`;
+  const trimmed = normalized.trim();
+  if (trimmed.length === 0) {
+    return null;
+  }
+
+  return trimmed;
+}
+
+export function normalizeRunTimeWindowParam(window: RunRouteQueryParam): RunRouteTimeWindow {
+  const normalized = Array.isArray(window) ? window[0] : window;
+  if (normalized === '24h' || normalized === '7d' || normalized === '30d') {
+    return normalized;
+  }
+
+  return 'all';
+}
+
+export function buildRunsListHref(params: Readonly<{
+  status: RunRouteFilter;
+  workflow: string | null;
+  repository: string | null;
+  window: RunRouteTimeWindow;
+}>): string {
+  const searchParams = new URLSearchParams();
+  if (params.status !== 'all') {
+    searchParams.set('status', params.status);
+  }
+  if (params.workflow) {
+    searchParams.set('workflow', params.workflow);
+  }
+  if (params.repository) {
+    searchParams.set('repository', params.repository);
+  }
+  if (params.window !== 'all') {
+    searchParams.set('window', params.window);
+  }
+
+  const query = searchParams.toString();
+  return query.length === 0 ? '/runs' : `/runs?${query}`;
 }
 
 export function listRunsForFilter(filter: RunRouteFilter): readonly RunRouteRecord[] {

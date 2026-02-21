@@ -1,13 +1,26 @@
 import type { DashboardRunSummary } from '../../src/server/dashboard-contracts';
 
-const STATUS_PRIORITY: Readonly<Record<DashboardRunSummary['status'], number>> = {
-  running: 0,
-  paused: 1,
-  pending: 2,
-  failed: 3,
-  completed: 4,
-  cancelled: 5,
-};
+function statusTier(status: DashboardRunSummary['status']): number {
+  if (status === 'running' || status === 'pending' || status === 'paused') {
+    return 0;
+  }
+
+  if (status === 'failed') {
+    return 1;
+  }
+
+  if (status === 'completed') {
+    return 2;
+  }
+
+  return 3;
+}
+
+function resolveSortTimestamp(run: DashboardRunSummary): number {
+  const candidate = run.completedAt ?? run.startedAt ?? run.createdAt;
+  const timestamp = new Date(candidate).getTime();
+  return Number.isNaN(timestamp) ? 0 : timestamp;
+}
 
 export function isActiveRunStatus(status: DashboardRunSummary['status']): boolean {
   return status === 'pending' || status === 'running' || status === 'paused';
@@ -15,13 +28,13 @@ export function isActiveRunStatus(status: DashboardRunSummary['status']): boolea
 
 export function sortRunsForDashboard(input: readonly DashboardRunSummary[]): DashboardRunSummary[] {
   return [...input].sort((left, right) => {
-    const statusDifference = STATUS_PRIORITY[left.status] - STATUS_PRIORITY[right.status];
+    const statusDifference = statusTier(left.status) - statusTier(right.status);
     if (statusDifference !== 0) {
       return statusDifference;
     }
 
-    const leftTimestamp = new Date(left.startedAt ?? left.createdAt).getTime();
-    const rightTimestamp = new Date(right.startedAt ?? right.createdAt).getTime();
+    const leftTimestamp = resolveSortTimestamp(left);
+    const rightTimestamp = resolveSortTimestamp(right);
     if (leftTimestamp !== rightTimestamp) {
       return rightTimestamp - leftTimestamp;
     }
@@ -29,4 +42,3 @@ export function sortRunsForDashboard(input: readonly DashboardRunSummary[]): Das
     return right.id - left.id;
   });
 }
-

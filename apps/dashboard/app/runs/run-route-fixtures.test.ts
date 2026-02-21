@@ -1,10 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import {
   RUN_ROUTE_FIXTURES,
+  buildRunsListHref,
   buildRunWorktreeHref,
   findRunByParam,
   normalizeRunFilter,
   normalizeRunRepositoryParam,
+  normalizeRunTimeWindowParam,
+  normalizeRunWorkflowParam,
   resolveWorktreePath,
 } from './run-route-fixtures';
 
@@ -20,6 +23,30 @@ describe('run-route-fixtures helpers', () => {
     expect(normalizeRunRepositoryParam('  demo-repo  ')).toBe('demo-repo');
     expect(normalizeRunRepositoryParam('   ')).toBeNull();
     expect(normalizeRunRepositoryParam(undefined)).toBeNull();
+  });
+
+  it('normalizes workflow query values with first-value and trim semantics', () => {
+    expect(normalizeRunWorkflowParam(['demo-tree', 'other-tree'])).toBe('demo-tree');
+    expect(normalizeRunWorkflowParam('  demo-tree  ')).toBe('demo-tree');
+    expect(normalizeRunWorkflowParam('   ')).toBeNull();
+    expect(normalizeRunWorkflowParam(undefined)).toBeNull();
+  });
+
+  it('normalizes time window query values using first-value semantics', () => {
+    expect(normalizeRunTimeWindowParam(['24h', '7d'])).toBe('24h');
+    expect(normalizeRunTimeWindowParam('7d')).toBe('7d');
+    expect(normalizeRunTimeWindowParam('unknown')).toBe('all');
+    expect(normalizeRunTimeWindowParam(undefined)).toBe('all');
+  });
+
+  it('builds canonical /runs hrefs from filter params', () => {
+    expect(buildRunsListHref({ status: 'all', workflow: null, repository: null, window: 'all' })).toBe('/runs');
+    expect(buildRunsListHref({ status: 'failed', workflow: null, repository: null, window: 'all' })).toBe(
+      '/runs?status=failed',
+    );
+    expect(buildRunsListHref({ status: 'failed', workflow: 'demo-tree', repository: 'demo-repo', window: '7d' })).toBe(
+      '/runs?status=failed&workflow=demo-tree&repository=demo-repo&window=7d',
+    );
   });
 
   it('returns null for invalid run id params', () => {

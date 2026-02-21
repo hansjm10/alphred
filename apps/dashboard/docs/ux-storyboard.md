@@ -156,11 +156,21 @@ Top-level routes:
   - Supported values: `running`, `failed`.
   - Unsupported or missing values resolve to `all`.
   - Repeated values use the first value.
+- `/runs?workflow=<treeKey>`
+  - Used to scope run list content to a single workflow tree key.
+  - Value is trimmed and only applied when it matches a known workflow tree key.
+  - Missing, empty, or unsupported values resolve to `All workflows`.
+  - Repeated values use the first value.
 - `/runs?repository=<name>`
   - Used by repository-scoped launch CTA to preselect launch repository context.
   - Value is trimmed and only applied when it matches a `cloned` repository name.
   - Missing, empty, unsupported, or non-cloned values resolve to `No repository context`.
   - Repeated values use the first value before validation.
+- `/runs?window=<value>`
+  - Used to constrain run list and KPI scope by a relative time window.
+  - Supported values: `24h`, `7d`, `30d`.
+  - Unsupported or missing values resolve to `all`.
+  - Repeated values use the first value.
 - `/runs/[runId]/worktree?path=<file-path>`
   - If `path` matches a tracked worktree file, that file is selected.
   - If `path` is missing or unsupported, selection falls back to the first changed file; if no changed file exists, use the first tracked file.
