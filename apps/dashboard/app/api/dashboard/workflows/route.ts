@@ -3,19 +3,12 @@ import { toErrorResponse } from '../../../../src/server/dashboard-http';
 import type { DashboardCreateWorkflowRequest, DashboardWorkflowTemplateKey } from '../../../../src/server/dashboard-contracts';
 import { DashboardIntegrationError } from '../../../../src/server/dashboard-errors';
 import { createDashboardService } from '../../../../src/server/dashboard-service';
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === 'object' && !Array.isArray(value);
-}
+import { optionalStringField, requireRecord, requireStringField } from './_shared/validation';
 
 function parseCreateWorkflowRequest(payload: unknown): DashboardCreateWorkflowRequest {
-  if (!isRecord(payload)) {
-    throw new DashboardIntegrationError('invalid_request', 'Workflow creation payload must be a JSON object.', {
-      status: 400,
-    });
-  }
+  const record = requireRecord(payload, 'Workflow creation payload must be a JSON object.');
 
-  const template = payload.template;
+  const template = record.template;
   if (template !== 'design-implement-review' && template !== 'blank') {
     throw new DashboardIntegrationError('invalid_request', 'Workflow template is invalid.', {
       status: 400,
@@ -23,36 +16,16 @@ function parseCreateWorkflowRequest(payload: unknown): DashboardCreateWorkflowRe
     });
   }
 
-  if (typeof payload.name !== 'string') {
-    throw new DashboardIntegrationError('invalid_request', 'Workflow name must be a string.', {
-      status: 400,
-      details: { field: 'name' },
-    });
-  }
+  const name = requireStringField(record, 'name', 'Workflow name must be a string.');
 
-  if (typeof payload.treeKey !== 'string') {
-    throw new DashboardIntegrationError('invalid_request', 'Workflow treeKey must be a string.', {
-      status: 400,
-      details: { field: 'treeKey' },
-    });
-  }
+  const treeKey = requireStringField(record, 'treeKey', 'Workflow treeKey must be a string.');
 
-  const description =
-    payload.description === undefined
-      ? undefined
-      : typeof payload.description === 'string'
-        ? payload.description
-        : (() => {
-            throw new DashboardIntegrationError('invalid_request', 'Workflow description must be a string when provided.', {
-              status: 400,
-              details: { field: 'description' },
-            });
-          })();
+  const description = optionalStringField(record, 'description', 'Workflow description must be a string when provided.');
 
   return {
     template: template satisfies DashboardWorkflowTemplateKey,
-    name: payload.name,
-    treeKey: payload.treeKey,
+    name,
+    treeKey,
     ...(description === undefined ? {} : { description }),
   };
 }

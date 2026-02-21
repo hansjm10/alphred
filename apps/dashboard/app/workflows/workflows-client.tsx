@@ -4,6 +4,7 @@ import { useMemo, useState, type FormEvent, type ReactNode } from 'react';
 import { useRouter } from 'next/navigation';
 import type { DashboardWorkflowCatalogItem } from '../../src/server/dashboard-contracts';
 import { ActionButton, ButtonLink, Card, Panel } from '../ui/primitives';
+import { resolveApiError, slugifyKey } from './workflows-shared';
 
 type WorkflowsPageContentProps = Readonly<{
   workflows: readonly DashboardWorkflowCatalogItem[];
@@ -57,33 +58,7 @@ type DuplicateDialogState = {
 };
 
 function slugifyTreeKey(value: string): string {
-  return value
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, 64);
-}
-
-type ApiErrorEnvelope = {
-  error?: {
-    message?: string;
-  };
-};
-
-function resolveApiError(status: number, payload: unknown, fallback: string): string {
-  if (
-    typeof payload === 'object' &&
-    payload !== null &&
-    'error' in payload &&
-    typeof (payload as ApiErrorEnvelope).error === 'object' &&
-    (payload as ApiErrorEnvelope).error !== null &&
-    typeof (payload as ApiErrorEnvelope).error?.message === 'string'
-  ) {
-    return (payload as ApiErrorEnvelope).error?.message as string;
-  }
-
-  return `${fallback} (HTTP ${status}).`;
+  return slugifyKey(value, 64);
 }
 
 export function WorkflowsPageContent({ workflows }: WorkflowsPageContentProps) {

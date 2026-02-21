@@ -35,6 +35,7 @@ import type {
   DashboardWorkflowValidationResult,
 } from '../../../../src/server/dashboard-contracts';
 import { ActionButton, ButtonLink, Card, Panel, StatusBadge } from '../../../ui/primitives';
+import { resolveApiError, slugifyKey } from '../../workflows-shared';
 
 type SaveState = 'draft' | 'saving' | 'saved' | 'error';
 type InspectorTab = 'node' | 'transition' | 'workflow';
@@ -45,12 +46,6 @@ type WorkflowSnapshot = Readonly<{
   nodes: Node[];
   edges: Edge[];
 }>;
-
-type ApiErrorEnvelope = {
-  error?: {
-    message?: string;
-  };
-};
 
 type FlowPoint = Readonly<{ x: number; y: number }>;
 
@@ -72,27 +67,7 @@ function toFlowPosition(instance: ReactFlowInstance, point: FlowPoint): FlowPoin
 }
 
 function slugifyNodeKey(value: string): string {
-  return value
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, 48);
-}
-
-function resolveApiError(status: number, payload: unknown, fallback: string): string {
-  if (
-    typeof payload === 'object' &&
-    payload !== null &&
-    'error' in payload &&
-    typeof (payload as ApiErrorEnvelope).error === 'object' &&
-    (payload as ApiErrorEnvelope).error !== null &&
-    typeof (payload as ApiErrorEnvelope).error?.message === 'string'
-  ) {
-    return (payload as ApiErrorEnvelope).error?.message as string;
-  }
-
-  return `${fallback} (HTTP ${status}).`;
+  return slugifyKey(value, 48);
 }
 
 function nextPriorityForSource(edges: readonly DashboardWorkflowDraftEdge[], sourceNodeKey: string): number {

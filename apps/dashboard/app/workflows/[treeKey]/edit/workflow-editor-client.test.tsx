@@ -217,4 +217,153 @@ describe('WorkflowEditorPageContent', () => {
 
     expect((screen.getByLabelText('Display name') as HTMLInputElement).value).toBe('Design');
   });
+
+  it('runs validation and renders errors and warnings', async () => {
+    vi.useRealTimers();
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/draft/validate')) {
+        return createJsonResponse(
+          {
+            result: {
+              errors: [{ code: 'missing_agent', message: 'At least one agent node is required.' }],
+              warnings: [{ code: 'draft_placeholders', message: 'Draft placeholders detected.' }],
+              initialRunnableNodeKeys: ['design'],
+            },
+          },
+          { status: 200 },
+        );
+      }
+      return createJsonResponse({ draft: {} }, { status: 200 });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(
+      <WorkflowEditorPageContent
+        initialDraft={{
+          treeKey: 'demo-tree',
+          version: 1,
+          draftRevision: 0,
+          name: 'Demo Tree',
+          description: null,
+          versionNotes: null,
+          nodes: [],
+          edges: [],
+          initialRunnableNodeKeys: [],
+        }}
+      />,
+    );
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Validate' }));
+    });
+
+    expect(await screen.findByText('Errors')).toBeInTheDocument();
+    expect(screen.getByText('At least one agent node is required.')).toBeInTheDocument();
+    expect(screen.getByText('Warnings')).toBeInTheDocument();
+    expect(screen.getByText('Draft placeholders detected.')).toBeInTheDocument();
+  });
+
+  it('publishes the workflow and routes to the tree page', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/draft/publish')) {
+        return createJsonResponse({ workflow: { treeKey: 'demo-tree', version: 1 } }, { status: 200 });
+      }
+      return createJsonResponse({ draft: {} }, { status: 200 });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(
+      <WorkflowEditorPageContent
+        initialDraft={{
+          treeKey: 'demo-tree',
+          version: 1,
+          draftRevision: 0,
+          name: 'Demo Tree',
+          description: null,
+          versionNotes: null,
+          nodes: [],
+          edges: [],
+          initialRunnableNodeKeys: [],
+        }}
+      />,
+    );
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Publish' }));
+    });
+
+    expect(pushMock).toHaveBeenCalledWith('/workflows/demo-tree');
+  });
+
+  it('connects nodes and autosaves a new transition', async () => {
+    const fetchMock = vi.fn(async () => createJsonResponse({ draft: {} }, { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(
+      <WorkflowEditorPageContent
+        initialDraft={{
+          treeKey: 'demo-tree',
+          version: 1,
+          draftRevision: 0,
+          name: 'Demo Tree',
+          description: null,
+          versionNotes: null,
+          nodes: [
+            {
+              nodeKey: 'design',
+              displayName: 'Design',
+              nodeType: 'agent',
+              provider: 'codex',
+              maxRetries: 0,
+              sequenceIndex: 10,
+              position: { x: 0, y: 0 },
+              promptTemplate: { content: 'Draft prompt', contentType: 'markdown' },
+            },
+            {
+              nodeKey: 'implement',
+              displayName: 'Implement',
+              nodeType: 'agent',
+              provider: 'codex',
+              maxRetries: 0,
+              sequenceIndex: 20,
+              position: { x: 200, y: 0 },
+              promptTemplate: { content: 'Draft prompt', contentType: 'markdown' },
+            },
+          ],
+          edges: [],
+          initialRunnableNodeKeys: ['design'],
+        }}
+      />,
+    );
+
+    const onConnect = latestReactFlowProps?.onConnect;
+    expect(typeof onConnect).toBe('function');
+
+    await act(async () => {
+      (onConnect as (connection: { source?: string; target?: string }) => void)({
+        source: 'design',
+        target: 'implement',
+      });
+    });
+
+    await vi.advanceTimersByTimeAsync(1000);
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const call = fetchMock.mock.calls[0] as unknown as [RequestInfo | URL, RequestInit | undefined];
+    const init = call[1];
+    expect(init?.method).toBe('PUT');
+
+    const payload = JSON.parse(init?.body as string) as { edges?: unknown[] };
+    expect(payload.edges).toEqual([
+      {
+        sourceNodeKey: 'design',
+        targetNodeKey: 'implement',
+        priority: 100,
+        auto: true,
+        guardExpression: null,
+      },
+    ]);
+  });
 });

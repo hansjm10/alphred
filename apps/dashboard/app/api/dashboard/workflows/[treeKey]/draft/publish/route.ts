@@ -3,6 +3,7 @@ import { toErrorResponse } from '../../../../../../../src/server/dashboard-http'
 import type { DashboardPublishWorkflowDraftRequest } from '../../../../../../../src/server/dashboard-contracts';
 import { DashboardIntegrationError } from '../../../../../../../src/server/dashboard-errors';
 import { createDashboardService } from '../../../../../../../src/server/dashboard-service';
+import { parsePositiveIntegerQueryParam, requireRecord } from '../../../_shared/validation';
 
 type RouteContext = {
   params: Promise<{
@@ -10,36 +11,17 @@ type RouteContext = {
   }>;
 };
 
-function parseVersionParam(request: Request): number {
-  const url = new URL(request.url);
-  const raw = url.searchParams.get('version');
-  const parsed = raw ? Number(raw) : NaN;
-  if (!Number.isInteger(parsed) || parsed < 1) {
-    throw new DashboardIntegrationError('invalid_request', 'Query parameter "version" must be a positive integer.', {
-      status: 400,
-    });
-  }
-
-  return parsed;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === 'object' && !Array.isArray(value);
-}
-
 function parsePublishWorkflowDraftRequest(payload: unknown): DashboardPublishWorkflowDraftRequest {
-  if (!isRecord(payload)) {
-    throw new DashboardIntegrationError('invalid_request', 'Publish payload must be a JSON object.', { status: 400 });
-  }
+  const record = requireRecord(payload, 'Publish payload must be a JSON object.');
 
-  if (payload.versionNotes !== undefined && typeof payload.versionNotes !== 'string') {
+  if (record.versionNotes !== undefined && typeof record.versionNotes !== 'string') {
     throw new DashboardIntegrationError('invalid_request', 'Publish versionNotes must be a string when provided.', {
       status: 400,
       details: { field: 'versionNotes' },
     });
   }
 
-  return payload.versionNotes === undefined ? {} : { versionNotes: payload.versionNotes };
+  return record.versionNotes === undefined ? {} : { versionNotes: record.versionNotes as string };
 }
 
 export async function POST(request: Request, context: RouteContext): Promise<Response> {
@@ -47,7 +29,11 @@ export async function POST(request: Request, context: RouteContext): Promise<Res
 
   try {
     const params = await context.params;
-    const version = parseVersionParam(request);
+    const version = parsePositiveIntegerQueryParam(
+      request,
+      'version',
+      'Query parameter "version" must be a positive integer.',
+    );
     const payload = parsePublishWorkflowDraftRequest(await request.json().catch(() => ({})));
     const workflow = await service.publishWorkflowDraft(params.treeKey, version, payload);
     return NextResponse.json({ workflow });

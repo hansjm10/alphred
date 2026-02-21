@@ -110,6 +110,116 @@ describe('PUT /api/dashboard/workflows/[treeKey]/draft', () => {
     expect(saveWorkflowDraftMock).not.toHaveBeenCalled();
   });
 
+  it('returns 400 when a node payload is invalid', async () => {
+    const request = new Request('http://localhost/api/dashboard/workflows/demo-tree/draft?version=1', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        draftRevision: 1,
+        name: 'Demo Tree',
+        nodes: [
+          {
+            nodeKey: 'design',
+            displayName: 'Design',
+            nodeType: 'invalid',
+            provider: null,
+            maxRetries: 0,
+            sequenceIndex: 10,
+            position: null,
+            promptTemplate: null,
+          },
+        ],
+        edges: [],
+      }),
+    });
+
+    const response = await PUT(request, { params: Promise.resolve({ treeKey: 'demo-tree' }) });
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      error: {
+        code: 'invalid_request',
+        message: 'Draft node at index 0 has an invalid nodeType.',
+        details: {
+          field: 'nodes[0].nodeType',
+        },
+      },
+    });
+    expect(saveWorkflowDraftMock).not.toHaveBeenCalled();
+  });
+
+  it('returns 400 when a node position payload is invalid', async () => {
+    const request = new Request('http://localhost/api/dashboard/workflows/demo-tree/draft?version=1', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        draftRevision: 1,
+        name: 'Demo Tree',
+        nodes: [
+          {
+            nodeKey: 'design',
+            displayName: 'Design',
+            nodeType: 'agent',
+            provider: null,
+            maxRetries: 0,
+            sequenceIndex: 10,
+            position: { x: 'nope', y: 2 },
+            promptTemplate: null,
+          },
+        ],
+        edges: [],
+      }),
+    });
+
+    const response = await PUT(request, { params: Promise.resolve({ treeKey: 'demo-tree' }) });
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      error: {
+        code: 'invalid_request',
+        message: 'Draft node at index 0 has an invalid position.',
+        details: {
+          field: 'nodes[0].position',
+        },
+      },
+    });
+    expect(saveWorkflowDraftMock).not.toHaveBeenCalled();
+  });
+
+  it('returns 400 when an edge payload is invalid', async () => {
+    const request = new Request('http://localhost/api/dashboard/workflows/demo-tree/draft?version=1', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        draftRevision: 1,
+        name: 'Demo Tree',
+        nodes: [],
+        edges: [
+          {
+            sourceNodeKey: 'design',
+            targetNodeKey: 'implement',
+            priority: 1.5,
+            auto: true,
+          },
+        ],
+      }),
+    });
+
+    const response = await PUT(request, { params: Promise.resolve({ treeKey: 'demo-tree' }) });
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      error: {
+        code: 'invalid_request',
+        message: 'Draft edge at index 0 must have an integer priority.',
+        details: {
+          field: 'edges[0].priority',
+        },
+      },
+    });
+    expect(saveWorkflowDraftMock).not.toHaveBeenCalled();
+  });
+
   it('saves workflow drafts via the dashboard service', async () => {
     saveWorkflowDraftMock.mockResolvedValue({
       treeKey: 'demo-tree',

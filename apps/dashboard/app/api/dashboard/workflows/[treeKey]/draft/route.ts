@@ -7,6 +7,7 @@ import type {
 } from '../../../../../../src/server/dashboard-contracts';
 import { DashboardIntegrationError } from '../../../../../../src/server/dashboard-errors';
 import { createDashboardService } from '../../../../../../src/server/dashboard-service';
+import { optionalStringField, parsePositiveIntegerQueryParam, requireRecord } from '../../_shared/validation';
 
 type RouteContext = {
   params: Promise<{
@@ -14,29 +15,10 @@ type RouteContext = {
   }>;
 };
 
-function parseVersionParam(request: Request): number {
-  const url = new URL(request.url);
-  const raw = url.searchParams.get('version');
-  const parsed = raw ? Number(raw) : NaN;
-  if (!Number.isInteger(parsed) || parsed < 1) {
-    throw new DashboardIntegrationError('invalid_request', 'Query parameter "version" must be a positive integer.', {
-      status: 400,
-    });
-  }
-
-  return parsed;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === 'object' && !Array.isArray(value);
-}
-
 function parseSaveWorkflowDraftRequest(payload: unknown): DashboardSaveWorkflowDraftRequest {
-  if (!isRecord(payload)) {
-    throw new DashboardIntegrationError('invalid_request', 'Draft save payload must be a JSON object.', { status: 400 });
-  }
+  const record = requireRecord(payload, 'Draft save payload must be a JSON object.');
 
-  const draftRevision = payload.draftRevision;
+  const draftRevision = record.draftRevision;
   if (typeof draftRevision !== 'number' || !Number.isInteger(draftRevision) || draftRevision < 1) {
     throw new DashboardIntegrationError('invalid_request', 'Draft revision must be a positive integer.', {
       status: 400,
@@ -44,46 +26,26 @@ function parseSaveWorkflowDraftRequest(payload: unknown): DashboardSaveWorkflowD
     });
   }
 
-  if (typeof payload.name !== 'string') {
+  if (typeof record.name !== 'string') {
     throw new DashboardIntegrationError('invalid_request', 'Draft name must be a string.', {
       status: 400,
       details: { field: 'name' },
     });
   }
 
-  const description =
-    payload.description === undefined
-      ? undefined
-      : typeof payload.description === 'string'
-        ? payload.description
-        : (() => {
-            throw new DashboardIntegrationError('invalid_request', 'Draft description must be a string when provided.', {
-              status: 400,
-              details: { field: 'description' },
-            });
-          })();
+  const description = optionalStringField(record, 'description', 'Draft description must be a string when provided.');
 
-  const versionNotes =
-    payload.versionNotes === undefined
-      ? undefined
-      : typeof payload.versionNotes === 'string'
-        ? payload.versionNotes
-        : (() => {
-            throw new DashboardIntegrationError('invalid_request', 'Draft versionNotes must be a string when provided.', {
-              status: 400,
-              details: { field: 'versionNotes' },
-            });
-          })();
+  const versionNotes = optionalStringField(record, 'versionNotes', 'Draft versionNotes must be a string when provided.');
 
-  if (!Array.isArray(payload.nodes)) {
+  if (!Array.isArray(record.nodes)) {
     throw new DashboardIntegrationError('invalid_request', 'Draft nodes must be an array.', { status: 400, details: { field: 'nodes' } });
   }
-  if (!Array.isArray(payload.edges)) {
+  if (!Array.isArray(record.edges)) {
     throw new DashboardIntegrationError('invalid_request', 'Draft edges must be an array.', { status: 400, details: { field: 'edges' } });
   }
 
-  const nodes: DashboardWorkflowDraftNode[] = payload.nodes.map((raw, index) => {
-    if (!isRecord(raw)) {
+  const nodes: DashboardWorkflowDraftNode[] = record.nodes.map((raw, index) => {
+    if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
       throw new DashboardIntegrationError('invalid_request', `Draft node at index ${index} must be an object.`, {
         status: 400,
         details: { field: `nodes[${index}]` },
@@ -110,7 +72,9 @@ function parseSaveWorkflowDraftRequest(payload: unknown): DashboardSaveWorkflowD
     if (
       position !== null &&
       !(
-        isRecord(position) &&
+        typeof position === 'object' &&
+        position !== null &&
+        !Array.isArray(position) &&
         typeof position.x === 'number' &&
         Number.isFinite(position.x) &&
         typeof position.y === 'number' &&
@@ -127,7 +91,9 @@ function parseSaveWorkflowDraftRequest(payload: unknown): DashboardSaveWorkflowD
     if (
       promptTemplate !== null &&
       !(
-        isRecord(promptTemplate) &&
+        typeof promptTemplate === 'object' &&
+        promptTemplate !== null &&
+        !Array.isArray(promptTemplate) &&
         typeof promptTemplate.content === 'string' &&
         (promptTemplate.contentType === 'text' || promptTemplate.contentType === 'markdown')
       )
@@ -172,8 +138,8 @@ function parseSaveWorkflowDraftRequest(payload: unknown): DashboardSaveWorkflowD
     };
   });
 
-  const edges: DashboardWorkflowDraftEdge[] = payload.edges.map((raw, index) => {
-    if (!isRecord(raw)) {
+  const edges: DashboardWorkflowDraftEdge[] = record.edges.map((raw, index) => {
+    if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
       throw new DashboardIntegrationError('invalid_request', `Draft edge at index ${index} must be an object.`, {
         status: 400,
         details: { field: `edges[${index}]` },
@@ -214,7 +180,7 @@ function parseSaveWorkflowDraftRequest(payload: unknown): DashboardSaveWorkflowD
 
   return {
     draftRevision,
-    name: payload.name,
+    name: record.name as string,
     ...(description === undefined ? {} : { description }),
     ...(versionNotes === undefined ? {} : { versionNotes }),
     nodes,
@@ -239,7 +205,11 @@ export async function PUT(request: Request, context: RouteContext): Promise<Resp
 
   try {
     const params = await context.params;
-    const version = parseVersionParam(request);
+    const version = parsePositiveIntegerQueryParam(
+      request,
+      'version',
+      'Query parameter "version" must be a positive integer.',
+    );
     const payload = parseSaveWorkflowDraftRequest(await request.json());
     const draft = await service.saveWorkflowDraft(params.treeKey, version, payload);
     return NextResponse.json({ draft });
