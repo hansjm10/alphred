@@ -153,6 +153,165 @@ Response `200`:
 
 Type: `{ workflows: DashboardWorkflowTreeSummary[] }`.
 
+Notes:
+- Only the latest **published** version per `treeKey` is returned.
+- Draft workflow versions are not launchable until published.
+
+### `GET /workflows/catalog`
+
+Lists workflow trees for dashboard management, including draft presence.
+
+Response `200`:
+
+```json
+{
+  "workflows": [
+    {
+      "treeKey": "demo-tree",
+      "name": "Demo Tree",
+      "description": "Demo tree description",
+      "publishedVersion": 2,
+      "draftVersion": 3,
+      "updatedAt": "2026-02-21T06:30:50.000Z"
+    }
+  ]
+}
+```
+
+Type: `{ workflows: DashboardWorkflowCatalogItem[] }`.
+
+### `POST /workflows`
+
+Creates a new workflow tree as a **draft** v1.
+
+Request body (`DashboardCreateWorkflowRequest`):
+
+```json
+{
+  "template": "design-implement-review",
+  "name": "Design → Implement → Review",
+  "treeKey": "design-implement-review",
+  "description": "Optional description"
+}
+```
+
+Validation notes:
+- `treeKey` must be lowercase `a-z0-9-` and unique across workflow trees.
+
+Response `201`:
+
+```json
+{
+  "workflow": {
+    "treeKey": "design-implement-review",
+    "draftVersion": 1
+  }
+}
+```
+
+Type: `{ workflow: DashboardCreateWorkflowResult }`.
+
+### `GET /workflows/[treeKey]/draft`
+
+Fetches the current draft for a tree key, creating a new draft from the latest published version when needed.
+
+Response `200`:
+
+```json
+{
+  "draft": {
+    "treeKey": "demo-tree",
+    "version": 3,
+    "name": "Demo Tree",
+    "description": null,
+    "nodes": [],
+    "edges": [],
+    "initialRunnableNodeKeys": []
+  }
+}
+```
+
+Type: `{ draft: DashboardWorkflowDraftTopology }`.
+
+### `PUT /workflows/[treeKey]/draft?version=<n>`
+
+Saves the draft topology (used by the workflow builder autosave loop).
+
+Request body (`DashboardSaveWorkflowDraftRequest`):
+
+```json
+{
+  "name": "Demo Tree",
+  "description": "Optional description",
+  "nodes": [],
+  "edges": []
+}
+```
+
+Response `200`:
+
+```json
+{
+  "draft": {
+    "treeKey": "demo-tree",
+    "version": 3,
+    "name": "Demo Tree",
+    "description": null,
+    "nodes": [],
+    "edges": [],
+    "initialRunnableNodeKeys": []
+  }
+}
+```
+
+Type: `{ draft: DashboardWorkflowDraftTopology }`.
+
+### `POST /workflows/[treeKey]/draft/validate?version=<n>`
+
+Validates the saved draft and returns errors/warnings that block publishing.
+
+Response `200`:
+
+```json
+{
+  "result": {
+    "errors": [],
+    "warnings": [],
+    "initialRunnableNodeKeys": ["design"]
+  }
+}
+```
+
+Type: `{ result: DashboardWorkflowValidationResult }`.
+
+### `POST /workflows/[treeKey]/draft/publish?version=<n>`
+
+Publishes a validated draft version.
+
+Request body (`DashboardPublishWorkflowDraftRequest`):
+
+```json
+{
+  "versionNotes": "Optional notes"
+}
+```
+
+Response `200`:
+
+```json
+{
+  "workflow": {
+    "id": 1,
+    "treeKey": "demo-tree",
+    "version": 3,
+    "name": "Demo Tree",
+    "description": null
+  }
+}
+```
+
+Type: `{ workflow: DashboardWorkflowTreeSummary }`.
+
 ### `GET /runs`
 
 Lists run summaries.

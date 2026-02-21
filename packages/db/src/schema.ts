@@ -9,6 +9,7 @@ export const workflowTrees = sqliteTable(
     id: integer('id').primaryKey({ autoIncrement: true }),
     treeKey: text('tree_key').notNull(),
     version: integer('version').notNull(),
+    status: text('status').notNull().default('published'),
     name: text('name').notNull(),
     description: text('description'),
     createdAt: text('created_at').notNull().default(utcNow),
@@ -16,6 +17,7 @@ export const workflowTrees = sqliteTable(
   },
   table => ({
     treeKeyVersionUnique: uniqueIndex('workflow_trees_tree_key_version_uq').on(table.treeKey, table.version),
+    statusCheck: check('workflow_trees_status_ck', sql`${table.status} in ('draft', 'published')`),
     createdAtIdx: index('workflow_trees_created_at_idx').on(table.createdAt),
   }),
 );
@@ -157,11 +159,14 @@ export const treeNodes = sqliteTable(
       .notNull()
       .references(() => workflowTrees.id, { onDelete: 'cascade' }),
     nodeKey: text('node_key').notNull(),
+    displayName: text('display_name'),
     nodeType: text('node_type').notNull(),
     provider: text('provider'),
     promptTemplateId: integer('prompt_template_id').references(() => promptTemplates.id, { onDelete: 'restrict' }),
     maxRetries: integer('max_retries').notNull().default(0),
     sequenceIndex: integer('sequence_index').notNull(),
+    positionX: integer('position_x'),
+    positionY: integer('position_y'),
     createdAt: text('created_at').notNull().default(utcNow),
     updatedAt: text('updated_at').notNull().default(utcNow),
   },

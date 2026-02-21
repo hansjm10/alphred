@@ -6,6 +6,8 @@ import type { ReactElement } from 'react';
 import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
 import RepositoriesError from './repositories/error';
 import RepositoriesLoading from './repositories/loading';
+import WorkflowsError from './workflows/error';
+import WorkflowsLoading from './workflows/loading';
 import RunDetailError from './runs/[runId]/error';
 import RunDetailLoading from './runs/[runId]/loading';
 import RunWorktreeError from './runs/[runId]/worktree/error';
@@ -33,6 +35,11 @@ const loadingCases: readonly {
     component: RepositoriesLoading,
     heading: 'Loading repositories',
     message: 'Checking clone status and sync state...',
+  },
+  {
+    component: WorkflowsLoading,
+    heading: 'Loading workflows',
+    message: 'Fetching version catalog and draft state...',
   },
   { component: RunsLoading, heading: 'Loading runs', message: 'Loading run lifecycle data...' },
   {
@@ -63,6 +70,12 @@ const errorCases: readonly {
     heading: 'Repositories unavailable',
     body: 'Unable to load repository registry data.',
     logPrefix: 'Repositories route error:',
+  },
+  {
+    component: WorkflowsError,
+    heading: 'Workflows unavailable',
+    body: 'Unable to load workflow catalog data.',
+    logPrefix: 'Workflows route error:',
   },
   {
     component: RunsError,

@@ -12,3 +12,15 @@ export async function GET(): Promise<Response> {
     return toErrorResponse(error);
   }
 }
+
+export async function POST(request: Request): Promise<Response> {
+  const service = createDashboardService();
+
+  try {
+    const payload = await request.json();
+    const workflow = await service.createWorkflowDraft(payload);
+    return NextResponse.json({ workflow }, { status: 201 });
+  } catch (error) {
+    return toErrorResponse(error);
+  }
+}
