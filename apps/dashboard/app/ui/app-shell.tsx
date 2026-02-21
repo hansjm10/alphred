@@ -25,25 +25,28 @@ export default function AppShell({ children, authGate }: AppShellProps) {
   const activeNav =
     PRIMARY_NAV_ITEMS.find((item) => isActivePath(pathname, item.href)) ??
     PRIMARY_NAV_ITEMS[0];
-  let launchAction: ReactNode;
-  if (authGate.canMutate) {
-    launchAction = (
-      <ButtonLink href="/runs" tone="primary">
-        Launch Run
-      </ButtonLink>
-    );
-  } else if (authGate.state === 'checking') {
-    launchAction = (
-      <ActionButton tone="primary" disabled aria-disabled="true">
-        Checking auth...
-      </ActionButton>
-    );
-  } else {
-    launchAction = (
-      <ButtonLink href="/settings/integrations" tone="primary">
-        Connect GitHub
-      </ButtonLink>
-    );
+  const showPrimaryCta = pathname === '/';
+  let primaryCta: ReactNode = null;
+  if (showPrimaryCta) {
+    if (authGate.canMutate) {
+      primaryCta = (
+        <ButtonLink href="/runs" tone="primary">
+          Launch Run
+        </ButtonLink>
+      );
+    } else if (authGate.state === 'checking') {
+      primaryCta = (
+        <ActionButton tone="primary" disabled aria-disabled="true">
+          Checking auth...
+        </ActionButton>
+      );
+    } else {
+      primaryCta = (
+        <ButtonLink href="/settings/integrations" tone="primary">
+          Connect GitHub
+        </ButtonLink>
+      );
+    }
   }
 
   return (
@@ -90,7 +93,7 @@ export default function AppShell({ children, authGate }: AppShellProps) {
 
           <div className="shell-topbar-actions">
             <StatusBadge status={authGate.badge.status} label={authGate.badge.label} />
-            {launchAction}
+            {primaryCta}
           </div>
         </header>
 

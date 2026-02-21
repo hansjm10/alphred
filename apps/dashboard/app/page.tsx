@@ -1,12 +1,11 @@
 import Link from 'next/link';
-import type { ReactNode } from 'react';
 import type { DashboardRunSummary } from '../src/server/dashboard-contracts';
 import { loadDashboardRunSummaries } from './runs/load-dashboard-runs';
 import { isActiveRunStatus, sortRunsForDashboard } from './runs/run-summary-utils';
 import { AuthRemediation } from './ui/auth-remediation';
 import type { GitHubAuthGate } from './ui/github-auth';
 import { loadGitHubAuthGate } from './ui/load-github-auth-gate';
-import { ActionButton, ButtonLink, Card, Panel, StatusBadge } from './ui/primitives';
+import { ButtonLink, Card, Panel, StatusBadge } from './ui/primitives';
 
 type PageProps = Readonly<{
   activeRuns?: readonly DashboardRunSummary[];
@@ -17,27 +16,6 @@ export function OverviewPageContent({ activeRuns, authGate }: Readonly<{
   activeRuns: readonly DashboardRunSummary[];
   authGate: GitHubAuthGate;
 }>) {
-  let launchAction: ReactNode;
-  if (authGate.canMutate) {
-    launchAction = (
-      <ButtonLink href="/runs" tone="primary">
-        Launch Run
-      </ButtonLink>
-    );
-  } else if (authGate.state === 'checking') {
-    launchAction = (
-      <ActionButton tone="primary" disabled aria-disabled="true">
-        Checking auth...
-      </ActionButton>
-    );
-  } else {
-    launchAction = (
-      <ButtonLink href="/settings/integrations" tone="primary">
-        Connect GitHub
-      </ButtonLink>
-    );
-  }
-
   const authContextMessage =
     authGate.state === 'auth_error'
       ? 'Run launch is blocked because auth checks are failing.'
@@ -94,7 +72,6 @@ export function OverviewPageContent({ activeRuns, authGate }: Readonly<{
           <div className="action-row">
             <ButtonLink href="/settings/integrations">Check Auth</ButtonLink>
             <ButtonLink href="/repositories">Go to Repositories</ButtonLink>
-            {launchAction}
           </div>
           <AuthRemediation authGate={authGate} context={authContextMessage} />
         </Panel>
