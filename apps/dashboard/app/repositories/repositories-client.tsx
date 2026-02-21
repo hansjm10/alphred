@@ -193,10 +193,15 @@ function renderSelectedRepositoryDetails(
   );
 }
 
-function renderLaunchAction(canLaunchWithSelectedRepository: boolean): ReactNode {
-  if (canLaunchWithSelectedRepository) {
+function renderLaunchAction(
+  canLaunchWithSelectedRepository: boolean,
+  selectedRepository: DashboardRepositoryState | null,
+): ReactNode {
+  if (canLaunchWithSelectedRepository && selectedRepository !== null) {
+    const launchHref = `/runs?repository=${encodeURIComponent(selectedRepository.name)}`;
+
     return (
-      <ButtonLink href="/runs" tone="primary">
+      <ButtonLink href={launchHref} tone="primary">
         Launch Run with this repo
       </ButtonLink>
     );
@@ -539,7 +544,7 @@ export function RepositoriesPageContent({
               Add Repository
             </ActionButton>
 
-            {renderLaunchAction(canLaunchWithSelectedRepository)}
+            {renderLaunchAction(canLaunchWithSelectedRepository, selectedRepository)}
           </div>
           <p className="meta-text repo-add-hint">{addFormHint}</p>
 

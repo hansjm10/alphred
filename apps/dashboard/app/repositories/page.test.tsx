@@ -398,7 +398,10 @@ describe('RepositoriesPage', () => {
     expect(screen.getByRole('button', { name: 'Launch Run with this repo' })).toBeDisabled();
 
     await user.click(screen.getByRole('button', { name: 'cloned-repo' }));
-    expect(screen.getByRole('link', { name: 'Launch Run with this repo' })).toHaveAttribute('href', '/runs');
+    expect(screen.getByRole('link', { name: 'Launch Run with this repo' })).toHaveAttribute(
+      'href',
+      '/runs?repository=cloned-repo',
+    );
 
     rerender(
       <RepositoriesPageContent

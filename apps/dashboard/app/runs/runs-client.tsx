@@ -19,6 +19,7 @@ type RunsPageContentProps = Readonly<{
   repositories: readonly DashboardRepositoryState[];
   authGate: GitHubAuthGate;
   activeFilter: RunRouteFilter;
+  initialRepositoryName?: string | null;
 }>;
 
 type LaunchBannerState = {
@@ -210,10 +211,11 @@ export function RunsPageContent({
   repositories,
   authGate,
   activeFilter,
+  initialRepositoryName = null,
 }: RunsPageContentProps) {
   const [runState, setRunState] = useState<readonly DashboardRunSummary[]>(sortRunsForDashboard(runs));
   const [selectedTreeKey, setSelectedTreeKey] = useState<string>(workflows[0]?.treeKey ?? '');
-  const [selectedRepositoryName, setSelectedRepositoryName] = useState<string>('');
+  const [selectedRepositoryName, setSelectedRepositoryName] = useState<string>(initialRepositoryName ?? '');
   const [branch, setBranch] = useState<string>('');
   const [isLaunching, setIsLaunching] = useState<boolean>(false);
   const [launchError, setLaunchError] = useState<string | null>(null);

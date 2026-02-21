@@ -4,6 +4,7 @@ import {
   buildRunWorktreeHref,
   findRunByParam,
   normalizeRunFilter,
+  normalizeRunRepositoryParam,
   resolveWorktreePath,
 } from './run-route-fixtures';
 
@@ -12,6 +13,13 @@ describe('run-route-fixtures helpers', () => {
     expect(normalizeRunFilter(['failed', 'running'])).toBe('failed');
     expect(normalizeRunFilter(['paused', 'running'])).toBe('all');
     expect(normalizeRunFilter(undefined)).toBe('all');
+  });
+
+  it('normalizes repository query values with first-value and trim semantics', () => {
+    expect(normalizeRunRepositoryParam(['demo-repo', 'sample-repo'])).toBe('demo-repo');
+    expect(normalizeRunRepositoryParam('  demo-repo  ')).toBe('demo-repo');
+    expect(normalizeRunRepositoryParam('   ')).toBeNull();
+    expect(normalizeRunRepositoryParam(undefined)).toBeNull();
   });
 
   it('returns null for invalid run id params', () => {

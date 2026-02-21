@@ -156,6 +156,11 @@ Top-level routes:
   - Supported values: `running`, `failed`.
   - Unsupported or missing values resolve to `all`.
   - Repeated values use the first value.
+- `/runs?repository=<name>`
+  - Used by repository-scoped launch CTA to preselect launch repository context.
+  - Value is trimmed and only applied when it matches a `cloned` repository name.
+  - Missing, empty, unsupported, or non-cloned values resolve to `No repository context`.
+  - Repeated values use the first value before validation.
 - `/runs/[runId]/worktree?path=<file-path>`
   - If `path` matches a tracked worktree file, that file is selected.
   - If `path` is missing or unsupported, selection falls back to the first changed file; if no changed file exists, use the first tracked file.
@@ -517,7 +522,7 @@ Interactions:
 - Row select opens details panel without route jump.
 - `Sync` triggers in-row progress state and disables duplicate sync clicks.
 - `Retry` appears only for `error` status.
-- Selecting a `cloned` repository enables `Launch Run with this repo`.
+- Selecting a `cloned` repository enables `Launch Run with this repo`, linking to `/runs?repository=<name>`.
 
 State behavior:
 - Loading: table skeleton.
