@@ -770,4 +770,224 @@ describe('WorkflowEditorPageContent', () => {
     const payload = JSON.parse(call[1]?.body as string) as { nodes?: { nodeKey: string }[] };
     expect(payload.nodes?.map(node => node.nodeKey)).toContain('agent-2');
   });
+
+  it('updates the draftRevision when the server responds with a higher revision', async () => {
+    const fetchMock = vi.fn(async () => createJsonResponse({ draft: { draftRevision: 50 } }, { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(
+      <WorkflowEditorPageContent
+        initialDraft={{
+          treeKey: 'demo-tree',
+          version: 1,
+          draftRevision: 0,
+          name: 'Demo Tree',
+          description: null,
+          versionNotes: null,
+          nodes: [],
+          edges: [],
+          initialRunnableNodeKeys: [],
+        }}
+      />,
+    );
+
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Updated Tree 1' } });
+    await vi.advanceTimersByTimeAsync(1000);
+
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Updated Tree 2' } });
+    await vi.advanceTimersByTimeAsync(1000);
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+
+    const calls = fetchMock.mock.calls as unknown as [RequestInfo | URL, RequestInit | undefined][];
+    const firstInit = calls[0]?.[1];
+    const secondInit = calls[1]?.[1];
+
+    const firstPayload = JSON.parse(firstInit?.body as string) as { draftRevision: number };
+    const secondPayload = JSON.parse(secondInit?.body as string) as { draftRevision: number };
+
+    expect(firstPayload.draftRevision).toBe(1);
+    expect(secondPayload.draftRevision).toBe(51);
+  });
+
+  it('does not delete a node when the user cancels confirmation', async () => {
+    const fetchMock = vi.fn(async () => createJsonResponse({ draft: {} }, { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false);
+
+    render(
+      <WorkflowEditorPageContent
+        initialDraft={{
+          treeKey: 'demo-tree',
+          version: 1,
+          draftRevision: 0,
+          name: 'Demo Tree',
+          description: null,
+          versionNotes: null,
+          nodes: [
+            {
+              nodeKey: 'design',
+              displayName: 'Design',
+              nodeType: 'agent',
+              provider: 'codex',
+              maxRetries: 0,
+              sequenceIndex: 10,
+              position: { x: 0, y: 0 },
+              promptTemplate: { content: 'Draft prompt', contentType: 'markdown' },
+            },
+            {
+              nodeKey: 'implement',
+              displayName: 'Implement',
+              nodeType: 'agent',
+              provider: 'codex',
+              maxRetries: 0,
+              sequenceIndex: 20,
+              position: { x: 200, y: 0 },
+              promptTemplate: { content: 'Draft prompt', contentType: 'markdown' },
+            },
+          ],
+          edges: [
+            {
+              sourceNodeKey: 'design',
+              targetNodeKey: 'implement',
+              priority: 100,
+              auto: true,
+              guardExpression: null,
+            },
+          ],
+          initialRunnableNodeKeys: ['design'],
+        }}
+      />,
+    );
+
+    const selectionChange = latestReactFlowProps?.onSelectionChange;
+    expect(typeof selectionChange).toBe('function');
+    await act(async () => {
+      (selectionChange as (params: { nodes: unknown[]; edges: unknown[] }) => void)({
+        nodes: [{ id: 'design' }],
+        edges: [],
+      });
+    });
+
+    fireEvent.keyDown(window, { key: 'Delete' });
+    await vi.advanceTimersByTimeAsync(1200);
+
+    expect(confirmSpy).toHaveBeenCalledTimes(1);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('deletes a node and connected transitions when confirmed', async () => {
+    const fetchMock = vi.fn(async () => createJsonResponse({ draft: {} }, { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
+
+    render(
+      <WorkflowEditorPageContent
+        initialDraft={{
+          treeKey: 'demo-tree',
+          version: 1,
+          draftRevision: 0,
+          name: 'Demo Tree',
+          description: null,
+          versionNotes: null,
+          nodes: [
+            {
+              nodeKey: 'design',
+              displayName: 'Design',
+              nodeType: 'agent',
+              provider: 'codex',
+              maxRetries: 0,
+              sequenceIndex: 10,
+              position: { x: 0, y: 0 },
+              promptTemplate: { content: 'Draft prompt', contentType: 'markdown' },
+            },
+            {
+              nodeKey: 'implement',
+              displayName: 'Implement',
+              nodeType: 'agent',
+              provider: 'codex',
+              maxRetries: 0,
+              sequenceIndex: 20,
+              position: { x: 200, y: 0 },
+              promptTemplate: { content: 'Draft prompt', contentType: 'markdown' },
+            },
+          ],
+          edges: [
+            {
+              sourceNodeKey: 'design',
+              targetNodeKey: 'implement',
+              priority: 100,
+              auto: true,
+              guardExpression: null,
+            },
+          ],
+          initialRunnableNodeKeys: ['design'],
+        }}
+      />,
+    );
+
+    const selectionChange = latestReactFlowProps?.onSelectionChange;
+    expect(typeof selectionChange).toBe('function');
+    await act(async () => {
+      (selectionChange as (params: { nodes: unknown[]; edges: unknown[] }) => void)({
+        nodes: [{ id: 'design' }],
+        edges: [],
+      });
+    });
+
+    fireEvent.keyDown(window, { key: 'Delete' });
+    await vi.advanceTimersByTimeAsync(1000);
+
+    expect(confirmSpy).toHaveBeenCalled();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    const call = fetchMock.mock.calls[0] as unknown as [RequestInfo | URL, RequestInit | undefined];
+    const payload = JSON.parse(call[1]?.body as string) as { nodes?: { nodeKey: string }[]; edges?: unknown[] };
+    expect(payload.nodes?.map(node => node.nodeKey)).toEqual(['implement']);
+    expect(payload.edges).toEqual([]);
+  });
+
+  it('renders draft placeholder copy when switching node type away from agent', async () => {
+    const fetchMock = vi.fn(async () => createJsonResponse({ draft: {} }, { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(
+      <WorkflowEditorPageContent
+        initialDraft={{
+          treeKey: 'demo-tree',
+          version: 1,
+          draftRevision: 0,
+          name: 'Demo Tree',
+          description: null,
+          versionNotes: null,
+          nodes: [
+            {
+              nodeKey: 'design',
+              displayName: 'Design',
+              nodeType: 'agent',
+              provider: 'codex',
+              maxRetries: 0,
+              sequenceIndex: 10,
+              position: { x: 0, y: 0 },
+              promptTemplate: { content: 'Draft prompt', contentType: 'markdown' },
+            },
+          ],
+          edges: [],
+          initialRunnableNodeKeys: ['design'],
+        }}
+      />,
+    );
+
+    const selectionChange = latestReactFlowProps?.onSelectionChange;
+    expect(typeof selectionChange).toBe('function');
+    await act(async () => {
+      (selectionChange as (params: { nodes: unknown[]; edges: unknown[] }) => void)({
+        nodes: [{ id: 'design' }],
+        edges: [],
+      });
+    });
+
+    fireEvent.change(screen.getByLabelText('Node type'), { target: { value: 'human' } });
+    expect(screen.getByText(/draft placeholders/i)).toBeInTheDocument();
+  });
 });
