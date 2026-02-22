@@ -49,5 +49,21 @@ describe('GET /api/dashboard/workflows/catalog', () => {
     });
     expect(listWorkflowCatalogMock).toHaveBeenCalledTimes(1);
   });
-});
 
+  it('maps service failures to integration error responses', async () => {
+    listWorkflowCatalogMock.mockRejectedValue(new Error('catalog failed'));
+
+    const response = await GET();
+
+    expect(response.status).toBe(500);
+    await expect(response.json()).resolves.toEqual({
+      error: {
+        code: 'internal_error',
+        message: 'Dashboard integration request failed.',
+        details: {
+          cause: 'catalog failed',
+        },
+      },
+    });
+  });
+});

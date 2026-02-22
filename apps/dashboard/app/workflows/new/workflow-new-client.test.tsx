@@ -90,6 +90,33 @@ describe('NewWorkflowPageContent', () => {
     expect(body).not.toHaveProperty('description');
   });
 
+  it('submits custom template and tree key selections', async () => {
+    const user = userEvent.setup();
+    const fetchMock = vi.fn(async () => createJsonResponse({ treeKey: 'custom-key', draftVersion: 1 }, { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(<NewWorkflowPageContent />);
+
+    await user.click(screen.getByRole('radio', { name: /Blank workflow/ }));
+    await user.type(screen.getByPlaceholderText('Workflow name'), 'Demo Tree');
+    await user.type(screen.getByPlaceholderText('demo-tree'), 'custom-key');
+    await user.type(screen.getByPlaceholderText('Optional one-line description'), 'Hello');
+    await user.click(screen.getByRole('button', { name: 'Create and open builder' }));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+
+    const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    const body = JSON.parse(init.body as string) as Record<string, unknown>;
+    expect(body).toMatchObject({
+      template: 'blank',
+      name: 'Demo Tree',
+      treeKey: 'custom-key',
+      description: 'Hello',
+    });
+  });
+
   it('renders API errors returned during creation', async () => {
     const user = userEvent.setup();
     const fetchMock = vi.fn(async () =>
