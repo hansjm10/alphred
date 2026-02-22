@@ -718,6 +718,56 @@ describe('createDashboardService', () => {
     });
   });
 
+  it('requires the exact next draft revision when saving', async () => {
+    const { db, dependencies } = createHarness();
+    migrateDatabase(db);
+
+    const service = createDashboardService({ dependencies });
+
+    await service.createWorkflowDraft({
+      template: 'blank',
+      name: 'Revision Tree',
+      treeKey: 'revision-tree',
+    });
+
+    const savePayload = {
+      name: 'Revision Tree',
+      nodes: [
+        {
+          nodeKey: 'a',
+          displayName: 'A',
+          nodeType: 'agent' as const,
+          provider: 'codex',
+          maxRetries: 0,
+          sequenceIndex: 10,
+          position: null,
+          promptTemplate: { content: 'A prompt', contentType: 'markdown' as const },
+        },
+      ],
+      edges: [],
+    };
+
+    await service.saveWorkflowDraft('revision-tree', 1, {
+      draftRevision: 1,
+      ...savePayload,
+    });
+
+    await expect(
+      service.saveWorkflowDraft('revision-tree', 1, {
+        draftRevision: 3,
+        ...savePayload,
+      }),
+    ).rejects.toMatchObject({
+      code: 'conflict',
+      status: 409,
+      details: expect.objectContaining({
+        currentDraftRevision: 1,
+        receivedDraftRevision: 3,
+        expectedDraftRevision: 2,
+      }),
+    });
+  });
+
   it('syncs repositories through ensureRepositoryClone and auth check adapters', async () => {
     const checkAuth = vi.fn(async () => ({
       authenticated: true,

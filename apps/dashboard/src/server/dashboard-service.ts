@@ -676,6 +676,31 @@ export function createDashboardService(options: {
     return value;
   }
 
+  function isWorkflowTreeVersionUniqueConstraintError(error: unknown): boolean {
+    if (typeof error !== 'object' || error === null) {
+      return false;
+    }
+
+    const code = 'code' in error ? (error as { code?: unknown }).code : undefined;
+    if (code === 'SQLITE_CONSTRAINT_UNIQUE') {
+      return true;
+    }
+
+    const message =
+      'message' in error && typeof (error as { message?: unknown }).message === 'string'
+        ? (error as { message: string }).message.toLowerCase()
+        : '';
+
+    if (!message.includes('unique constraint failed')) {
+      return false;
+    }
+
+    return (
+      (message.includes('workflow_trees.tree_key') && message.includes('workflow_trees.version')) ||
+      message.includes('workflow_trees_tree_key_version_uq')
+    );
+  }
+
   function computeInitialRunnableNodeKeys(
     nodes: readonly { nodeKey: string }[],
     edges: readonly { targetNodeKey: string }[],
@@ -1436,44 +1461,59 @@ export function createDashboardService(options: {
 	      );
 	    },
 
-	    async getOrCreateWorkflowDraft(treeKeyRaw: string): Promise<DashboardWorkflowDraftTopology> {
-	      const treeKey = normalizeWorkflowTreeKey(treeKeyRaw);
+    async getOrCreateWorkflowDraft(treeKeyRaw: string): Promise<DashboardWorkflowDraftTopology> {
+      const treeKey = normalizeWorkflowTreeKey(treeKeyRaw);
 
-	      return withDatabase(async db => {
-	        const existingDraft = db
-	          .select({
-	            id: workflowTrees.id,
-	            version: workflowTrees.version,
-	            name: workflowTrees.name,
-	            description: workflowTrees.description,
+      return withDatabase(async db => {
+        const loadLatestDraft = () =>
+          db
+            .select({
+              id: workflowTrees.id,
+              version: workflowTrees.version,
+              name: workflowTrees.name,
+              description: workflowTrees.description,
               versionNotes: workflowTrees.versionNotes,
               draftRevision: workflowTrees.draftRevision,
-	          })
-	          .from(workflowTrees)
-	          .where(and(eq(workflowTrees.treeKey, treeKey), eq(workflowTrees.status, 'draft')))
-	          .orderBy(desc(workflowTrees.version), desc(workflowTrees.id))
-	          .get();
+            })
+            .from(workflowTrees)
+            .where(and(eq(workflowTrees.treeKey, treeKey), eq(workflowTrees.status, 'draft')))
+            .orderBy(desc(workflowTrees.version), desc(workflowTrees.id))
+            .get();
 
+        const toDraftTopology = (
+          draftRecord: {
+            id: number;
+            version: number;
+            name: string;
+            description: string | null;
+            versionNotes: string | null;
+            draftRevision: number;
+          },
+        ): DashboardWorkflowDraftTopology => {
+          const topology = loadDraftTopologyByTreeId(db, draftRecord.id);
+          return {
+            treeKey,
+            version: draftRecord.version,
+            draftRevision: draftRecord.draftRevision,
+            name: draftRecord.name,
+            description: draftRecord.description,
+            versionNotes: draftRecord.versionNotes,
+            ...topology,
+          };
+        };
+
+        const existingDraft = loadLatestDraft();
         if (existingDraft) {
-	          const topology = loadDraftTopologyByTreeId(db, existingDraft.id);
-	          return {
-	            treeKey,
-	            version: existingDraft.version,
-              draftRevision: existingDraft.draftRevision,
-	            name: existingDraft.name,
-	            description: existingDraft.description,
-              versionNotes: existingDraft.versionNotes,
-	            ...topology,
-	          };
-	        }
+          return toDraftTopology(existingDraft);
+        }
 
-	        const published = db
-	          .select({
-	            id: workflowTrees.id,
-	            version: workflowTrees.version,
-	            name: workflowTrees.name,
-	            description: workflowTrees.description,
-	          })
+        const published = db
+          .select({
+            id: workflowTrees.id,
+            version: workflowTrees.version,
+            name: workflowTrees.name,
+            description: workflowTrees.description,
+          })
           .from(workflowTrees)
           .where(and(eq(workflowTrees.treeKey, treeKey), eq(workflowTrees.status, 'published')))
           .orderBy(desc(workflowTrees.version), desc(workflowTrees.id))
@@ -1485,19 +1525,33 @@ export function createDashboardService(options: {
         }
 
         const draftVersion = published.version + 1;
-	        const draftTree = db
-	          .insert(workflowTrees)
-	          .values({
-	            treeKey,
-	            version: draftVersion,
-	            status: 'draft',
-	            name: published.name,
-	            description: published.description,
+        let draftTreeId: number;
+        try {
+          const insertedDraft = db
+            .insert(workflowTrees)
+            .values({
+              treeKey,
+              version: draftVersion,
+              status: 'draft',
+              name: published.name,
+              description: published.description,
               versionNotes: null,
               draftRevision: 0,
-	          })
-	          .returning({ id: workflowTrees.id })
-	          .get();
+            })
+            .returning({ id: workflowTrees.id })
+            .get();
+          draftTreeId = insertedDraft.id;
+        } catch (error) {
+          if (!isWorkflowTreeVersionUniqueConstraintError(error)) {
+            throw error;
+          }
+
+          const concurrentDraft = loadLatestDraft();
+          if (!concurrentDraft) {
+            throw error;
+          }
+          return toDraftTopology(concurrentDraft);
+        }
 
         const publishedNodes = db
           .select({
@@ -1561,7 +1615,7 @@ export function createDashboardService(options: {
           const inserted = db
             .insert(treeNodes)
             .values({
-              workflowTreeId: draftTree.id,
+              workflowTreeId: draftTreeId,
               nodeKey: node.nodeKey,
               displayName: node.displayName,
               nodeType: node.nodeType,
@@ -1637,7 +1691,7 @@ export function createDashboardService(options: {
           }
           db.insert(treeEdges)
             .values({
-              workflowTreeId: draftTree.id,
+              workflowTreeId: draftTreeId,
               sourceNodeId,
               targetNodeId,
               priority: edge.priority,
@@ -1648,18 +1702,18 @@ export function createDashboardService(options: {
             .run();
         }
 
-	        const topology = loadDraftTopologyByTreeId(db, draftTree.id);
-	        return {
-	          treeKey,
-	          version: draftVersion,
-            draftRevision: 0,
-	          name: published.name,
-	          description: published.description,
-            versionNotes: null,
-	          ...topology,
-	        };
-	      });
-	    },
+        const topology = loadDraftTopologyByTreeId(db, draftTreeId);
+        return {
+          treeKey,
+          version: draftVersion,
+          draftRevision: 0,
+          name: published.name,
+          description: published.description,
+          versionNotes: null,
+          ...topology,
+        };
+      });
+    },
 
 	    async saveWorkflowDraft(
 	      treeKeyRaw: string,
@@ -1711,7 +1765,8 @@ export function createDashboardService(options: {
 	            });
 	          }
 
-	          if (request.draftRevision <= tree.draftRevision) {
+	          const expectedDraftRevision = tree.draftRevision + 1;
+	          if (request.draftRevision !== expectedDraftRevision) {
 	            throw new DashboardIntegrationError(
 	              'conflict',
 	              'Draft workflow is out of date. Refresh the editor before saving again.',
@@ -1720,7 +1775,8 @@ export function createDashboardService(options: {
 	                details: {
 	                  currentDraftRevision: tree.draftRevision,
 	                  receivedDraftRevision: request.draftRevision,
-	                  expectedMinDraftRevision: tree.draftRevision + 1,
+	                  expectedDraftRevision,
+	                  expectedMinDraftRevision: expectedDraftRevision,
 	                },
 	              },
 	            );

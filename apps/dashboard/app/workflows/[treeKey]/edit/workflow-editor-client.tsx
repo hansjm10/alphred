@@ -107,7 +107,7 @@ export function WorkflowEditorPageContent({ initialDraft }: Readonly<{ initialDr
     };
   }, [draftEdgesForSave, draftNodesForSave, workflowDescription, workflowName, workflowVersionNotes]);
 
-  const { markDirty, saveError, saveNow, saveState, scheduleSave } = useDraftAutosave({
+  const { flushSave, markDirty, saveError, saveNow, saveState, scheduleSave } = useDraftAutosave({
     treeKey,
     version,
     latestDraftStateRef,
@@ -355,6 +355,12 @@ export function WorkflowEditorPageContent({ initialDraft }: Readonly<{ initialDr
     setPublishError(null);
 
     try {
+      const saveSucceeded = await flushSave();
+      if (!saveSucceeded) {
+        setPublishError('Save the latest draft changes before publishing.');
+        return;
+      }
+
       const versionNotes = workflowVersionNotes.trim();
       const response = await fetch(
         `/api/dashboard/workflows/${encodeURIComponent(treeKey)}/draft/publish?version=${version}`,

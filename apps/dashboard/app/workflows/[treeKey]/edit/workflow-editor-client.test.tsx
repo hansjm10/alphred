@@ -306,6 +306,89 @@ describe('WorkflowEditorPageContent', () => {
     expect(pushMock).toHaveBeenCalledWith('/workflows/demo-tree');
   });
 
+  it('flushes draft autosave before publishing', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/draft/publish')) {
+        return createJsonResponse({ workflow: { treeKey: 'demo-tree', version: 1 } }, { status: 200 });
+      }
+      return createJsonResponse({ draft: { draftRevision: 1 } }, { status: 200 });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(
+      <WorkflowEditorPageContent
+        initialDraft={{
+          treeKey: 'demo-tree',
+          version: 1,
+          draftRevision: 0,
+          name: 'Demo Tree',
+          description: null,
+          versionNotes: null,
+          nodes: [],
+          edges: [],
+          initialRunnableNodeKeys: [],
+        }}
+      />,
+    );
+
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Updated Tree' } });
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Publish' }));
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const calls = fetchMock.mock.calls as unknown as [RequestInfo | URL, RequestInit | undefined][];
+
+    expect(String(calls[0]?.[0])).toContain('/draft?version=1');
+    expect(calls[0]?.[1]?.method).toBe('PUT');
+    const firstPayload = JSON.parse(calls[0]?.[1]?.body as string) as { name: string };
+    expect(firstPayload.name).toBe('Updated Tree');
+
+    expect(String(calls[1]?.[0])).toContain('/draft/publish?version=1');
+    expect(calls[1]?.[1]?.method).toBe('POST');
+    expect(pushMock).toHaveBeenCalledWith('/workflows/demo-tree');
+  });
+
+  it('does not publish when the save flush fails', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/draft/publish')) {
+        return createJsonResponse({ workflow: { treeKey: 'demo-tree', version: 1 } }, { status: 200 });
+      }
+      return createJsonResponse({ error: { message: 'conflict' } }, { status: 409 });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(
+      <WorkflowEditorPageContent
+        initialDraft={{
+          treeKey: 'demo-tree',
+          version: 1,
+          draftRevision: 0,
+          name: 'Demo Tree',
+          description: null,
+          versionNotes: null,
+          nodes: [],
+          edges: [],
+          initialRunnableNodeKeys: [],
+        }}
+      />,
+    );
+
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Updated Tree' } });
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Publish' }));
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(String(fetchMock.mock.calls[0]?.[0])).toContain('/draft?version=1');
+    expect(pushMock).not.toHaveBeenCalled();
+    expect(screen.getByText('Save the latest draft changes before publishing.')).toBeInTheDocument();
+  });
+
   it('connects nodes and autosaves a new transition', async () => {
     const fetchMock = vi.fn(async () => createJsonResponse({ draft: {} }, { status: 200 }));
     vi.stubGlobal('fetch', fetchMock);

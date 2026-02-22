@@ -35,64 +35,99 @@ export function useDraftAutosave(args: Readonly<{
   const [saveError, setSaveError] = useState<string | null>(null);
   const pendingSaveRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const inFlightSaveAbortRef = useRef<AbortController | null>(null);
+  const inFlightSavePromiseRef = useRef<Promise<boolean> | null>(null);
 
   const markDirty = useCallback(() => {
     setSaveState('draft');
   }, []);
 
-  const saveNow = useCallback(async (): Promise<void> => {
-    setSaveError(null);
-    setSaveState('saving');
+  const saveNow = useCallback((): Promise<boolean> => {
+    if (pendingSaveRef.current !== null) {
+      globalThis.clearTimeout(pendingSaveRef.current);
+      pendingSaveRef.current = null;
+    }
 
-    const snapshot = args.latestDraftStateRef.current;
-    const nextDraftRevision = snapshot.draftRevision + 1;
-    args.latestDraftStateRef.current = { ...snapshot, draftRevision: nextDraftRevision };
+    const runSave = async (): Promise<boolean> => {
+      setSaveError(null);
+      setSaveState('saving');
 
-    const payload: DashboardSaveWorkflowDraftRequest = {
-      draftRevision: nextDraftRevision,
-      name: snapshot.name,
-      description: snapshot.description.trim().length > 0 ? snapshot.description : undefined,
-      versionNotes: snapshot.versionNotes.trim().length > 0 ? snapshot.versionNotes : undefined,
-      nodes: snapshot.nodes,
-      edges: snapshot.edges,
-    };
+      const snapshot = args.latestDraftStateRef.current;
+      const previousDraftRevision = snapshot.draftRevision;
+      const nextDraftRevision = previousDraftRevision + 1;
+      args.latestDraftStateRef.current = { ...snapshot, draftRevision: nextDraftRevision };
 
-    try {
+      const payload: DashboardSaveWorkflowDraftRequest = {
+        draftRevision: nextDraftRevision,
+        name: snapshot.name,
+        description: snapshot.description.trim().length > 0 ? snapshot.description : undefined,
+        versionNotes: snapshot.versionNotes.trim().length > 0 ? snapshot.versionNotes : undefined,
+        nodes: snapshot.nodes,
+        edges: snapshot.edges,
+      };
+
       if (inFlightSaveAbortRef.current) {
         inFlightSaveAbortRef.current.abort();
       }
       const abortController = new AbortController();
       inFlightSaveAbortRef.current = abortController;
 
-      const response = await fetch(`/api/dashboard/workflows/${encodeURIComponent(args.treeKey)}/draft?version=${args.version}`, {
-        method: 'PUT',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(payload),
-        signal: abortController.signal,
-      });
+      const rollbackDraftRevision = () => {
+        if (args.latestDraftStateRef.current.draftRevision === nextDraftRevision) {
+          args.latestDraftStateRef.current = { ...args.latestDraftStateRef.current, draftRevision: previousDraftRevision };
+        }
+      };
 
-      const json = await response.json().catch(() => null);
-      if (!response.ok) {
+      try {
+        const response = await fetch(`/api/dashboard/workflows/${encodeURIComponent(args.treeKey)}/draft?version=${args.version}`, {
+          method: 'PUT',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(payload),
+          signal: abortController.signal,
+        });
+
+        const json = await response.json().catch(() => null);
+        if (!response.ok) {
+          rollbackDraftRevision();
+          setSaveState('error');
+          setSaveError(resolveApiError(response.status, json, 'Autosave failed'));
+          return false;
+        }
+
+        if (json && typeof json === 'object' && 'draft' in json) {
+          const draftRevision = (json as { draft?: { draftRevision?: unknown } }).draft?.draftRevision;
+          if (
+            typeof draftRevision === 'number' &&
+            Number.isInteger(draftRevision) &&
+            draftRevision > args.latestDraftStateRef.current.draftRevision
+          ) {
+            args.latestDraftStateRef.current = { ...args.latestDraftStateRef.current, draftRevision };
+          }
+        }
+
+        setSaveState('saved');
+        return true;
+      } catch (error_) {
+        if (error_ instanceof DOMException && error_.name === 'AbortError') {
+          return false;
+        }
+        rollbackDraftRevision();
         setSaveState('error');
-        setSaveError(resolveApiError(response.status, json, 'Autosave failed'));
-        return;
-      }
-
-      if (json && typeof json === 'object' && 'draft' in json) {
-        const draftRevision = (json as { draft?: { draftRevision?: unknown } }).draft?.draftRevision;
-        if (typeof draftRevision === 'number' && Number.isInteger(draftRevision) && draftRevision > args.latestDraftStateRef.current.draftRevision) {
-          args.latestDraftStateRef.current = { ...args.latestDraftStateRef.current, draftRevision };
+        setSaveError(error_ instanceof Error ? error_.message : 'Autosave failed.');
+        return false;
+      } finally {
+        if (inFlightSaveAbortRef.current === abortController) {
+          inFlightSaveAbortRef.current = null;
         }
       }
+    };
 
-      setSaveState('saved');
-    } catch (error_) {
-      if (error_ instanceof DOMException && error_.name === 'AbortError') {
-        return;
+    const savePromise = runSave();
+    inFlightSavePromiseRef.current = savePromise;
+    return savePromise.finally(() => {
+      if (inFlightSavePromiseRef.current === savePromise) {
+        inFlightSavePromiseRef.current = null;
       }
-      setSaveState('error');
-      setSaveError(error_ instanceof Error ? error_.message : 'Autosave failed.');
-    }
+    });
   }, [args.latestDraftStateRef, args.treeKey, args.version]);
 
   const scheduleSave = useCallback(() => {
@@ -105,6 +140,22 @@ export function useDraftAutosave(args: Readonly<{
       saveNow().catch(() => undefined);
     }, 1000);
   }, [saveNow]);
+
+  const flushSave = useCallback(async (): Promise<boolean> => {
+    if (pendingSaveRef.current !== null) {
+      return saveNow();
+    }
+
+    if (inFlightSavePromiseRef.current) {
+      return inFlightSavePromiseRef.current;
+    }
+
+    if (saveState === 'saved') {
+      return true;
+    }
+
+    return saveNow();
+  }, [saveNow, saveState]);
 
   useEffect(() => {
     return () => {
@@ -121,13 +172,14 @@ export function useDraftAutosave(args: Readonly<{
   return useMemo(() => {
     return {
       markDirty,
+      flushSave,
       saveError,
       saveNow,
       saveState,
       scheduleSave,
       setSaveError,
     };
-  }, [markDirty, saveError, saveNow, saveState, scheduleSave]);
+  }, [flushSave, markDirty, saveError, saveNow, saveState, scheduleSave]);
 }
 
 export function useWorkflowHistory(args: Readonly<{
