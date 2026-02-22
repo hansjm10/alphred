@@ -1814,10 +1814,30 @@ export function createDashboardService(options: {
 	            );
 	          }
 
-	          tx.update(workflowTrees)
+	          const saveUpdate = tx.update(workflowTrees)
 	            .set({ name, description, versionNotes, draftRevision: request.draftRevision, updatedAt: utcNow })
-	            .where(eq(workflowTrees.id, tree.id))
+	            .where(
+	              and(
+	                eq(workflowTrees.id, tree.id),
+	                eq(workflowTrees.status, 'draft'),
+	                eq(workflowTrees.draftRevision, tree.draftRevision),
+	              ),
+	            )
 	            .run();
+	          if (saveUpdate.changes !== 1) {
+	            throw new DashboardIntegrationError(
+	              'conflict',
+	              'Draft workflow changed while saving. Refresh the editor before saving again.',
+	              {
+	                status: 409,
+	                details: {
+	                  expectedPreviousDraftRevision: tree.draftRevision,
+	                  receivedDraftRevision: request.draftRevision,
+	                  expectedDraftRevision,
+	                },
+	              },
+	            );
+	          }
 
           const existingPromptTemplateIds = tx
             .select({ id: treeNodes.promptTemplateId })

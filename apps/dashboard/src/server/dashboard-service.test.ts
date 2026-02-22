@@ -1060,6 +1060,119 @@ describe('createDashboardService', () => {
     });
   });
 
+  it('returns conflict when draft changes between revision check and save update', async () => {
+    const { db, dependencies } = createHarness();
+    migrateDatabase(db);
+
+    const bootstrapService = createDashboardService({ dependencies });
+    await bootstrapService.createWorkflowDraft({
+      template: 'blank',
+      name: 'Race Tree',
+      treeKey: 'race-tree',
+    });
+
+    const draftTree = db
+      .select({ id: workflowTrees.id, draftRevision: workflowTrees.draftRevision })
+      .from(workflowTrees)
+      .where(and(eq(workflowTrees.treeKey, 'race-tree'), eq(workflowTrees.version, 1), eq(workflowTrees.status, 'draft')))
+      .get();
+    expect(draftTree).toBeDefined();
+
+    let injectConcurrentChange = true;
+    const originalTransaction = db.transaction.bind(db);
+    const proxiedDatabase = new Proxy(db, {
+      get(target, prop, receiver) {
+        if (prop === 'transaction') {
+          return ((callback: (tx: unknown) => unknown) =>
+            originalTransaction((tx) => {
+              const originalUpdate = tx.update.bind(tx);
+              const txProxy = new Proxy(tx, {
+                get(txTarget, txProp, txReceiver) {
+                  if (txProp === 'update') {
+                    return ((table: unknown) => {
+                      const updateBuilder = originalUpdate(table as never);
+                      if (!injectConcurrentChange || table !== workflowTrees || !draftTree) {
+                        return updateBuilder;
+                      }
+
+                      const wrappedUpdateBuilder = {
+                        set(values: unknown) {
+                          const setBuilder = (updateBuilder as { set: (input: unknown) => unknown }).set(values) as {
+                            where: (condition: unknown) => unknown;
+                          };
+                          return {
+                            where(condition: unknown) {
+                              const whereBuilder = setBuilder.where(condition) as { run: () => unknown };
+                              return {
+                                run() {
+                                  if (injectConcurrentChange) {
+                                    injectConcurrentChange = false;
+                                    originalUpdate(workflowTrees)
+                                      .set({
+                                        status: 'published',
+                                        draftRevision: draftTree.draftRevision + 1,
+                                        updatedAt: '2026-02-22T00:00:00.000Z',
+                                      })
+                                      .where(eq(workflowTrees.id, draftTree.id))
+                                      .run();
+                                  }
+                                  return whereBuilder.run();
+                                },
+                              };
+                            },
+                          };
+                        },
+                      };
+
+                      return wrappedUpdateBuilder as unknown as ReturnType<typeof originalUpdate>;
+                    }) as AlphredDatabase['update'];
+                  }
+
+                  const value = Reflect.get(txTarget, txProp, txReceiver);
+                  return typeof value === 'function' ? value.bind(txTarget) : value;
+                },
+              });
+              return callback(txProxy);
+            })) as unknown as AlphredDatabase['transaction'];
+        }
+
+        const value = Reflect.get(target, prop, receiver);
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    });
+
+    const raceService = createDashboardService({
+      dependencies: {
+        ...dependencies,
+        openDatabase: () => proxiedDatabase,
+      },
+    });
+
+    await expect(
+      raceService.saveWorkflowDraft('race-tree', 1, {
+        draftRevision: 1,
+        name: 'Race Tree Updated',
+        nodes: [
+          {
+            nodeKey: 'design',
+            displayName: 'Design',
+            nodeType: 'agent',
+            provider: 'codex',
+            maxRetries: 0,
+            sequenceIndex: 10,
+            position: null,
+            promptTemplate: { content: 'Draft prompt', contentType: 'markdown' },
+          },
+        ],
+        edges: [],
+      }),
+    ).rejects.toMatchObject({
+      code: 'conflict',
+      status: 409,
+      message: 'Draft workflow changed while saving. Refresh the editor before saving again.',
+    });
+  });
+
   it('syncs repositories through ensureRepositoryClone and auth check adapters', async () => {
     const checkAuth = vi.fn(async () => ({
       authenticated: true,
