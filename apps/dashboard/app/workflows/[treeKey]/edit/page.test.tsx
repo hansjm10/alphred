@@ -12,9 +12,9 @@ const { notFoundMock } = vi.hoisted(() => ({
   }),
 }));
 
-const { createDashboardServiceMock, getOrCreateWorkflowDraftMock } = vi.hoisted(() => ({
+const { createDashboardServiceMock, getWorkflowTreeSnapshotMock } = vi.hoisted(() => ({
   createDashboardServiceMock: vi.fn(),
-  getOrCreateWorkflowDraftMock: vi.fn(),
+  getWorkflowTreeSnapshotMock: vi.fn(),
 }));
 
 vi.mock('next/navigation', () => ({
@@ -26,8 +26,16 @@ vi.mock('../../../../src/server/dashboard-service', () => ({
 }));
 
 vi.mock('./workflow-editor-client', () => ({
-  WorkflowEditorPageContent: ({ initialDraft }: { initialDraft: { treeKey: string } }) => (
-    <div>Editor for {initialDraft.treeKey}</div>
+  WorkflowEditorPageContent: ({
+    initialDraft,
+    bootstrapDraftOnMount,
+  }: {
+    initialDraft: { treeKey: string };
+    bootstrapDraftOnMount?: boolean;
+  }) => (
+    <div>
+      Editor for {initialDraft.treeKey} ({bootstrapDraftOnMount ? 'bootstrap' : 'ready'})
+    </div>
   ),
 }));
 
@@ -35,9 +43,9 @@ describe('WorkflowEditorPage', () => {
   beforeEach(() => {
     notFoundMock.mockClear();
     createDashboardServiceMock.mockReset();
-    getOrCreateWorkflowDraftMock.mockReset();
+    getWorkflowTreeSnapshotMock.mockReset();
     createDashboardServiceMock.mockReturnValue({
-      getOrCreateWorkflowDraft: getOrCreateWorkflowDraftMock,
+      getWorkflowTreeSnapshot: getWorkflowTreeSnapshotMock,
     });
   });
 
@@ -59,12 +67,13 @@ describe('WorkflowEditorPage', () => {
 
     render(element);
 
-    expect(getOrCreateWorkflowDraftMock).not.toHaveBeenCalled();
-    expect(screen.getByText('Editor for demo-tree')).toBeInTheDocument();
+    expect(getWorkflowTreeSnapshotMock).not.toHaveBeenCalled();
+    expect(screen.getByText('Editor for demo-tree (ready)')).toBeInTheDocument();
   });
 
-  it('loads the workflow draft via the dashboard service when none is provided', async () => {
-    getOrCreateWorkflowDraftMock.mockResolvedValue({
+  it('loads a draft snapshot without bootstrap when a draft already exists', async () => {
+    getWorkflowTreeSnapshotMock.mockResolvedValue({
+      status: 'draft',
       treeKey: 'demo-tree',
       version: 1,
       draftRevision: 0,
@@ -82,12 +91,36 @@ describe('WorkflowEditorPage', () => {
 
     render(element);
 
-    expect(getOrCreateWorkflowDraftMock).toHaveBeenCalledTimes(1);
-    expect(screen.getByText('Editor for demo-tree')).toBeInTheDocument();
+    expect(getWorkflowTreeSnapshotMock).toHaveBeenCalledTimes(1);
+    expect(screen.getByText('Editor for demo-tree (ready)')).toBeInTheDocument();
+  });
+
+  it('enables client-side draft bootstrap when only a published snapshot is available', async () => {
+    getWorkflowTreeSnapshotMock.mockResolvedValue({
+      status: 'published',
+      treeKey: 'demo-tree',
+      version: 2,
+      draftRevision: 0,
+      name: 'Demo Tree',
+      description: null,
+      versionNotes: null,
+      nodes: [],
+      edges: [],
+      initialRunnableNodeKeys: [],
+    });
+
+    const element = (await WorkflowEditorPage({
+      params: Promise.resolve({ treeKey: 'demo-tree' }),
+    })) as unknown as ReactElement;
+
+    render(element);
+
+    expect(getWorkflowTreeSnapshotMock).toHaveBeenCalledTimes(1);
+    expect(screen.getByText('Editor for demo-tree (bootstrap)')).toBeInTheDocument();
   });
 
   it('delegates missing drafts to next/navigation notFound()', async () => {
-    getOrCreateWorkflowDraftMock.mockRejectedValue(
+    getWorkflowTreeSnapshotMock.mockRejectedValue(
       new DashboardIntegrationError('not_found', 'missing', { status: 404 }),
     );
 
@@ -98,7 +131,7 @@ describe('WorkflowEditorPage', () => {
   });
 
   it('rethrows unexpected errors from the dashboard service', async () => {
-    getOrCreateWorkflowDraftMock.mockRejectedValue(new Error('boom'));
+    getWorkflowTreeSnapshotMock.mockRejectedValue(new Error('boom'));
 
     await expect(
       WorkflowEditorPage({ params: Promise.resolve({ treeKey: 'demo-tree' }) }),

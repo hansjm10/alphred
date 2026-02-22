@@ -15,18 +15,26 @@ export { WorkflowEditorPageContent } from './workflow-editor-client';
 
 export default async function WorkflowEditorPage({ draft, params }: WorkflowEditorPageProps) {
   const { treeKey } = await params;
-  const service = createDashboardService();
+  let resolvedDraft: DashboardWorkflowDraftTopology | null = draft ?? null;
+  let bootstrapDraftOnMount = false;
 
-  let resolvedDraft: DashboardWorkflowDraftTopology;
-  try {
-    resolvedDraft = draft ?? (await service.getOrCreateWorkflowDraft(treeKey));
-  } catch (error) {
-    if (error instanceof DashboardIntegrationError && error.code === 'not_found') {
-      notFound();
+  if (!resolvedDraft) {
+    const service = createDashboardService();
+    try {
+      const snapshot = await service.getWorkflowTreeSnapshot(treeKey);
+      resolvedDraft = snapshot;
+      bootstrapDraftOnMount = snapshot.status !== 'draft';
+    } catch (error) {
+      if (error instanceof DashboardIntegrationError && error.code === 'not_found') {
+        notFound();
+      }
+      throw error;
     }
-    throw error;
   }
 
-  return <WorkflowEditorPageContent initialDraft={resolvedDraft} />;
-}
+  if (!resolvedDraft) {
+    notFound();
+  }
 
+  return <WorkflowEditorPageContent initialDraft={resolvedDraft} bootstrapDraftOnMount={bootstrapDraftOnMount} />;
+}

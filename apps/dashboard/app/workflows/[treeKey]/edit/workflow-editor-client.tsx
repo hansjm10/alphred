@@ -63,7 +63,105 @@ function hasNonSelectionEdgeChanges(changes: EdgeChange[]): boolean {
   return changes.some(change => change.type !== 'select');
 }
 
-export function WorkflowEditorPageContent({ initialDraft }: Readonly<{ initialDraft: DashboardWorkflowDraftTopology }>) {
+type WorkflowEditorPageContentProps = Readonly<{
+  initialDraft: DashboardWorkflowDraftTopology;
+  bootstrapDraftOnMount?: boolean;
+}>;
+
+function parseDraftFromBootstrapPayload(payload: unknown): DashboardWorkflowDraftTopology | null {
+  if (!payload || typeof payload !== 'object' || !('draft' in payload)) {
+    return null;
+  }
+
+  const draft = (payload as { draft?: unknown }).draft;
+  if (!draft || typeof draft !== 'object') {
+    return null;
+  }
+
+  return draft as DashboardWorkflowDraftTopology;
+}
+
+export function WorkflowEditorPageContent({
+  initialDraft,
+  bootstrapDraftOnMount = false,
+}: WorkflowEditorPageContentProps) {
+  const [resolvedDraft, setResolvedDraft] = useState<DashboardWorkflowDraftTopology | null>(
+    bootstrapDraftOnMount ? null : initialDraft,
+  );
+  const [bootstrapError, setBootstrapError] = useState<string | null>(null);
+  const [bootstrapAttempt, setBootstrapAttempt] = useState(0);
+
+  useEffect(() => {
+    if (!bootstrapDraftOnMount) {
+      setResolvedDraft(initialDraft);
+      setBootstrapError(null);
+      return;
+    }
+
+    let active = true;
+    setResolvedDraft(null);
+    setBootstrapError(null);
+
+    async function bootstrapDraft(): Promise<void> {
+      try {
+        const response = await fetch(`/api/dashboard/workflows/${encodeURIComponent(initialDraft.treeKey)}/draft`, {
+          method: 'GET',
+        });
+        const json = await response.json().catch(() => null);
+        if (!response.ok) {
+          if (active) {
+            setBootstrapError(resolveApiError(response.status, json, 'Preparing draft failed'));
+          }
+          return;
+        }
+
+        const draft = parseDraftFromBootstrapPayload(json);
+        if (!draft) {
+          if (active) {
+            setBootstrapError('Preparing draft failed.');
+          }
+          return;
+        }
+
+        if (active) {
+          setResolvedDraft(draft);
+          setBootstrapError(null);
+        }
+      } catch (error_) {
+        if (active) {
+          setBootstrapError(error_ instanceof Error ? error_.message : 'Preparing draft failed.');
+        }
+      }
+    }
+
+    bootstrapDraft().catch(() => undefined);
+
+    return () => {
+      active = false;
+    };
+  }, [bootstrapAttempt, bootstrapDraftOnMount, initialDraft, initialDraft.treeKey]);
+
+  if (!resolvedDraft) {
+    return (
+      <div className="workflow-editor-shell">
+        <Panel title="Preparing draft">
+          <p className="meta-text">Creating editable draft version...</p>
+          {bootstrapError ? <p className="run-launch-banner--error" role="alert">{bootstrapError}</p> : null}
+          <div className="workflow-actions">
+            {bootstrapError ? (
+              <ActionButton onClick={() => setBootstrapAttempt(attempt => attempt + 1)}>Retry</ActionButton>
+            ) : null}
+            <ButtonLink href="/workflows">Exit</ButtonLink>
+          </div>
+        </Panel>
+      </div>
+    );
+  }
+
+  return <WorkflowEditorLoadedContent initialDraft={resolvedDraft} />;
+}
+
+function WorkflowEditorLoadedContent({ initialDraft }: Readonly<{ initialDraft: DashboardWorkflowDraftTopology }>) {
   const router = useRouter();
   const treeKey = initialDraft.treeKey;
   const version = initialDraft.version;

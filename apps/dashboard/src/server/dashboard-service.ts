@@ -1263,7 +1263,7 @@ export function createDashboardService(options: {
             const reviseGuard = tx
               .insert(guardDefinitions)
               .values({
-                guardKey: `${treeKey}/v1/implement->design/priority-10`,
+                guardKey: `${treeKey}/v1/review->implement/priority-10`,
                 version: 1,
                 expression: { field: 'decision', operator: '==', value: 'changes_requested' },
                 description: 'Loop back when changes are requested.',
@@ -1285,8 +1285,8 @@ export function createDashboardService(options: {
             tx.insert(treeEdges)
               .values({
                 workflowTreeId: tree.id,
-                sourceNodeId: implementId,
-                targetNodeId: designId,
+                sourceNodeId: reviewId,
+                targetNodeId: implementId,
                 priority: 10,
                 auto: 0,
                 guardDefinitionId: reviseGuard.id,
@@ -1984,6 +1984,7 @@ export function createDashboardService(options: {
             id: workflowTrees.id,
             name: workflowTrees.name,
             description: workflowTrees.description,
+            draftRevision: workflowTrees.draftRevision,
           })
           .from(workflowTrees)
           .where(and(eq(workflowTrees.treeKey, treeKey), eq(workflowTrees.version, version), eq(workflowTrees.status, 'draft')))
@@ -2006,15 +2007,33 @@ export function createDashboardService(options: {
 	        const nextVersionNotes =
 	          request.versionNotes === undefined ? undefined : (request.versionNotes.trim().length > 0 ? request.versionNotes.trim() : null);
 
-	        db.update(workflowTrees)
+	        const publishUpdate = db.update(workflowTrees)
 	          .set({
 	            status: 'published',
 	            updatedAt: utcNow,
 	            draftRevision: 0,
 	            ...(nextVersionNotes === undefined ? {} : { versionNotes: nextVersionNotes }),
 	          })
-	          .where(eq(workflowTrees.id, tree.id))
+	          .where(
+	            and(
+	              eq(workflowTrees.id, tree.id),
+	              eq(workflowTrees.status, 'draft'),
+	              eq(workflowTrees.draftRevision, tree.draftRevision),
+	            ),
+	          )
 	          .run();
+	        if (publishUpdate.changes !== 1) {
+	          throw new DashboardIntegrationError(
+	            'conflict',
+	            'Draft workflow changed while publishing. Refresh the editor and try publishing again.',
+	            {
+	              status: 409,
+	              details: {
+	                expectedDraftRevision: tree.draftRevision,
+	              },
+	            },
+	          );
+	        }
 
         return {
           id: tree.id,

@@ -605,6 +605,48 @@ describe('createDashboardService', () => {
     expect(draft.edges.length).toBeGreaterThan(0);
   });
 
+  it('seeds design-implement-review with an initial runnable design node', async () => {
+    const { db, dependencies } = createHarness();
+    migrateDatabase(db);
+
+    const service = createDashboardService({ dependencies });
+
+    await service.createWorkflowDraft({
+      template: 'design-implement-review',
+      name: 'Demo Tree',
+      treeKey: 'demo-tree',
+    });
+
+    const draft = await service.getOrCreateWorkflowDraft('demo-tree');
+    expect(draft.initialRunnableNodeKeys).toEqual(['design']);
+    expect(draft.edges).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          sourceNodeKey: 'design',
+          targetNodeKey: 'implement',
+          auto: true,
+        }),
+        expect.objectContaining({
+          sourceNodeKey: 'implement',
+          targetNodeKey: 'review',
+          auto: true,
+        }),
+        expect.objectContaining({
+          sourceNodeKey: 'review',
+          targetNodeKey: 'implement',
+          auto: false,
+          guardExpression: { field: 'decision', operator: '==', value: 'changes_requested' },
+        }),
+      ]),
+    );
+
+    const validation = await service.validateWorkflowDraft('demo-tree', 1);
+    expect(validation.initialRunnableNodeKeys).toEqual(['design']);
+    expect(validation.errors).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ code: 'no_initial_nodes' })]),
+    );
+  });
+
   it('rolls back draft creation when cloning fails', async () => {
     const { db, dependencies } = createHarness();
     migrateDatabase(db);
