@@ -14,14 +14,19 @@ type RouteContext = {
 function parsePublishWorkflowDraftRequest(payload: unknown): DashboardPublishWorkflowDraftRequest {
   const record = requireRecord(payload, 'Publish payload must be a JSON object.');
 
-  if (record.versionNotes !== undefined && typeof record.versionNotes !== 'string') {
+  const versionNotes = record.versionNotes;
+  if (versionNotes === undefined) {
+    return {};
+  }
+
+  if (typeof versionNotes !== 'string') {
     throw new DashboardIntegrationError('invalid_request', 'Publish versionNotes must be a string when provided.', {
       status: 400,
       details: { field: 'versionNotes' },
     });
   }
 
-  return record.versionNotes === undefined ? {} : { versionNotes: record.versionNotes as string };
+  return { versionNotes };
 }
 
 export async function POST(request: Request, context: RouteContext): Promise<Response> {

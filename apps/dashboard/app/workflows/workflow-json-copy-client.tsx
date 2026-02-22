@@ -21,7 +21,7 @@ async function copyToClipboard(value: string): Promise<void> {
   textarea.select();
 
   const ok = document.execCommand('copy');
-  document.body.removeChild(textarea);
+  textarea.remove();
   if (!ok) {
     throw new Error('Copy failed');
   }
@@ -30,12 +30,19 @@ async function copyToClipboard(value: string): Promise<void> {
 export function WorkflowJsonCopyActions({ json }: Readonly<{ json: string }>) {
   const [state, setState] = useState<CopyState>('idle');
 
+  let statusText = '';
+  if (state === 'copied') {
+    statusText = 'Copied.';
+  } else if (state === 'error') {
+    statusText = 'Copy failed.';
+  }
+
   async function handleCopy() {
     setState('idle');
     try {
       await copyToClipboard(json);
       setState('copied');
-      window.setTimeout(() => setState('idle'), 1600);
+      globalThis.setTimeout(() => setState('idle'), 1600);
     } catch {
       setState('error');
     }
@@ -44,10 +51,7 @@ export function WorkflowJsonCopyActions({ json }: Readonly<{ json: string }>) {
   return (
     <div className="workflow-json-actions">
       <ActionButton onClick={handleCopy}>Copy JSON</ActionButton>
-      <span className="meta-text" role="status" aria-live="polite">
-        {state === 'copied' ? 'Copied.' : state === 'error' ? 'Copy failed.' : ''}
-      </span>
+      <output className="meta-text" aria-live="polite">{statusText}</output>
     </div>
   );
 }
-

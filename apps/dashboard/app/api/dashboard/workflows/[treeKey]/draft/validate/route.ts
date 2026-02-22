@@ -12,7 +12,7 @@ type RouteContext = {
 function parseVersionParam(request: Request): number {
   const url = new URL(request.url);
   const raw = url.searchParams.get('version');
-  const parsed = raw ? Number(raw) : NaN;
+  const parsed = raw ? Number(raw) : Number.NaN;
   if (!Number.isInteger(parsed) || parsed < 1) {
     throw new DashboardIntegrationError('invalid_request', 'Query parameter "version" must be a positive integer.', {
       status: 400,
@@ -34,4 +34,3 @@ export async function POST(request: Request, context: RouteContext): Promise<Res
     return toErrorResponse(error);
   }
 }
-

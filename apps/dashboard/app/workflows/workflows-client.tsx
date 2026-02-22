@@ -131,13 +131,13 @@ export function WorkflowsPageContent({ workflows }: WorkflowsPageContentProps) {
 
       setDuplicateDialog(null);
       router.push(`/workflows/${encodeURIComponent(treeKey)}/edit`);
-    } catch (failure) {
+    } catch (error_) {
       setDuplicateDialog(current =>
         current
           ? {
               ...current,
               submitting: false,
-              error: failure instanceof Error ? failure.message : 'Workflow duplicate failed.',
+              error: error_ instanceof Error ? error_.message : 'Workflow duplicate failed.',
             }
           : current,
       );

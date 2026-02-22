@@ -4,37 +4,48 @@ export type ApiErrorEnvelope = {
   };
 };
 
-function trimHyphens(value: string): string {
-  let start = 0;
-  while (start < value.length && value[start] === '-') {
-    start += 1;
-  }
-
-  let end = value.length;
-  while (end > start && value[end - 1] === '-') {
-    end -= 1;
-  }
-
-  return start === 0 && end === value.length ? value : value.slice(start, end);
+function isSlugChar(value: string): boolean {
+  if (value.length !== 1) return false;
+  const codePoint = value.charCodeAt(0);
+  return (codePoint >= 97 && codePoint <= 122) || (codePoint >= 48 && codePoint <= 57);
 }
 
 export function slugifyKey(value: string, maxLength: number): string {
+  if (maxLength <= 0) return '';
+
   const normalized = value.trim().toLowerCase();
   if (normalized.length === 0) return '';
 
-  return trimHyphens(normalized.replace(/[^a-z0-9]+/g, '-')).slice(0, maxLength);
+  let slug = '';
+  let pendingHyphen = false;
+
+  for (const char of normalized) {
+    if (isSlugChar(char)) {
+      if (pendingHyphen && slug.length < maxLength) {
+        slug += '-';
+      }
+      pendingHyphen = false;
+
+      if (slug.length < maxLength) {
+        slug += char;
+      }
+      continue;
+    }
+
+    if (slug.length > 0) {
+      pendingHyphen = true;
+    }
+  }
+
+  return slug;
 }
 
 export function resolveApiError(status: number, payload: unknown, fallback: string): string {
-  if (
-    typeof payload === 'object' &&
-    payload !== null &&
-    'error' in payload &&
-    typeof (payload as ApiErrorEnvelope).error === 'object' &&
-    (payload as ApiErrorEnvelope).error !== null &&
-    typeof (payload as ApiErrorEnvelope).error?.message === 'string'
-  ) {
-    return (payload as ApiErrorEnvelope).error?.message as string;
+  if (typeof payload === 'object' && payload !== null && 'error' in payload) {
+    const error = (payload as ApiErrorEnvelope).error;
+    if (typeof error === 'object' && error !== null && typeof error.message === 'string') {
+      return error.message;
+    }
   }
 
   return `${fallback} (HTTP ${status}).`;

@@ -20,7 +20,7 @@ export function requireStringField(payload: Record<string, unknown>, field: stri
     });
   }
 
-  return payload[field] as string;
+  return payload[field];
 }
 
 export function optionalStringField(payload: Record<string, unknown>, field: string, message: string): string | undefined {
@@ -42,11 +42,10 @@ export function optionalStringField(payload: Record<string, unknown>, field: str
 export function parsePositiveIntegerQueryParam(request: Request, name: string, message: string): number {
   const url = new URL(request.url);
   const raw = url.searchParams.get(name);
-  const parsed = raw ? Number(raw) : NaN;
+  const parsed = raw ? Number(raw) : Number.NaN;
   if (!Number.isInteger(parsed) || parsed < 1) {
     throw new DashboardIntegrationError('invalid_request', message, { status: 400 });
   }
 
   return parsed;
 }
-

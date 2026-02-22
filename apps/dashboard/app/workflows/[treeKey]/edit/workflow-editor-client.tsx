@@ -147,9 +147,9 @@ export function WorkflowEditorPageContent({ initialDraft }: Readonly<{ initialDr
   const [addNodePaletteOpen, setAddNodePaletteOpen] = useState(false);
   const addNodePaletteFirstRef = useRef<HTMLButtonElement | null>(null);
 
-  const pendingSaveRef = useRef<number | null>(null);
+  const pendingSaveRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const inFlightSaveAbortRef = useRef<AbortController | null>(null);
-  const pendingHistoryCommitRef = useRef<number | null>(null);
+  const pendingHistoryCommitRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const workflowHistoryRef = useRef<{
     past: WorkflowSnapshot[];
     present: WorkflowSnapshot;
@@ -186,11 +186,11 @@ export function WorkflowEditorPageContent({ initialDraft }: Readonly<{ initialDr
       return;
     }
 
-    const timeout = window.setTimeout(() => {
+    const timeout = globalThis.setTimeout(() => {
       addNodePaletteFirstRef.current?.focus();
     }, 0);
 
-    return () => window.clearTimeout(timeout);
+    return () => globalThis.clearTimeout(timeout);
   }, [addNodePaletteOpen]);
 
   const draftNodesForSave = useMemo(() => nodes.map(mapNodeFromReactFlow), [nodes]);
@@ -272,23 +272,23 @@ export function WorkflowEditorPageContent({ initialDraft }: Readonly<{ initialDr
         }
       }
       setSaveState('saved');
-    } catch (failure) {
-      if (failure instanceof DOMException && failure.name === 'AbortError') {
+    } catch (error_) {
+      if (error_ instanceof DOMException && error_.name === 'AbortError') {
         return;
       }
       setSaveState('error');
-      setSaveError(failure instanceof Error ? failure.message : 'Autosave failed.');
+      setSaveError(error_ instanceof Error ? error_.message : 'Autosave failed.');
     }
   }, [treeKey, version]);
 
   const scheduleSave = useCallback(() => {
     if (pendingSaveRef.current !== null) {
-      window.clearTimeout(pendingSaveRef.current);
+      globalThis.clearTimeout(pendingSaveRef.current);
     }
 
-    pendingSaveRef.current = window.setTimeout(() => {
+    pendingSaveRef.current = globalThis.setTimeout(() => {
       pendingSaveRef.current = null;
-      void saveDraft();
+      saveDraft().catch(() => undefined);
     }, 1000);
   }, [saveDraft]);
 
@@ -298,10 +298,10 @@ export function WorkflowEditorPageContent({ initialDraft }: Readonly<{ initialDr
     }
 
     if (pendingHistoryCommitRef.current !== null) {
-      window.clearTimeout(pendingHistoryCommitRef.current);
+      globalThis.clearTimeout(pendingHistoryCommitRef.current);
     }
 
-    pendingHistoryCommitRef.current = window.setTimeout(() => {
+    pendingHistoryCommitRef.current = globalThis.setTimeout(() => {
       pendingHistoryCommitRef.current = null;
 
       const history = workflowHistoryRef.current;
@@ -315,14 +315,14 @@ export function WorkflowEditorPageContent({ initialDraft }: Readonly<{ initialDr
   useEffect(() => {
     return () => {
       if (pendingSaveRef.current !== null) {
-        window.clearTimeout(pendingSaveRef.current);
+        globalThis.clearTimeout(pendingSaveRef.current);
       }
       if (inFlightSaveAbortRef.current) {
         inFlightSaveAbortRef.current.abort();
         inFlightSaveAbortRef.current = null;
       }
       if (pendingHistoryCommitRef.current !== null) {
-        window.clearTimeout(pendingHistoryCommitRef.current);
+        globalThis.clearTimeout(pendingHistoryCommitRef.current);
       }
     };
   }, []);
@@ -497,7 +497,7 @@ export function WorkflowEditorPageContent({ initialDraft }: Readonly<{ initialDr
     setActiveTab('workflow');
     setSaveState('draft');
     scheduleSave();
-    window.setTimeout(() => {
+    globalThis.setTimeout(() => {
       applyingHistoryRef.current = false;
     }, 0);
   }, [scheduleSave]);
@@ -524,7 +524,7 @@ export function WorkflowEditorPageContent({ initialDraft }: Readonly<{ initialDr
     setActiveTab('workflow');
     setSaveState('draft');
     scheduleSave();
-    window.setTimeout(() => {
+    globalThis.setTimeout(() => {
       applyingHistoryRef.current = false;
     }, 0);
   }, [scheduleSave]);
@@ -583,7 +583,7 @@ export function WorkflowEditorPageContent({ initialDraft }: Readonly<{ initialDr
           event.preventDefault();
           const connectedEdges = edges.filter(edge => edge.source === selectedNodeId || edge.target === selectedNodeId);
           const requiresConfirm = connectedEdges.length > 0;
-          if (requiresConfirm && !window.confirm('Delete this node and its connected transitions?')) {
+          if (requiresConfirm && !globalThis.confirm('Delete this node and its connected transitions?')) {
             return;
           }
 
@@ -602,9 +602,9 @@ export function WorkflowEditorPageContent({ initialDraft }: Readonly<{ initialDr
 	      }
 	    }
 
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-	  }, [
+    globalThis.addEventListener('keydown', handleKeyDown);
+    return () => globalThis.removeEventListener('keydown', handleKeyDown);
+		  }, [
 	    addNodePaletteOpen,
 	    edges,
 	    handleAddNode,
@@ -657,8 +657,8 @@ export function WorkflowEditorPageContent({ initialDraft }: Readonly<{ initialDr
 
       setValidation((json as { result: DashboardWorkflowValidationResult }).result);
       setActiveTab('workflow');
-    } catch (failure) {
-      setValidationError(failure instanceof Error ? failure.message : 'Validation failed.');
+    } catch (error_) {
+      setValidationError(error_ instanceof Error ? error_.message : 'Validation failed.');
     }
   }
 
@@ -682,8 +682,8 @@ export function WorkflowEditorPageContent({ initialDraft }: Readonly<{ initialDr
       }
 
       router.push(`/workflows/${encodeURIComponent(treeKey)}`);
-    } catch (failure) {
-      setPublishError(failure instanceof Error ? failure.message : 'Publish failed.');
+    } catch (error_) {
+      setPublishError(error_ instanceof Error ? error_.message : 'Publish failed.');
     }
   }
 
@@ -911,10 +911,10 @@ export function WorkflowEditorPageContent({ initialDraft }: Readonly<{ initialDr
 	            <p className="meta-text">v{version} (unpublished)</p>
 	            {saveError ? <p className="run-launch-banner--error" role="alert">{saveError}</p> : null}
 	            {saveState === 'error' ? (
-	              <ActionButton onClick={() => void saveDraft()}>
-	                Retry save
-	              </ActionButton>
-	            ) : null}
+		              <ActionButton onClick={() => saveDraft().catch(() => undefined)}>
+		                Retry save
+		              </ActionButton>
+		            ) : null}
 	          </Panel>
 	        </aside>
 

@@ -52,8 +52,8 @@ export function NewWorkflowPageContent() {
       }
 
       router.push(`/workflows/${encodeURIComponent(effectiveTreeKey)}/edit`);
-    } catch (failure) {
-      setError(failure instanceof Error ? failure.message : 'Workflow creation failed.');
+    } catch (error_) {
+      setError(error_ instanceof Error ? error_.message : 'Workflow creation failed.');
     } finally {
       setCreating(false);
     }
