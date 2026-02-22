@@ -117,6 +117,27 @@ describe('NewWorkflowPageContent', () => {
     });
   });
 
+  it('can switch templates back to design-implement-review before submitting', async () => {
+    const user = userEvent.setup();
+    const fetchMock = vi.fn(async () => createJsonResponse({ treeKey: 'demo-tree', draftVersion: 1 }, { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(<NewWorkflowPageContent />);
+
+    await user.click(screen.getByRole('radio', { name: /Blank workflow/ }));
+    await user.click(screen.getByRole('radio', { name: /Template: Design/ }));
+    await user.type(screen.getByPlaceholderText('Workflow name'), 'Demo Tree');
+    await user.click(screen.getByRole('button', { name: 'Create and open builder' }));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+
+    const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    const body = JSON.parse(init.body as string) as Record<string, unknown>;
+    expect(body.template).toBe('design-implement-review');
+  });
+
   it('renders API errors returned during creation', async () => {
     const user = userEvent.setup();
     const fetchMock = vi.fn(async () =>

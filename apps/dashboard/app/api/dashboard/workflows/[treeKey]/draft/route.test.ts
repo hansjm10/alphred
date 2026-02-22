@@ -579,6 +579,43 @@ describe('PUT /api/dashboard/workflows/[treeKey]/draft', () => {
     });
   });
 
+  it('includes versionNotes when saving drafts', async () => {
+    saveWorkflowDraftMock.mockResolvedValue({
+      treeKey: 'demo-tree',
+      version: 1,
+      draftRevision: 4,
+      name: 'Demo Tree',
+      description: null,
+      versionNotes: 'Notes',
+      nodes: [],
+      edges: [],
+      initialRunnableNodeKeys: [],
+    });
+
+    const request = new Request('http://localhost/api/dashboard/workflows/demo-tree/draft?version=1', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        draftRevision: 4,
+        name: 'Demo Tree',
+        versionNotes: 'Notes',
+        nodes: [],
+        edges: [],
+      }),
+    });
+
+    const response = await PUT(request, { params: Promise.resolve({ treeKey: 'demo-tree' }) });
+
+    expect(response.status).toBe(200);
+    expect(saveWorkflowDraftMock).toHaveBeenCalledWith('demo-tree', 1, {
+      draftRevision: 4,
+      name: 'Demo Tree',
+      versionNotes: 'Notes',
+      nodes: [],
+      edges: [],
+    });
+  });
+
   it('maps service failures to integration error responses', async () => {
     saveWorkflowDraftMock.mockRejectedValue(new Error('save failed'));
 
