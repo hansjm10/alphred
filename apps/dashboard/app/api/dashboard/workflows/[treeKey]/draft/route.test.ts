@@ -330,6 +330,69 @@ describe('PUT /api/dashboard/workflows/[treeKey]/draft', () => {
     expect(saveWorkflowDraftMock).toHaveBeenCalledTimes(1);
   });
 
+  it('accepts node and edge payloads when saving drafts', async () => {
+    saveWorkflowDraftMock.mockResolvedValue({
+      treeKey: 'demo-tree',
+      version: 1,
+      draftRevision: 2,
+      name: 'Demo Tree',
+      description: 'Demo description',
+      versionNotes: null,
+      nodes: [],
+      edges: [],
+      initialRunnableNodeKeys: [],
+    });
+
+    const request = new Request('http://localhost/api/dashboard/workflows/demo-tree/draft?version=1', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        draftRevision: 2,
+        name: 'Demo Tree',
+        description: 'Demo description',
+        nodes: [
+          {
+            nodeKey: 'design',
+            displayName: 'Design',
+            nodeType: 'agent',
+            provider: 'codex',
+            maxRetries: 0,
+            sequenceIndex: 10,
+            position: { x: 10, y: 20 },
+            promptTemplate: { content: 'Draft prompt', contentType: 'markdown' },
+          },
+        ],
+        edges: [
+          {
+            sourceNodeKey: 'design',
+            targetNodeKey: 'design',
+            priority: 100,
+            auto: false,
+            guardExpression: { field: 'decision', operator: '==', value: 'approved' },
+          },
+        ],
+      }),
+    });
+
+    const response = await PUT(request, { params: Promise.resolve({ treeKey: 'demo-tree' }) });
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      draft: {
+        treeKey: 'demo-tree',
+        version: 1,
+        draftRevision: 2,
+        name: 'Demo Tree',
+        description: 'Demo description',
+        versionNotes: null,
+        nodes: [],
+        edges: [],
+        initialRunnableNodeKeys: [],
+      },
+    });
+    expect(saveWorkflowDraftMock).toHaveBeenCalledTimes(1);
+  });
+
   it('maps service failures to integration error responses', async () => {
     saveWorkflowDraftMock.mockRejectedValue(new Error('save failed'));
 

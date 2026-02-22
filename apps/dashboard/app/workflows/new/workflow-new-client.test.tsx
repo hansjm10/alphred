@@ -85,4 +85,34 @@ describe('NewWorkflowPageContent', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('Name already exists.');
     expect(pushMock).not.toHaveBeenCalled();
   });
+
+  it('falls back to a status message when the API response lacks an error envelope', async () => {
+    const user = userEvent.setup();
+    const fetchMock = vi.fn(async () => createJsonResponse({}, { status: 500 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(<NewWorkflowPageContent />);
+
+    await user.type(screen.getByPlaceholderText('Workflow name'), 'Demo Tree');
+    await user.click(screen.getByRole('button', { name: 'Create and open builder' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Workflow creation failed (HTTP 500).');
+    expect(pushMock).not.toHaveBeenCalled();
+  });
+
+  it('surfaces thrown errors during creation', async () => {
+    const user = userEvent.setup();
+    const fetchMock = vi.fn(async () => {
+      throw new Error('Network down');
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(<NewWorkflowPageContent />);
+
+    await user.type(screen.getByPlaceholderText('Workflow name'), 'Demo Tree');
+    await user.click(screen.getByRole('button', { name: 'Create and open builder' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Network down');
+    expect(pushMock).not.toHaveBeenCalled();
+  });
 });

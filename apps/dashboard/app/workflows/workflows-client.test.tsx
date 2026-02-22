@@ -103,6 +103,27 @@ describe('WorkflowsPageContent', () => {
     expect(screen.getByText('just now')).toBeInTheDocument();
   });
 
+  it('renders version cells for published-only and never-published workflows', () => {
+    render(
+      <WorkflowsPageContent
+        workflows={[
+          createWorkflow({ treeKey: 'published', name: 'Published Only', publishedVersion: 2, draftVersion: null }),
+          {
+            treeKey: 'empty',
+            name: 'Empty',
+            description: 'Default description',
+            publishedVersion: null,
+            draftVersion: null,
+            updatedAt: '2026-02-18T00:00:10.000Z',
+          },
+        ]}
+      />,
+    );
+
+    expect(screen.getByText('v2')).toBeInTheDocument();
+    expect(screen.getAllByText('—').length).toBeGreaterThan(0);
+  });
+
   it('renders Unknown when updatedAt is invalid', () => {
     render(
       <WorkflowsPageContent
@@ -242,6 +263,22 @@ describe('WorkflowsPageContent', () => {
     await user.click(within(dialog).getByRole('button', { name: 'Duplicate and open builder' }));
 
     expect(await within(dialog).findByRole('alert')).toHaveTextContent('No permissions.');
+    expect(pushMock).not.toHaveBeenCalled();
+  });
+
+  it('falls back to an HTTP status message when the duplicate API response is not JSON', async () => {
+    const user = userEvent.setup();
+    const fetchMock = vi.fn(async () => new Response('nope', { status: 500 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(<WorkflowsPageContent workflows={[createWorkflow()]} />);
+
+    await user.click(screen.getByRole('button', { name: 'Duplicate' }));
+
+    const dialog = screen.getByRole('dialog', { name: 'Duplicate workflow' });
+    await user.click(within(dialog).getByRole('button', { name: 'Duplicate and open builder' }));
+
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent('Workflow duplicate failed (HTTP 500).');
     expect(pushMock).not.toHaveBeenCalled();
   });
 });
