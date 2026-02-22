@@ -393,6 +393,78 @@ describe('PUT /api/dashboard/workflows/[treeKey]/draft', () => {
     expect(saveWorkflowDraftMock).toHaveBeenCalledTimes(1);
   });
 
+  it('defaults missing guardExpression fields to null when saving drafts', async () => {
+    saveWorkflowDraftMock.mockResolvedValue({
+      treeKey: 'demo-tree',
+      version: 1,
+      draftRevision: 3,
+      name: 'Demo Tree',
+      description: null,
+      versionNotes: null,
+      nodes: [],
+      edges: [],
+      initialRunnableNodeKeys: [],
+    });
+
+    const request = new Request('http://localhost/api/dashboard/workflows/demo-tree/draft?version=1', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        draftRevision: 3,
+        name: 'Demo Tree',
+        nodes: [
+          {
+            nodeKey: 'design',
+            displayName: 'Design',
+            nodeType: 'agent',
+            provider: 'codex',
+            maxRetries: 0,
+            sequenceIndex: 10,
+            position: { x: 10, y: 20 },
+            promptTemplate: { content: 'Draft prompt', contentType: 'text' },
+          },
+        ],
+        edges: [
+          {
+            sourceNodeKey: 'design',
+            targetNodeKey: 'design',
+            priority: 100,
+            auto: false,
+          },
+        ],
+      }),
+    });
+
+    const response = await PUT(request, { params: Promise.resolve({ treeKey: 'demo-tree' }) });
+
+    expect(response.status).toBe(200);
+    expect(saveWorkflowDraftMock).toHaveBeenCalledWith('demo-tree', 1, {
+      draftRevision: 3,
+      name: 'Demo Tree',
+      nodes: [
+        {
+          nodeKey: 'design',
+          displayName: 'Design',
+          nodeType: 'agent',
+          provider: 'codex',
+          maxRetries: 0,
+          sequenceIndex: 10,
+          position: { x: 10, y: 20 },
+          promptTemplate: { content: 'Draft prompt', contentType: 'text' },
+        },
+      ],
+      edges: [
+        {
+          sourceNodeKey: 'design',
+          targetNodeKey: 'design',
+          priority: 100,
+          auto: false,
+          guardExpression: null,
+        },
+      ],
+    });
+  });
+
   it('maps service failures to integration error responses', async () => {
     saveWorkflowDraftMock.mockRejectedValue(new Error('save failed'));
 

@@ -281,4 +281,22 @@ describe('WorkflowsPageContent', () => {
     expect(await within(dialog).findByRole('alert')).toHaveTextContent('Workflow duplicate failed (HTTP 500).');
     expect(pushMock).not.toHaveBeenCalled();
   });
+
+  it('surfaces thrown errors when duplication fails before a response is returned', async () => {
+    const user = userEvent.setup();
+    const fetchMock = vi.fn(async () => {
+      throw new Error('Network down');
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(<WorkflowsPageContent workflows={[createWorkflow()]} />);
+
+    await user.click(screen.getByRole('button', { name: 'Duplicate' }));
+
+    const dialog = screen.getByRole('dialog', { name: 'Duplicate workflow' });
+    await user.click(within(dialog).getByRole('button', { name: 'Duplicate and open builder' }));
+
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent('Network down');
+    expect(pushMock).not.toHaveBeenCalled();
+  });
 });
