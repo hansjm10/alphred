@@ -261,7 +261,7 @@ function resolveWorkflowTreeVersion(db: TopologyReader, params: LoadWorkflowTree
       description: workflowTrees.description,
     })
     .from(workflowTrees)
-    .where(eq(workflowTrees.treeKey, params.treeKey))
+    .where(and(eq(workflowTrees.treeKey, params.treeKey), eq(workflowTrees.status, 'published')))
     .orderBy(desc(workflowTrees.version), desc(workflowTrees.id))
     .all();
 

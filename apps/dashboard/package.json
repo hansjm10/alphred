@@ -19,6 +19,7 @@
     "@alphred/db": "workspace:*",
     "@alphred/git": "workspace:*",
     "@alphred/shared": "workspace:*",
+    "@xyflow/react": "^12.8.4",
     "drizzle-orm": "^0.44.2",
     "next": "^16.0.1",
     "react": "^19.1.0",

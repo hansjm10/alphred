@@ -71,6 +71,9 @@ describe('GET /api/dashboard/runs/[runId]/worktrees', () => {
       error: {
         code: 'internal_error',
         message: 'Dashboard integration request failed.',
+        details: {
+          cause: 'worktree fetch failed',
+        },
       },
     });
   });

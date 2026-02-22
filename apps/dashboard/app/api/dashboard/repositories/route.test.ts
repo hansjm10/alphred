@@ -67,6 +67,9 @@ describe('Route /api/dashboard/repositories', () => {
         error: {
           code: 'internal_error',
           message: 'Dashboard integration request failed.',
+          details: {
+            cause: 'cannot connect',
+          },
         },
       });
     });
@@ -201,6 +204,9 @@ describe('Route /api/dashboard/repositories', () => {
         error: {
           code: 'internal_error',
           message: 'Dashboard integration request failed.',
+          details: {
+            cause: 'cannot create',
+          },
         },
       });
     });

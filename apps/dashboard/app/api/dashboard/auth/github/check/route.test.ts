@@ -64,6 +64,9 @@ describe('POST /api/dashboard/auth/github/check', () => {
       error: {
         code: 'internal_error',
         message: 'Dashboard integration request failed.',
+        details: {
+          cause: 'kaboom',
+        },
       },
     });
   });

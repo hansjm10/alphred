@@ -17,6 +17,103 @@ export type DashboardWorkflowTreeSummary = {
   description: string | null;
 };
 
+export type DashboardWorkflowTreeStatus = 'draft' | 'published';
+
+export type DashboardWorkflowCatalogItem = {
+  treeKey: string;
+  name: string;
+  description: string | null;
+  publishedVersion: number | null;
+  draftVersion: number | null;
+  updatedAt: string;
+};
+
+export type DashboardWorkflowTemplateKey = 'design-implement-review' | 'blank';
+
+export type DashboardCreateWorkflowRequest = {
+  template: DashboardWorkflowTemplateKey;
+  name: string;
+  treeKey: string;
+  description?: string;
+};
+
+export type DashboardCreateWorkflowResult = {
+  treeKey: string;
+  draftVersion: number;
+};
+
+export type DashboardDuplicateWorkflowRequest = {
+  name: string;
+  treeKey: string;
+  description?: string;
+};
+
+export type DashboardDuplicateWorkflowResult = DashboardCreateWorkflowResult;
+
+export type DashboardWorkflowDraftNode = {
+  nodeKey: string;
+  displayName: string;
+  nodeType: 'agent' | 'human' | 'tool';
+  provider: string | null;
+  maxRetries: number;
+  sequenceIndex: number;
+  position: { x: number; y: number } | null;
+  promptTemplate:
+    | {
+        content: string;
+        contentType: 'text' | 'markdown';
+      }
+    | null;
+};
+
+export type DashboardWorkflowDraftEdge = {
+  sourceNodeKey: string;
+  targetNodeKey: string;
+  priority: number;
+  auto: boolean;
+  guardExpression: unknown | null;
+};
+
+export type DashboardWorkflowDraftTopology = {
+  treeKey: string;
+  version: number;
+  draftRevision: number;
+  name: string;
+  description: string | null;
+  versionNotes: string | null;
+  nodes: DashboardWorkflowDraftNode[];
+  edges: DashboardWorkflowDraftEdge[];
+  initialRunnableNodeKeys: string[];
+};
+
+export type DashboardWorkflowTreeSnapshot = DashboardWorkflowDraftTopology & {
+  status: DashboardWorkflowTreeStatus;
+};
+
+export type DashboardSaveWorkflowDraftRequest = {
+  draftRevision: number;
+  name: string;
+  description?: string;
+  versionNotes?: string;
+  nodes: DashboardWorkflowDraftNode[];
+  edges: DashboardWorkflowDraftEdge[];
+};
+
+export type DashboardWorkflowValidationIssue = {
+  code: string;
+  message: string;
+};
+
+export type DashboardWorkflowValidationResult = {
+  errors: DashboardWorkflowValidationIssue[];
+  warnings: DashboardWorkflowValidationIssue[];
+  initialRunnableNodeKeys: string[];
+};
+
+export type DashboardPublishWorkflowDraftRequest = {
+  versionNotes?: string;
+};
+
 export type DashboardRepositoryState = {
   id: number;
   name: string;
