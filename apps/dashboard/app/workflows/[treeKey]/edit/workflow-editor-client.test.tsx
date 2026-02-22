@@ -171,6 +171,37 @@ describe('WorkflowEditorPageContent', () => {
     expect((screen.getByLabelText('Name') as HTMLInputElement).value).toBe('Demo Tree');
   });
 
+  it('supports immediate undo/redo before the history debounce commits', async () => {
+    const fetchMock = vi.fn(async () => createJsonResponse({ draft: {} }, { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(
+      <WorkflowEditorPageContent
+        initialDraft={{
+          treeKey: 'demo-tree',
+          version: 1,
+          draftRevision: 0,
+          name: 'Demo Tree',
+          description: null,
+          versionNotes: null,
+          nodes: [],
+          edges: [],
+          initialRunnableNodeKeys: [],
+        }}
+      />,
+    );
+
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Updated Tree' } });
+
+    fireEvent.keyDown(window, { key: 'z', ctrlKey: true });
+    await vi.advanceTimersByTimeAsync(0);
+    expect((screen.getByLabelText('Name') as HTMLInputElement).value).toBe('Demo Tree');
+
+    fireEvent.keyDown(window, { key: 'y', ctrlKey: true });
+    await vi.advanceTimersByTimeAsync(0);
+    expect((screen.getByLabelText('Name') as HTMLInputElement).value).toBe('Updated Tree');
+  });
+
   it('adds node inspector edits to the undo stack', async () => {
     const fetchMock = vi.fn(async () => createJsonResponse({ draft: {} }, { status: 200 }));
     vi.stubGlobal('fetch', fetchMock);

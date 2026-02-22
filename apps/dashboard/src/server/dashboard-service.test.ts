@@ -657,6 +657,38 @@ describe('createDashboardService', () => {
     expect(draft.edges.length).toBeGreaterThan(0);
   });
 
+  it('accepts underscore workflow tree keys across draft lifecycle actions', async () => {
+    const { db, dependencies } = createHarness();
+    migrateDatabase(db);
+
+    const service = createDashboardService({ dependencies });
+
+    await service.createWorkflowDraft({
+      template: 'design-implement-review',
+      name: 'Design Tree',
+      treeKey: 'design_tree',
+    });
+
+    const draft = await service.getOrCreateWorkflowDraft('design_tree');
+    expect(draft.treeKey).toBe('design_tree');
+
+    await expect(service.validateWorkflowDraft('design_tree', draft.version)).resolves.toMatchObject({
+      errors: expect.any(Array),
+    });
+
+    await expect(service.publishWorkflowDraft('design_tree', draft.version, {})).resolves.toBeDefined();
+
+    await expect(
+      service.duplicateWorkflowTree('design_tree', {
+        name: 'Design Tree Copy',
+        treeKey: 'design_tree_copy',
+      }),
+    ).resolves.toMatchObject({
+      treeKey: 'design_tree_copy',
+      draftVersion: 1,
+    });
+  });
+
   it('seeds design-implement-review with an initial runnable design node', async () => {
     const { db, dependencies } = createHarness();
     migrateDatabase(db);

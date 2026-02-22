@@ -207,6 +207,14 @@ export function useWorkflowHistory(args: Readonly<{
     latestSnapshotRef.current = args.snapshot;
   }, [args.snapshot]);
 
+  const commitLatestSnapshot = useCallback(() => {
+    const history = historyRef.current;
+    const snapshot = latestSnapshotRef.current;
+    history.past = [...history.past, history.present].slice(-50);
+    history.present = snapshot;
+    history.future = [];
+  }, []);
+
   const scheduleHistoryCommit = useCallback(() => {
     if (applyingHistoryRef.current) {
       return;
@@ -218,16 +226,23 @@ export function useWorkflowHistory(args: Readonly<{
 
     pendingHistoryCommitRef.current = globalThis.setTimeout(() => {
       pendingHistoryCommitRef.current = null;
-
-      const history = historyRef.current;
-      const snapshot = latestSnapshotRef.current;
-      history.past = [...history.past, history.present].slice(-50);
-      history.present = snapshot;
-      history.future = [];
+      commitLatestSnapshot();
     }, 400);
-  }, []);
+  }, [commitLatestSnapshot]);
+
+  const flushPendingHistoryCommit = useCallback(() => {
+    if (pendingHistoryCommitRef.current === null) {
+      return;
+    }
+
+    globalThis.clearTimeout(pendingHistoryCommitRef.current);
+    pendingHistoryCommitRef.current = null;
+    commitLatestSnapshot();
+  }, [commitLatestSnapshot]);
 
   const undo = useCallback(() => {
+    flushPendingHistoryCommit();
+
     const history = historyRef.current;
     if (history.past.length === 0) {
       return;
@@ -246,9 +261,11 @@ export function useWorkflowHistory(args: Readonly<{
     globalThis.setTimeout(() => {
       applyingHistoryRef.current = false;
     }, 0);
-  }, [applySnapshot, markDirty, scheduleSave]);
+  }, [applySnapshot, flushPendingHistoryCommit, markDirty, scheduleSave]);
 
   const redo = useCallback(() => {
+    flushPendingHistoryCommit();
+
     const history = historyRef.current;
     if (history.future.length === 0) {
       return;
@@ -266,7 +283,7 @@ export function useWorkflowHistory(args: Readonly<{
     globalThis.setTimeout(() => {
       applyingHistoryRef.current = false;
     }, 0);
-  }, [applySnapshot, markDirty, scheduleSave]);
+  }, [applySnapshot, flushPendingHistoryCommit, markDirty, scheduleSave]);
 
   useEffect(() => {
     return () => {

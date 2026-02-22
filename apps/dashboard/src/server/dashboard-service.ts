@@ -665,10 +665,10 @@ export function createDashboardService(options: {
       });
     }
 
-    if (!/^[a-z0-9-]+$/.test(value)) {
+    if (!/^[a-z0-9_-]+$/.test(value)) {
       throw new DashboardIntegrationError(
         'invalid_request',
-        'Workflow tree key must be lowercase and contain only a-z, 0-9, and hyphens.',
+        'Workflow tree key must be lowercase and contain only a-z, 0-9, underscores, and hyphens.',
         { status: 400 },
       );
     }
