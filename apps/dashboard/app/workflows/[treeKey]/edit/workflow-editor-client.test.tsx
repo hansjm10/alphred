@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { act, fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const { pushMock } = vi.hoisted(() => ({
@@ -198,6 +198,36 @@ describe('WorkflowEditorPageContent', () => {
     expect((screen.getByLabelText('Name') as HTMLInputElement).value).toBe('Demo Tree');
 
     fireEvent.keyDown(window, { key: 'y', ctrlKey: true });
+    await vi.advanceTimersByTimeAsync(0);
+    expect((screen.getByLabelText('Name') as HTMLInputElement).value).toBe('Updated Tree');
+  });
+
+  it('supports undo/redo from top-bar actions', async () => {
+    const fetchMock = vi.fn(async () => createJsonResponse({ draft: {} }, { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(
+      <WorkflowEditorPageContent
+        initialDraft={{
+          treeKey: 'demo-tree',
+          version: 1,
+          draftRevision: 0,
+          name: 'Demo Tree',
+          description: null,
+          versionNotes: null,
+          nodes: [],
+          edges: [],
+          initialRunnableNodeKeys: [],
+        }}
+      />,
+    );
+
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Updated Tree' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Undo' }));
+    await vi.advanceTimersByTimeAsync(0);
+    expect((screen.getByLabelText('Name') as HTMLInputElement).value).toBe('Demo Tree');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Redo' }));
     await vi.advanceTimersByTimeAsync(0);
     expect((screen.getByLabelText('Name') as HTMLInputElement).value).toBe('Updated Tree');
   });
@@ -436,11 +466,77 @@ describe('WorkflowEditorPageContent', () => {
       />,
     );
 
+    fireEvent.click(screen.getByRole('button', { name: 'Publish' }));
+    await act(async () => undefined);
     await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: 'Publish' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Publish version' }));
     });
 
     expect(pushMock).toHaveBeenCalledWith('/workflows/demo-tree');
+  });
+
+  it('shows a publish confirmation summary before sending publish requests', async () => {
+    const fetchMock = vi.fn(async () => createJsonResponse({ draft: {} }, { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(
+      <WorkflowEditorPageContent
+        initialDraft={{
+          treeKey: 'demo-tree',
+          version: 4,
+          draftRevision: 0,
+          name: 'Demo Tree',
+          description: null,
+          versionNotes: 'Release candidate notes',
+          nodes: [
+            {
+              nodeKey: 'design',
+              displayName: 'Design',
+              nodeType: 'agent',
+              provider: 'codex',
+              maxRetries: 0,
+              sequenceIndex: 10,
+              position: { x: 0, y: 0 },
+              promptTemplate: { content: 'Draft prompt', contentType: 'markdown' },
+            },
+            {
+              nodeKey: 'review',
+              displayName: 'Review',
+              nodeType: 'agent',
+              provider: 'codex',
+              maxRetries: 0,
+              sequenceIndex: 20,
+              position: { x: 200, y: 0 },
+              promptTemplate: { content: 'Review prompt', contentType: 'markdown' },
+            },
+          ],
+          edges: [
+            {
+              sourceNodeKey: 'design',
+              targetNodeKey: 'review',
+              priority: 100,
+              auto: true,
+              guardExpression: null,
+            },
+          ],
+          initialRunnableNodeKeys: ['design'],
+        }}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Publish' }));
+    const dialog = screen.getByRole('dialog', { name: 'Confirm publish' });
+    expect(within(dialog).getByText('Version bump')).toBeInTheDocument();
+    expect(within(dialog).getByText('v3 → v4')).toBeInTheDocument();
+    const nodeRow = within(dialog).getByText('Nodes').closest('li');
+    expect(nodeRow?.textContent).toContain('2');
+    const edgeRow = within(dialog).getByText('Transitions').closest('li');
+    expect(edgeRow?.textContent).toContain('1');
+    expect(within(dialog).getByText('Release candidate notes')).toBeInTheDocument();
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(screen.queryByRole('dialog', { name: 'Confirm publish' })).toBeNull();
   });
 
   it('flushes draft autosave before publishing', async () => {
@@ -471,8 +567,10 @@ describe('WorkflowEditorPageContent', () => {
 
     fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Updated Tree' } });
 
+    fireEvent.click(screen.getByRole('button', { name: 'Publish' }));
+    await act(async () => undefined);
     await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: 'Publish' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Publish version' }));
     });
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
@@ -516,14 +614,16 @@ describe('WorkflowEditorPageContent', () => {
 
     fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Updated Tree' } });
 
+    fireEvent.click(screen.getByRole('button', { name: 'Publish' }));
+    await act(async () => undefined);
     await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: 'Publish' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Publish version' }));
     });
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(String(fetchMock.mock.calls[0]?.[0])).toContain('/draft?version=1');
     expect(pushMock).not.toHaveBeenCalled();
-    expect(screen.getByText('Save the latest draft changes before publishing.')).toBeInTheDocument();
+    expect(screen.getAllByText('Save the latest draft changes before publishing.').length).toBeGreaterThan(0);
   });
 
   it('connects nodes and autosaves a new transition', async () => {

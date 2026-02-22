@@ -180,6 +180,8 @@ function WorkflowEditorLoadedContent({ initialDraft }: Readonly<{ initialDraft: 
   const [validationError, setValidationError] = useState<string | null>(null);
   const [publishError, setPublishError] = useState<string | null>(null);
   const [addNodePaletteOpen, setAddNodePaletteOpen] = useState(false);
+  const [publishConfirmOpen, setPublishConfirmOpen] = useState(false);
+  const [publishing, setPublishing] = useState(false);
 
   const selectedNode = useMemo(() => nodes.find(node => node.id === selectedNodeId) ?? null, [nodes, selectedNodeId]);
   const selectedEdge = useMemo(() => edges.find(edge => edge.id === selectedEdgeId) ?? null, [edges, selectedEdgeId]);
@@ -321,6 +323,18 @@ function WorkflowEditorLoadedContent({ initialDraft }: Readonly<{ initialDraft: 
     const incoming = new Set(draftEdgesForSave.map(edge => edge.targetNodeKey));
     return draftNodesForSave.filter(node => !incoming.has(node.nodeKey)).map(node => node.nodeKey);
   }, [draftEdgesForSave, draftNodesForSave]);
+
+  const publishSummary = useMemo(() => {
+    const previousPublishedVersion = version > 1 ? version - 1 : null;
+    const versionBump = previousPublishedVersion === null ? `new → v${version}` : `v${previousPublishedVersion} → v${version}`;
+    const versionNotes = workflowVersionNotes.trim();
+    return {
+      versionBump,
+      nodeCount: draftNodesForSave.length,
+      edgeCount: draftEdgesForSave.length,
+      versionNotes: versionNotes.length > 0 ? versionNotes : 'None',
+    };
+  }, [draftEdgesForSave.length, draftNodesForSave.length, version, workflowVersionNotes]);
 
   const onNodesChange = useCallback((changes: NodeChange[]) => {
     const shouldMarkDirty = hasNonSelectionNodeChanges(changes);
@@ -471,8 +485,21 @@ function WorkflowEditorLoadedContent({ initialDraft }: Readonly<{ initialDraft: 
     }
   }
 
+  function openPublishConfirm(): void {
+    setPublishError(null);
+    setPublishConfirmOpen(true);
+  }
+
+  function closePublishConfirm(): void {
+    if (publishing) {
+      return;
+    }
+    setPublishConfirmOpen(false);
+  }
+
   async function publish(): Promise<void> {
     setPublishError(null);
+    setPublishing(true);
 
     try {
       const saveSucceeded = await flushSave();
@@ -496,9 +523,12 @@ function WorkflowEditorLoadedContent({ initialDraft }: Readonly<{ initialDraft: 
         return;
       }
 
+      setPublishConfirmOpen(false);
       router.push(`/workflows/${encodeURIComponent(treeKey)}`);
     } catch (error_) {
       setPublishError(error_ instanceof Error ? error_.message : 'Publish failed.');
+    } finally {
+      setPublishing(false);
     }
   }
 
@@ -602,6 +632,73 @@ function WorkflowEditorLoadedContent({ initialDraft }: Readonly<{ initialDraft: 
 	return (
 	    <div className="workflow-editor-shell">
 	      <WorkflowEditorAddNodeDialog open={addNodePaletteOpen} onClose={closePalette} onSelect={handlePaletteSelect} />
+      {publishConfirmOpen ? (
+        <div className="workflow-overlay">
+          <button
+            type="button"
+            aria-label="Close publish workflow dialog"
+            tabIndex={-1}
+            onClick={closePublishConfirm}
+            style={{
+              position: 'absolute',
+              inset: 0,
+              background: 'transparent',
+              border: 0,
+              padding: 0,
+            }}
+          />
+          <dialog
+            open
+            className="workflow-dialog"
+            aria-modal="true"
+            aria-labelledby="workflow-publish-dialog-title"
+            onCancel={(event) => {
+              event.preventDefault();
+              closePublishConfirm();
+            }}
+            style={{ position: 'relative' }}
+          >
+            <header className="workflow-dialog__header">
+              <h3 id="workflow-publish-dialog-title">Confirm publish</h3>
+              <p className="meta-text">Review this summary before publishing the workflow draft.</p>
+            </header>
+
+            <div className="workflow-dialog__form">
+              <ul className="entity-list">
+                <li>
+                  <span>Version bump</span>
+                  <span>{publishSummary.versionBump}</span>
+                </li>
+                <li>
+                  <span>Nodes</span>
+                  <span>{publishSummary.nodeCount}</span>
+                </li>
+                <li>
+                  <span>Transitions</span>
+                  <span>{publishSummary.edgeCount}</span>
+                </li>
+                <li>
+                  <span>Version notes</span>
+                  <span>{publishSummary.versionNotes}</span>
+                </li>
+              </ul>
+
+              {publishError ? (
+                <p className="run-launch-banner--error" role="alert">{publishError}</p>
+              ) : null}
+
+              <div className="workflow-dialog__actions">
+                <ActionButton onClick={closePublishConfirm} disabled={publishing}>
+                  Cancel
+                </ActionButton>
+                <ActionButton tone="primary" onClick={() => publish().catch(() => undefined)} disabled={publishing}>
+                  {publishing ? 'Publishing...' : 'Publish version'}
+                </ActionButton>
+              </div>
+            </div>
+          </dialog>
+        </div>
+      ) : null}
 	      <header className="workflow-editor-topbar">
 	        <div className="workflow-editor-topbar__meta">
 	          <p className="meta-text">Workflows / {treeKey}</p>
@@ -609,8 +706,10 @@ function WorkflowEditorLoadedContent({ initialDraft }: Readonly<{ initialDraft: 
 	        </div>
         <div className="workflow-editor-topbar__actions">
           <StatusBadge status={statusBadge.status} label={statusBadge.label} />
+          <ActionButton onClick={undo}>Undo</ActionButton>
+          <ActionButton onClick={redo}>Redo</ActionButton>
           <ActionButton onClick={runValidation}>Validate</ActionButton>
-          <ActionButton tone="primary" onClick={publish}>Publish</ActionButton>
+          <ActionButton tone="primary" onClick={openPublishConfirm}>Publish</ActionButton>
           <ButtonLink href="/workflows">Exit</ButtonLink>
         </div>
       </header>
