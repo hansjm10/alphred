@@ -42,6 +42,7 @@ import {
   mapEdgeFromReactFlow,
   mapNodeFromReactFlow,
   nextPriorityForSource,
+  toReactFlowNodeData,
   toFlowPosition,
 } from './workflow-editor-helpers';
 import {
@@ -400,7 +401,8 @@ function WorkflowEditorLoadedContent({ initialDraft }: Readonly<{ initialDraft: 
       {
         id: newNode.nodeKey,
         position: newNode.position ?? { x: 0, y: 0 },
-        data: newNode,
+        data: toReactFlowNodeData(newNode),
+        type: 'default',
       },
     ]);
 
@@ -534,7 +536,14 @@ function WorkflowEditorLoadedContent({ initialDraft }: Readonly<{ initialDraft: 
             onChange={(next) => {
               if (!selectedNode) return;
               setNodes((current) =>
-                current.map((node) => (node.id === selectedNode.id ? { ...node, data: next } : node)),
+                current.map((node) =>
+                  node.id === selectedNode.id
+                    ? {
+                        ...node,
+                        data: toReactFlowNodeData(next),
+                      }
+                    : node,
+                ),
               );
               markWorkflowChanged();
             }}

@@ -7,6 +7,7 @@ import type {
 import { slugifyKey } from '../../workflows-shared';
 
 type FlowPoint = Readonly<{ x: number; y: number }>;
+type ReactFlowNodeData = DashboardWorkflowDraftNode & { label?: string };
 
 export function toFlowPosition(instance: ReactFlowInstance, point: FlowPoint): FlowPoint | null {
   const maybe = instance as unknown as {
@@ -45,9 +46,7 @@ export function buildReactFlowNodes(draft: DashboardWorkflowDraftTopology): Node
   return draft.nodes.map(node => ({
     id: node.nodeKey,
     position: node.position ?? { x: 0, y: 0 },
-    data: {
-      ...node,
-    },
+    data: toReactFlowNodeData(node),
     type: 'default',
   }));
 }
@@ -65,11 +64,21 @@ export function buildReactFlowEdges(draft: DashboardWorkflowDraftTopology): Edge
 }
 
 export function mapNodeFromReactFlow(node: Node): DashboardWorkflowDraftNode {
-  const data = node.data as DashboardWorkflowDraftNode;
+  const data = { ...(node.data as ReactFlowNodeData) };
+  delete data.label;
+
+  const draftNode = data as DashboardWorkflowDraftNode;
   return {
-    ...data,
-    nodeKey: data.nodeKey,
+    ...draftNode,
+    nodeKey: draftNode.nodeKey,
     position: { x: Math.round(node.position.x), y: Math.round(node.position.y) },
+  };
+}
+
+export function toReactFlowNodeData(node: DashboardWorkflowDraftNode): DashboardWorkflowDraftNode & { label: string } {
+  return {
+    ...node,
+    label: node.displayName,
   };
 }
 
@@ -136,4 +145,3 @@ export function createDraftNode(args: Readonly<{
     promptTemplate: defaultPromptTemplate(args.nodeType),
   };
 }
-

@@ -107,8 +107,12 @@ describe('WorkflowEditorPageContent', () => {
 
     const body = init?.body;
     expect(typeof body).toBe('string');
-    const payload = JSON.parse(body as string) as { name?: string };
+    const payload = JSON.parse(body as string) as {
+      name?: string;
+      nodes?: Record<string, unknown>[];
+    };
     expect(payload.name).toBe('Updated Tree');
+    expect(Object.prototype.hasOwnProperty.call(payload.nodes?.[0] ?? {}, 'label')).toBe(false);
   });
 
   it('opens the add-node palette on N and closes on Escape', async () => {
@@ -213,6 +217,14 @@ describe('WorkflowEditorPageContent', () => {
     await vi.advanceTimersByTimeAsync(400);
 
     expect((screen.getByLabelText('Display name') as HTMLInputElement).value).toBe('Updated Node');
+    const editedNode = (
+      latestReactFlowProps?.nodes as {
+        id: string;
+        data: { displayName: string; label?: string };
+      }[]
+    )?.find((node) => node.id === 'design');
+    expect(editedNode?.data.displayName).toBe('Updated Node');
+    expect(editedNode?.data.label).toBe('Updated Node');
 
     fireEvent.keyDown(window, { key: 'z', ctrlKey: true });
     await vi.advanceTimersByTimeAsync(0);
@@ -225,6 +237,47 @@ describe('WorkflowEditorPageContent', () => {
     });
 
     expect((screen.getByLabelText('Display name') as HTMLInputElement).value).toBe('Design');
+  });
+
+  it('hydrates React Flow node labels from display names', async () => {
+    const fetchMock = vi.fn(async () => createJsonResponse({ draft: {} }, { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(
+      <WorkflowEditorPageContent
+        initialDraft={{
+          treeKey: 'demo-tree',
+          version: 1,
+          draftRevision: 0,
+          name: 'Demo Tree',
+          description: null,
+          versionNotes: null,
+          nodes: [
+            {
+              nodeKey: 'design',
+              displayName: 'Design',
+              nodeType: 'agent',
+              provider: 'codex',
+              maxRetries: 0,
+              sequenceIndex: 10,
+              position: { x: 0, y: 0 },
+              promptTemplate: { content: 'Draft prompt', contentType: 'markdown' },
+            },
+          ],
+          edges: [],
+          initialRunnableNodeKeys: ['design'],
+        }}
+      />,
+    );
+
+    const flowNode = (
+      latestReactFlowProps?.nodes as {
+        id: string;
+        data: { displayName: string; label?: string };
+      }[]
+    )?.find((node) => node.id === 'design');
+    expect(flowNode?.data.displayName).toBe('Design');
+    expect(flowNode?.data.label).toBe('Design');
   });
 
   it('runs validation and renders errors and warnings', async () => {
