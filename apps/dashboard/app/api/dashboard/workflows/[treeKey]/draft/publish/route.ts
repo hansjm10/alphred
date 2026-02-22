@@ -29,6 +29,25 @@ function parsePublishWorkflowDraftRequest(payload: unknown): DashboardPublishWor
   return { versionNotes };
 }
 
+async function parsePublishWorkflowDraftBody(request: Request): Promise<DashboardPublishWorkflowDraftRequest> {
+  const rawPayload = await request.text();
+  if (rawPayload.trim().length === 0) {
+    return {};
+  }
+
+  let payload: unknown;
+  try {
+    payload = JSON.parse(rawPayload) as unknown;
+  } catch (error) {
+    throw new DashboardIntegrationError('invalid_request', 'Publish payload must be valid JSON when provided.', {
+      status: 400,
+      cause: error,
+    });
+  }
+
+  return parsePublishWorkflowDraftRequest(payload);
+}
+
 export async function POST(request: Request, context: RouteContext): Promise<Response> {
   const service = createDashboardService();
 
@@ -39,7 +58,7 @@ export async function POST(request: Request, context: RouteContext): Promise<Res
       'version',
       'Query parameter "version" must be a positive integer.',
     );
-    const payload = parsePublishWorkflowDraftRequest(await request.json().catch(() => ({})));
+    const payload = await parsePublishWorkflowDraftBody(request);
     const workflow = await service.publishWorkflowDraft(params.treeKey, version, payload);
     return NextResponse.json({ workflow });
   } catch (error) {

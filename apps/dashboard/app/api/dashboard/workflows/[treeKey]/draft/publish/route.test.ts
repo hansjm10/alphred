@@ -69,6 +69,44 @@ describe('POST /api/dashboard/workflows/[treeKey]/draft/publish', () => {
     expect(publishWorkflowDraftMock).toHaveBeenCalledTimes(1);
   });
 
+  it('publishes workflow drafts when the request body is empty', async () => {
+    publishWorkflowDraftMock.mockResolvedValue({
+      id: 1,
+      treeKey: 'demo-tree',
+      version: 2,
+      name: 'Demo Tree',
+      description: null,
+    });
+
+    const request = new Request('http://localhost/api/dashboard/workflows/demo-tree/draft/publish?version=2', {
+      method: 'POST',
+    });
+
+    const response = await POST(request, { params: Promise.resolve({ treeKey: 'demo-tree' }) });
+
+    expect(response.status).toBe(200);
+    expect(publishWorkflowDraftMock).toHaveBeenCalledWith('demo-tree', 2, {});
+  });
+
+  it('returns 400 when publish payload JSON is malformed', async () => {
+    const request = new Request('http://localhost/api/dashboard/workflows/demo-tree/draft/publish?version=2', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: '{"versionNotes":',
+    });
+
+    const response = await POST(request, { params: Promise.resolve({ treeKey: 'demo-tree' }) });
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      error: {
+        code: 'invalid_request',
+        message: 'Publish payload must be valid JSON when provided.',
+      },
+    });
+    expect(publishWorkflowDraftMock).not.toHaveBeenCalled();
+  });
+
   it('returns 400 when publish payload is invalid', async () => {
     const request = new Request('http://localhost/api/dashboard/workflows/demo-tree/draft/publish?version=2', {
       method: 'POST',

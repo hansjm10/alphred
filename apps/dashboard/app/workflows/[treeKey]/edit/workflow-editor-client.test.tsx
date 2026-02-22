@@ -946,28 +946,20 @@ describe('WorkflowEditorPageContent', () => {
     expect(secondPayload.draftRevision).toBe(51);
   });
 
-  it('reuses the aborted revision for the next save request', async () => {
+  it('serializes autosave requests while a save is in flight', async () => {
     let saveRequestCount = 0;
-    const fetchMock = vi.fn((_: RequestInfo | URL, init?: RequestInit) => {
+    let releaseFirstSave: (() => void) | undefined;
+    const firstSaveReleased = new Promise<void>(resolve => {
+      releaseFirstSave = resolve;
+    });
+    const fetchMock = vi.fn(async () => {
       saveRequestCount += 1;
       if (saveRequestCount === 1) {
-        const signal = init?.signal;
-        return new Promise<Response>((_resolve, reject) => {
-          if (signal?.aborted) {
-            reject(new DOMException('The operation was aborted.', 'AbortError'));
-            return;
-          }
-          signal?.addEventListener(
-            'abort',
-            () => {
-              reject(new DOMException('The operation was aborted.', 'AbortError'));
-            },
-            { once: true },
-          );
-        });
+        await firstSaveReleased;
+        return createJsonResponse({ draft: { draftRevision: 1 } }, { status: 200 });
       }
 
-      return Promise.resolve(createJsonResponse({ draft: { draftRevision: 1 } }, { status: 200 }));
+      return createJsonResponse({ draft: { draftRevision: 2 } }, { status: 200 });
     });
     vi.stubGlobal('fetch', fetchMock);
 
@@ -993,12 +985,24 @@ describe('WorkflowEditorPageContent', () => {
     fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Updated Tree 2' } });
     await vi.advanceTimersByTimeAsync(1000);
 
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const completeFirstSave = releaseFirstSave;
+    expect(completeFirstSave).toBeTypeOf('function');
+    if (!completeFirstSave) {
+      throw new Error('Expected first autosave resolver to be initialized.');
+    }
+    completeFirstSave();
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
     expect(fetchMock).toHaveBeenCalledTimes(2);
     const calls = fetchMock.mock.calls as unknown as [RequestInfo | URL, RequestInit | undefined][];
     const firstPayload = JSON.parse(calls[0]?.[1]?.body as string) as { draftRevision: number };
     const secondPayload = JSON.parse(calls[1]?.[1]?.body as string) as { draftRevision: number };
     expect(firstPayload.draftRevision).toBe(1);
-    expect(secondPayload.draftRevision).toBe(1);
+    expect(secondPayload.draftRevision).toBe(2);
   });
 
   it('does not autosave for selection-only ReactFlow changes', async () => {

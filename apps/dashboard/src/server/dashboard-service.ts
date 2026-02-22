@@ -753,19 +753,33 @@ export function createDashboardService(options: {
     return false;
   }
 
+  function normalizeDraftTopologyKeys(
+    topology: Pick<DashboardWorkflowDraftTopology, 'nodes' | 'edges'>,
+  ): Pick<DashboardWorkflowDraftTopology, 'nodes' | 'edges'> {
+    return {
+      nodes: topology.nodes.map(node => ({ ...node, nodeKey: node.nodeKey.trim() })),
+      edges: topology.edges.map(edge => ({
+        ...edge,
+        sourceNodeKey: edge.sourceNodeKey.trim(),
+        targetNodeKey: edge.targetNodeKey.trim(),
+      })),
+    };
+  }
+
   function validateDraftTopology(
     topology: Pick<DashboardWorkflowDraftTopology, 'nodes' | 'edges'>,
     mode: 'save' | 'publish',
   ): DashboardWorkflowValidationResult {
+    const normalizedTopology = normalizeDraftTopologyKeys(topology);
     const errors: DashboardWorkflowValidationIssue[] = [];
     const warnings: DashboardWorkflowValidationIssue[] = [];
 
-    if (topology.nodes.length === 0) {
+    if (normalizedTopology.nodes.length === 0) {
       errors.push({ code: 'no_nodes', message: 'Workflow must include at least one node.' });
     }
 
     const nodeKeys = new Set<string>();
-    for (const node of topology.nodes) {
+    for (const node of normalizedTopology.nodes) {
       if (!workflowNodeTypes.has(node.nodeType)) {
         errors.push({ code: 'node_type_invalid', message: `Node type "${node.nodeType}" is not supported.` });
         continue;
@@ -804,7 +818,7 @@ export function createDashboardService(options: {
     }
 
     const prioritiesBySource = new Map<string, Set<number>>();
-    for (const edge of topology.edges) {
+    for (const edge of normalizedTopology.edges) {
       if (!nodeKeys.has(edge.sourceNodeKey)) {
         errors.push({
           code: 'edge_source_missing',
@@ -857,8 +871,8 @@ export function createDashboardService(options: {
       }
     }
 
-    const initialRunnableNodeKeys = computeInitialRunnableNodeKeys(topology.nodes, topology.edges);
-    if (topology.nodes.length > 0 && initialRunnableNodeKeys.length === 0) {
+    const initialRunnableNodeKeys = computeInitialRunnableNodeKeys(normalizedTopology.nodes, normalizedTopology.edges);
+    if (normalizedTopology.nodes.length > 0 && initialRunnableNodeKeys.length === 0) {
       errors.push({
         code: 'no_initial_nodes',
         message: 'Workflow must include at least one initial runnable node (a node with no incoming transitions).',
@@ -870,16 +884,16 @@ export function createDashboardService(options: {
       });
     }
 
-    const hasCycles = detectCycle(topology.nodes, topology.edges);
+    const hasCycles = detectCycle(normalizedTopology.nodes, normalizedTopology.edges);
     if (hasCycles) {
       warnings.push({ code: 'cycles_present', message: 'Cycles are present in the workflow graph.' });
     }
 
     const outgoingBySource = new Map<string, number>();
-    for (const edge of topology.edges) {
+    for (const edge of normalizedTopology.edges) {
       outgoingBySource.set(edge.sourceNodeKey, (outgoingBySource.get(edge.sourceNodeKey) ?? 0) + 1);
     }
-    for (const node of topology.nodes) {
+    for (const node of normalizedTopology.nodes) {
       if ((outgoingBySource.get(node.nodeKey) ?? 0) === 0) {
         warnings.push({
           code: 'terminal_node',
@@ -1742,7 +1756,8 @@ export function createDashboardService(options: {
 	        });
 	      }
 
-	      const draftValidation = validateDraftTopology({ nodes: request.nodes, edges: request.edges }, 'save');
+	      const normalizedTopology = normalizeDraftTopologyKeys({ nodes: request.nodes, edges: request.edges });
+	      const draftValidation = validateDraftTopology(normalizedTopology, 'save');
 	      if (draftValidation.errors.length > 0) {
 	        throw new DashboardIntegrationError('invalid_request', 'Draft workflow failed validation and cannot be saved.', {
 	          status: 400,
@@ -1817,11 +1832,11 @@ export function createDashboardService(options: {
             tx.delete(guardDefinitions).where(inArray(guardDefinitions.id, existingGuardDefinitionIds)).run();
           }
 
-          const promptTemplateIdByNodeKey = new Map<string, number>();
-          for (const node of request.nodes) {
-            if (!node.promptTemplate) {
-              continue;
-            }
+	          const promptTemplateIdByNodeKey = new Map<string, number>();
+	          for (const node of normalizedTopology.nodes) {
+	            if (!node.promptTemplate) {
+	              continue;
+	            }
             const inserted = tx
               .insert(promptTemplates)
               .values({
@@ -1833,13 +1848,13 @@ export function createDashboardService(options: {
               .returning({ id: promptTemplates.id })
               .get();
             promptTemplateIdByNodeKey.set(node.nodeKey, inserted.id);
-          }
+	          }
 
-          const nodeIdByKey = new Map<string, number>();
-          for (const node of request.nodes) {
-            const inserted = tx
-              .insert(treeNodes)
-              .values({
+	          const nodeIdByKey = new Map<string, number>();
+	          for (const node of normalizedTopology.nodes) {
+	            const inserted = tx
+	              .insert(treeNodes)
+	              .values({
                 workflowTreeId: tree.id,
                 nodeKey: node.nodeKey,
                 displayName: node.displayName,
@@ -1854,13 +1869,13 @@ export function createDashboardService(options: {
               .returning({ id: treeNodes.id })
               .get();
             nodeIdByKey.set(node.nodeKey, inserted.id);
-          }
+	          }
 
-          const guardDefinitionIdByKey = new Map<string, number>();
-          for (const edge of request.edges) {
-            if (edge.auto || edge.guardExpression === null) {
-              continue;
-            }
+	          const guardDefinitionIdByKey = new Map<string, number>();
+	          for (const edge of normalizedTopology.edges) {
+	            if (edge.auto || edge.guardExpression === null) {
+	              continue;
+	            }
             const key = `${edge.sourceNodeKey}->${edge.targetNodeKey}/priority-${edge.priority}`;
             const inserted = tx
               .insert(guardDefinitions)
@@ -1872,13 +1887,13 @@ export function createDashboardService(options: {
               })
               .returning({ id: guardDefinitions.id })
               .get();
-            guardDefinitionIdByKey.set(key, inserted.id);
-          }
+	            guardDefinitionIdByKey.set(key, inserted.id);
+	          }
 
-	          for (const edge of request.edges) {
-	            const sourceNodeId = nodeIdByKey.get(edge.sourceNodeKey);
-	            const targetNodeId = nodeIdByKey.get(edge.targetNodeKey);
-	            if (!sourceNodeId || !targetNodeId) {
+		          for (const edge of normalizedTopology.edges) {
+		            const sourceNodeId = nodeIdByKey.get(edge.sourceNodeKey);
+		            const targetNodeId = nodeIdByKey.get(edge.targetNodeKey);
+		            if (!sourceNodeId || !targetNodeId) {
 	              throw new DashboardIntegrationError(
 	                'internal_error',
 	                `Failed to resolve node IDs for transition ${edge.sourceNodeKey} → ${edge.targetNodeKey}.`,

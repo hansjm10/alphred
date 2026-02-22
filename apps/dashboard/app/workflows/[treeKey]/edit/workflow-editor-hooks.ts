@@ -36,6 +36,7 @@ export function useDraftAutosave(args: Readonly<{
   const pendingSaveRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const inFlightSaveAbortRef = useRef<AbortController | null>(null);
   const inFlightSavePromiseRef = useRef<Promise<boolean> | null>(null);
+  const saveQueueRef = useRef<Promise<void>>(Promise.resolve());
 
   const markDirty = useCallback(() => {
     setSaveState('draft');
@@ -48,14 +49,6 @@ export function useDraftAutosave(args: Readonly<{
     }
 
     const runSave = async (): Promise<boolean> => {
-      const previousInFlightSave = inFlightSavePromiseRef.current;
-      if (inFlightSaveAbortRef.current) {
-        inFlightSaveAbortRef.current.abort();
-      }
-      if (previousInFlightSave) {
-        await previousInFlightSave.catch(() => false);
-      }
-
       setSaveError(null);
       setSaveState('saving');
 
@@ -127,7 +120,8 @@ export function useDraftAutosave(args: Readonly<{
       }
     };
 
-    const savePromise = runSave();
+    const savePromise = saveQueueRef.current.then(runSave, runSave);
+    saveQueueRef.current = savePromise.then(() => undefined, () => undefined);
     inFlightSavePromiseRef.current = savePromise;
     return savePromise.finally(() => {
       if (inFlightSavePromiseRef.current === savePromise) {

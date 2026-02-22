@@ -788,6 +788,63 @@ describe('createDashboardService', () => {
     });
   });
 
+  it('normalizes node and edge keys before saving drafts', async () => {
+    const { db, dependencies } = createHarness();
+    migrateDatabase(db);
+
+    const service = createDashboardService({ dependencies });
+
+    await service.createWorkflowDraft({
+      template: 'blank',
+      name: 'Whitespace Tree',
+      treeKey: 'whitespace-tree',
+    });
+
+    const savedDraft = await service.saveWorkflowDraft('whitespace-tree', 1, {
+      draftRevision: 1,
+      name: 'Whitespace Tree',
+      nodes: [
+        {
+          nodeKey: ' source ',
+          displayName: 'Source',
+          nodeType: 'agent',
+          provider: 'codex',
+          maxRetries: 0,
+          sequenceIndex: 10,
+          position: null,
+          promptTemplate: { content: 'Source prompt', contentType: 'markdown' },
+        },
+        {
+          nodeKey: 'target ',
+          displayName: 'Target',
+          nodeType: 'agent',
+          provider: 'codex',
+          maxRetries: 0,
+          sequenceIndex: 20,
+          position: null,
+          promptTemplate: { content: 'Target prompt', contentType: 'markdown' },
+        },
+      ],
+      edges: [
+        {
+          sourceNodeKey: 'source',
+          targetNodeKey: ' target',
+          priority: 0,
+          auto: true,
+          guardExpression: null,
+        },
+      ],
+    });
+
+    expect(savedDraft.nodes.map(node => node.nodeKey)).toEqual(['source', 'target']);
+    expect(savedDraft.edges).toEqual([
+      expect.objectContaining({
+        sourceNodeKey: 'source',
+        targetNodeKey: 'target',
+      }),
+    ]);
+  });
+
   it('requires the exact next draft revision when saving', async () => {
     const { db, dependencies } = createHarness();
     migrateDatabase(db);
