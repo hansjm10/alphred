@@ -657,35 +657,28 @@ describe('createDashboardService', () => {
     expect(draft.edges.length).toBeGreaterThan(0);
   });
 
-  it('accepts underscore workflow tree keys across draft lifecycle actions', async () => {
+  it('rejects underscore workflow tree keys across draft lifecycle actions', async () => {
     const { db, dependencies } = createHarness();
     migrateDatabase(db);
 
     const service = createDashboardService({ dependencies });
 
-    await service.createWorkflowDraft({
-      template: 'design-implement-review',
-      name: 'Design Tree',
-      treeKey: 'design_tree',
-    });
-
-    const draft = await service.getOrCreateWorkflowDraft('design_tree');
-    expect(draft.treeKey).toBe('design_tree');
-
-    await expect(service.validateWorkflowDraft('design_tree', draft.version)).resolves.toMatchObject({
-      errors: expect.any(Array),
-    });
-
-    await expect(service.publishWorkflowDraft('design_tree', draft.version, {})).resolves.toBeDefined();
-
     await expect(
-      service.duplicateWorkflowTree('design_tree', {
-        name: 'Design Tree Copy',
-        treeKey: 'design_tree_copy',
+      service.createWorkflowDraft({
+        template: 'design-implement-review',
+        name: 'Design Tree',
+        treeKey: 'design_tree',
       }),
-    ).resolves.toMatchObject({
-      treeKey: 'design_tree_copy',
-      draftVersion: 1,
+    ).rejects.toMatchObject({
+      code: 'invalid_request',
+      status: 400,
+      message: 'Workflow tree key must be lowercase and contain only a-z, 0-9, and hyphens.',
+    });
+
+    await expect(service.getOrCreateWorkflowDraft('design_tree')).rejects.toMatchObject({
+      code: 'invalid_request',
+      status: 400,
+      message: 'Workflow tree key must be lowercase and contain only a-z, 0-9, and hyphens.',
     });
   });
 
@@ -949,6 +942,55 @@ describe('createDashboardService', () => {
       status: 400,
       details: expect.objectContaining({
         errors: expect.arrayContaining([expect.objectContaining({ code: 'transition_priority_invalid' })]),
+      }),
+    });
+  });
+
+  it('rejects saving drafts with duplicate node sequence indexes', async () => {
+    const { db, dependencies } = createHarness();
+    migrateDatabase(db);
+
+    const service = createDashboardService({ dependencies });
+
+    await service.createWorkflowDraft({
+      template: 'blank',
+      name: 'Sequence Tree',
+      treeKey: 'sequence-tree',
+    });
+
+    await expect(
+      service.saveWorkflowDraft('sequence-tree', 1, {
+        draftRevision: 1,
+        name: 'Sequence Tree',
+        nodes: [
+          {
+            nodeKey: 'a',
+            displayName: 'A',
+            nodeType: 'agent',
+            provider: 'codex',
+            maxRetries: 0,
+            sequenceIndex: 10,
+            position: null,
+            promptTemplate: { content: 'A prompt', contentType: 'markdown' },
+          },
+          {
+            nodeKey: 'b',
+            displayName: 'B',
+            nodeType: 'agent',
+            provider: 'codex',
+            maxRetries: 0,
+            sequenceIndex: 10,
+            position: null,
+            promptTemplate: { content: 'B prompt', contentType: 'markdown' },
+          },
+        ],
+        edges: [],
+      }),
+    ).rejects.toMatchObject({
+      code: 'invalid_request',
+      status: 400,
+      details: expect.objectContaining({
+        errors: expect.arrayContaining([expect.objectContaining({ code: 'duplicate_node_sequence_index' })]),
       }),
     });
   });

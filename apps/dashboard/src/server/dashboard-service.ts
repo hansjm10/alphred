@@ -665,10 +665,10 @@ export function createDashboardService(options: {
       });
     }
 
-    if (!/^[a-z0-9_-]+$/.test(value)) {
+    if (!/^[a-z0-9-]+$/.test(value)) {
       throw new DashboardIntegrationError(
         'invalid_request',
-        'Workflow tree key must be lowercase and contain only a-z, 0-9, underscores, and hyphens.',
+        'Workflow tree key must be lowercase and contain only a-z, 0-9, and hyphens.',
         { status: 400 },
       );
     }
@@ -779,6 +779,7 @@ export function createDashboardService(options: {
     }
 
     const nodeKeys = new Set<string>();
+    const sequenceIndexes = new Set<number>();
     for (const node of normalizedTopology.nodes) {
       if (!workflowNodeTypes.has(node.nodeType)) {
         errors.push({ code: 'node_type_invalid', message: `Node type "${node.nodeType}" is not supported.` });
@@ -794,6 +795,14 @@ export function createDashboardService(options: {
         errors.push({ code: 'duplicate_node_key', message: `Duplicate node key "${trimmedKey}".` });
       }
       nodeKeys.add(trimmedKey);
+
+      if (sequenceIndexes.has(node.sequenceIndex)) {
+        errors.push({
+          code: 'duplicate_node_sequence_index',
+          message: `Duplicate node sequence index ${node.sequenceIndex}.`,
+        });
+      }
+      sequenceIndexes.add(node.sequenceIndex);
 
       const trimmedName = node.displayName.trim();
       if (trimmedName.length === 0) {
