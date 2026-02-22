@@ -103,6 +103,24 @@ describe('WorkflowsPageContent', () => {
     expect(screen.getByText('just now')).toBeInTheDocument();
   });
 
+  it('renders Unknown when updatedAt is invalid', () => {
+    render(
+      <WorkflowsPageContent
+        workflows={[
+          createWorkflow({
+            treeKey: 'demo-tree',
+            name: 'Demo Tree',
+            updatedAt: 'not-a-date',
+            publishedVersion: 1,
+            draftVersion: null,
+          }),
+        ]}
+      />,
+    );
+
+    expect(screen.getByText('Unknown')).toBeInTheDocument();
+  });
+
   it('duplicates a workflow and routes to the new builder on success', async () => {
     const user = userEvent.setup();
     const fetchMock = vi.fn(async () => createJsonResponse({ treeKey: 'demo-tree-copy', draftVersion: 1 }, { status: 200 }));
@@ -156,6 +174,57 @@ describe('WorkflowsPageContent', () => {
     await waitFor(() => {
       expect(pushMock).toHaveBeenCalledWith('/workflows/demo-tree-copy/edit');
     });
+  });
+
+  it('slugifies the tree key when left blank in the duplicate dialog', async () => {
+    const user = userEvent.setup();
+    const fetchMock = vi.fn(async () => createJsonResponse({ treeKey: 'demo-tree-copy', draftVersion: 1 }, { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(<WorkflowsPageContent workflows={[createWorkflow({ treeKey: 'demo-tree', description: 'First workflow' })]} />);
+
+    await user.click(screen.getByRole('button', { name: 'Duplicate' }));
+
+    const dialog = screen.getByRole('dialog', { name: 'Duplicate workflow' });
+    const dialogQueries = within(dialog);
+
+    const nameInput = dialogQueries.getByLabelText('Name');
+    const treeKeyInput = dialogQueries.getByRole('textbox', { name: /^Tree key/ });
+
+    await user.clear(nameInput);
+    await user.type(nameInput, 'Demo Tree Copy');
+    await user.clear(treeKeyInput);
+
+    await user.click(dialogQueries.getByRole('button', { name: 'Duplicate and open builder' }));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+
+    const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    const body = JSON.parse(init.body as string) as Record<string, unknown>;
+    expect(body.treeKey).toBe('demo-tree-copy');
+  });
+
+  it('requires name and tree key when duplicating', async () => {
+    const user = userEvent.setup();
+    const fetchMock = vi.fn(async () => createJsonResponse({ treeKey: 'demo-tree-copy', draftVersion: 1 }, { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(<WorkflowsPageContent workflows={[createWorkflow({ treeKey: 'demo-tree', description: 'First workflow' })]} />);
+
+    await user.click(screen.getByRole('button', { name: 'Duplicate' }));
+
+    const dialog = screen.getByRole('dialog', { name: 'Duplicate workflow' });
+    const dialogQueries = within(dialog);
+
+    await user.clear(dialogQueries.getByLabelText('Name'));
+    await user.clear(dialogQueries.getByRole('textbox', { name: /^Tree key/ }));
+
+    await user.click(dialogQueries.getByRole('button', { name: 'Duplicate and open builder' }));
+
+    expect(await dialogQueries.findByRole('alert')).toHaveTextContent('Name and tree key are required.');
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it('surfaces API error payloads when duplication fails', async () => {

@@ -186,6 +186,44 @@ describe('PUT /api/dashboard/workflows/[treeKey]/draft', () => {
     expect(saveWorkflowDraftMock).not.toHaveBeenCalled();
   });
 
+  it('returns 400 when a node promptTemplate payload is invalid', async () => {
+    const request = new Request('http://localhost/api/dashboard/workflows/demo-tree/draft?version=1', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        draftRevision: 1,
+        name: 'Demo Tree',
+        nodes: [
+          {
+            nodeKey: 'design',
+            displayName: 'Design',
+            nodeType: 'agent',
+            provider: null,
+            maxRetries: 0,
+            sequenceIndex: 10,
+            position: null,
+            promptTemplate: { content: 123, contentType: 'markdown' },
+          },
+        ],
+        edges: [],
+      }),
+    });
+
+    const response = await PUT(request, { params: Promise.resolve({ treeKey: 'demo-tree' }) });
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      error: {
+        code: 'invalid_request',
+        message: 'Draft node at index 0 has an invalid promptTemplate.',
+        details: {
+          field: 'nodes[0].promptTemplate',
+        },
+      },
+    });
+    expect(saveWorkflowDraftMock).not.toHaveBeenCalled();
+  });
+
   it('returns 400 when an edge payload is invalid', async () => {
     const request = new Request('http://localhost/api/dashboard/workflows/demo-tree/draft?version=1', {
       method: 'PUT',
@@ -214,6 +252,40 @@ describe('PUT /api/dashboard/workflows/[treeKey]/draft', () => {
         message: 'Draft edge at index 0 must have an integer priority.',
         details: {
           field: 'edges[0].priority',
+        },
+      },
+    });
+    expect(saveWorkflowDraftMock).not.toHaveBeenCalled();
+  });
+
+  it('returns 400 when edge auto flag is invalid', async () => {
+    const request = new Request('http://localhost/api/dashboard/workflows/demo-tree/draft?version=1', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        draftRevision: 1,
+        name: 'Demo Tree',
+        nodes: [],
+        edges: [
+          {
+            sourceNodeKey: 'design',
+            targetNodeKey: 'implement',
+            priority: 100,
+            auto: 'true',
+          },
+        ],
+      }),
+    });
+
+    const response = await PUT(request, { params: Promise.resolve({ treeKey: 'demo-tree' }) });
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      error: {
+        code: 'invalid_request',
+        message: 'Draft edge at index 0 must have a boolean auto flag.',
+        details: {
+          field: 'edges[0].auto',
         },
       },
     });
