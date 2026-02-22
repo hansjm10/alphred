@@ -575,4 +575,199 @@ describe('WorkflowEditorPageContent', () => {
       },
     ]);
   });
+
+  it('ignores drops when no node type is provided', async () => {
+    const fetchMock = vi.fn(async () => createJsonResponse({ draft: {} }, { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(
+      <WorkflowEditorPageContent
+        initialDraft={{
+          treeKey: 'demo-tree',
+          version: 1,
+          draftRevision: 0,
+          name: 'Demo Tree',
+          description: null,
+          versionNotes: null,
+          nodes: [],
+          edges: [],
+          initialRunnableNodeKeys: [],
+        }}
+      />,
+    );
+
+    const onDrop = latestReactFlowProps?.onDrop;
+    expect(typeof onDrop).toBe('function');
+
+    let preventDefaultCalled = false;
+    await act(async () => {
+      (onDrop as (event: unknown) => void)({
+        preventDefault: () => {
+          preventDefaultCalled = true;
+        },
+        clientX: 10,
+        clientY: 20,
+        dataTransfer: {
+          getData: () => '',
+        },
+      });
+    });
+    expect(preventDefaultCalled).toBe(true);
+
+    await vi.advanceTimersByTimeAsync(1200);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('falls back to the ReactFlow project() method when screenToFlowPosition is unavailable', async () => {
+    const fetchMock = vi.fn(async () => createJsonResponse({ draft: {} }, { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(
+      <WorkflowEditorPageContent
+        initialDraft={{
+          treeKey: 'demo-tree',
+          version: 1,
+          draftRevision: 0,
+          name: 'Demo Tree',
+          description: null,
+          versionNotes: null,
+          nodes: [],
+          edges: [],
+          initialRunnableNodeKeys: [],
+        }}
+      />,
+    );
+
+    const onInit = latestReactFlowProps?.onInit;
+    expect(typeof onInit).toBe('function');
+    await act(async () => {
+      (onInit as (instance: unknown) => void)({
+        project: (point: { x: number; y: number }) => point,
+      });
+    });
+
+    const onDrop = latestReactFlowProps?.onDrop;
+    expect(typeof onDrop).toBe('function');
+
+    let preventDefaultCalled = false;
+    await act(async () => {
+      (onDrop as (event: unknown) => void)({
+        preventDefault: () => {
+          preventDefaultCalled = true;
+        },
+        clientX: 10,
+        clientY: 20,
+        dataTransfer: {
+          getData: () => 'agent',
+        },
+      });
+    });
+    expect(preventDefaultCalled).toBe(true);
+
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('skips drops when the flow instance cannot project screen coordinates', async () => {
+    const fetchMock = vi.fn(async () => createJsonResponse({ draft: {} }, { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(
+      <WorkflowEditorPageContent
+        initialDraft={{
+          treeKey: 'demo-tree',
+          version: 1,
+          draftRevision: 0,
+          name: 'Demo Tree',
+          description: null,
+          versionNotes: null,
+          nodes: [],
+          edges: [],
+          initialRunnableNodeKeys: [],
+        }}
+      />,
+    );
+
+    const onInit = latestReactFlowProps?.onInit;
+    expect(typeof onInit).toBe('function');
+    await act(async () => {
+      (onInit as (instance: unknown) => void)({});
+    });
+
+    const onDrop = latestReactFlowProps?.onDrop;
+    expect(typeof onDrop).toBe('function');
+
+    let preventDefaultCalled = false;
+    await act(async () => {
+      (onDrop as (event: unknown) => void)({
+        preventDefault: () => {
+          preventDefaultCalled = true;
+        },
+        clientX: 10,
+        clientY: 20,
+        dataTransfer: {
+          getData: () => 'agent',
+        },
+      });
+    });
+    expect(preventDefaultCalled).toBe(true);
+
+    await vi.advanceTimersByTimeAsync(1200);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('generates unique node keys when dropping duplicate node types', async () => {
+    const fetchMock = vi.fn(async () => createJsonResponse({ draft: {} }, { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(
+      <WorkflowEditorPageContent
+        initialDraft={{
+          treeKey: 'demo-tree',
+          version: 1,
+          draftRevision: 0,
+          name: 'Demo Tree',
+          description: null,
+          versionNotes: null,
+          nodes: [
+            {
+              nodeKey: 'agent',
+              displayName: 'Agent',
+              nodeType: 'agent',
+              provider: 'codex',
+              maxRetries: 0,
+              sequenceIndex: 10,
+              position: { x: 0, y: 0 },
+              promptTemplate: { content: 'Draft prompt', contentType: 'markdown' },
+            },
+          ],
+          edges: [],
+          initialRunnableNodeKeys: ['agent'],
+        }}
+      />,
+    );
+
+    const onDrop = latestReactFlowProps?.onDrop;
+    expect(typeof onDrop).toBe('function');
+
+    let preventDefaultCalled = false;
+    await act(async () => {
+      (onDrop as (event: unknown) => void)({
+        preventDefault: () => {
+          preventDefaultCalled = true;
+        },
+        clientX: 10,
+        clientY: 20,
+        dataTransfer: {
+          getData: () => 'agent',
+        },
+      });
+    });
+    expect(preventDefaultCalled).toBe(true);
+
+    await vi.advanceTimersByTimeAsync(1000);
+    const call = fetchMock.mock.calls[0] as unknown as [RequestInfo | URL, RequestInit | undefined];
+    const payload = JSON.parse(call[1]?.body as string) as { nodes?: { nodeKey: string }[] };
+    expect(payload.nodes?.map(node => node.nodeKey)).toContain('agent-2');
+  });
 });
