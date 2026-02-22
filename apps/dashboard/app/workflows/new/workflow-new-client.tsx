@@ -75,6 +75,7 @@ export function NewWorkflowPageContent() {
             <div className="workflow-template-cards" role="radiogroup" aria-label="Workflow template">
               <label
                 htmlFor="workflow-template-design-implement-review"
+                aria-label="Template: Design implement review"
                 className={`workflow-template-card${template === 'design-implement-review' ? ' workflow-template-card--selected' : ''}`}
               >
                 <input
@@ -93,6 +94,7 @@ export function NewWorkflowPageContent() {
 
               <label
                 htmlFor="workflow-template-blank"
+                aria-label="Template: Blank workflow"
                 className={`workflow-template-card${template === 'blank' ? ' workflow-template-card--selected' : ''}`}
               >
                 <input

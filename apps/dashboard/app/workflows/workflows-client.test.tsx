@@ -294,7 +294,7 @@ describe('WorkflowsPageContent', () => {
     fireEvent.mouseDown(within(dialog).getByRole('heading', { name: 'Duplicate workflow' }));
     expect(screen.getByRole('dialog', { name: 'Duplicate workflow' })).toBeInTheDocument();
 
-    fireEvent.mouseDown(dialog);
+    await user.click(screen.getByRole('button', { name: 'Close duplicate workflow dialog' }));
     expect(screen.queryByRole('dialog', { name: 'Duplicate workflow' })).toBeNull();
 
     await user.click(screen.getByRole('button', { name: 'Duplicate' }));

@@ -238,24 +238,31 @@ export function WorkflowsPageContent({ workflows }: WorkflowsPageContentProps) {
       </Panel>
 
       {duplicateDialog?.open ? (
-        <dialog
-          className="workflow-overlay"
-          open
-          aria-modal="true"
-          aria-labelledby="workflow-duplicate-dialog-title"
-          onMouseDown={(event) => {
-            if (event.target === event.currentTarget) {
-              setDuplicateDialog(null);
-            }
-          }}
-          onKeyDown={(event) => {
-            if (event.key === 'Escape') {
+        <div className="workflow-overlay">
+          <button
+            type="button"
+            aria-label="Close duplicate workflow dialog"
+            tabIndex={-1}
+            onClick={() => setDuplicateDialog(null)}
+            style={{
+              position: 'absolute',
+              inset: 0,
+              background: 'transparent',
+              border: 0,
+              padding: 0,
+            }}
+          />
+          <dialog
+            open
+            className="workflow-dialog"
+            aria-modal="true"
+            aria-labelledby="workflow-duplicate-dialog-title"
+            onCancel={(event) => {
               event.preventDefault();
               setDuplicateDialog(null);
-            }
-          }}
-        >
-          <div className="workflow-dialog">
+            }}
+            style={{ position: 'relative' }}
+          >
             <header className="workflow-dialog__header">
               <h3 id="workflow-duplicate-dialog-title">Duplicate workflow</h3>
               <p className="meta-text">Creates a new draft v1 from “{duplicateDialog.sourceName}”.</p>
@@ -311,8 +318,8 @@ export function WorkflowsPageContent({ workflows }: WorkflowsPageContentProps) {
                 </ActionButton>
               </div>
             </form>
-          </div>
-        </dialog>
+          </dialog>
+        </div>
       ) : null}
     </div>
   );
