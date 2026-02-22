@@ -55,6 +55,14 @@ import { WorkflowEditorNodePalette } from './workflow-editor-node-palette';
 
 type InspectorTab = 'node' | 'transition' | 'workflow';
 
+function hasNonSelectionNodeChanges(changes: NodeChange[]): boolean {
+  return changes.some(change => change.type !== 'select');
+}
+
+function hasNonSelectionEdgeChanges(changes: EdgeChange[]): boolean {
+  return changes.some(change => change.type !== 'select');
+}
+
 export function WorkflowEditorPageContent({ initialDraft }: Readonly<{ initialDraft: DashboardWorkflowDraftTopology }>) {
   const router = useRouter();
   const treeKey = initialDraft.treeKey;
@@ -216,13 +224,19 @@ export function WorkflowEditorPageContent({ initialDraft }: Readonly<{ initialDr
   }, [draftEdgesForSave, draftNodesForSave]);
 
   const onNodesChange = useCallback((changes: NodeChange[]) => {
+    const shouldMarkDirty = hasNonSelectionNodeChanges(changes);
     setNodes((current) => applyNodeChanges(changes, current));
-    markWorkflowChanged();
+    if (shouldMarkDirty) {
+      markWorkflowChanged();
+    }
   }, [markWorkflowChanged]);
 
   const onEdgesChange = useCallback((changes: EdgeChange[]) => {
+    const shouldMarkDirty = hasNonSelectionEdgeChanges(changes);
     setEdges((current) => applyEdgeChanges(changes, current));
-    markWorkflowChanged();
+    if (shouldMarkDirty) {
+      markWorkflowChanged();
+    }
   }, [markWorkflowChanged]);
 
   const onConnect = useCallback((connection: Connection) => {
@@ -334,6 +348,12 @@ export function WorkflowEditorPageContent({ initialDraft }: Readonly<{ initialDr
     setPublishError(null);
 
     try {
+      const saveSucceeded = await flushSave();
+      if (!saveSucceeded) {
+        setValidationError('Save the latest draft changes before validating.');
+        return;
+      }
+
       const response = await fetch(
         `/api/dashboard/workflows/${encodeURIComponent(treeKey)}/draft/validate?version=${version}`,
         { method: 'POST' },

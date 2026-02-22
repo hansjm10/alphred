@@ -1,10 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createSqlWorkflowExecutor, createSqlWorkflowPlanner } from '@alphred/core';
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import {
   createDatabase,
   migrateDatabase,
   phaseArtifacts,
+  promptTemplates,
   repositories,
   routingDecisions,
   runNodes,
@@ -602,6 +603,75 @@ describe('createDashboardService', () => {
     expect(draft.treeKey).toBe('demo-tree-copy');
     expect(draft.nodes.map(node => node.nodeKey)).toEqual(expect.arrayContaining(['design', 'implement', 'review']));
     expect(draft.edges.length).toBeGreaterThan(0);
+  });
+
+  it('rolls back draft creation when cloning fails', async () => {
+    const { db, dependencies } = createHarness();
+    migrateDatabase(db);
+
+    const service = createDashboardService({ dependencies });
+
+    await service.createWorkflowDraft({
+      template: 'blank',
+      name: 'Demo Tree',
+      treeKey: 'demo-tree',
+    });
+    await service.saveWorkflowDraft('demo-tree', 1, {
+      draftRevision: 1,
+      name: 'Demo Tree',
+      nodes: [
+        {
+          nodeKey: 'design',
+          displayName: 'Design',
+          nodeType: 'agent',
+          provider: 'codex',
+          maxRetries: 0,
+          sequenceIndex: 10,
+          position: null,
+          promptTemplate: { content: 'Draft prompt', contentType: 'markdown' },
+        },
+      ],
+      edges: [],
+    });
+    await service.publishWorkflowDraft('demo-tree', 1, {});
+
+    const publishedTree = db
+      .select({ id: workflowTrees.id })
+      .from(workflowTrees)
+      .where(and(eq(workflowTrees.treeKey, 'demo-tree'), eq(workflowTrees.status, 'published')))
+      .orderBy(workflowTrees.id)
+      .get();
+    expect(publishedTree).toBeDefined();
+
+    const publishedNodeWithPrompt = db
+      .select({ promptTemplateId: treeNodes.promptTemplateId })
+      .from(treeNodes)
+      .where(eq(treeNodes.workflowTreeId, publishedTree?.id ?? -1))
+      .all()
+      .find(node => node.promptTemplateId !== null);
+    expect(publishedNodeWithPrompt?.promptTemplateId).toBeTypeOf('number');
+
+    const conflictingTemplateId = publishedNodeWithPrompt?.promptTemplateId as number;
+    db.insert(promptTemplates)
+      .values({
+        templateKey: `demo-tree/v2/prompt-template/${conflictingTemplateId}`,
+        version: 1,
+        content: 'Conflicting prompt template row',
+        contentType: 'markdown',
+      })
+      .run();
+
+    await expect(service.getOrCreateWorkflowDraft('demo-tree')).rejects.toMatchObject({
+      code: 'internal_error',
+      status: 500,
+    });
+
+    const drafts = db
+      .select({ id: workflowTrees.id })
+      .from(workflowTrees)
+      .where(and(eq(workflowTrees.treeKey, 'demo-tree'), eq(workflowTrees.status, 'draft')))
+      .all();
+    expect(drafts).toHaveLength(0);
   });
 
   it('rejects saving drafts with invalid guard expressions', async () => {

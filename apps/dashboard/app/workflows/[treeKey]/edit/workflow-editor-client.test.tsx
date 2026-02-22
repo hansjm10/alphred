@@ -273,6 +273,59 @@ describe('WorkflowEditorPageContent', () => {
     expect(screen.getByText('Draft placeholders detected.')).toBeInTheDocument();
   });
 
+  it('flushes draft autosave before validation', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/draft/validate')) {
+        return createJsonResponse(
+          {
+            result: {
+              errors: [],
+              warnings: [],
+              initialRunnableNodeKeys: [],
+            },
+          },
+          { status: 200 },
+        );
+      }
+      return createJsonResponse({ draft: { draftRevision: 1 } }, { status: 200 });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(
+      <WorkflowEditorPageContent
+        initialDraft={{
+          treeKey: 'demo-tree',
+          version: 1,
+          draftRevision: 0,
+          name: 'Demo Tree',
+          description: null,
+          versionNotes: null,
+          nodes: [],
+          edges: [],
+          initialRunnableNodeKeys: [],
+        }}
+      />,
+    );
+
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Updated Tree' } });
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Validate' }));
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const calls = fetchMock.mock.calls as unknown as [RequestInfo | URL, RequestInit | undefined][];
+
+    expect(String(calls[0]?.[0])).toContain('/draft?version=1');
+    expect(calls[0]?.[1]?.method).toBe('PUT');
+    const firstPayload = JSON.parse(calls[0]?.[1]?.body as string) as { name: string };
+    expect(firstPayload.name).toBe('Updated Tree');
+
+    expect(String(calls[1]?.[0])).toContain('/draft/validate?version=1');
+    expect(calls[1]?.[1]?.method).toBe('POST');
+  });
+
   it('publishes the workflow and routes to the tree page', async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
@@ -891,6 +944,128 @@ describe('WorkflowEditorPageContent', () => {
 
     expect(firstPayload.draftRevision).toBe(1);
     expect(secondPayload.draftRevision).toBe(51);
+  });
+
+  it('reuses the aborted revision for the next save request', async () => {
+    let saveRequestCount = 0;
+    const fetchMock = vi.fn((_: RequestInfo | URL, init?: RequestInit) => {
+      saveRequestCount += 1;
+      if (saveRequestCount === 1) {
+        const signal = init?.signal;
+        return new Promise<Response>((_resolve, reject) => {
+          if (signal?.aborted) {
+            reject(new DOMException('The operation was aborted.', 'AbortError'));
+            return;
+          }
+          signal?.addEventListener(
+            'abort',
+            () => {
+              reject(new DOMException('The operation was aborted.', 'AbortError'));
+            },
+            { once: true },
+          );
+        });
+      }
+
+      return Promise.resolve(createJsonResponse({ draft: { draftRevision: 1 } }, { status: 200 }));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(
+      <WorkflowEditorPageContent
+        initialDraft={{
+          treeKey: 'demo-tree',
+          version: 1,
+          draftRevision: 0,
+          name: 'Demo Tree',
+          description: null,
+          versionNotes: null,
+          nodes: [],
+          edges: [],
+          initialRunnableNodeKeys: [],
+        }}
+      />,
+    );
+
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Updated Tree 1' } });
+    await vi.advanceTimersByTimeAsync(1000);
+
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Updated Tree 2' } });
+    await vi.advanceTimersByTimeAsync(1000);
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const calls = fetchMock.mock.calls as unknown as [RequestInfo | URL, RequestInit | undefined][];
+    const firstPayload = JSON.parse(calls[0]?.[1]?.body as string) as { draftRevision: number };
+    const secondPayload = JSON.parse(calls[1]?.[1]?.body as string) as { draftRevision: number };
+    expect(firstPayload.draftRevision).toBe(1);
+    expect(secondPayload.draftRevision).toBe(1);
+  });
+
+  it('does not autosave for selection-only ReactFlow changes', async () => {
+    const fetchMock = vi.fn(async () => createJsonResponse({ draft: {} }, { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(
+      <WorkflowEditorPageContent
+        initialDraft={{
+          treeKey: 'demo-tree',
+          version: 1,
+          draftRevision: 0,
+          name: 'Demo Tree',
+          description: null,
+          versionNotes: null,
+          nodes: [
+            {
+              nodeKey: 'design',
+              displayName: 'Design',
+              nodeType: 'agent',
+              provider: 'codex',
+              maxRetries: 0,
+              sequenceIndex: 10,
+              position: { x: 0, y: 0 },
+              promptTemplate: { content: 'Draft prompt', contentType: 'markdown' },
+            },
+            {
+              nodeKey: 'implement',
+              displayName: 'Implement',
+              nodeType: 'agent',
+              provider: 'codex',
+              maxRetries: 0,
+              sequenceIndex: 20,
+              position: { x: 200, y: 0 },
+              promptTemplate: { content: 'Draft prompt', contentType: 'markdown' },
+            },
+          ],
+          edges: [
+            {
+              sourceNodeKey: 'design',
+              targetNodeKey: 'implement',
+              priority: 100,
+              auto: true,
+              guardExpression: null,
+            },
+          ],
+          initialRunnableNodeKeys: ['design'],
+        }}
+      />,
+    );
+
+    const onNodesChange = latestReactFlowProps?.onNodesChange;
+    const onEdgesChange = latestReactFlowProps?.onEdgesChange;
+    expect(typeof onNodesChange).toBe('function');
+    expect(typeof onEdgesChange).toBe('function');
+
+    await act(async () => {
+      (onNodesChange as (changes: unknown[]) => void)([
+        { id: 'design', type: 'select', selected: true },
+      ]);
+      (onEdgesChange as (changes: unknown[]) => void)([
+        { id: 'design->implement:100', type: 'select', selected: true },
+      ]);
+    });
+
+    await vi.advanceTimersByTimeAsync(1200);
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it('does not delete a node when the user cancels confirmation', async () => {

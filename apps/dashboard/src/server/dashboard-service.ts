@@ -1525,22 +1525,186 @@ export function createDashboardService(options: {
         }
 
         const draftVersion = published.version + 1;
-        let draftTreeId: number;
-        try {
-          const insertedDraft = db
-            .insert(workflowTrees)
-            .values({
+        const createDraftFromPublished = () =>
+          db.transaction((tx) => {
+            const insertedDraft = tx
+              .insert(workflowTrees)
+              .values({
+                treeKey,
+                version: draftVersion,
+                status: 'draft',
+                name: published.name,
+                description: published.description,
+                versionNotes: null,
+                draftRevision: 0,
+              })
+              .returning({ id: workflowTrees.id })
+              .get();
+            const draftTreeId = insertedDraft.id;
+
+            const publishedNodes = tx
+              .select({
+                id: treeNodes.id,
+                nodeKey: treeNodes.nodeKey,
+                displayName: treeNodes.displayName,
+                nodeType: treeNodes.nodeType,
+                provider: treeNodes.provider,
+                maxRetries: treeNodes.maxRetries,
+                sequenceIndex: treeNodes.sequenceIndex,
+                positionX: treeNodes.positionX,
+                positionY: treeNodes.positionY,
+                promptTemplateId: treeNodes.promptTemplateId,
+              })
+              .from(treeNodes)
+              .where(eq(treeNodes.workflowTreeId, published.id))
+              .orderBy(asc(treeNodes.sequenceIndex), asc(treeNodes.id))
+              .all();
+
+            const promptTemplateIds = publishedNodes
+              .map(node => node.promptTemplateId)
+              .filter((id): id is number => typeof id === 'number');
+            const promptTemplateRows =
+              promptTemplateIds.length === 0
+                ? []
+                : tx
+                    .select({
+                      id: promptTemplates.id,
+                      content: promptTemplates.content,
+                      contentType: promptTemplates.contentType,
+                    })
+                    .from(promptTemplates)
+                    .where(inArray(promptTemplates.id, promptTemplateIds))
+                    .all();
+
+            const promptTemplateById = new Map(promptTemplateRows.map(row => [row.id, row]));
+            const promptTemplateCloneById = new Map<number, number>();
+            for (const templateId of promptTemplateIds) {
+              if (promptTemplateCloneById.has(templateId)) {
+                continue;
+              }
+              const template = promptTemplateById.get(templateId);
+              if (!template) {
+                continue;
+              }
+              const inserted = tx
+                .insert(promptTemplates)
+                .values({
+                  templateKey: `${treeKey}/v${draftVersion}/prompt-template/${templateId}`,
+                  version: 1,
+                  content: template.content,
+                  contentType: template.contentType,
+                })
+                .returning({ id: promptTemplates.id })
+                .get();
+              promptTemplateCloneById.set(templateId, inserted.id);
+            }
+
+            const nodeIdCloneById = new Map<number, number>();
+            for (const node of publishedNodes) {
+              const inserted = tx
+                .insert(treeNodes)
+                .values({
+                  workflowTreeId: draftTreeId,
+                  nodeKey: node.nodeKey,
+                  displayName: node.displayName,
+                  nodeType: node.nodeType,
+                  provider: node.provider,
+                  promptTemplateId:
+                    node.promptTemplateId === null ? null : (promptTemplateCloneById.get(node.promptTemplateId) ?? null),
+                  maxRetries: node.maxRetries,
+                  sequenceIndex: node.sequenceIndex,
+                  positionX: node.positionX,
+                  positionY: node.positionY,
+                })
+                .returning({ id: treeNodes.id })
+                .get();
+              nodeIdCloneById.set(node.id, inserted.id);
+            }
+
+            const publishedEdges = tx
+              .select({
+                sourceNodeId: treeEdges.sourceNodeId,
+                targetNodeId: treeEdges.targetNodeId,
+                priority: treeEdges.priority,
+                auto: treeEdges.auto,
+                guardDefinitionId: treeEdges.guardDefinitionId,
+              })
+              .from(treeEdges)
+              .where(eq(treeEdges.workflowTreeId, published.id))
+              .orderBy(asc(treeEdges.sourceNodeId), asc(treeEdges.priority), asc(treeEdges.id))
+              .all();
+
+            const guardDefinitionIds = publishedEdges
+              .map(edge => edge.guardDefinitionId)
+              .filter((id): id is number => typeof id === 'number');
+            const guardRows =
+              guardDefinitionIds.length === 0
+                ? []
+                : tx
+                    .select({
+                      id: guardDefinitions.id,
+                      expression: guardDefinitions.expression,
+                      description: guardDefinitions.description,
+                    })
+                    .from(guardDefinitions)
+                    .where(inArray(guardDefinitions.id, guardDefinitionIds))
+                    .all();
+            const guardById = new Map(guardRows.map(row => [row.id, row]));
+            const guardCloneById = new Map<number, number>();
+            for (const guardId of guardDefinitionIds) {
+              if (guardCloneById.has(guardId)) {
+                continue;
+              }
+              const guard = guardById.get(guardId);
+              if (!guard) {
+                continue;
+              }
+              const inserted = tx
+                .insert(guardDefinitions)
+                .values({
+                  guardKey: `${treeKey}/v${draftVersion}/guard/${guardId}`,
+                  version: 1,
+                  expression: guard.expression,
+                  description: guard.description,
+                })
+                .returning({ id: guardDefinitions.id })
+                .get();
+              guardCloneById.set(guardId, inserted.id);
+            }
+
+            for (const edge of publishedEdges) {
+              const sourceNodeId = nodeIdCloneById.get(edge.sourceNodeId);
+              const targetNodeId = nodeIdCloneById.get(edge.targetNodeId);
+              if (!sourceNodeId || !targetNodeId) {
+                continue;
+              }
+              tx.insert(treeEdges)
+                .values({
+                  workflowTreeId: draftTreeId,
+                  sourceNodeId,
+                  targetNodeId,
+                  priority: edge.priority,
+                  auto: edge.auto,
+                  guardDefinitionId:
+                    edge.guardDefinitionId === null ? null : (guardCloneById.get(edge.guardDefinitionId) ?? null),
+                })
+                .run();
+            }
+
+            const topology = loadDraftTopologyByTreeId(tx, draftTreeId);
+            return {
               treeKey,
               version: draftVersion,
-              status: 'draft',
+              draftRevision: 0,
               name: published.name,
               description: published.description,
               versionNotes: null,
-              draftRevision: 0,
-            })
-            .returning({ id: workflowTrees.id })
-            .get();
-          draftTreeId = insertedDraft.id;
+              ...topology,
+            };
+          });
+
+        try {
+          return createDraftFromPublished();
         } catch (error) {
           if (!isWorkflowTreeVersionUniqueConstraintError(error)) {
             throw error;
@@ -1552,166 +1716,6 @@ export function createDashboardService(options: {
           }
           return toDraftTopology(concurrentDraft);
         }
-
-        const publishedNodes = db
-          .select({
-            id: treeNodes.id,
-            nodeKey: treeNodes.nodeKey,
-            displayName: treeNodes.displayName,
-            nodeType: treeNodes.nodeType,
-            provider: treeNodes.provider,
-            maxRetries: treeNodes.maxRetries,
-            sequenceIndex: treeNodes.sequenceIndex,
-            positionX: treeNodes.positionX,
-            positionY: treeNodes.positionY,
-            promptTemplateId: treeNodes.promptTemplateId,
-          })
-          .from(treeNodes)
-          .where(eq(treeNodes.workflowTreeId, published.id))
-          .orderBy(asc(treeNodes.sequenceIndex), asc(treeNodes.id))
-          .all();
-
-        const promptTemplateIds = publishedNodes
-          .map(node => node.promptTemplateId)
-          .filter((id): id is number => typeof id === 'number');
-        const promptTemplateRows =
-          promptTemplateIds.length === 0
-            ? []
-            : db
-                .select({
-                  id: promptTemplates.id,
-                  content: promptTemplates.content,
-                  contentType: promptTemplates.contentType,
-                })
-                .from(promptTemplates)
-                .where(inArray(promptTemplates.id, promptTemplateIds))
-                .all();
-
-        const promptTemplateById = new Map(promptTemplateRows.map(row => [row.id, row]));
-        const promptTemplateCloneById = new Map<number, number>();
-        for (const templateId of promptTemplateIds) {
-          if (promptTemplateCloneById.has(templateId)) {
-            continue;
-          }
-          const template = promptTemplateById.get(templateId);
-          if (!template) {
-            continue;
-          }
-          const inserted = db
-            .insert(promptTemplates)
-            .values({
-              templateKey: `${treeKey}/v${draftVersion}/prompt-template/${templateId}`,
-              version: 1,
-              content: template.content,
-              contentType: template.contentType,
-            })
-            .returning({ id: promptTemplates.id })
-            .get();
-          promptTemplateCloneById.set(templateId, inserted.id);
-        }
-
-        const nodeIdCloneById = new Map<number, number>();
-        for (const node of publishedNodes) {
-          const inserted = db
-            .insert(treeNodes)
-            .values({
-              workflowTreeId: draftTreeId,
-              nodeKey: node.nodeKey,
-              displayName: node.displayName,
-              nodeType: node.nodeType,
-              provider: node.provider,
-              promptTemplateId:
-                node.promptTemplateId === null ? null : (promptTemplateCloneById.get(node.promptTemplateId) ?? null),
-              maxRetries: node.maxRetries,
-              sequenceIndex: node.sequenceIndex,
-              positionX: node.positionX,
-              positionY: node.positionY,
-            })
-            .returning({ id: treeNodes.id })
-            .get();
-          nodeIdCloneById.set(node.id, inserted.id);
-        }
-
-        const publishedEdges = db
-          .select({
-            sourceNodeId: treeEdges.sourceNodeId,
-            targetNodeId: treeEdges.targetNodeId,
-            priority: treeEdges.priority,
-            auto: treeEdges.auto,
-            guardDefinitionId: treeEdges.guardDefinitionId,
-          })
-          .from(treeEdges)
-          .where(eq(treeEdges.workflowTreeId, published.id))
-          .orderBy(asc(treeEdges.sourceNodeId), asc(treeEdges.priority), asc(treeEdges.id))
-          .all();
-
-        const guardDefinitionIds = publishedEdges
-          .map(edge => edge.guardDefinitionId)
-          .filter((id): id is number => typeof id === 'number');
-        const guardRows =
-          guardDefinitionIds.length === 0
-            ? []
-            : db
-                .select({
-                  id: guardDefinitions.id,
-                  expression: guardDefinitions.expression,
-                  description: guardDefinitions.description,
-                })
-                .from(guardDefinitions)
-                .where(inArray(guardDefinitions.id, guardDefinitionIds))
-                .all();
-        const guardById = new Map(guardRows.map(row => [row.id, row]));
-        const guardCloneById = new Map<number, number>();
-        for (const guardId of guardDefinitionIds) {
-          if (guardCloneById.has(guardId)) {
-            continue;
-          }
-          const guard = guardById.get(guardId);
-          if (!guard) {
-            continue;
-          }
-          const inserted = db
-            .insert(guardDefinitions)
-            .values({
-              guardKey: `${treeKey}/v${draftVersion}/guard/${guardId}`,
-              version: 1,
-              expression: guard.expression,
-              description: guard.description,
-            })
-            .returning({ id: guardDefinitions.id })
-            .get();
-          guardCloneById.set(guardId, inserted.id);
-        }
-
-        for (const edge of publishedEdges) {
-          const sourceNodeId = nodeIdCloneById.get(edge.sourceNodeId);
-          const targetNodeId = nodeIdCloneById.get(edge.targetNodeId);
-          if (!sourceNodeId || !targetNodeId) {
-            continue;
-          }
-          db.insert(treeEdges)
-            .values({
-              workflowTreeId: draftTreeId,
-              sourceNodeId,
-              targetNodeId,
-              priority: edge.priority,
-              auto: edge.auto,
-              guardDefinitionId:
-                edge.guardDefinitionId === null ? null : (guardCloneById.get(edge.guardDefinitionId) ?? null),
-            })
-            .run();
-        }
-
-        const topology = loadDraftTopologyByTreeId(db, draftTreeId);
-        return {
-          treeKey,
-          version: draftVersion,
-          draftRevision: 0,
-          name: published.name,
-          description: published.description,
-          versionNotes: null,
-          ...topology,
-        };
       });
     },
 

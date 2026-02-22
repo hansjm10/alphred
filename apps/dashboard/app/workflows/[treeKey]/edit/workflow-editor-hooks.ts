@@ -48,6 +48,14 @@ export function useDraftAutosave(args: Readonly<{
     }
 
     const runSave = async (): Promise<boolean> => {
+      const previousInFlightSave = inFlightSavePromiseRef.current;
+      if (inFlightSaveAbortRef.current) {
+        inFlightSaveAbortRef.current.abort();
+      }
+      if (previousInFlightSave) {
+        await previousInFlightSave.catch(() => false);
+      }
+
       setSaveError(null);
       setSaveState('saving');
 
@@ -65,9 +73,6 @@ export function useDraftAutosave(args: Readonly<{
         edges: snapshot.edges,
       };
 
-      if (inFlightSaveAbortRef.current) {
-        inFlightSaveAbortRef.current.abort();
-      }
       const abortController = new AbortController();
       inFlightSaveAbortRef.current = abortController;
 
@@ -108,6 +113,7 @@ export function useDraftAutosave(args: Readonly<{
         return true;
       } catch (error_) {
         if (error_ instanceof DOMException && error_.name === 'AbortError') {
+          rollbackDraftRevision();
           return false;
         }
         rollbackDraftRevision();
