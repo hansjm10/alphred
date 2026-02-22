@@ -70,6 +70,26 @@ describe('NewWorkflowPageContent', () => {
     });
   });
 
+  it('omits blank descriptions from the create payload', async () => {
+    const user = userEvent.setup();
+    const fetchMock = vi.fn(async () => createJsonResponse({ treeKey: 'demo-tree', draftVersion: 1 }, { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(<NewWorkflowPageContent />);
+
+    await user.type(screen.getByPlaceholderText('Workflow name'), 'Demo Tree');
+    await user.type(screen.getByPlaceholderText('Optional one-line description'), '   ');
+    await user.click(screen.getByRole('button', { name: 'Create and open builder' }));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+
+    const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    const body = JSON.parse(init.body as string) as Record<string, unknown>;
+    expect(body).not.toHaveProperty('description');
+  });
+
   it('renders API errors returned during creation', async () => {
     const user = userEvent.setup();
     const fetchMock = vi.fn(async () =>

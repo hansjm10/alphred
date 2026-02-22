@@ -65,5 +65,17 @@ describe('WorkflowDetailPage', () => {
     ).rejects.toThrowError('NOT_FOUND');
     expect(notFoundMock).toHaveBeenCalledTimes(1);
   });
-});
 
+  it('rethrows unexpected errors', async () => {
+    notFoundMock.mockClear();
+    getWorkflowTreeSnapshotMock.mockRejectedValue(new Error('boom'));
+    createDashboardServiceMock.mockReturnValue({
+      getWorkflowTreeSnapshot: getWorkflowTreeSnapshotMock,
+    });
+
+    await expect(
+      WorkflowDetailPage({ params: Promise.resolve({ treeKey: 'demo-tree' }) }),
+    ).rejects.toThrowError('boom');
+    expect(notFoundMock).not.toHaveBeenCalled();
+  });
+});

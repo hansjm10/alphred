@@ -96,5 +96,13 @@ describe('WorkflowEditorPage', () => {
     ).rejects.toThrowError('NOT_FOUND');
     expect(notFoundMock).toHaveBeenCalledTimes(1);
   });
-});
 
+  it('rethrows unexpected errors from the dashboard service', async () => {
+    getOrCreateWorkflowDraftMock.mockRejectedValue(new Error('boom'));
+
+    await expect(
+      WorkflowEditorPage({ params: Promise.resolve({ treeKey: 'demo-tree' }) }),
+    ).rejects.toThrowError('boom');
+    expect(notFoundMock).not.toHaveBeenCalled();
+  });
+});

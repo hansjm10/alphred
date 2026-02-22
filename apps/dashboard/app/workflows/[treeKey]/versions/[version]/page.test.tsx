@@ -76,5 +76,13 @@ describe('WorkflowVersionPage', () => {
     ).rejects.toThrowError('NOT_FOUND');
     expect(notFoundMock).toHaveBeenCalledTimes(1);
   });
-});
 
+  it('rethrows unexpected errors from the dashboard service', async () => {
+    getWorkflowTreeVersionSnapshotMock.mockRejectedValue(new Error('boom'));
+
+    await expect(
+      WorkflowVersionPage({ params: Promise.resolve({ treeKey: 'demo-tree', version: '1' }) }),
+    ).rejects.toThrowError('boom');
+    expect(notFoundMock).not.toHaveBeenCalled();
+  });
+});
