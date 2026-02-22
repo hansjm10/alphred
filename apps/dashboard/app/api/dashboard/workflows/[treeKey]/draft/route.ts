@@ -99,7 +99,7 @@ function parseDraftNode(raw: unknown, index: number): DashboardWorkflowDraftNode
     });
   }
 
-  if (typeof raw.sequenceIndex !== 'number' || !Number.isInteger(raw.sequenceIndex)) {
+  if (typeof raw.sequenceIndex !== 'number' || !Number.isInteger(raw.sequenceIndex) || raw.sequenceIndex < 0) {
     throw new DashboardIntegrationError('invalid_request', `Draft node at index ${index} has an invalid sequenceIndex.`, {
       status: 400,
       details: { field: `nodes[${index}].sequenceIndex` },
