@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { WorkflowsPageContent } from './workflows-client';
@@ -280,6 +280,29 @@ describe('WorkflowsPageContent', () => {
 
     expect(await within(dialog).findByRole('alert')).toHaveTextContent('Workflow duplicate failed (HTTP 500).');
     expect(pushMock).not.toHaveBeenCalled();
+  });
+
+  it('closes the duplicate dialog via backdrop or cancel', async () => {
+    const user = userEvent.setup();
+
+    const { container } = render(<WorkflowsPageContent workflows={[createWorkflow()]} />);
+
+    await user.click(screen.getByRole('button', { name: 'Duplicate' }));
+    expect(screen.getByRole('dialog', { name: 'Duplicate workflow' })).toBeInTheDocument();
+
+    const dialog = screen.getByRole('dialog', { name: 'Duplicate workflow' });
+    fireEvent.mouseDown(dialog);
+    expect(screen.getByRole('dialog', { name: 'Duplicate workflow' })).toBeInTheDocument();
+
+    const overlay = container.querySelector('.workflow-overlay');
+    expect(overlay).not.toBeNull();
+    fireEvent.mouseDown(overlay as Element);
+    expect(screen.queryByRole('dialog', { name: 'Duplicate workflow' })).toBeNull();
+
+    await user.click(screen.getByRole('button', { name: 'Duplicate' }));
+    const reopenedDialog = screen.getByRole('dialog', { name: 'Duplicate workflow' });
+    await user.click(within(reopenedDialog).getByRole('button', { name: 'Cancel' }));
+    expect(screen.queryByRole('dialog', { name: 'Duplicate workflow' })).toBeNull();
   });
 
   it('surfaces thrown errors when duplication fails before a response is returned', async () => {

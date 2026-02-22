@@ -131,6 +131,41 @@ describe('database schema hardening', () => {
     expect(columnNames).toContain('draft_revision');
   });
 
+  it('adds tree_nodes columns when migrating a legacy tree_nodes table', () => {
+    const db = createDatabase(':memory:');
+
+    db.run(sql`CREATE TABLE workflow_trees (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      tree_key TEXT NOT NULL,
+      version INTEGER NOT NULL,
+      name TEXT NOT NULL,
+      description TEXT,
+      created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+      updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+    )`);
+
+    db.run(sql`CREATE TABLE tree_nodes (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      workflow_tree_id INTEGER NOT NULL REFERENCES workflow_trees(id) ON DELETE CASCADE,
+      node_key TEXT NOT NULL,
+      node_type TEXT NOT NULL,
+      provider TEXT,
+      prompt_template_id INTEGER,
+      max_retries INTEGER NOT NULL DEFAULT 0,
+      sequence_index INTEGER NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+      updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+    )`);
+
+    expect(() => migrateDatabase(db)).not.toThrow();
+
+    const columns = db.all<{ name: string }>(sql`SELECT name FROM pragma_table_info('tree_nodes') ORDER BY cid`);
+    const columnNames = columns.map(column => column.name);
+    expect(columnNames).toContain('display_name');
+    expect(columnNames).toContain('position_x');
+    expect(columnNames).toContain('position_y');
+  });
+
   it('adds repositories.branch_template when migrating a legacy repositories table', () => {
     const db = createDatabase(':memory:');
 
