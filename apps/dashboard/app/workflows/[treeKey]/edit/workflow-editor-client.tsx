@@ -4,11 +4,10 @@ import '@xyflow/react/dist/style.css';
 
 import {
   useCallback,
-  useEffect,
   useMemo,
   useRef,
   useState,
-  type ChangeEvent,
+  useEffect,
   type DragEvent,
 } from 'react';
 import { useRouter } from 'next/navigation';
@@ -28,102 +27,33 @@ import {
   type ReactFlowInstance,
 } from '@xyflow/react';
 import type {
-  DashboardSaveWorkflowDraftRequest,
   DashboardWorkflowDraftEdge,
   DashboardWorkflowDraftNode,
   DashboardWorkflowDraftTopology,
   DashboardWorkflowValidationResult,
 } from '../../../../src/server/dashboard-contracts';
-import { ActionButton, ButtonLink, Card, Panel, StatusBadge } from '../../../ui/primitives';
-import { resolveApiError, slugifyKey } from '../../workflows-shared';
+import { ActionButton, ButtonLink, Panel, StatusBadge } from '../../../ui/primitives';
+import { resolveApiError } from '../../workflows-shared';
+import { WorkflowEditorAddNodeDialog } from './workflow-editor-add-node-dialog';
+import {
+  buildReactFlowEdges,
+  buildReactFlowNodes,
+  createDraftNode,
+  mapEdgeFromReactFlow,
+  mapNodeFromReactFlow,
+  nextPriorityForSource,
+  toFlowPosition,
+} from './workflow-editor-helpers';
+import {
+  useDraftAutosave,
+  useWorkflowHistory,
+  useWorkflowKeyboardShortcuts,
+  type WorkflowSnapshot,
+} from './workflow-editor-hooks';
+import { EdgeInspector, NodeInspector, WorkflowInspector } from './workflow-editor-inspectors';
+import { WorkflowEditorNodePalette } from './workflow-editor-node-palette';
 
-type SaveState = 'draft' | 'saving' | 'saved' | 'error';
 type InspectorTab = 'node' | 'transition' | 'workflow';
-type WorkflowSnapshot = Readonly<{
-  name: string;
-  description: string;
-  versionNotes: string;
-  nodes: Node[];
-  edges: Edge[];
-}>;
-
-type FlowPoint = Readonly<{ x: number; y: number }>;
-
-function toFlowPosition(instance: ReactFlowInstance, point: FlowPoint): FlowPoint | null {
-  const maybe = instance as unknown as {
-    screenToFlowPosition?: (input: FlowPoint) => FlowPoint;
-    project?: (input: FlowPoint) => FlowPoint;
-  };
-
-  if (typeof maybe.screenToFlowPosition === 'function') {
-    return maybe.screenToFlowPosition(point);
-  }
-
-  if (typeof maybe.project === 'function') {
-    return maybe.project(point);
-  }
-
-  return null;
-}
-
-function slugifyNodeKey(value: string): string {
-  return slugifyKey(value, 48);
-}
-
-function nextPriorityForSource(edges: readonly DashboardWorkflowDraftEdge[], sourceNodeKey: string): number {
-  const priorities = edges
-    .filter(edge => edge.sourceNodeKey === sourceNodeKey)
-    .map(edge => edge.priority);
-
-  if (priorities.length === 0) {
-    return 100;
-  }
-
-  return Math.max(...priorities) + 10;
-}
-
-function buildReactFlowNodes(draft: DashboardWorkflowDraftTopology): Node[] {
-  return draft.nodes.map(node => ({
-    id: node.nodeKey,
-    position: node.position ?? { x: 0, y: 0 },
-    data: {
-      ...node,
-    },
-    type: 'default',
-  }));
-}
-
-function buildReactFlowEdges(draft: DashboardWorkflowDraftTopology): Edge[] {
-  return draft.edges.map(edge => ({
-    id: `${edge.sourceNodeKey}->${edge.targetNodeKey}:${edge.priority}`,
-    source: edge.sourceNodeKey,
-    target: edge.targetNodeKey,
-    label: edge.auto ? `auto · ${edge.priority}` : `guard · ${edge.priority}`,
-    data: {
-      ...edge,
-    },
-  }));
-}
-
-function mapNodeFromReactFlow(node: Node): DashboardWorkflowDraftNode {
-  const data = node.data as DashboardWorkflowDraftNode;
-  return {
-    ...data,
-    nodeKey: data.nodeKey,
-    position: { x: Math.round(node.position.x), y: Math.round(node.position.y) },
-  };
-}
-
-function mapEdgeFromReactFlow(edge: Edge): DashboardWorkflowDraftEdge {
-  const data = edge.data as DashboardWorkflowDraftEdge;
-  return {
-    sourceNodeKey: edge.source,
-    targetNodeKey: edge.target,
-    priority: data.priority,
-    auto: data.auto,
-    guardExpression: data.auto ? null : (data.guardExpression ?? null),
-  };
-}
 
 export function WorkflowEditorPageContent({ initialDraft }: Readonly<{ initialDraft: DashboardWorkflowDraftTopology }>) {
   const router = useRouter();
@@ -136,8 +66,6 @@ export function WorkflowEditorPageContent({ initialDraft }: Readonly<{ initialDr
   const [nodes, setNodes] = useState<Node[]>(() => buildReactFlowNodes(initialDraft));
   const [edges, setEdges] = useState<Edge[]>(() => buildReactFlowEdges(initialDraft));
   const [reactFlowInstance, setReactFlowInstance] = useState<ReactFlowInstance | null>(null);
-  const [saveState, setSaveState] = useState<SaveState>('draft');
-  const [saveError, setSaveError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<InspectorTab>('workflow');
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null);
@@ -145,53 +73,9 @@ export function WorkflowEditorPageContent({ initialDraft }: Readonly<{ initialDr
   const [validationError, setValidationError] = useState<string | null>(null);
   const [publishError, setPublishError] = useState<string | null>(null);
   const [addNodePaletteOpen, setAddNodePaletteOpen] = useState(false);
-  const addNodePaletteFirstRef = useRef<HTMLButtonElement | null>(null);
-
-  const pendingSaveRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const inFlightSaveAbortRef = useRef<AbortController | null>(null);
-  const pendingHistoryCommitRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const workflowHistoryRef = useRef<{
-    past: WorkflowSnapshot[];
-    present: WorkflowSnapshot;
-    future: WorkflowSnapshot[];
-  }>({
-    past: [],
-    present: {
-      name: initialDraft.name,
-      description: initialDraft.description ?? '',
-      versionNotes: initialDraft.versionNotes ?? '',
-      nodes: buildReactFlowNodes(initialDraft),
-      edges: buildReactFlowEdges(initialDraft),
-    },
-    future: [],
-  });
-  const applyingHistoryRef = useRef(false);
-  const latestWorkflowSnapshotRef = useRef<WorkflowSnapshot>(workflowHistoryRef.current.present);
 
   const selectedNode = useMemo(() => nodes.find(node => node.id === selectedNodeId) ?? null, [nodes, selectedNodeId]);
   const selectedEdge = useMemo(() => edges.find(edge => edge.id === selectedEdgeId) ?? null, [edges, selectedEdgeId]);
-
-  useEffect(() => {
-    latestWorkflowSnapshotRef.current = {
-      name: workflowName,
-      description: workflowDescription,
-      versionNotes: workflowVersionNotes,
-      nodes,
-      edges,
-    };
-  }, [edges, nodes, workflowDescription, workflowName, workflowVersionNotes]);
-
-  useEffect(() => {
-    if (!addNodePaletteOpen) {
-      return;
-    }
-
-    const timeout = globalThis.setTimeout(() => {
-      addNodePaletteFirstRef.current?.focus();
-    }, 0);
-
-    return () => globalThis.clearTimeout(timeout);
-  }, [addNodePaletteOpen]);
 
   const draftNodesForSave = useMemo(() => nodes.map(mapNodeFromReactFlow), [nodes]);
   const draftEdgesForSave = useMemo(() => edges.map(mapEdgeFromReactFlow), [edges]);
@@ -223,123 +107,123 @@ export function WorkflowEditorPageContent({ initialDraft }: Readonly<{ initialDr
     };
   }, [draftEdgesForSave, draftNodesForSave, workflowDescription, workflowName, workflowVersionNotes]);
 
+  const { markDirty, saveError, saveNow, saveState, scheduleSave } = useDraftAutosave({
+    treeKey,
+    version,
+    latestDraftStateRef,
+  });
+
+  const snapshot = useMemo<WorkflowSnapshot>(() => {
+    return {
+      name: workflowName,
+      description: workflowDescription,
+      versionNotes: workflowVersionNotes,
+      nodes,
+      edges,
+    };
+  }, [edges, nodes, workflowDescription, workflowName, workflowVersionNotes]);
+
+  const applySnapshot = useCallback((next: WorkflowSnapshot) => {
+    setWorkflowName(next.name);
+    setWorkflowDescription(next.description);
+    setWorkflowVersionNotes(next.versionNotes);
+    setNodes(next.nodes);
+    setEdges(next.edges);
+    selectedNodeIdRef.current = null;
+    selectedEdgeIdRef.current = null;
+    setSelectedNodeId(null);
+    setSelectedEdgeId(null);
+    setActiveTab('workflow');
+  }, []);
+
+  const { redo, scheduleHistoryCommit, undo } = useWorkflowHistory({
+    snapshot,
+    applySnapshot,
+    markDirty,
+    scheduleSave,
+  });
+
+  const markWorkflowChanged = useCallback(() => {
+    markDirty();
+    scheduleSave();
+    scheduleHistoryCommit();
+  }, [markDirty, scheduleHistoryCommit, scheduleSave]);
+
+  const addNodePaletteOpenRef = useRef(addNodePaletteOpen);
+  useEffect(() => {
+    addNodePaletteOpenRef.current = addNodePaletteOpen;
+  }, [addNodePaletteOpen]);
+
+  const selectedNodeIdRef = useRef(selectedNodeId);
+  useEffect(() => {
+    selectedNodeIdRef.current = selectedNodeId;
+  }, [selectedNodeId]);
+
+  const selectedEdgeIdRef = useRef(selectedEdgeId);
+  useEffect(() => {
+    selectedEdgeIdRef.current = selectedEdgeId;
+  }, [selectedEdgeId]);
+
+  const edgesRef = useRef(edges);
+  useEffect(() => {
+    edgesRef.current = edges;
+  }, [edges]);
+
+  const openPalette = useCallback(() => {
+    addNodePaletteOpenRef.current = true;
+    setAddNodePaletteOpen(true);
+  }, [addNodePaletteOpenRef]);
+
+  const closePalette = useCallback(() => {
+    addNodePaletteOpenRef.current = false;
+    setAddNodePaletteOpen(false);
+  }, [addNodePaletteOpenRef]);
+
+  const deleteEdgeById = useCallback((edgeId: string) => {
+    setEdges((current) => current.filter(edge => edge.id !== edgeId));
+    selectedEdgeIdRef.current = null;
+    setSelectedEdgeId(null);
+    markWorkflowChanged();
+  }, [markWorkflowChanged]);
+
+  const deleteNodeById = useCallback((nodeId: string) => {
+    setEdges((current) => current.filter(edge => edge.source !== nodeId && edge.target !== nodeId));
+    setNodes((current) => current.filter(node => node.id !== nodeId));
+    selectedNodeIdRef.current = null;
+    selectedEdgeIdRef.current = null;
+    setSelectedNodeId(null);
+    setSelectedEdgeId(null);
+    setActiveTab('workflow');
+    markWorkflowChanged();
+  }, [markWorkflowChanged]);
+
+  useWorkflowKeyboardShortcuts({
+    addNodePaletteOpenRef,
+    selectedNodeIdRef,
+    selectedEdgeIdRef,
+    edgesRef,
+    closePalette,
+    openPalette,
+    undo,
+    redo,
+    deleteEdgeById,
+    deleteNodeById,
+  });
+
   const initialRunnableNodeKeys = useMemo(() => {
     const incoming = new Set(draftEdgesForSave.map(edge => edge.targetNodeKey));
     return draftNodesForSave.filter(node => !incoming.has(node.nodeKey)).map(node => node.nodeKey);
   }, [draftEdgesForSave, draftNodesForSave]);
 
-  const saveDraft = useCallback(async (): Promise<void> => {
-    setSaveError(null);
-    setSaveState('saving');
-
-    const snapshot = latestDraftStateRef.current;
-    const nextDraftRevision = snapshot.draftRevision + 1;
-    latestDraftStateRef.current = { ...snapshot, draftRevision: nextDraftRevision };
-    const payload: DashboardSaveWorkflowDraftRequest = {
-      draftRevision: nextDraftRevision,
-      name: snapshot.name,
-      description: snapshot.description.trim().length > 0 ? snapshot.description : undefined,
-      versionNotes: snapshot.versionNotes.trim().length > 0 ? snapshot.versionNotes : undefined,
-      nodes: snapshot.nodes,
-      edges: snapshot.edges,
-    };
-
-    try {
-      if (inFlightSaveAbortRef.current) {
-        inFlightSaveAbortRef.current.abort();
-      }
-      const abortController = new AbortController();
-      inFlightSaveAbortRef.current = abortController;
-
-      const response = await fetch(`/api/dashboard/workflows/${encodeURIComponent(treeKey)}/draft?version=${version}`, {
-        method: 'PUT',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(payload),
-        signal: abortController.signal,
-      });
-
-      const json = await response.json().catch(() => null);
-      if (!response.ok) {
-        setSaveState('error');
-        setSaveError(resolveApiError(response.status, json, 'Autosave failed'));
-        return;
-      }
-
-      if (json && typeof json === 'object' && 'draft' in json) {
-        const draftRevision = (json as { draft?: { draftRevision?: unknown } }).draft?.draftRevision;
-        if (typeof draftRevision === 'number' && Number.isInteger(draftRevision) && draftRevision > latestDraftStateRef.current.draftRevision) {
-          latestDraftStateRef.current = { ...latestDraftStateRef.current, draftRevision };
-        }
-      }
-      setSaveState('saved');
-    } catch (error_) {
-      if (error_ instanceof DOMException && error_.name === 'AbortError') {
-        return;
-      }
-      setSaveState('error');
-      setSaveError(error_ instanceof Error ? error_.message : 'Autosave failed.');
-    }
-  }, [treeKey, version]);
-
-  const scheduleSave = useCallback(() => {
-    if (pendingSaveRef.current !== null) {
-      globalThis.clearTimeout(pendingSaveRef.current);
-    }
-
-    pendingSaveRef.current = globalThis.setTimeout(() => {
-      pendingSaveRef.current = null;
-      saveDraft().catch(() => undefined);
-    }, 1000);
-  }, [saveDraft]);
-
-  const scheduleHistoryCommit = useCallback(() => {
-    if (applyingHistoryRef.current) {
-      return;
-    }
-
-    if (pendingHistoryCommitRef.current !== null) {
-      globalThis.clearTimeout(pendingHistoryCommitRef.current);
-    }
-
-    pendingHistoryCommitRef.current = globalThis.setTimeout(() => {
-      pendingHistoryCommitRef.current = null;
-
-      const history = workflowHistoryRef.current;
-      const snapshot = latestWorkflowSnapshotRef.current;
-      history.past = [...history.past, history.present].slice(-50);
-      history.present = snapshot;
-      history.future = [];
-    }, 400);
-  }, []);
-
-  useEffect(() => {
-    return () => {
-      if (pendingSaveRef.current !== null) {
-        globalThis.clearTimeout(pendingSaveRef.current);
-      }
-      if (inFlightSaveAbortRef.current) {
-        inFlightSaveAbortRef.current.abort();
-        inFlightSaveAbortRef.current = null;
-      }
-      if (pendingHistoryCommitRef.current !== null) {
-        globalThis.clearTimeout(pendingHistoryCommitRef.current);
-      }
-    };
-  }, []);
-
   const onNodesChange = useCallback((changes: NodeChange[]) => {
     setNodes((current) => applyNodeChanges(changes, current));
-    setSaveState('draft');
-    scheduleSave();
-    scheduleHistoryCommit();
-  }, [scheduleHistoryCommit, scheduleSave]);
+    markWorkflowChanged();
+  }, [markWorkflowChanged]);
 
   const onEdgesChange = useCallback((changes: EdgeChange[]) => {
     setEdges((current) => applyEdgeChanges(changes, current));
-    setSaveState('draft');
-    scheduleSave();
-    scheduleHistoryCommit();
-  }, [scheduleHistoryCommit, scheduleSave]);
+    markWorkflowChanged();
+  }, [markWorkflowChanged]);
 
   const onConnect = useCallback((connection: Connection) => {
     if (!connection.source || !connection.target) {
@@ -365,14 +249,14 @@ export function WorkflowEditorPageContent({ initialDraft }: Readonly<{ initialDr
       return addEdge(next, current);
     });
 
-    setSaveState('draft');
-    scheduleSave();
-    scheduleHistoryCommit();
-  }, [scheduleHistoryCommit, scheduleSave]);
+    markWorkflowChanged();
+  }, [markWorkflowChanged]);
 
   const handleSelectionChange = useCallback((params: { nodes: Node[]; edges: Edge[] }) => {
     const nextNode = params.nodes[0]?.id ?? null;
     const nextEdge = params.edges[0]?.id ?? null;
+    selectedNodeIdRef.current = nextNode;
+    selectedEdgeIdRef.current = nextEdge;
     setSelectedNodeId(nextNode);
     setSelectedEdgeId(nextEdge);
 
@@ -383,32 +267,21 @@ export function WorkflowEditorPageContent({ initialDraft }: Readonly<{ initialDr
     }
   }, []);
 
-  const handleAddNode = useCallback((nodeType: DashboardWorkflowDraftNode['nodeType']) => {
-    const baseName = nodeType === 'agent' ? 'Agent' : nodeType === 'human' ? 'Human' : 'Tool';
-    const keyBase = slugifyNodeKey(baseName) || nodeType;
+  const addNode = useCallback((args: {
+    nodeType: DashboardWorkflowDraftNode['nodeType'];
+    position?: { x: number; y: number };
+  }) => {
     const existingKeys = new Set(nodes.map(node => node.id));
-    let nodeKey = keyBase;
-    let counter = 2;
-    while (existingKeys.has(nodeKey)) {
-      nodeKey = `${keyBase}-${counter}`;
-      counter += 1;
-    }
+    const lastNode = nodes.at(-1)?.data as DashboardWorkflowDraftNode | undefined;
+    const nextSequenceIndex = (lastNode?.sequenceIndex ?? 0) + 10;
+    const fallbackPosition = { x: 80, y: 80 + nodes.length * 60 };
 
-    const sequenceIndex = (draftNodesForSave.at(-1)?.sequenceIndex ?? 0) + 10;
-
-    const newNode: DashboardWorkflowDraftNode = {
-      nodeKey,
-      displayName: baseName,
-      nodeType,
-      provider: nodeType === 'agent' ? 'codex' : null,
-      maxRetries: 0,
-      sequenceIndex,
-      position: { x: 80, y: 80 + nodes.length * 60 },
-      promptTemplate:
-        nodeType === 'agent'
-          ? { content: 'Describe what to do for this workflow phase.', contentType: 'markdown' }
-          : null,
-    };
+    const newNode = createDraftNode({
+      nodeType: args.nodeType,
+      existingNodeKeys: existingKeys,
+      nextSequenceIndex,
+      position: args.position ?? fallbackPosition,
+    });
 
     setNodes((current) => [
       ...current,
@@ -419,202 +292,18 @@ export function WorkflowEditorPageContent({ initialDraft }: Readonly<{ initialDr
       },
     ]);
 
+    selectedNodeIdRef.current = newNode.nodeKey;
+    selectedEdgeIdRef.current = null;
     setSelectedNodeId(newNode.nodeKey);
     setSelectedEdgeId(null);
     setActiveTab('node');
-    setSaveState('draft');
-    scheduleSave();
-    scheduleHistoryCommit();
-  }, [draftNodesForSave, nodes, scheduleHistoryCommit, scheduleSave]);
+    markWorkflowChanged();
+  }, [markWorkflowChanged, nodes]);
 
-  const handleAddNodeAtPosition = useCallback((
-    nodeType: DashboardWorkflowDraftNode['nodeType'],
-    position: { x: number; y: number },
-  ) => {
-    const baseName = nodeType === 'agent' ? 'Agent' : nodeType === 'human' ? 'Human' : 'Tool';
-    const keyBase = slugifyNodeKey(baseName) || nodeType;
-    const existingKeys = new Set(nodes.map(node => node.id));
-    let nodeKey = keyBase;
-    let counter = 2;
-    while (existingKeys.has(nodeKey)) {
-      nodeKey = `${keyBase}-${counter}`;
-      counter += 1;
-    }
-
-    const sequenceIndex = (draftNodesForSave.at(-1)?.sequenceIndex ?? 0) + 10;
-
-    const newNode: DashboardWorkflowDraftNode = {
-      nodeKey,
-      displayName: baseName,
-      nodeType,
-      provider: nodeType === 'agent' ? 'codex' : null,
-      maxRetries: 0,
-      sequenceIndex,
-      position: { x: Math.round(position.x), y: Math.round(position.y) },
-      promptTemplate:
-        nodeType === 'agent'
-          ? { content: 'Describe what to do for this workflow phase.', contentType: 'markdown' }
-          : null,
-    };
-
-    setNodes((current) => [
-      ...current,
-      {
-        id: newNode.nodeKey,
-        position: newNode.position ?? { x: 0, y: 0 },
-        data: newNode,
-      },
-    ]);
-
-    setSelectedNodeId(newNode.nodeKey);
-    setSelectedEdgeId(null);
-    setActiveTab('node');
-    setSaveState('draft');
-    scheduleSave();
-    scheduleHistoryCommit();
-  }, [draftNodesForSave, nodes, scheduleHistoryCommit, scheduleSave]);
-
-  const undo = useCallback(() => {
-    const history = workflowHistoryRef.current;
-    if (history.past.length === 0) {
-      return;
-    }
-
-    const previous = history.past[history.past.length - 1];
-    const remaining = history.past.slice(0, -1);
-    history.past = remaining;
-    history.future = [history.present, ...history.future];
-    history.present = previous;
-
-    applyingHistoryRef.current = true;
-    setWorkflowName(previous.name);
-    setWorkflowDescription(previous.description);
-    setWorkflowVersionNotes(previous.versionNotes);
-    setNodes(previous.nodes);
-    setEdges(previous.edges);
-    setSelectedNodeId(null);
-    setSelectedEdgeId(null);
-    setActiveTab('workflow');
-    setSaveState('draft');
-    scheduleSave();
-    globalThis.setTimeout(() => {
-      applyingHistoryRef.current = false;
-    }, 0);
-  }, [scheduleSave]);
-
-  const redo = useCallback(() => {
-    const history = workflowHistoryRef.current;
-    if (history.future.length === 0) {
-      return;
-    }
-
-    const next = history.future[0];
-    history.future = history.future.slice(1);
-    history.past = [...history.past, history.present].slice(-50);
-    history.present = next;
-
-    applyingHistoryRef.current = true;
-    setWorkflowName(next.name);
-    setWorkflowDescription(next.description);
-    setWorkflowVersionNotes(next.versionNotes);
-    setNodes(next.nodes);
-    setEdges(next.edges);
-    setSelectedNodeId(null);
-    setSelectedEdgeId(null);
-    setActiveTab('workflow');
-    setSaveState('draft');
-    scheduleSave();
-    globalThis.setTimeout(() => {
-      applyingHistoryRef.current = false;
-    }, 0);
-  }, [scheduleSave]);
-
-  useEffect(() => {
-    function isTypingTarget(target: EventTarget | null): boolean {
-      if (!target || !(target instanceof HTMLElement)) {
-        return false;
-      }
-
-      const tag = target.tagName.toLowerCase();
-      return tag === 'input' || tag === 'textarea' || tag === 'select' || target.isContentEditable;
-    }
-
-	    function handleKeyDown(event: KeyboardEvent) {
-	      if (isTypingTarget(event.target)) {
-	        return;
-	      }
-
-	      if (addNodePaletteOpen) {
-	        if (event.key === 'Escape') {
-	          event.preventDefault();
-	          setAddNodePaletteOpen(false);
-	        }
-	        return;
-	      }
-
-	      const key = event.key.toLowerCase();
-	      const isUndo = (event.metaKey || event.ctrlKey) && key === 'z' && !event.shiftKey;
-	      const isRedo = (event.metaKey || event.ctrlKey) && ((key === 'z' && event.shiftKey) || key === 'y');
-
-      if (isUndo) {
-        event.preventDefault();
-        undo();
-        return;
-      }
-
-      if (isRedo) {
-        event.preventDefault();
-        redo();
-        return;
-      }
-
-      if (event.key === 'Delete' || event.key === 'Backspace') {
-        if (selectedEdgeId) {
-          event.preventDefault();
-          setEdges((current) => current.filter(edge => edge.id !== selectedEdgeId));
-          setSelectedEdgeId(null);
-          setSaveState('draft');
-          scheduleSave();
-          scheduleHistoryCommit();
-          return;
-        }
-
-        if (selectedNodeId) {
-          event.preventDefault();
-          const connectedEdges = edges.filter(edge => edge.source === selectedNodeId || edge.target === selectedNodeId);
-          const requiresConfirm = connectedEdges.length > 0;
-          if (requiresConfirm && !globalThis.confirm('Delete this node and its connected transitions?')) {
-            return;
-          }
-
-          setEdges((current) => current.filter(edge => edge.source !== selectedNodeId && edge.target !== selectedNodeId));
-          setNodes((current) => current.filter(node => node.id !== selectedNodeId));
-          setSelectedNodeId(null);
-          setSaveState('draft');
-          scheduleSave();
-          scheduleHistoryCommit();
-        }
-      }
-
-	      if (!event.metaKey && !event.ctrlKey && key === 'n') {
-	        event.preventDefault();
-	        setAddNodePaletteOpen(true);
-	      }
-	    }
-
-    globalThis.addEventListener('keydown', handleKeyDown);
-    return () => globalThis.removeEventListener('keydown', handleKeyDown);
-		  }, [
-	    addNodePaletteOpen,
-	    edges,
-	    handleAddNode,
-	    redo,
-	    scheduleHistoryCommit,
-	    scheduleSave,
-	    selectedEdgeId,
-	    selectedNodeId,
-	    undo,
-	  ]);
+  const handlePaletteSelect = useCallback((nodeType: DashboardWorkflowDraftNode['nodeType']) => {
+    closePalette();
+    addNode({ nodeType });
+  }, [addNode, closePalette]);
 
   const onDragOver = useCallback((event: DragEvent) => {
     event.preventDefault();
@@ -637,8 +326,8 @@ export function WorkflowEditorPageContent({ initialDraft }: Readonly<{ initialDr
       return;
     }
 
-    handleAddNodeAtPosition(nodeType as DashboardWorkflowDraftNode['nodeType'], position);
-  }, [handleAddNodeAtPosition, reactFlowInstance]);
+    addNode({ nodeType: nodeType as DashboardWorkflowDraftNode['nodeType'], position });
+  }, [addNode, reactFlowInstance]);
 
   async function runValidation(): Promise<void> {
     setValidationError(null);
@@ -701,7 +390,7 @@ export function WorkflowEditorPageContent({ initialDraft }: Readonly<{ initialDr
   }, [saveState]);
 
   const inspector = (
-    <div className="workflow-editor-inspector" role="complementary" aria-label="Workflow inspector">
+    <aside className="workflow-editor-inspector" aria-label="Workflow inspector">
       <nav className="workflow-editor-tabs" aria-label="Inspector tabs">
         <button type="button" className={activeTab === 'node' ? 'active' : ''} onClick={() => setActiveTab('node')} disabled={!selectedNode}>
           Node
@@ -723,9 +412,7 @@ export function WorkflowEditorPageContent({ initialDraft }: Readonly<{ initialDr
               setNodes((current) =>
                 current.map((node) => (node.id === selectedNode.id ? { ...node, data: next } : node)),
               );
-              setSaveState('draft');
-              scheduleSave();
-              scheduleHistoryCommit();
+              markWorkflowChanged();
             }}
           />
         ) : null}
@@ -735,122 +422,53 @@ export function WorkflowEditorPageContent({ initialDraft }: Readonly<{ initialDr
             edge={selectedEdge}
             onChange={(next) => {
               if (!selectedEdge) return;
+              const label = next.auto ? `auto · ${next.priority}` : `guard · ${next.priority}`;
               setEdges((current) =>
                 current.map((edge) =>
                   edge.id === selectedEdge.id
                     ? {
                         ...edge,
-                        label: next.auto ? `auto · ${next.priority}` : `guard · ${next.priority}`,
+                        label,
                         data: next,
                       }
                     : edge,
                 ),
               );
-              setSaveState('draft');
-              scheduleSave();
-              scheduleHistoryCommit();
+              markWorkflowChanged();
             }}
           />
         ) : null}
 
-		        {activeTab === 'workflow' ? (
-		          <WorkflowInspector
-		            name={workflowName}
-		            description={workflowDescription}
-		            versionNotes={workflowVersionNotes}
-		            onNameChange={(event) => {
-		              setWorkflowName(event.target.value);
-		              setSaveState('draft');
-		              scheduleSave();
-		              scheduleHistoryCommit();
-		            }}
-		            onDescriptionChange={(event) => {
-		              setWorkflowDescription(event.target.value);
-		              setSaveState('draft');
-		              scheduleSave();
-		              scheduleHistoryCommit();
-		            }}
-		            onVersionNotesChange={(event) => {
-		              setWorkflowVersionNotes(event.target.value);
-		              setSaveState('draft');
-		              scheduleSave();
-		              scheduleHistoryCommit();
-		            }}
-		            initialRunnableNodeKeys={validation?.initialRunnableNodeKeys ?? initialRunnableNodeKeys}
-		            validation={validation}
-		            validationError={validationError}
-	            publishError={publishError}
-	          />
-	        ) : null}
+        {activeTab === 'workflow' ? (
+          <WorkflowInspector
+            name={workflowName}
+            description={workflowDescription}
+            versionNotes={workflowVersionNotes}
+            onNameChange={(next) => {
+              setWorkflowName(next);
+              markWorkflowChanged();
+            }}
+            onDescriptionChange={(next) => {
+              setWorkflowDescription(next);
+              markWorkflowChanged();
+            }}
+            onVersionNotesChange={(next) => {
+              setWorkflowVersionNotes(next);
+              markWorkflowChanged();
+            }}
+            initialRunnableNodeKeys={validation?.initialRunnableNodeKeys ?? initialRunnableNodeKeys}
+            validation={validation}
+            validationError={validationError}
+            publishError={publishError}
+          />
+        ) : null}
       </div>
-    </div>
+    </aside>
   );
 
 	return (
 	    <div className="workflow-editor-shell">
-	      {addNodePaletteOpen ? (
-	        <div
-	          className="workflow-overlay"
-	          role="presentation"
-	          onMouseDown={() => setAddNodePaletteOpen(false)}
-	        >
-	          <div
-	            className="workflow-dialog workflow-command-palette"
-	            role="dialog"
-	            aria-modal="true"
-	            aria-label="Add node"
-	            onMouseDown={(event) => event.stopPropagation()}
-	          >
-	            <header className="workflow-dialog__header">
-	              <h3>Add node</h3>
-	              <p className="meta-text">Choose a node type to add to the canvas. Press Escape to close.</p>
-	            </header>
-
-	            <div className="workflow-command-palette__options" role="list">
-	              <button
-	                ref={addNodePaletteFirstRef}
-	                type="button"
-	                className="workflow-command-palette__option"
-	                onClick={() => {
-	                  setAddNodePaletteOpen(false);
-	                  handleAddNode('agent');
-	                }}
-	              >
-	                <strong>Agent node</strong>
-	                <span>Provider-backed phase with a prompt template.</span>
-	              </button>
-
-	              <button
-	                type="button"
-	                className="workflow-command-palette__option"
-	                onClick={() => {
-	                  setAddNodePaletteOpen(false);
-	                  handleAddNode('human');
-	                }}
-	              >
-	                <strong>Human node</strong>
-	                <span>Draft placeholder (publish may be blocked by validation).</span>
-	              </button>
-
-	              <button
-	                type="button"
-	                className="workflow-command-palette__option"
-	                onClick={() => {
-	                  setAddNodePaletteOpen(false);
-	                  handleAddNode('tool');
-	                }}
-	              >
-	                <strong>Tool node</strong>
-	                <span>Draft placeholder for tool execution (publish may be blocked by validation).</span>
-	              </button>
-	            </div>
-
-	            <div className="workflow-dialog__actions">
-	              <ActionButton onClick={() => setAddNodePaletteOpen(false)}>Close</ActionButton>
-	            </div>
-	          </div>
-	        </div>
-	      ) : null}
+	      <WorkflowEditorAddNodeDialog open={addNodePaletteOpen} onClose={closePalette} onSelect={handlePaletteSelect} />
 	      <header className="workflow-editor-topbar">
 	        <div className="workflow-editor-topbar__meta">
 	          <p className="meta-text">Workflows / {treeKey}</p>
@@ -864,59 +482,20 @@ export function WorkflowEditorPageContent({ initialDraft }: Readonly<{ initialDr
         </div>
       </header>
 
-      <div className="workflow-editor-body">
-        <aside className="workflow-editor-palette" aria-label="Node palette">
-          <Card title="Node palette" description="Drag onto canvas or click to add.">
-            <div className="workflow-palette-draggable-list">
-              <div
-                className="workflow-palette-draggable"
-                draggable
-                onDragStart={(event) => {
-                  event.dataTransfer.setData('application/alphred-workflow-node', 'agent');
-                  event.dataTransfer.effectAllowed = 'move';
-                }}
-              >
-                Agent node
-              </div>
-              <div
-                className="workflow-palette-draggable"
-                draggable
-                onDragStart={(event) => {
-                  event.dataTransfer.setData('application/alphred-workflow-node', 'human');
-                  event.dataTransfer.effectAllowed = 'move';
-                }}
-              >
-                Human node
-              </div>
-              <div
-                className="workflow-palette-draggable"
-                draggable
-                onDragStart={(event) => {
-                  event.dataTransfer.setData('application/alphred-workflow-node', 'tool');
-                  event.dataTransfer.effectAllowed = 'move';
-                }}
-              >
-                Tool node
-              </div>
-            </div>
+	      <div className="workflow-editor-body">
+	        <aside className="workflow-editor-palette" aria-label="Node palette">
+	          <WorkflowEditorNodePalette onAdd={(nodeType) => addNode({ nodeType })} />
 
-            <div className="workflow-palette-actions">
-              <ActionButton onClick={() => handleAddNode('agent')}>Add agent</ActionButton>
-              <ActionButton onClick={() => handleAddNode('human')}>Add human</ActionButton>
-              <ActionButton onClick={() => handleAddNode('tool')}>Add tool</ActionButton>
-            </div>
-          </Card>
-
-	          <Panel title="Draft version">
-	            <p className="meta-text">v{version} (unpublished)</p>
-	            {saveError ? <p className="run-launch-banner--error" role="alert">{saveError}</p> : null}
-	            {saveState === 'error' ? (
-		              <ActionButton onClick={() => saveDraft().catch(() => undefined)}>
-		                Retry save
-		              </ActionButton>
-		            ) : null}
-	          </Panel>
-	        </aside>
+		          <Panel title="Draft version">
+		            <p className="meta-text">v{version} (unpublished)</p>
+		            {saveError ? <p className="run-launch-banner--error" role="alert">{saveError}</p> : null}
+		            {saveState === 'error' ? (
+			              <ActionButton onClick={() => saveNow().catch(() => undefined)}>
+			                Retry save
+			              </ActionButton>
+			            ) : null}
+		          </Panel>
+		        </aside>
 
         <section className="workflow-editor-canvas" aria-label="Workflow canvas">
           <ReactFlow
@@ -939,268 +518,6 @@ export function WorkflowEditorPageContent({ initialDraft }: Readonly<{ initialDr
 
         {inspector}
       </div>
-    </div>
-  );
-}
-
-function NodeInspector({
-  node,
-  onChange,
-}: Readonly<{
-  node: Node | null;
-  onChange: (next: DashboardWorkflowDraftNode) => void;
-}>) {
-  if (!node) {
-    return <p className="meta-text">Select a node to edit details.</p>;
-  }
-
-  const data = node.data as DashboardWorkflowDraftNode;
-
-  function handleFieldChange(field: keyof DashboardWorkflowDraftNode, value: unknown) {
-    onChange({ ...data, [field]: value } as DashboardWorkflowDraftNode);
-  }
-
-  function handlePromptChange(event: ChangeEvent<HTMLTextAreaElement>) {
-    if (!data.promptTemplate) {
-      handleFieldChange('promptTemplate', { content: event.target.value, contentType: 'markdown' });
-      return;
-    }
-
-    handleFieldChange('promptTemplate', { ...data.promptTemplate, content: event.target.value });
-  }
-
-  return (
-    <div className="workflow-inspector-stack">
-      <h3>Node</h3>
-      <label className="workflow-inspector-field">
-        <span>Display name</span>
-        <input value={data.displayName} onChange={(event) => handleFieldChange('displayName', event.target.value)} />
-      </label>
-
-      <label className="workflow-inspector-field">
-        <span>Node key</span>
-        <input value={data.nodeKey} readOnly aria-readonly="true" />
-        <span className="meta-text">Keys are stable IDs used by transitions.</span>
-      </label>
-
-      <label className="workflow-inspector-field">
-        <span>Node type</span>
-        <select value={data.nodeType} onChange={(event) => handleFieldChange('nodeType', event.target.value)}>
-          <option value="agent">agent</option>
-          <option value="human">human</option>
-          <option value="tool">tool</option>
-        </select>
-      </label>
-
-      {data.nodeType === 'agent' ? (
-        <>
-          <label className="workflow-inspector-field">
-            <span>Provider</span>
-            <select value={data.provider ?? 'codex'} onChange={(event) => handleFieldChange('provider', event.target.value)}>
-              <option value="codex">codex</option>
-              <option value="claude">claude</option>
-            </select>
-          </label>
-
-          <label className="workflow-inspector-field">
-            <span>Prompt</span>
-            <textarea value={data.promptTemplate?.content ?? ''} rows={10} onChange={handlePromptChange} />
-          </label>
-        </>
-      ) : (
-        <p className="meta-text">Human/tool nodes are supported as draft placeholders; publishing may be blocked by validation.</p>
-      )}
-
-      <label className="workflow-inspector-field">
-        <span>Max retries</span>
-        <input
-          type="number"
-          min={0}
-          value={data.maxRetries}
-          onChange={(event) => handleFieldChange('maxRetries', Number(event.target.value))}
-        />
-      </label>
-    </div>
-  );
-}
-
-function EdgeInspector({
-  edge,
-  onChange,
-}: Readonly<{
-  edge: Edge | null;
-  onChange: (next: DashboardWorkflowDraftEdge) => void;
-}>) {
-  if (!edge) {
-    return <p className="meta-text">Select a transition to edit details.</p>;
-  }
-
-  const data = edge.data as DashboardWorkflowDraftEdge;
-
-  function readGuardDecisionValue(expression: unknown): string {
-    if (!expression || typeof expression !== 'object') {
-      return 'approved';
-    }
-
-    if (!('value' in expression)) {
-      return 'approved';
-    }
-
-    const value = (expression as { value?: unknown }).value;
-    return typeof value === 'string' ? value : 'approved';
-  }
-
-  function handleAutoChange(nextAuto: boolean) {
-    if (nextAuto) {
-      onChange({ ...data, auto: true, guardExpression: null });
-      return;
-    }
-
-    onChange({
-      ...data,
-      auto: false,
-      guardExpression: data.guardExpression ?? { field: 'decision', operator: '==', value: 'approved' },
-    });
-  }
-
-  function handleGuardValueChange(nextValue: string) {
-    onChange({
-      ...data,
-      auto: false,
-      guardExpression: { field: 'decision', operator: '==', value: nextValue },
-    });
-  }
-
-  return (
-    <div className="workflow-inspector-stack">
-      <h3>Transition</h3>
-      <p className="meta-text">{edge.source} → {edge.target}</p>
-
-      <label className="workflow-inspector-field">
-        <span>Priority</span>
-        <input
-          type="number"
-          min={0}
-          value={data.priority}
-          onChange={(event) => onChange({ ...data, priority: Number(event.target.value) })}
-        />
-      </label>
-
-      <label className="workflow-inspector-field workflow-inspector-field--inline">
-        <span>Auto</span>
-        <input type="checkbox" checked={data.auto} onChange={(event) => handleAutoChange(event.target.checked)} />
-      </label>
-
-      {!data.auto ? (
-        <label className="workflow-inspector-field">
-          <span>Guard (decision)</span>
-          <select
-            value={readGuardDecisionValue(data.guardExpression)}
-            onChange={(event) => handleGuardValueChange(event.target.value)}
-          >
-            <option value="approved">approved</option>
-            <option value="changes_requested">changes_requested</option>
-            <option value="blocked">blocked</option>
-            <option value="retry">retry</option>
-          </select>
-        </label>
-      ) : (
-        <p className="meta-text">Auto transitions are unconditional.</p>
-      )}
-    </div>
-  );
-}
-
-function WorkflowInspector({
-  name,
-  description,
-  versionNotes,
-  onNameChange,
-  onDescriptionChange,
-  onVersionNotesChange,
-  initialRunnableNodeKeys,
-  validation,
-  validationError,
-  publishError,
-}: Readonly<{
-  name: string;
-  description: string;
-  versionNotes: string;
-  onNameChange: (event: ChangeEvent<HTMLInputElement>) => void;
-  onDescriptionChange: (event: ChangeEvent<HTMLTextAreaElement>) => void;
-  onVersionNotesChange: (event: ChangeEvent<HTMLTextAreaElement>) => void;
-  initialRunnableNodeKeys: readonly string[];
-  validation: DashboardWorkflowValidationResult | null;
-  validationError: string | null;
-  publishError: string | null;
-}>) {
-  const errors = validation?.errors ?? [];
-  const warnings = validation?.warnings ?? [];
-
-  return (
-    <div className="workflow-inspector-stack">
-      <h3>Workflow</h3>
-      <label className="workflow-inspector-field">
-        <span>Name</span>
-        <input value={name} onChange={onNameChange} />
-      </label>
-
-      <label className="workflow-inspector-field">
-        <span>Description</span>
-        <textarea rows={3} value={description} onChange={onDescriptionChange} />
-      </label>
-
-      <label className="workflow-inspector-field">
-        <span>Version notes</span>
-        <textarea rows={3} value={versionNotes} onChange={onVersionNotesChange} />
-        <span className="meta-text">Optional notes to attach to this version when publishing.</span>
-      </label>
-
-      <Panel title="Initial runnable nodes">
-        {initialRunnableNodeKeys.length === 0 ? (
-          <p className="meta-text">None detected.</p>
-        ) : (
-          <div className="workflow-chip-row">
-            {initialRunnableNodeKeys.map((key) => (
-              <span key={key} className="workflow-chip">{key}</span>
-            ))}
-          </div>
-        )}
-      </Panel>
-
-      {validationError ? <p className="run-launch-banner--error" role="alert">{validationError}</p> : null}
-      {publishError ? <p className="run-launch-banner--error" role="alert">{publishError}</p> : null}
-
-      <Panel title="Validation results">
-        {validation === null ? (
-          <p className="meta-text">Run validation to see publish blockers and warnings.</p>
-        ) : errors.length === 0 && warnings.length === 0 ? (
-          <p className="meta-text">No issues detected.</p>
-        ) : (
-          <div className="workflow-validation-stack">
-            {errors.length > 0 ? (
-              <div>
-                <h4>Errors</h4>
-                <ul className="workflow-issue-list">
-                  {errors.map((issue) => (
-                    <li key={`error-${issue.code}-${issue.message}`}>{issue.message}</li>
-                  ))}
-                </ul>
-              </div>
-            ) : null}
-            {warnings.length > 0 ? (
-              <div>
-                <h4>Warnings</h4>
-                <ul className="workflow-issue-list">
-                  {warnings.map((issue) => (
-                    <li key={`warn-${issue.code}-${issue.message}`}>{issue.message}</li>
-                  ))}
-                </ul>
-              </div>
-            ) : null}
-          </div>
-        )}
-      </Panel>
     </div>
   );
 }
