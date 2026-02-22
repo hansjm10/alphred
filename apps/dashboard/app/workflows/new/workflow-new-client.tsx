@@ -73,8 +73,12 @@ export function NewWorkflowPageContent() {
           <div className="workflow-new-section">
             <h2>Start point</h2>
             <div className="workflow-template-cards" role="radiogroup" aria-label="Workflow template">
-              <label className={`workflow-template-card${template === 'design-implement-review' ? ' workflow-template-card--selected' : ''}`}>
+              <label
+                htmlFor="workflow-template-design-implement-review"
+                className={`workflow-template-card${template === 'design-implement-review' ? ' workflow-template-card--selected' : ''}`}
+              >
                 <input
+                  id="workflow-template-design-implement-review"
                   type="radio"
                   name="workflow-template"
                   value="design-implement-review"
@@ -87,8 +91,12 @@ export function NewWorkflowPageContent() {
                 </div>
               </label>
 
-              <label className={`workflow-template-card${template === 'blank' ? ' workflow-template-card--selected' : ''}`}>
+              <label
+                htmlFor="workflow-template-blank"
+                className={`workflow-template-card${template === 'blank' ? ' workflow-template-card--selected' : ''}`}
+              >
                 <input
+                  id="workflow-template-blank"
                   type="radio"
                   name="workflow-template"
                   value="blank"

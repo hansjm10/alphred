@@ -166,13 +166,7 @@ export function WorkflowsPageContent({ workflows }: WorkflowsPageContentProps) {
           />
         </div>
 
-        {!hasWorkflows ? (
-          <div className="empty-state">
-            <h2>No workflows yet</h2>
-            <p>Create your first workflow tree to start launching runs.</p>
-            <ButtonLink href="/workflows/new" tone="primary">Create workflow</ButtonLink>
-          </div>
-        ) : (
+        {hasWorkflows ? (
           <div className="workflows-table-wrapper">
             <table className="workflows-table">
               <thead>
@@ -227,6 +221,12 @@ export function WorkflowsPageContent({ workflows }: WorkflowsPageContentProps) {
               </tbody>
             </table>
           </div>
+        ) : (
+          <div className="empty-state">
+            <h2>No workflows yet</h2>
+            <p>Create your first workflow tree to start launching runs.</p>
+            <ButtonLink href="/workflows/new" tone="primary">Create workflow</ButtonLink>
+          </div>
         )}
       </Card>
 
@@ -238,20 +238,26 @@ export function WorkflowsPageContent({ workflows }: WorkflowsPageContentProps) {
       </Panel>
 
       {duplicateDialog?.open ? (
-        <div
+        <dialog
           className="workflow-overlay"
-          role="presentation"
-          onMouseDown={() => setDuplicateDialog(null)}
+          open
+          aria-modal="true"
+          aria-labelledby="workflow-duplicate-dialog-title"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) {
+              setDuplicateDialog(null);
+            }
+          }}
+          onKeyDown={(event) => {
+            if (event.key === 'Escape') {
+              event.preventDefault();
+              setDuplicateDialog(null);
+            }
+          }}
         >
-          <div
-            className="workflow-dialog"
-            role="dialog"
-            aria-modal="true"
-            aria-label="Duplicate workflow"
-            onMouseDown={(event) => event.stopPropagation()}
-          >
+          <div className="workflow-dialog">
             <header className="workflow-dialog__header">
-              <h3>Duplicate workflow</h3>
+              <h3 id="workflow-duplicate-dialog-title">Duplicate workflow</h3>
               <p className="meta-text">Creates a new draft v1 from “{duplicateDialog.sourceName}”.</p>
             </header>
 
@@ -306,7 +312,7 @@ export function WorkflowsPageContent({ workflows }: WorkflowsPageContentProps) {
               </div>
             </form>
           </div>
-        </div>
+        </dialog>
       ) : null}
     </div>
   );

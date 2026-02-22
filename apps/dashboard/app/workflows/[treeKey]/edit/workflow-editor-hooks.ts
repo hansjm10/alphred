@@ -264,61 +264,101 @@ export function useWorkflowKeyboardShortcuts(args: Readonly<{
   } = args;
 
   useEffect(() => {
+    function handlePaletteShortcuts(event: KeyboardEvent): boolean {
+      if (!addNodePaletteOpenRef.current) {
+        return false;
+      }
+
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        closePalette();
+      }
+
+      return true;
+    }
+
+    function handleUndoRedoShortcuts(event: KeyboardEvent, key: string): boolean {
+      const hasModifier = event.metaKey || event.ctrlKey;
+      if (!hasModifier) return false;
+
+      const isUndo = key === 'z' && !event.shiftKey;
+      if (isUndo) {
+        event.preventDefault();
+        undo();
+        return true;
+      }
+
+      const isRedo = (key === 'z' && event.shiftKey) || key === 'y';
+      if (isRedo) {
+        event.preventDefault();
+        redo();
+        return true;
+      }
+
+      return false;
+    }
+
+    function handleDeleteShortcuts(event: KeyboardEvent): boolean {
+      if (event.key !== 'Delete' && event.key !== 'Backspace') {
+        return false;
+      }
+
+      const selectedEdgeId = selectedEdgeIdRef.current;
+      if (selectedEdgeId) {
+        event.preventDefault();
+        deleteEdgeById(selectedEdgeId);
+        return true;
+      }
+
+      const selectedNodeId = selectedNodeIdRef.current;
+      if (!selectedNodeId) {
+        return false;
+      }
+
+      event.preventDefault();
+      const connectedEdgeCount = edgesRef.current.reduce((count, edge) => {
+        return count + (edge.source === selectedNodeId || edge.target === selectedNodeId ? 1 : 0);
+      }, 0);
+
+      if (
+        connectedEdgeCount > 0 &&
+        !globalThis.confirm('Delete this node and its connected transitions?')
+      ) {
+        return true;
+      }
+
+      deleteNodeById(selectedNodeId);
+      return true;
+    }
+
+    function handleOpenPaletteShortcut(event: KeyboardEvent, key: string): boolean {
+      if (event.metaKey || event.ctrlKey) {
+        return false;
+      }
+
+      if (key !== 'n') {
+        return false;
+      }
+
+      event.preventDefault();
+      openPalette();
+      return true;
+    }
+
     function handleKeyDown(event: KeyboardEvent) {
       if (isTypingTarget(event.target)) {
         return;
       }
 
-      if (addNodePaletteOpenRef.current) {
-        if (event.key === 'Escape') {
-          event.preventDefault();
-          closePalette();
-        }
-        return;
-      }
-
       const key = event.key.toLowerCase();
-      const isUndo = (event.metaKey || event.ctrlKey) && key === 'z' && !event.shiftKey;
-      const isRedo = (event.metaKey || event.ctrlKey) && ((key === 'z' && event.shiftKey) || key === 'y');
 
-      if (isUndo) {
-        event.preventDefault();
-        undo();
+      if (handlePaletteShortcuts(event)) {
         return;
       }
 
-      if (isRedo) {
-        event.preventDefault();
-        redo();
-        return;
-      }
-
-      if (event.key === 'Delete' || event.key === 'Backspace') {
-        const selectedEdgeId = selectedEdgeIdRef.current;
-        if (selectedEdgeId) {
-          event.preventDefault();
-          deleteEdgeById(selectedEdgeId);
-          return;
-        }
-
-        const selectedNodeId = selectedNodeIdRef.current;
-        if (selectedNodeId) {
-          event.preventDefault();
-          const edges = edgesRef.current;
-          const connectedEdges = edges.filter(edge => edge.source === selectedNodeId || edge.target === selectedNodeId);
-          const requiresConfirm = connectedEdges.length > 0;
-          if (requiresConfirm && !globalThis.confirm('Delete this node and its connected transitions?')) {
-            return;
-          }
-
-          deleteNodeById(selectedNodeId);
-        }
-      }
-
-      if (!event.metaKey && !event.ctrlKey && key === 'n') {
-        event.preventDefault();
-        openPalette();
-      }
+      if (handleUndoRedoShortcuts(event, key)) return;
+      if (handleDeleteShortcuts(event)) return;
+      handleOpenPaletteShortcut(event, key);
     }
 
     globalThis.addEventListener('keydown', handleKeyDown);

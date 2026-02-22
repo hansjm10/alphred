@@ -6,7 +6,8 @@ export type ApiErrorEnvelope = {
 
 function isSlugChar(value: string): boolean {
   if (value.length !== 1) return false;
-  const codePoint = value.charCodeAt(0);
+  const codePoint = value.codePointAt(0);
+  if (codePoint === undefined) return false;
   return (codePoint >= 97 && codePoint <= 122) || (codePoint >= 48 && codePoint <= 57);
 }
 

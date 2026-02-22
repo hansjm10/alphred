@@ -285,18 +285,16 @@ describe('WorkflowsPageContent', () => {
   it('closes the duplicate dialog via backdrop or cancel', async () => {
     const user = userEvent.setup();
 
-    const { container } = render(<WorkflowsPageContent workflows={[createWorkflow()]} />);
+    render(<WorkflowsPageContent workflows={[createWorkflow()]} />);
 
     await user.click(screen.getByRole('button', { name: 'Duplicate' }));
     expect(screen.getByRole('dialog', { name: 'Duplicate workflow' })).toBeInTheDocument();
 
     const dialog = screen.getByRole('dialog', { name: 'Duplicate workflow' });
-    fireEvent.mouseDown(dialog);
+    fireEvent.mouseDown(within(dialog).getByRole('heading', { name: 'Duplicate workflow' }));
     expect(screen.getByRole('dialog', { name: 'Duplicate workflow' })).toBeInTheDocument();
 
-    const overlay = container.querySelector('.workflow-overlay');
-    expect(overlay).not.toBeNull();
-    fireEvent.mouseDown(overlay as Element);
+    fireEvent.mouseDown(dialog);
     expect(screen.queryByRole('dialog', { name: 'Duplicate workflow' })).toBeNull();
 
     await user.click(screen.getByRole('button', { name: 'Duplicate' }));

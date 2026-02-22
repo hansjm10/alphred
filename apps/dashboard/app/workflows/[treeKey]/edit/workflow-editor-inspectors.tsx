@@ -158,7 +158,9 @@ export function EdgeInspector({
         <input type="checkbox" checked={data.auto} onChange={(event) => handleAutoChange(event.target.checked)} />
       </label>
 
-      {!data.auto ? (
+      {data.auto ? (
+        <p className="meta-text">Auto transitions are unconditional.</p>
+      ) : (
         <label className="workflow-inspector-field">
           <span>Guard (decision)</span>
           <select
@@ -171,8 +173,6 @@ export function EdgeInspector({
             <option value="retry">retry</option>
           </select>
         </label>
-      ) : (
-        <p className="meta-text">Auto transitions are unconditional.</p>
       )}
     </div>
   );
@@ -203,6 +203,41 @@ export function WorkflowInspector({
 }>) {
   const errors = validation?.errors ?? [];
   const warnings = validation?.warnings ?? [];
+
+  const validationBody = (() => {
+    if (validation === null) {
+      return <p className="meta-text">Run validation to see publish blockers and warnings.</p>;
+    }
+
+    if (errors.length === 0 && warnings.length === 0) {
+      return <p className="meta-text">No issues detected.</p>;
+    }
+
+    return (
+      <div className="workflow-validation-stack">
+        {errors.length > 0 ? (
+          <div>
+            <h4>Errors</h4>
+            <ul className="workflow-issue-list">
+              {errors.map((issue) => (
+                <li key={`error-${issue.code}-${issue.message}`}>{issue.message}</li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
+        {warnings.length > 0 ? (
+          <div>
+            <h4>Warnings</h4>
+            <ul className="workflow-issue-list">
+              {warnings.map((issue) => (
+                <li key={`warn-${issue.code}-${issue.message}`}>{issue.message}</li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
+      </div>
+    );
+  })();
 
   return (
     <div className="workflow-inspector-stack">
@@ -239,36 +274,8 @@ export function WorkflowInspector({
       {publishError ? <p className="run-launch-banner--error" role="alert">{publishError}</p> : null}
 
       <Panel title="Validation results">
-        {validation === null ? (
-          <p className="meta-text">Run validation to see publish blockers and warnings.</p>
-        ) : errors.length === 0 && warnings.length === 0 ? (
-          <p className="meta-text">No issues detected.</p>
-        ) : (
-          <div className="workflow-validation-stack">
-            {errors.length > 0 ? (
-              <div>
-                <h4>Errors</h4>
-                <ul className="workflow-issue-list">
-                  {errors.map((issue) => (
-                    <li key={`error-${issue.code}-${issue.message}`}>{issue.message}</li>
-                  ))}
-                </ul>
-              </div>
-            ) : null}
-            {warnings.length > 0 ? (
-              <div>
-                <h4>Warnings</h4>
-                <ul className="workflow-issue-list">
-                  {warnings.map((issue) => (
-                    <li key={`warn-${issue.code}-${issue.message}`}>{issue.message}</li>
-                  ))}
-                </ul>
-              </div>
-            ) : null}
-          </div>
-        )}
+        {validationBody}
       </Panel>
     </div>
   );
 }
-

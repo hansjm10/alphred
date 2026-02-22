@@ -6,25 +6,12 @@ import { ActionButton } from '../ui/primitives';
 type CopyState = 'idle' | 'copied' | 'error';
 
 async function copyToClipboard(value: string): Promise<void> {
-  if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+  if (navigator.clipboard?.writeText) {
     await navigator.clipboard.writeText(value);
     return;
   }
 
-  const textarea = document.createElement('textarea');
-  textarea.value = value;
-  textarea.style.position = 'fixed';
-  textarea.style.left = '-9999px';
-  textarea.style.top = '0';
-  document.body.appendChild(textarea);
-  textarea.focus();
-  textarea.select();
-
-  const ok = document.execCommand('copy');
-  textarea.remove();
-  if (!ok) {
-    throw new Error('Copy failed');
-  }
+  throw new Error('Copy is unavailable in this browser. Select the JSON and copy manually.');
 }
 
 export function WorkflowJsonCopyActions({ json }: Readonly<{ json: string }>) {

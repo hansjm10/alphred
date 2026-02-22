@@ -5,6 +5,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { WorkflowJsonCopyActions } from './workflow-json-copy-client';
 
 describe('WorkflowJsonCopyActions', () => {
+  async function flushMicrotasks(): Promise<void> {
+    await act(async () => {
+      await Promise.resolve();
+    });
+  }
+
   beforeEach(() => {
     vi.useFakeTimers();
   });
@@ -27,6 +33,8 @@ describe('WorkflowJsonCopyActions', () => {
       fireEvent.click(screen.getByRole('button', { name: 'Copy JSON' }));
     });
 
+    await flushMicrotasks();
+
     expect(writeTextMock).toHaveBeenCalledWith('{"ok":true}');
     expect(screen.getByRole('status')).toHaveTextContent('Copied.');
 
@@ -41,11 +49,6 @@ describe('WorkflowJsonCopyActions', () => {
       value: undefined,
       configurable: true,
     });
-    Object.defineProperty(document, 'execCommand', {
-      value: vi.fn(),
-      configurable: true,
-    });
-    vi.spyOn(document, 'execCommand').mockReturnValue(true);
 
     render(<WorkflowJsonCopyActions json="demo" />);
 
@@ -53,20 +56,19 @@ describe('WorkflowJsonCopyActions', () => {
       fireEvent.click(screen.getByRole('button', { name: 'Copy JSON' }));
     });
 
-    expect(document.execCommand).toHaveBeenCalledWith('copy');
-    expect(screen.getByRole('status')).toHaveTextContent('Copied.');
+    await flushMicrotasks();
+
+    expect(screen.getByRole('status')).toHaveTextContent('Copy failed.');
   });
 
   it('surfaces an error when copying fails', async () => {
+    const writeTextMock = vi.fn(async () => {
+      throw new Error('nope');
+    });
     Object.defineProperty(navigator, 'clipboard', {
-      value: undefined,
+      value: { writeText: writeTextMock },
       configurable: true,
     });
-    Object.defineProperty(document, 'execCommand', {
-      value: vi.fn(),
-      configurable: true,
-    });
-    vi.spyOn(document, 'execCommand').mockReturnValue(false);
 
     render(<WorkflowJsonCopyActions json="demo" />);
 
@@ -74,6 +76,9 @@ describe('WorkflowJsonCopyActions', () => {
       fireEvent.click(screen.getByRole('button', { name: 'Copy JSON' }));
     });
 
+    await flushMicrotasks();
+
+    expect(writeTextMock).toHaveBeenCalledWith('demo');
     expect(screen.getByRole('status')).toHaveTextContent('Copy failed.');
   });
 });

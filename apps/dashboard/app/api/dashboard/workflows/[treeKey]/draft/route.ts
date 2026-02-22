@@ -15,6 +15,49 @@ type RouteContext = {
   }>;
 };
 
+function parseDraftNodePosition(value: unknown, index: number): { x: number; y: number } | null {
+  if (value === null) {
+    return null;
+  }
+
+  if (
+    isRecord(value) &&
+    typeof value.x === 'number' &&
+    Number.isFinite(value.x) &&
+    typeof value.y === 'number' &&
+    Number.isFinite(value.y)
+  ) {
+    return { x: value.x, y: value.y };
+  }
+
+  throw new DashboardIntegrationError('invalid_request', `Draft node at index ${index} has an invalid position.`, {
+    status: 400,
+    details: { field: `nodes[${index}].position` },
+  });
+}
+
+function parseDraftNodePromptTemplate(
+  value: unknown,
+  index: number,
+): { content: string; contentType: 'text' | 'markdown' } | null {
+  if (value === null) {
+    return null;
+  }
+
+  if (
+    isRecord(value) &&
+    typeof value.content === 'string' &&
+    (value.contentType === 'text' || value.contentType === 'markdown')
+  ) {
+    return { content: value.content, contentType: value.contentType };
+  }
+
+  throw new DashboardIntegrationError('invalid_request', `Draft node at index ${index} has an invalid promptTemplate.`, {
+    status: 400,
+    details: { field: `nodes[${index}].promptTemplate` },
+  });
+}
+
 function parseDraftNode(raw: unknown, index: number): DashboardWorkflowDraftNode {
   if (!isRecord(raw)) {
     throw new DashboardIntegrationError('invalid_request', `Draft node at index ${index} must be an object.`, {
@@ -39,41 +82,8 @@ function parseDraftNode(raw: unknown, index: number): DashboardWorkflowDraftNode
     });
   }
 
-  const positionValue = raw.position;
-  let position: { x: number; y: number } | null;
-  if (positionValue === null) {
-    position = null;
-  } else if (
-    isRecord(positionValue) &&
-    typeof positionValue.x === 'number' &&
-    Number.isFinite(positionValue.x) &&
-    typeof positionValue.y === 'number' &&
-    Number.isFinite(positionValue.y)
-  ) {
-    position = { x: positionValue.x, y: positionValue.y };
-  } else {
-    throw new DashboardIntegrationError('invalid_request', `Draft node at index ${index} has an invalid position.`, {
-      status: 400,
-      details: { field: `nodes[${index}].position` },
-    });
-  }
-
-  const promptTemplateValue = raw.promptTemplate;
-  let promptTemplate: { content: string; contentType: 'text' | 'markdown' } | null;
-  if (promptTemplateValue === null) {
-    promptTemplate = null;
-  } else if (
-    isRecord(promptTemplateValue) &&
-    typeof promptTemplateValue.content === 'string' &&
-    (promptTemplateValue.contentType === 'text' || promptTemplateValue.contentType === 'markdown')
-  ) {
-    promptTemplate = { content: promptTemplateValue.content, contentType: promptTemplateValue.contentType };
-  } else {
-    throw new DashboardIntegrationError('invalid_request', `Draft node at index ${index} has an invalid promptTemplate.`, {
-      status: 400,
-      details: { field: `nodes[${index}].promptTemplate` },
-    });
-  }
+  const position = parseDraftNodePosition(raw.position, index);
+  const promptTemplate = parseDraftNodePromptTemplate(raw.promptTemplate, index);
 
   if (typeof raw.nodeKey !== 'string' || typeof raw.displayName !== 'string') {
     throw new DashboardIntegrationError('invalid_request', `Draft node at index ${index} must have nodeKey and displayName strings.`, {
