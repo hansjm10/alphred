@@ -109,6 +109,28 @@ function seedTreeState(db: ReturnType<typeof createDatabase>, keyPrefix = 'desig
 }
 
 describe('database schema hardening', () => {
+  it('adds workflow_trees columns when migrating a legacy workflow_trees table', () => {
+    const db = createDatabase(':memory:');
+
+    db.run(sql`CREATE TABLE workflow_trees (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      tree_key TEXT NOT NULL,
+      version INTEGER NOT NULL,
+      name TEXT NOT NULL,
+      description TEXT,
+      created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+      updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+    )`);
+
+    expect(() => migrateDatabase(db)).not.toThrow();
+
+    const columns = db.all<{ name: string }>(sql`SELECT name FROM pragma_table_info('workflow_trees') ORDER BY cid`);
+    const columnNames = columns.map(column => column.name);
+    expect(columnNames).toContain('status');
+    expect(columnNames).toContain('version_notes');
+    expect(columnNames).toContain('draft_revision');
+  });
+
   it('adds repositories.branch_template when migrating a legacy repositories table', () => {
     const db = createDatabase(':memory:');
 
