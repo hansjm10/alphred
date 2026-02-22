@@ -110,6 +110,26 @@ describe('PUT /api/dashboard/workflows/[treeKey]/draft', () => {
     expect(saveWorkflowDraftMock).not.toHaveBeenCalled();
   });
 
+  it('returns 400 when nodes payload is not an array', async () => {
+    const request = new Request('http://localhost/api/dashboard/workflows/demo-tree/draft?version=1', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ draftRevision: 1, name: 'Demo', nodes: 'nope', edges: [] }),
+    });
+
+    const response = await PUT(request, { params: Promise.resolve({ treeKey: 'demo-tree' }) });
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      error: {
+        code: 'invalid_request',
+        message: 'Draft nodes must be an array.',
+        details: { field: 'nodes' },
+      },
+    });
+    expect(saveWorkflowDraftMock).not.toHaveBeenCalled();
+  });
+
   it('returns 400 when a node payload is invalid', async () => {
     const request = new Request('http://localhost/api/dashboard/workflows/demo-tree/draft?version=1', {
       method: 'PUT',
