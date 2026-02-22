@@ -1,6 +1,6 @@
 import { join, resolve } from 'node:path';
 import { and, asc, desc, eq, inArray, sql } from 'drizzle-orm';
-import { resolveAgentProvider } from '@alphred/agents';
+import { UnknownAgentProviderError, resolveAgentProvider } from '@alphred/agents';
 import { createSqlWorkflowExecutor, createSqlWorkflowPlanner, type PhaseProviderResolver } from '@alphred/core';
 import {
   createDatabase,
@@ -810,6 +810,19 @@ export function createDashboardService(options: {
       if (node.nodeType === 'agent') {
         if (!node.provider || node.provider.trim().length === 0) {
           errors.push({ code: 'agent_provider_missing', message: `Agent node "${trimmedKey}" must have a provider.` });
+        } else {
+          try {
+            resolveAgentProvider(node.provider);
+          } catch (error) {
+            const availableProviders =
+              error instanceof UnknownAgentProviderError && error.availableProviders.length > 0
+                ? error.availableProviders.join(', ')
+                : '(none)';
+            errors.push({
+              code: 'agent_provider_invalid',
+              message: `Agent node "${trimmedKey}" has unsupported provider value ${JSON.stringify(node.provider)}. Available providers: ${availableProviders}.`,
+            });
+          }
         }
         if (!node.promptTemplate || node.promptTemplate.content.trim().length === 0) {
           errors.push({ code: 'agent_prompt_missing', message: `Agent node "${trimmedKey}" must have a prompt.` });

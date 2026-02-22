@@ -575,6 +575,58 @@ describe('createDashboardService', () => {
     });
   });
 
+  it('rejects publishing drafts that contain unsupported agent providers', async () => {
+    const { db, dependencies } = createHarness();
+    migrateDatabase(db);
+
+    const service = createDashboardService({ dependencies });
+
+    await service.createWorkflowDraft({
+      template: 'blank',
+      name: 'Provider Tree',
+      treeKey: 'provider-tree',
+    });
+
+    await service.saveWorkflowDraft('provider-tree', 1, {
+      draftRevision: 1,
+      name: 'Provider Tree',
+      nodes: [
+        {
+          nodeKey: 'agent-node',
+          displayName: 'Agent Node',
+          nodeType: 'agent',
+          provider: 'codex',
+          maxRetries: 0,
+          sequenceIndex: 10,
+          position: null,
+          promptTemplate: { content: 'Agent prompt', contentType: 'markdown' },
+        },
+      ],
+      edges: [],
+    });
+
+    const draftTree = db
+      .select({ id: workflowTrees.id })
+      .from(workflowTrees)
+      .where(and(eq(workflowTrees.treeKey, 'provider-tree'), eq(workflowTrees.version, 1), eq(workflowTrees.status, 'draft')))
+      .get();
+    expect(draftTree).toBeDefined();
+
+    db.update(treeNodes).set({ provider: 'codex ' }).where(eq(treeNodes.workflowTreeId, draftTree?.id ?? -1)).run();
+
+    await expect(service.validateWorkflowDraft('provider-tree', 1)).resolves.toMatchObject({
+      errors: expect.arrayContaining([expect.objectContaining({ code: 'agent_provider_invalid' })]),
+    });
+
+    await expect(service.publishWorkflowDraft('provider-tree', 1, {})).rejects.toMatchObject({
+      code: 'invalid_request',
+      status: 400,
+      details: expect.objectContaining({
+        errors: expect.arrayContaining([expect.objectContaining({ code: 'agent_provider_invalid' })]),
+      }),
+    });
+  });
+
   it('duplicates workflow trees into a new draft v1', async () => {
     const { db, dependencies } = createHarness();
     migrateDatabase(db);
@@ -769,6 +821,45 @@ describe('createDashboardService', () => {
       status: 400,
       details: expect.objectContaining({
         errors: expect.arrayContaining([expect.objectContaining({ code: 'guard_invalid' })]),
+      }),
+    });
+  });
+
+  it('rejects saving drafts with unsupported agent providers', async () => {
+    const { db, dependencies } = createHarness();
+    migrateDatabase(db);
+
+    const service = createDashboardService({ dependencies });
+
+    await service.createWorkflowDraft({
+      template: 'blank',
+      name: 'Provider Save Tree',
+      treeKey: 'provider-save-tree',
+    });
+
+    await expect(
+      service.saveWorkflowDraft('provider-save-tree', 1, {
+        draftRevision: 1,
+        name: 'Provider Save Tree',
+        nodes: [
+          {
+            nodeKey: 'agent-node',
+            displayName: 'Agent Node',
+            nodeType: 'agent',
+            provider: 'codex ',
+            maxRetries: 0,
+            sequenceIndex: 10,
+            position: null,
+            promptTemplate: { content: 'Agent prompt', contentType: 'markdown' },
+          },
+        ],
+        edges: [],
+      }),
+    ).rejects.toMatchObject({
+      code: 'invalid_request',
+      status: 400,
+      details: expect.objectContaining({
+        errors: expect.arrayContaining([expect.objectContaining({ code: 'agent_provider_invalid' })]),
       }),
     });
   });
