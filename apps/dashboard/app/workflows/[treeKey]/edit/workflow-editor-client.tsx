@@ -134,6 +134,25 @@ type AddNodeArgs = {
   presetNode?: DashboardWorkflowDraftNode;
 };
 
+type PublishSummary = {
+  versionBump: string;
+  nodeCount: number;
+  edgeCount: number;
+  versionNotes: string;
+};
+
+function workflowEditorShellClassName(inspectorDrawerOpen: boolean): string {
+  return inspectorDrawerOpen ? 'workflow-editor-shell workflow-editor-shell--drawer-open' : 'workflow-editor-shell';
+}
+
+function inspectorClassName(inspectorDrawerOpen: boolean): string {
+  return inspectorDrawerOpen ? 'workflow-editor-inspector workflow-editor-inspector--open' : 'workflow-editor-inspector';
+}
+
+function inspectorTabClassName(activeTab: InspectorTab, tab: InspectorTab): string {
+  return activeTab === tab ? 'active' : '';
+}
+
 function deriveSelectionChangeState(
   params: { nodes: Node[]; edges: Edge[] },
   activeTab: InspectorTab,
@@ -623,6 +642,160 @@ function WorkflowEditorInspectorBody({
       validationError={validationError}
       publishError={publishError}
     />
+  );
+}
+
+function WorkflowPublishDialog({
+  closePublishConfirm,
+  open,
+  publish,
+  publishError,
+  publishSummary,
+  publishing,
+}: Readonly<{
+  closePublishConfirm: () => void;
+  open: boolean;
+  publish: () => Promise<void>;
+  publishError: string | null;
+  publishSummary: PublishSummary;
+  publishing: boolean;
+}>) {
+  if (!open) {
+    return null;
+  }
+
+  return (
+    <div className="workflow-overlay">
+      <button
+        type="button"
+        aria-label="Close publish workflow dialog"
+        tabIndex={-1}
+        onClick={closePublishConfirm}
+        style={{
+          position: 'absolute',
+          inset: 0,
+          background: 'transparent',
+          border: 0,
+          padding: 0,
+        }}
+      />
+      <dialog
+        open
+        className="workflow-dialog"
+        aria-modal="true"
+        aria-labelledby="workflow-publish-dialog-title"
+        onCancel={(event) => {
+          event.preventDefault();
+          closePublishConfirm();
+        }}
+        style={{ position: 'relative' }}
+      >
+        <header className="workflow-dialog__header">
+          <h3 id="workflow-publish-dialog-title">Confirm publish</h3>
+          <p className="meta-text">Review this summary before publishing the workflow draft.</p>
+        </header>
+
+        <div className="workflow-dialog__form">
+          <ul className="entity-list">
+            <li>
+              <span>Version bump</span>
+              <span>{publishSummary.versionBump}</span>
+            </li>
+            <li>
+              <span>Nodes</span>
+              <span>{publishSummary.nodeCount}</span>
+            </li>
+            <li>
+              <span>Transitions</span>
+              <span>{publishSummary.edgeCount}</span>
+            </li>
+            <li>
+              <span>Version notes</span>
+              <span>{publishSummary.versionNotes}</span>
+            </li>
+          </ul>
+
+          {publishError ? <p className="run-launch-banner--error" role="alert">{publishError}</p> : null}
+
+          <div className="workflow-dialog__actions">
+            <ActionButton onClick={closePublishConfirm} disabled={publishing}>
+              Cancel
+            </ActionButton>
+            <ActionButton tone="primary" onClick={() => publish().catch(() => undefined)} disabled={publishing}>
+              {publishing ? 'Publishing...' : 'Publish version'}
+            </ActionButton>
+          </div>
+        </div>
+      </dialog>
+    </div>
+  );
+}
+
+function WorkflowInspectorBackdrop({
+  closeInspectorDrawer,
+  inspectorDrawerOpen,
+  isCompactViewport,
+}: Readonly<{
+  closeInspectorDrawer: () => void;
+  inspectorDrawerOpen: boolean;
+  isCompactViewport: boolean;
+}>) {
+  if (!isCompactViewport || !inspectorDrawerOpen) {
+    return null;
+  }
+
+  return (
+    <button
+      type="button"
+      className="workflow-editor-inspector-backdrop"
+      aria-label="Close inspector drawer"
+      onClick={closeInspectorDrawer}
+    />
+  );
+}
+
+function WorkflowContextMenuPanel({
+  addConnectedNodeFromContextMenu,
+  contextMenu,
+  deleteEdgeById,
+  deleteNodeById,
+  duplicateEdgeFromContextMenu,
+  duplicateNodeFromContextMenu,
+  renameNodeFromContextMenu,
+}: Readonly<{
+  addConnectedNodeFromContextMenu: () => void;
+  contextMenu: WorkflowContextMenuState | null;
+  deleteEdgeById: (edgeId: string) => void;
+  deleteNodeById: (nodeId: string) => void;
+  duplicateEdgeFromContextMenu: () => void;
+  duplicateNodeFromContextMenu: () => void;
+  renameNodeFromContextMenu: () => void;
+}>) {
+  if (!contextMenu) {
+    return null;
+  }
+
+  return (
+    <div
+      className="workflow-context-menu"
+      role="menu"
+      aria-label={`${contextMenu.targetType} context menu`}
+      style={{ left: contextMenu.x, top: contextMenu.y }}
+    >
+      {contextMenu.targetType === 'node' ? (
+        <>
+          <button type="button" role="menuitem" onClick={renameNodeFromContextMenu}>Rename</button>
+          <button type="button" role="menuitem" onClick={duplicateNodeFromContextMenu}>Duplicate</button>
+          <button type="button" role="menuitem" onClick={addConnectedNodeFromContextMenu}>Add connected node</button>
+          <button type="button" role="menuitem" onClick={() => deleteNodeById(contextMenu.id)}>Delete</button>
+        </>
+      ) : (
+        <>
+          <button type="button" role="menuitem" onClick={duplicateEdgeFromContextMenu}>Duplicate</button>
+          <button type="button" role="menuitem" onClick={() => deleteEdgeById(contextMenu.id)}>Delete</button>
+        </>
+      )}
+    </div>
   );
 }
 
@@ -1275,7 +1448,7 @@ function WorkflowEditorLoadedContent({
 
   const inspector = (
     <aside
-      className={`workflow-editor-inspector${inspectorDrawerOpen ? ' workflow-editor-inspector--open' : ''}`}
+      className={inspectorClassName(inspectorDrawerOpen)}
       aria-label="Workflow inspector"
     >
       <div className="workflow-editor-inspector__mobile-header">
@@ -1283,13 +1456,13 @@ function WorkflowEditorLoadedContent({
         <ActionButton className="workflow-editor-inspector-close" onClick={closeInspectorDrawer}>Close</ActionButton>
       </div>
       <nav className="workflow-editor-tabs" aria-label="Inspector tabs">
-        <button type="button" className={activeTab === 'node' ? 'active' : ''} onClick={() => setActiveTab('node')} disabled={!selectedNode}>
+        <button type="button" className={inspectorTabClassName(activeTab, 'node')} onClick={() => setActiveTab('node')} disabled={!selectedNode}>
           Node
         </button>
-        <button type="button" className={activeTab === 'transition' ? 'active' : ''} onClick={() => setActiveTab('transition')} disabled={!selectedEdge}>
+        <button type="button" className={inspectorTabClassName(activeTab, 'transition')} onClick={() => setActiveTab('transition')} disabled={!selectedEdge}>
           Transition
         </button>
-        <button type="button" className={activeTab === 'workflow' ? 'active' : ''} onClick={() => setActiveTab('workflow')}>
+        <button type="button" className={inspectorTabClassName(activeTab, 'workflow')} onClick={() => setActiveTab('workflow')}>
           Workflow
         </button>
       </nav>
@@ -1324,106 +1497,33 @@ function WorkflowEditorLoadedContent({
   );
 
   return (
-    <div className={`workflow-editor-shell${inspectorDrawerOpen ? ' workflow-editor-shell--drawer-open' : ''}`}>
+    <div className={workflowEditorShellClassName(inspectorDrawerOpen)}>
       <WorkflowEditorAddNodeDialog open={addNodePaletteOpen} onClose={closePalette} onSelect={handlePaletteSelect} />
 
-      {publishConfirmOpen ? (
-        <div className="workflow-overlay">
-          <button
-            type="button"
-            aria-label="Close publish workflow dialog"
-            tabIndex={-1}
-            onClick={closePublishConfirm}
-            style={{
-              position: 'absolute',
-              inset: 0,
-              background: 'transparent',
-              border: 0,
-              padding: 0,
-            }}
-          />
-          <dialog
-            open
-            className="workflow-dialog"
-            aria-modal="true"
-            aria-labelledby="workflow-publish-dialog-title"
-            onCancel={(event) => {
-              event.preventDefault();
-              closePublishConfirm();
-            }}
-            style={{ position: 'relative' }}
-          >
-            <header className="workflow-dialog__header">
-              <h3 id="workflow-publish-dialog-title">Confirm publish</h3>
-              <p className="meta-text">Review this summary before publishing the workflow draft.</p>
-            </header>
+      <WorkflowPublishDialog
+        closePublishConfirm={closePublishConfirm}
+        open={publishConfirmOpen}
+        publish={publish}
+        publishError={publishError}
+        publishSummary={publishSummary}
+        publishing={publishing}
+      />
 
-            <div className="workflow-dialog__form">
-              <ul className="entity-list">
-                <li>
-                  <span>Version bump</span>
-                  <span>{publishSummary.versionBump}</span>
-                </li>
-                <li>
-                  <span>Nodes</span>
-                  <span>{publishSummary.nodeCount}</span>
-                </li>
-                <li>
-                  <span>Transitions</span>
-                  <span>{publishSummary.edgeCount}</span>
-                </li>
-                <li>
-                  <span>Version notes</span>
-                  <span>{publishSummary.versionNotes}</span>
-                </li>
-              </ul>
+      <WorkflowInspectorBackdrop
+        closeInspectorDrawer={closeInspectorDrawer}
+        inspectorDrawerOpen={inspectorDrawerOpen}
+        isCompactViewport={isCompactViewport}
+      />
 
-              {publishError ? <p className="run-launch-banner--error" role="alert">{publishError}</p> : null}
-
-              <div className="workflow-dialog__actions">
-                <ActionButton onClick={closePublishConfirm} disabled={publishing}>
-                  Cancel
-                </ActionButton>
-                <ActionButton tone="primary" onClick={() => publish().catch(() => undefined)} disabled={publishing}>
-                  {publishing ? 'Publishing...' : 'Publish version'}
-                </ActionButton>
-              </div>
-            </div>
-          </dialog>
-        </div>
-      ) : null}
-
-      {isCompactViewport && inspectorDrawerOpen ? (
-        <button
-          type="button"
-          className="workflow-editor-inspector-backdrop"
-          aria-label="Close inspector drawer"
-          onClick={closeInspectorDrawer}
-        />
-      ) : null}
-
-      {contextMenu ? (
-        <div
-          className="workflow-context-menu"
-          role="menu"
-          aria-label={`${contextMenu.targetType} context menu`}
-          style={{ left: contextMenu.x, top: contextMenu.y }}
-        >
-          {contextMenu.targetType === 'node' ? (
-            <>
-              <button type="button" role="menuitem" onClick={renameNodeFromContextMenu}>Rename</button>
-              <button type="button" role="menuitem" onClick={duplicateNodeFromContextMenu}>Duplicate</button>
-              <button type="button" role="menuitem" onClick={addConnectedNodeFromContextMenu}>Add connected node</button>
-              <button type="button" role="menuitem" onClick={() => deleteNodeById(contextMenu.id)}>Delete</button>
-            </>
-          ) : (
-            <>
-              <button type="button" role="menuitem" onClick={duplicateEdgeFromContextMenu}>Duplicate</button>
-              <button type="button" role="menuitem" onClick={() => deleteEdgeById(contextMenu.id)}>Delete</button>
-            </>
-          )}
-        </div>
-      ) : null}
+      <WorkflowContextMenuPanel
+        addConnectedNodeFromContextMenu={addConnectedNodeFromContextMenu}
+        contextMenu={contextMenu}
+        deleteEdgeById={deleteEdgeById}
+        deleteNodeById={deleteNodeById}
+        duplicateEdgeFromContextMenu={duplicateEdgeFromContextMenu}
+        duplicateNodeFromContextMenu={duplicateNodeFromContextMenu}
+        renameNodeFromContextMenu={renameNodeFromContextMenu}
+      />
 
       <header className="workflow-editor-topbar">
         <div className="workflow-editor-topbar__meta">
