@@ -19,7 +19,7 @@ A workflow is a directed graph of phases with conditional transitions:
 ### Phase Execution
 
 Each phase:
-1. Loads prior phase reports from the database as context
+1. Assembles bounded upstream artifact context from selected predecessor reports
 2. Creates a new agent session (no conversation carry-over)
 3. Invokes the configured agent provider with the prompt + context
 4. Collects streaming events and stores the final report
@@ -76,6 +76,21 @@ Streamed event types: `system`, `assistant`, `result`, `tool_use`, `tool_result`
 Shared `ProviderRunOptions` are intentionally minimal and cross-provider: required `workingDirectory`, plus optional `systemPrompt`, `context`, and `timeout`.
 
 Each phase spawns a fresh agent session. Context from prior phases is injected via the prompt, not through conversation history.
+
+### Upstream Artifact Context Handoff Policy (v1)
+
+Executor-side context assembly follows a deterministic, bounded policy:
+- Eligible artifacts: latest successful `report` per selected upstream run node.
+- Default upstream scope: selected direct predecessors only (no transitive ancestry by default).
+- Hard caps:
+  - `MAX_UPSTREAM_ARTIFACTS = 4`
+  - `MAX_CONTEXT_CHARS_TOTAL = 32_000`
+  - `MAX_CHARS_PER_ARTIFACT = 12_000`
+- Truncation: deterministic `head_tail` with persisted truncation metadata.
+- Auditability: stable Context Envelope v1 entries in `options.context` and persisted downstream context-manifest metadata.
+
+Canonical policy details live in:
+- `packages/core/docs/upstream-artifact-handoff-policy-v1.md`
 
 ## Agent Runtime v1 (DI + Adapters)
 
