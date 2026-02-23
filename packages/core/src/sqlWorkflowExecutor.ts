@@ -684,7 +684,7 @@ function selectDirectPredecessorNodes(
     }
 
     const sourceNode = routingSelection.latestByTreeNodeId.get(edge.sourceNodeId);
-    if (!sourceNode || sourceNode.status !== 'completed') {
+    if (sourceNode?.status !== 'completed') {
       continue;
     }
 
@@ -693,6 +693,49 @@ function selectDirectPredecessorNodes(
   }
 
   return predecessors.sort(compareUpstreamSourceOrder);
+}
+
+function resolveIncludedContentForContextCandidate(
+  candidate: ContextEnvelopeCandidate,
+  remainingChars: number,
+): {
+  includedContent: string | null;
+  budgetOverflow: boolean;
+} {
+  if (remainingChars <= 0) {
+    return {
+      includedContent: null,
+      budgetOverflow: true,
+    };
+  }
+
+  let includedContent = truncateHeadTail(candidate.originalContent, MAX_CHARS_PER_ARTIFACT);
+  if (includedContent.length <= remainingChars) {
+    return {
+      includedContent,
+      budgetOverflow: false,
+    };
+  }
+
+  if (remainingChars < MIN_REMAINING_CONTEXT_CHARS) {
+    return {
+      includedContent: null,
+      budgetOverflow: true,
+    };
+  }
+
+  includedContent = truncateHeadTail(candidate.originalContent, Math.min(MAX_CHARS_PER_ARTIFACT, remainingChars));
+  if (includedContent.length <= 0) {
+    return {
+      includedContent: null,
+      budgetOverflow: true,
+    };
+  }
+
+  return {
+    includedContent,
+    budgetOverflow: true,
+  };
 }
 
 function assembleUpstreamArtifactContext(
@@ -746,35 +789,22 @@ function assembleUpstreamArtifactContext(
       continue;
     }
 
-    if (remainingChars <= 0) {
+    const inclusion = resolveIncludedContentForContextCandidate(candidate, remainingChars);
+    if (inclusion.budgetOverflow) {
       budgetOverflow = true;
+    }
+    if (!inclusion.includedContent) {
       droppedArtifactIds.push(candidate.artifactId);
       continue;
     }
 
-    let includedContent = truncateHeadTail(candidate.originalContent, MAX_CHARS_PER_ARTIFACT);
-    if (includedContent.length > remainingChars) {
-      budgetOverflow = true;
-      if (remainingChars < MIN_REMAINING_CONTEXT_CHARS) {
-        droppedArtifactIds.push(candidate.artifactId);
-        continue;
-      }
-      includedContent = truncateHeadTail(candidate.originalContent, Math.min(MAX_CHARS_PER_ARTIFACT, remainingChars));
-    }
-
-    if (includedContent.length <= 0) {
-      budgetOverflow = true;
-      droppedArtifactIds.push(candidate.artifactId);
-      continue;
-    }
-
-    const truncation = buildTruncationMetadata(candidate.originalContent.length, includedContent.length);
+    const truncation = buildTruncationMetadata(candidate.originalContent.length, inclusion.includedContent.length);
     includedEntries.push({
       ...candidate,
-      includedContent,
+      includedContent: inclusion.includedContent,
       truncation,
     });
-    remainingChars -= includedContent.length;
+    remainingChars -= inclusion.includedContent.length;
   }
 
   const contextEntries = includedEntries.map(entry =>
@@ -1641,6 +1671,13 @@ type ClaimedNodeSuccess = {
   runStatus: WorkflowRunStatus;
 };
 
+type ClaimedNodeSuccessParams = {
+  currentAttempt: number;
+  currentRunStatus: WorkflowRunStatus;
+  contextManifest: ContextHandoffManifest;
+  phaseResult: Awaited<ReturnType<typeof runPhase>>;
+};
+
 type ClaimedNodeFailure = {
   artifactId: number;
   runStatus: WorkflowRunStatus;
@@ -1705,11 +1742,10 @@ function handleClaimedNodeSuccess(
   run: WorkflowRunRow,
   node: RunNodeExecutionRow,
   edgeRows: EdgeRow[],
-  currentAttempt: number,
-  currentRunStatus: WorkflowRunStatus,
-  contextManifest: ContextHandoffManifest,
-  phaseResult: Awaited<ReturnType<typeof runPhase>>,
+  params: ClaimedNodeSuccessParams,
 ): ClaimedNodeSuccess {
+  const { currentAttempt, currentRunStatus, contextManifest, phaseResult } = params;
+
   const artifactId = persistSuccessArtifact(db, {
     workflowRunId: run.id,
     runNodeId: node.runNodeId,
@@ -1866,10 +1902,12 @@ async function executeClaimedRunnableNode(
         run,
         node,
         edgeRows,
-        currentAttempt,
-        currentRunStatus,
-        contextAssembly.manifest,
-        phaseResult,
+        {
+          currentAttempt,
+          currentRunStatus,
+          contextManifest: contextAssembly.manifest,
+          phaseResult,
+        },
       );
       currentRunStatus = success.runStatus;
       return buildExecutedNodeResult(run, node, 'completed', currentRunStatus, success.artifactId);
