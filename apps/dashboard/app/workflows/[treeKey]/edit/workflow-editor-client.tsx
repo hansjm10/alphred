@@ -140,7 +140,12 @@ function deriveSelectionChangeState(
 ): SelectionChangeState {
   const nextNodeId = params.nodes[0]?.id ?? null;
   const nextEdgeId = params.edges[0]?.id ?? null;
-  const nextActiveTab = nextNodeId ? 'node' : nextEdgeId ? 'transition' : activeTab;
+  let nextActiveTab: InspectorTab = activeTab;
+  if (nextNodeId) {
+    nextActiveTab = 'node';
+  } else if (nextEdgeId) {
+    nextActiveTab = 'transition';
+  }
   return {
     nextNodeId,
     nextEdgeId,
@@ -258,6 +263,208 @@ function handleDuplicateEdgeFromContextMenu(args: Readonly<{
   });
   setContextMenu(null);
   markWorkflowChanged();
+}
+
+function bindCompactViewportChanges(args: Readonly<{
+  setIsCompactViewport: Dispatch<SetStateAction<boolean>>;
+  setInspectorDrawerOpen: Dispatch<SetStateAction<boolean>>;
+}>): () => void {
+  const { setInspectorDrawerOpen, setIsCompactViewport } = args;
+  if (typeof globalThis.matchMedia !== 'function') {
+    setIsCompactViewport(false);
+    return () => undefined;
+  }
+
+  const mediaQuery = globalThis.matchMedia('(max-width: 960px)');
+  const update = () => {
+    setIsCompactViewport(mediaQuery.matches);
+    if (!mediaQuery.matches) {
+      setInspectorDrawerOpen(false);
+    }
+  };
+
+  update();
+  return subscribeToMediaQueryChanges(mediaQuery, update);
+}
+
+function bindContextMenuCloseHandlers(args: Readonly<{
+  contextMenu: WorkflowContextMenuState | null;
+  setContextMenu: Dispatch<SetStateAction<WorkflowContextMenuState | null>>;
+}>): (() => void) | undefined {
+  const { contextMenu, setContextMenu } = args;
+  if (!contextMenu) {
+    return undefined;
+  }
+
+  const closeContextMenu = () => setContextMenu(null);
+  globalThis.addEventListener('click', closeContextMenu);
+  globalThis.addEventListener('contextmenu', closeContextMenu);
+  return () => {
+    globalThis.removeEventListener('click', closeContextMenu);
+    globalThis.removeEventListener('contextmenu', closeContextMenu);
+  };
+}
+
+function handleCanvasConnect(args: Readonly<{
+  connection: Connection;
+  openPalette: (sourceNodeKey?: string) => void;
+  setEdges: Dispatch<SetStateAction<Edge[]>>;
+  markWorkflowChanged: () => void;
+}>): void {
+  const { connection, markWorkflowChanged, openPalette, setEdges } = args;
+  if (!connection.source) {
+    return;
+  }
+
+  if (!connection.target) {
+    openPalette(connection.source);
+    return;
+  }
+
+  setEdges((current) => {
+    const draftEdges = current.map(mapEdgeFromReactFlow);
+    const next = createConnectedDraftEdge({
+      sourceNodeKey: connection.source as string,
+      targetNodeKey: connection.target as string,
+      existingEdges: draftEdges,
+    });
+    return [...current, toReactFlowEdge(next)];
+  });
+  markWorkflowChanged();
+}
+
+function handleCanvasDrop(args: Readonly<{
+  event: DragEvent;
+  reactFlowInstance: ReactFlowInstance | null;
+  addNode: (args: AddNodeArgs) => DashboardWorkflowDraftNode;
+}>): void {
+  const { addNode, event, reactFlowInstance } = args;
+  event.preventDefault();
+  const nodeType = event.dataTransfer.getData('application/alphred-workflow-node');
+  if (!nodeType || !reactFlowInstance) {
+    return;
+  }
+
+  const position = toFlowPosition(reactFlowInstance, { x: event.clientX, y: event.clientY });
+  if (!position) {
+    return;
+  }
+
+  addNode({ nodeType: nodeType as DashboardWorkflowDraftNode['nodeType'], position });
+}
+
+function handleAddConnectedNodeFromContextMenu(args: Readonly<{
+  contextMenu: WorkflowContextMenuState | null;
+  setContextMenu: Dispatch<SetStateAction<WorkflowContextMenuState | null>>;
+  openPalette: (sourceNodeKey?: string) => void;
+}>): void {
+  const { contextMenu, openPalette, setContextMenu } = args;
+  if (contextMenu?.targetType !== 'node') {
+    return;
+  }
+
+  setContextMenu(null);
+  openPalette(contextMenu.id);
+}
+
+async function runWorkflowValidation(args: Readonly<{
+  flushSave: () => Promise<boolean>;
+  treeKey: string;
+  version: number;
+  setValidationError: Dispatch<SetStateAction<string | null>>;
+  setPublishError: Dispatch<SetStateAction<string | null>>;
+  setValidation: Dispatch<SetStateAction<DashboardWorkflowValidationResult | null>>;
+  setActiveTab: Dispatch<SetStateAction<InspectorTab>>;
+}>): Promise<void> {
+  const {
+    flushSave,
+    setActiveTab,
+    setPublishError,
+    setValidation,
+    setValidationError,
+    treeKey,
+    version,
+  } = args;
+
+  setValidationError(null);
+  setPublishError(null);
+
+  try {
+    const saveSucceeded = await flushSave();
+    if (!saveSucceeded) {
+      setValidationError('Save the latest draft changes before validating.');
+      return;
+    }
+
+    const response = await fetch(
+      `/api/dashboard/workflows/${encodeURIComponent(treeKey)}/draft/validate?version=${version}`,
+      { method: 'POST' },
+    );
+    const json = await response.json().catch(() => null);
+    if (!response.ok) {
+      setValidationError(resolveApiError(response.status, json, 'Validation failed'));
+      return;
+    }
+
+    setValidation((json as { result: DashboardWorkflowValidationResult }).result);
+    setActiveTab('workflow');
+  } catch (error_) {
+    setValidationError(error_ instanceof Error ? error_.message : 'Validation failed.');
+  }
+}
+
+async function publishWorkflowDraft(args: Readonly<{
+  flushSave: () => Promise<boolean>;
+  treeKey: string;
+  version: number;
+  workflowVersionNotes: string;
+  setPublishError: Dispatch<SetStateAction<string | null>>;
+  setPublishing: Dispatch<SetStateAction<boolean>>;
+  setPublishConfirmOpen: Dispatch<SetStateAction<boolean>>;
+  pushToWorkflow: () => void;
+}>): Promise<void> {
+  const {
+    flushSave,
+    pushToWorkflow,
+    setPublishConfirmOpen,
+    setPublishError,
+    setPublishing,
+    treeKey,
+    version,
+    workflowVersionNotes,
+  } = args;
+
+  setPublishError(null);
+  setPublishing(true);
+  try {
+    const saveSucceeded = await flushSave();
+    if (!saveSucceeded) {
+      setPublishError('Save the latest draft changes before publishing.');
+      return;
+    }
+
+    const versionNotes = workflowVersionNotes.trim();
+    const response = await fetch(
+      `/api/dashboard/workflows/${encodeURIComponent(treeKey)}/draft/publish?version=${version}`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(versionNotes.length > 0 ? { versionNotes } : {}),
+      },
+    );
+    const json = await response.json().catch(() => null);
+    if (!response.ok) {
+      setPublishError(resolveApiError(response.status, json, 'Publish failed'));
+      return;
+    }
+
+    setPublishConfirmOpen(false);
+    pushToWorkflow();
+  } catch (error_) {
+    setPublishError(error_ instanceof Error ? error_.message : 'Publish failed.');
+  } finally {
+    setPublishing(false);
+  }
 }
 
 type WorkflowEditorPageContentProps = Readonly<{
@@ -551,35 +758,17 @@ function WorkflowEditorLoadedContent({
   }, [draftEdgesForSave, draftNodesForSave, workflowDescription, workflowName, workflowVersionNotes]);
 
   useEffect(() => {
-    if (typeof globalThis.matchMedia !== 'function') {
-      setIsCompactViewport(false);
-      return;
-    }
-
-    const mediaQuery = globalThis.matchMedia('(max-width: 960px)');
-    const update = () => {
-      setIsCompactViewport(mediaQuery.matches);
-      if (!mediaQuery.matches) {
-        setInspectorDrawerOpen(false);
-      }
-    };
-
-    update();
-    return subscribeToMediaQueryChanges(mediaQuery, update);
+    return bindCompactViewportChanges({
+      setIsCompactViewport,
+      setInspectorDrawerOpen,
+    });
   }, []);
 
   useEffect(() => {
-    if (!contextMenu) {
-      return;
-    }
-
-    const closeContextMenu = () => setContextMenu(null);
-    globalThis.addEventListener('click', closeContextMenu);
-    globalThis.addEventListener('contextmenu', closeContextMenu);
-    return () => {
-      globalThis.removeEventListener('click', closeContextMenu);
-      globalThis.removeEventListener('contextmenu', closeContextMenu);
-    };
+    return bindContextMenuCloseHandlers({
+      contextMenu,
+      setContextMenu,
+    });
   }, [contextMenu]);
 
   const { flushSave, markDirty, saveError, saveNow, saveState, scheduleSave } = useDraftAutosave({
@@ -727,26 +916,12 @@ function WorkflowEditorLoadedContent({
   }, [markWorkflowChanged]);
 
   const onConnect = useCallback((connection: Connection) => {
-    if (!connection.source) {
-      return;
-    }
-
-    if (!connection.target) {
-      openPalette(connection.source);
-      return;
-    }
-
-    setEdges((current) => {
-      const draftEdges = current.map(mapEdgeFromReactFlow);
-      const next = createConnectedDraftEdge({
-        sourceNodeKey: connection.source,
-        targetNodeKey: connection.target,
-        existingEdges: draftEdges,
-      });
-      return [...current, toReactFlowEdge(next)];
+    handleCanvasConnect({
+      connection,
+      openPalette,
+      setEdges,
+      markWorkflowChanged,
     });
-
-    markWorkflowChanged();
   }, [markWorkflowChanged, openPalette]);
 
   const handleSelectionChange = useCallback((params: { nodes: Node[]; edges: Edge[] }) => {
@@ -821,22 +996,11 @@ function WorkflowEditorLoadedContent({
   }, []);
 
   const onDrop = useCallback((event: DragEvent) => {
-    event.preventDefault();
-    const nodeType = event.dataTransfer.getData('application/alphred-workflow-node');
-    if (!nodeType) {
-      return;
-    }
-
-    if (!reactFlowInstance) {
-      return;
-    }
-
-    const position = toFlowPosition(reactFlowInstance, { x: event.clientX, y: event.clientY });
-    if (!position) {
-      return;
-    }
-
-    addNode({ nodeType: nodeType as DashboardWorkflowDraftNode['nodeType'], position });
+    handleCanvasDrop({
+      event,
+      reactFlowInstance,
+      addNode,
+    });
   }, [addNode, reactFlowInstance]);
 
   const onNodeContextMenu = useCallback((event: ReactMouseEvent, node: Node) => {
@@ -889,12 +1053,11 @@ function WorkflowEditorLoadedContent({
   }, [addNode, contextMenu, nodes]);
 
   const addConnectedNodeFromContextMenu = useCallback(() => {
-    if (contextMenu?.targetType !== 'node') {
-      return;
-    }
-
-    setContextMenu(null);
-    openPalette(contextMenu.id);
+    handleAddConnectedNodeFromContextMenu({
+      contextMenu,
+      setContextMenu,
+      openPalette,
+    });
   }, [contextMenu, openPalette]);
 
   const duplicateEdgeFromContextMenu = useCallback(() => {
@@ -908,31 +1071,15 @@ function WorkflowEditorLoadedContent({
   }, [contextMenu, edges, markWorkflowChanged]);
 
   async function runValidation(): Promise<void> {
-    setValidationError(null);
-    setPublishError(null);
-
-    try {
-      const saveSucceeded = await flushSave();
-      if (!saveSucceeded) {
-        setValidationError('Save the latest draft changes before validating.');
-        return;
-      }
-
-      const response = await fetch(
-        `/api/dashboard/workflows/${encodeURIComponent(treeKey)}/draft/validate?version=${version}`,
-        { method: 'POST' },
-      );
-      const json = await response.json().catch(() => null);
-      if (!response.ok) {
-        setValidationError(resolveApiError(response.status, json, 'Validation failed'));
-        return;
-      }
-
-      setValidation((json as { result: DashboardWorkflowValidationResult }).result);
-      setActiveTab('workflow');
-    } catch (error_) {
-      setValidationError(error_ instanceof Error ? error_.message : 'Validation failed.');
-    }
+    await runWorkflowValidation({
+      flushSave,
+      treeKey,
+      version,
+      setValidationError,
+      setPublishError,
+      setValidation,
+      setActiveTab,
+    });
   }
 
   function openPublishConfirm(): void {
@@ -945,38 +1092,16 @@ function WorkflowEditorLoadedContent({
   }
 
   async function publish(): Promise<void> {
-    setPublishError(null);
-    setPublishing(true);
-
-    try {
-      const saveSucceeded = await flushSave();
-      if (!saveSucceeded) {
-        setPublishError('Save the latest draft changes before publishing.');
-        return;
-      }
-
-      const versionNotes = workflowVersionNotes.trim();
-      const response = await fetch(
-        `/api/dashboard/workflows/${encodeURIComponent(treeKey)}/draft/publish?version=${version}`,
-        {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify(versionNotes.length > 0 ? { versionNotes } : {}),
-        },
-      );
-      const json = await response.json().catch(() => null);
-      if (!response.ok) {
-        setPublishError(resolveApiError(response.status, json, 'Publish failed'));
-        return;
-      }
-
-      setPublishConfirmOpen(false);
-      router.push(`/workflows/${encodeURIComponent(treeKey)}`);
-    } catch (error_) {
-      setPublishError(error_ instanceof Error ? error_.message : 'Publish failed.');
-    } finally {
-      setPublishing(false);
-    }
+    await publishWorkflowDraft({
+      flushSave,
+      treeKey,
+      version,
+      workflowVersionNotes,
+      setPublishError,
+      setPublishing,
+      setPublishConfirmOpen,
+      pushToWorkflow: () => router.push(`/workflows/${encodeURIComponent(treeKey)}`),
+    });
   }
 
   function openInspectorDrawer(): void {
