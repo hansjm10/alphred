@@ -227,6 +227,10 @@ function defaultProvider(nodeType: DashboardWorkflowDraftNode['nodeType']): stri
   return nodeType === 'agent' ? 'codex' : null;
 }
 
+function defaultModel(nodeType: DashboardWorkflowDraftNode['nodeType']): string | null {
+  return nodeType === 'agent' ? 'gpt-5.3-codex' : null;
+}
+
 function defaultPromptTemplate(nodeType: DashboardWorkflowDraftNode['nodeType']): DashboardWorkflowDraftNode['promptTemplate'] {
   if (nodeType !== 'agent') {
     return null;
@@ -256,6 +260,7 @@ export function createDraftNode(args: Readonly<{
     displayName: baseName,
     nodeType: args.nodeType,
     provider: defaultProvider(args.nodeType),
+    model: defaultModel(args.nodeType),
     maxRetries: 0,
     sequenceIndex: args.nextSequenceIndex,
     position: { x: Math.round(args.position.x), y: Math.round(args.position.y) },

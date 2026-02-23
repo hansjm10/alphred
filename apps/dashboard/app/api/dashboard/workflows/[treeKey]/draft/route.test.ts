@@ -619,6 +619,7 @@ describe('PUT /api/dashboard/workflows/[treeKey]/draft', () => {
           displayName: 'Design',
           nodeType: 'agent',
           provider: 'codex',
+          model: null,
           maxRetries: 0,
           sequenceIndex: 10,
           position: { x: 10, y: 20 },

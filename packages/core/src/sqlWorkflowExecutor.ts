@@ -38,6 +38,7 @@ type RunNodeExecutionRow = {
   maxRetries: number;
   nodeType: string;
   provider: string | null;
+  model: string | null;
   prompt: string | null;
   promptContentType: string | null;
 };
@@ -753,6 +754,7 @@ function createExecutionPhase(node: RunNodeExecutionRow): PhaseDefinition {
     name: node.nodeKey,
     type: 'agent',
     provider: (node.provider as AgentProviderName | null) ?? undefined,
+    model: node.model ?? undefined,
     prompt: node.prompt ?? '',
     transitions: [],
   };
@@ -794,6 +796,7 @@ function loadRunNodeExecutionRows(db: AlphredDatabase, workflowRunId: number): R
       maxRetries: treeNodes.maxRetries,
       nodeType: treeNodes.nodeType,
       provider: treeNodes.provider,
+      model: treeNodes.model,
       prompt: promptTemplates.content,
       promptContentType: promptTemplates.contentType,
     })
@@ -816,6 +819,7 @@ function loadRunNodeExecutionRows(db: AlphredDatabase, workflowRunId: number): R
     maxRetries: row.maxRetries,
     nodeType: row.nodeType,
     provider: row.provider,
+    model: row.model,
     prompt: row.prompt,
     promptContentType: row.promptContentType,
   }));
@@ -1341,7 +1345,8 @@ async function executeNodePhase(
   dependencies: SqlWorkflowExecutorDependencies,
 ): Promise<Awaited<ReturnType<typeof runPhase>>> {
   const phase = createExecutionPhase(node);
-  return runPhase(phase, options, {
+  const phaseOptions = phase.model ? { ...options, model: phase.model } : options;
+  return runPhase(phase, phaseOptions, {
     resolveProvider: dependencies.resolveProvider,
   });
 }

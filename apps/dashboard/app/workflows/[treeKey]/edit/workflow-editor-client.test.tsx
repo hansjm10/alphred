@@ -1298,6 +1298,7 @@ describe('WorkflowEditorPageContent', () => {
         displayName: 'Agent',
         nodeType: 'agent',
         provider: 'codex',
+        model: 'gpt-5.3-codex',
         maxRetries: 0,
         sequenceIndex: 10,
         position: { x: 10, y: 20 },

@@ -12,9 +12,11 @@ const { notFoundMock } = vi.hoisted(() => ({
   }),
 }));
 
-const { createDashboardServiceMock, getWorkflowTreeSnapshotMock } = vi.hoisted(() => ({
+const { createDashboardServiceMock, getWorkflowTreeSnapshotMock, listAgentProvidersMock, listAgentModelsMock } = vi.hoisted(() => ({
   createDashboardServiceMock: vi.fn(),
   getWorkflowTreeSnapshotMock: vi.fn(),
+  listAgentProvidersMock: vi.fn(),
+  listAgentModelsMock: vi.fn(),
 }));
 
 vi.mock('next/navigation', () => ({
@@ -44,8 +46,16 @@ describe('WorkflowEditorPage', () => {
     notFoundMock.mockClear();
     createDashboardServiceMock.mockReset();
     getWorkflowTreeSnapshotMock.mockReset();
+    listAgentProvidersMock.mockReset();
+    listAgentModelsMock.mockReset();
+    listAgentProvidersMock.mockResolvedValue([{ provider: 'codex', label: 'Codex', defaultModel: 'gpt-5.3-codex' }]);
+    listAgentModelsMock.mockResolvedValue([
+      { provider: 'codex', model: 'gpt-5.3-codex', label: 'GPT-5.3-Codex', isDefault: true, sortOrder: 10 },
+    ]);
     createDashboardServiceMock.mockReturnValue({
       getWorkflowTreeSnapshot: getWorkflowTreeSnapshotMock,
+      listAgentProviders: listAgentProvidersMock,
+      listAgentModels: listAgentModelsMock,
     });
   });
 

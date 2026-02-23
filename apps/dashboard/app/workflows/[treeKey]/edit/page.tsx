@@ -1,5 +1,9 @@
 import { notFound } from 'next/navigation';
-import type { DashboardWorkflowDraftTopology } from '../../../../src/server/dashboard-contracts';
+import type {
+  DashboardAgentModelOption,
+  DashboardAgentProviderOption,
+  DashboardWorkflowDraftTopology,
+} from '../../../../src/server/dashboard-contracts';
 import { DashboardIntegrationError } from '../../../../src/server/dashboard-errors';
 import { createDashboardService } from '../../../../src/server/dashboard-service';
 import { WorkflowEditorPageContent } from './workflow-editor-client';
@@ -17,9 +21,16 @@ export default async function WorkflowEditorPage({ draft, params }: WorkflowEdit
   const { treeKey } = await params;
   let resolvedDraft: DashboardWorkflowDraftTopology | null = draft ?? null;
   let bootstrapDraftOnMount = false;
+  let providerOptions: DashboardAgentProviderOption[] = [];
+  let modelOptions: DashboardAgentModelOption[] = [];
+
+  const service = createDashboardService();
+  [providerOptions, modelOptions] = await Promise.all([
+    service.listAgentProviders(),
+    service.listAgentModels(),
+  ]);
 
   if (!resolvedDraft) {
-    const service = createDashboardService();
     try {
       const snapshot = await service.getWorkflowTreeSnapshot(treeKey);
       resolvedDraft = snapshot;
@@ -36,5 +47,12 @@ export default async function WorkflowEditorPage({ draft, params }: WorkflowEdit
     notFound();
   }
 
-  return <WorkflowEditorPageContent initialDraft={resolvedDraft} bootstrapDraftOnMount={bootstrapDraftOnMount} />;
+  return (
+    <WorkflowEditorPageContent
+      initialDraft={resolvedDraft}
+      providerOptions={providerOptions}
+      modelOptions={modelOptions}
+      bootstrapDraftOnMount={bootstrapDraftOnMount}
+    />
+  );
 }

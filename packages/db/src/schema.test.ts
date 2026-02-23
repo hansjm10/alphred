@@ -164,6 +164,7 @@ describe('database schema hardening', () => {
     expect(columnNames).toContain('display_name');
     expect(columnNames).toContain('position_x');
     expect(columnNames).toContain('position_y');
+    expect(columnNames).toContain('model');
   });
 
   it('adds repositories.branch_template when migrating a legacy repositories table', () => {
@@ -203,6 +204,29 @@ describe('database schema hardening', () => {
 
     const trees = db.select({ id: workflowTrees.id }).from(workflowTrees).all();
     expect(trees).toHaveLength(1);
+  });
+
+  it('seeds agent model catalog defaults including GPT-5.3-Codex', () => {
+    const db = createDatabase(':memory:');
+    migrateDatabase(db);
+
+    const models = db.all<{
+      provider: string;
+      model_key: string;
+      display_name: string;
+      is_default: number;
+    }>(sql`SELECT provider, model_key, display_name, is_default FROM agent_models ORDER BY provider, model_key`);
+
+    expect(models).toEqual(
+      expect.arrayContaining([
+        {
+          provider: 'codex',
+          model_key: 'gpt-5.3-codex',
+          display_name: 'GPT-5.3-Codex',
+          is_default: 1,
+        },
+      ]),
+    );
   });
 
   it('refreshes run-node transition trigger definitions on migration reruns', () => {

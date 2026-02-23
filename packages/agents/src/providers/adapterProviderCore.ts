@@ -28,6 +28,7 @@ export type AdapterRunRequest = Readonly<{
   workingDirectory: string;
   context: readonly string[];
   systemPrompt?: string;
+  model?: string;
   timeout?: number;
 }>;
 
@@ -249,6 +250,34 @@ function normalizeSystemPrompt<Code extends string, TError extends Error>(
   return normalizedSystemPrompt.length > 0 ? normalizedSystemPrompt : undefined;
 }
 
+function normalizeModel<Code extends string, TError extends Error>(
+  model: ProviderRunOptions['model'],
+  config: AdapterProviderConfig<Code, TError>,
+): string | undefined {
+  if (model === undefined) {
+    return undefined;
+  }
+
+  if (typeof model !== 'string') {
+    throw config.createError(
+      config.codes.invalidOptions,
+      `${config.providerDisplayName} provider requires model to be a string when provided.`,
+      { model },
+    );
+  }
+
+  const normalizedModel = model.trim();
+  if (normalizedModel.length === 0) {
+    throw config.createError(
+      config.codes.invalidOptions,
+      `${config.providerDisplayName} provider requires model to be a non-empty string when provided.`,
+      { model },
+    );
+  }
+
+  return normalizedModel;
+}
+
 function buildBridgedPrompt(prompt: string, systemPrompt: string | undefined, context: readonly string[]): string {
   if (!systemPrompt && context.length === 0) {
     return prompt;
@@ -305,6 +334,7 @@ function createRunRequest<Code extends string, TError extends Error>(
   }
 
   const systemPrompt = normalizeSystemPrompt(validatedOptions.systemPrompt, config);
+  const model = normalizeModel(validatedOptions.model, config);
   const context = normalizeContext(validatedOptions.context, config);
 
   return {
@@ -313,6 +343,7 @@ function createRunRequest<Code extends string, TError extends Error>(
     workingDirectory,
     context,
     systemPrompt,
+    model,
     timeout: validatedOptions.timeout,
   };
 }
@@ -354,12 +385,19 @@ export async function* runAdapterProvider<Code extends string, TError extends Er
     ...config.eventTypeAliases,
   });
 
-  yield createProviderEvent('system', `${config.providerDisplayName} provider run started.`, {
+  const runStartedMetadata: Record<string, unknown> = {
     provider: config.providerName,
     workingDirectory: request.workingDirectory,
     hasSystemPrompt: request.systemPrompt !== undefined,
     contextItemCount: request.context.length,
     timeout: request.timeout,
+  };
+  if (request.model !== undefined) {
+    runStartedMetadata.model = request.model;
+  }
+
+  yield createProviderEvent('system', `${config.providerDisplayName} provider run started.`, {
+    ...runStartedMetadata,
   });
 
   let eventIndex = 0;

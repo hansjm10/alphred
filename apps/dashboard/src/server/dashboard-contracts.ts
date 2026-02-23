@@ -37,6 +37,20 @@ export type DashboardWorkflowTreeKeyAvailability = {
 
 export type DashboardWorkflowTemplateKey = 'design-implement-review' | 'blank';
 
+export type DashboardAgentProviderOption = {
+  provider: string;
+  label: string;
+  defaultModel: string | null;
+};
+
+export type DashboardAgentModelOption = {
+  provider: string;
+  model: string;
+  label: string;
+  isDefault: boolean;
+  sortOrder: number;
+};
+
 export type DashboardCreateWorkflowRequest = {
   template: DashboardWorkflowTemplateKey;
   name: string;
@@ -62,6 +76,7 @@ export type DashboardWorkflowDraftNode = {
   displayName: string;
   nodeType: 'agent' | 'human' | 'tool';
   provider: string | null;
+  model?: string | null;
   maxRetries: number;
   sequenceIndex: number;
   position: { x: number; y: number } | null;

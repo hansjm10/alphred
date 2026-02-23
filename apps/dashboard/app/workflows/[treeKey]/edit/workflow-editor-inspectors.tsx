@@ -4,6 +4,8 @@ import { useEffect, useMemo, useState, type ChangeEvent } from 'react';
 import type { GuardCondition, GuardExpression, GuardOperator } from '@alphred/shared';
 import type { Edge, Node } from '@xyflow/react';
 import type {
+  DashboardAgentModelOption,
+  DashboardAgentProviderOption,
   DashboardWorkflowDraftEdge,
   DashboardWorkflowDraftNode,
   DashboardWorkflowValidationIssue,
@@ -150,10 +152,14 @@ function summarizeGuardExpression(expression: GuardExpression | null): string {
 
 export function NodeInspector({
   node,
+  providerOptions = [],
+  modelOptions = [],
   onChange,
   onAddConnectedNode,
 }: Readonly<{
   node: Node | null;
+  providerOptions?: DashboardAgentProviderOption[];
+  modelOptions?: DashboardAgentModelOption[];
   onChange: (next: DashboardWorkflowDraftNode) => void;
   onAddConnectedNode?: (nodeKey: string) => void;
 }>) {
@@ -178,6 +184,94 @@ export function NodeInspector({
 
   const nodeType = data.nodeType;
   const isAgent = nodeType === 'agent';
+  const effectiveProviderOptions = providerOptions.length > 0
+    ? providerOptions
+    : [{ provider: 'codex', label: 'Codex', defaultModel: 'gpt-5.3-codex' }];
+  const providerValues = new Set(effectiveProviderOptions.map(option => option.provider));
+  const providerOptionsWithCurrent = data.provider && !providerValues.has(data.provider)
+    ? [...effectiveProviderOptions, { provider: data.provider, label: `${data.provider} (unsupported)`, defaultModel: null }]
+    : effectiveProviderOptions;
+  const selectedProvider = data.provider ?? providerOptionsWithCurrent[0]?.provider ?? null;
+
+  const availableModelsForProvider = modelOptions
+    .filter(option => option.provider === selectedProvider)
+    .sort((left, right) => {
+      if (left.sortOrder !== right.sortOrder) {
+        return left.sortOrder - right.sortOrder;
+      }
+      if (left.model < right.model) {
+        return -1;
+      }
+      if (left.model > right.model) {
+        return 1;
+      }
+      return 0;
+    });
+  const modelValues = new Set(availableModelsForProvider.map(option => option.model));
+  const modelOptionsWithCurrent = data.model && !modelValues.has(data.model)
+    ? [
+        ...availableModelsForProvider,
+        {
+          provider: selectedProvider ?? 'unknown',
+          model: data.model,
+          label: `${data.model} (unsupported)`,
+          isDefault: false,
+          sortOrder: Number.MAX_SAFE_INTEGER,
+        },
+      ]
+    : availableModelsForProvider;
+
+  function defaultModelForProvider(provider: string | null): string | null {
+    if (!provider) {
+      return null;
+    }
+
+    const providerOption = providerOptionsWithCurrent.find(option => option.provider === provider);
+    if (providerOption?.defaultModel) {
+      return providerOption.defaultModel;
+    }
+
+    const providerModel = modelOptions.find(option => option.provider === provider && option.isDefault);
+    if (providerModel) {
+      return providerModel.model;
+    }
+
+    return modelOptions.find(option => option.provider === provider)?.model ?? null;
+  }
+
+  function handleNodeTypeChange(nextNodeType: DashboardWorkflowDraftNode['nodeType']) {
+    if (nextNodeType === 'agent') {
+      const nextProvider = selectedProvider;
+      const nextModel = data.model ?? defaultModelForProvider(nextProvider);
+      onChange({
+        ...data,
+        nodeType: nextNodeType,
+        provider: nextProvider,
+        model: nextModel,
+        promptTemplate: data.promptTemplate ?? { content: 'Describe what to do for this workflow phase.', contentType: 'markdown' },
+      });
+      return;
+    }
+
+    onChange({
+      ...data,
+      nodeType: nextNodeType,
+      provider: null,
+      model: null,
+      promptTemplate: null,
+    });
+  }
+
+  function handleProviderChange(nextProvider: string) {
+    const normalizedProvider = nextProvider.trim().length > 0 ? nextProvider : null;
+    const nextModel = defaultModelForProvider(normalizedProvider);
+    onChange({
+      ...data,
+      provider: normalizedProvider,
+      model: nextModel,
+      promptTemplate: data.promptTemplate ?? { content: 'Describe what to do for this workflow phase.', contentType: 'markdown' },
+    });
+  }
 
   return (
     <div className="workflow-inspector-stack">
@@ -195,7 +289,7 @@ export function NodeInspector({
 
       <label className="workflow-inspector-field">
         <span>Node type</span>
-        <select value={data.nodeType} onChange={(event) => handleFieldChange('nodeType', event.target.value as DashboardWorkflowDraftNode['nodeType'])}>
+        <select value={data.nodeType} onChange={(event) => handleNodeTypeChange(event.target.value as DashboardWorkflowDraftNode['nodeType'])}>
           <option value="agent">agent</option>
           <option value="human">human</option>
           <option value="tool">tool</option>
@@ -203,11 +297,36 @@ export function NodeInspector({
       </label>
 
       {isAgent ? (
-        <label className="workflow-inspector-field">
-          <span>Provider</span>
-          <input value={data.provider ?? ''} onChange={(event) => handleFieldChange('provider', event.target.value)} />
-          <span className="meta-text">Provider selection will be configurable once multiple backends are supported.</span>
-        </label>
+        <>
+          <label className="workflow-inspector-field">
+            <span>Provider</span>
+            <select value={selectedProvider ?? ''} onChange={(event) => handleProviderChange(event.target.value)}>
+              {providerOptionsWithCurrent.map(option => (
+                <option key={option.provider} value={option.provider}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <label className="workflow-inspector-field">
+            <span>Model</span>
+            <select
+              value={data.model ?? defaultModelForProvider(selectedProvider) ?? ''}
+              onChange={(event) => handleFieldChange('model', event.target.value.length > 0 ? event.target.value : null)}
+              disabled={!selectedProvider || modelOptionsWithCurrent.length === 0}
+            >
+              {!selectedProvider || modelOptionsWithCurrent.length === 0 ? (
+                <option value="">No models available</option>
+              ) : null}
+              {modelOptionsWithCurrent.map(option => (
+                <option key={`${option.provider}:${option.model}`} value={option.model}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </label>
+        </>
       ) : (
         <p className="meta-text">Human/tool nodes are supported as draft placeholders; publishing may be blocked by validation.</p>
       )}

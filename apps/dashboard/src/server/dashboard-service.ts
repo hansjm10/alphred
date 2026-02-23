@@ -4,6 +4,7 @@ import { UnknownAgentProviderError, resolveAgentProvider } from '@alphred/agents
 import { createSqlWorkflowExecutor, createSqlWorkflowPlanner, type PhaseProviderResolver } from '@alphred/core';
 import {
   createDatabase,
+  agentModels,
   guardDefinitions,
   getRepositoryByName,
   insertRepository,
@@ -35,6 +36,8 @@ import type {
   DashboardArtifactSnapshot,
   DashboardCreateRepositoryRequest,
   DashboardCreateRepositoryResult,
+  DashboardAgentModelOption,
+  DashboardAgentProviderOption,
   DashboardGitHubAuthStatus,
   DashboardNodeStatus,
   DashboardNodeStatusSummary,
@@ -69,6 +72,135 @@ const BACKGROUND_RUN_STATUS: RunStatus = 'running';
 const DEFAULT_GITHUB_AUTH_REPO = 'octocat/Hello-World';
 const MAX_ARTIFACT_PREVIEW_LENGTH = 280;
 const RECENT_SNAPSHOT_LIMIT = 30;
+const AGENT_PROVIDER_ORDER: readonly string[] = ['codex', 'claude'];
+
+const AGENT_PROVIDER_LABELS: Readonly<Record<string, string>> = Object.freeze({
+  codex: 'Codex',
+  claude: 'Claude',
+});
+
+const FALLBACK_AGENT_MODELS: readonly DashboardAgentModelOption[] = Object.freeze([
+  { provider: 'codex', model: 'gpt-5.3-codex', label: 'GPT-5.3-Codex', isDefault: true, sortOrder: 10 },
+  { provider: 'codex', model: 'gpt-5-codex', label: 'GPT-5-Codex', isDefault: false, sortOrder: 20 },
+  { provider: 'codex', model: 'gpt-5-codex-mini', label: 'GPT-5-Codex-Mini', isDefault: false, sortOrder: 30 },
+  {
+    provider: 'claude',
+    model: 'claude-3-7-sonnet-latest',
+    label: 'Claude 3.7 Sonnet (Latest)',
+    isDefault: true,
+    sortOrder: 10,
+  },
+  {
+    provider: 'claude',
+    model: 'claude-3-5-haiku-latest',
+    label: 'Claude 3.5 Haiku (Latest)',
+    isDefault: false,
+    sortOrder: 20,
+  },
+]);
+
+type AgentCatalog = {
+  modelOptions: DashboardAgentModelOption[];
+  providerOptions: DashboardAgentProviderOption[];
+  modelSetByProvider: Map<string, Set<string>>;
+  defaultModelByProvider: Map<string, string>;
+};
+
+function compareStringsByCodeUnit(left: string, right: string): number {
+  if (left < right) {
+    return -1;
+  }
+
+  if (left > right) {
+    return 1;
+  }
+
+  return 0;
+}
+
+function providerSortRank(provider: string): number {
+  const rank = AGENT_PROVIDER_ORDER.indexOf(provider);
+  return rank === -1 ? Number.MAX_SAFE_INTEGER : rank;
+}
+
+function resolveProviderLabel(provider: string): string {
+  return AGENT_PROVIDER_LABELS[provider] ?? provider;
+}
+
+function sortAgentModelOptions(options: readonly DashboardAgentModelOption[]): DashboardAgentModelOption[] {
+  return [...options].sort((left, right) => {
+    const byProviderRank = providerSortRank(left.provider) - providerSortRank(right.provider);
+    if (byProviderRank !== 0) {
+      return byProviderRank;
+    }
+
+    const byProvider = compareStringsByCodeUnit(left.provider, right.provider);
+    if (byProvider !== 0) {
+      return byProvider;
+    }
+
+    const bySortOrder = left.sortOrder - right.sortOrder;
+    if (bySortOrder !== 0) {
+      return bySortOrder;
+    }
+
+    return compareStringsByCodeUnit(left.model, right.model);
+  });
+}
+
+function toAgentCatalog(modelOptions: readonly DashboardAgentModelOption[]): AgentCatalog {
+  const sortedModels = sortAgentModelOptions(modelOptions);
+  const modelSetByProvider = new Map<string, Set<string>>();
+  const defaultModelByProvider = new Map<string, string>();
+
+  for (const option of sortedModels) {
+    const modelSet = modelSetByProvider.get(option.provider) ?? new Set<string>();
+    modelSet.add(option.model);
+    modelSetByProvider.set(option.provider, modelSet);
+
+    if (option.isDefault && !defaultModelByProvider.has(option.provider)) {
+      defaultModelByProvider.set(option.provider, option.model);
+    }
+  }
+
+  for (const provider of AGENT_PROVIDER_ORDER) {
+    if (!defaultModelByProvider.has(provider)) {
+      const fallback = sortedModels.find(option => option.provider === provider);
+      if (fallback) {
+        defaultModelByProvider.set(provider, fallback.model);
+      }
+    }
+  }
+
+  const providerNames = new Set<string>();
+  for (const option of sortedModels) {
+    providerNames.add(option.provider);
+  }
+  for (const provider of AGENT_PROVIDER_ORDER) {
+    providerNames.add(provider);
+  }
+
+  const providerOptions = [...providerNames]
+    .sort((left, right) => {
+      const byRank = providerSortRank(left) - providerSortRank(right);
+      if (byRank !== 0) {
+        return byRank;
+      }
+      return compareStringsByCodeUnit(left, right);
+    })
+    .map((provider) => ({
+      provider,
+      label: resolveProviderLabel(provider),
+      defaultModel: defaultModelByProvider.get(provider) ?? null,
+    }));
+
+  return {
+    modelOptions: sortedModels,
+    providerOptions,
+    modelSetByProvider,
+    defaultModelByProvider,
+  };
+}
 
 const backgroundRunExecutions = new Map<number, Promise<void>>();
 
@@ -394,6 +526,44 @@ export function createDashboardService(options: {
     }
 
     return result as T;
+  }
+
+  function loadAgentCatalog(db: Pick<AlphredDatabase, 'select'>): AgentCatalog {
+    const rows = db
+      .select({
+        provider: agentModels.provider,
+        model: agentModels.modelKey,
+        label: agentModels.displayName,
+        isDefault: agentModels.isDefault,
+        sortOrder: agentModels.sortOrder,
+      })
+      .from(agentModels)
+      .orderBy(asc(agentModels.provider), asc(agentModels.sortOrder), asc(agentModels.modelKey), asc(agentModels.id))
+      .all();
+
+    const modelOptions: DashboardAgentModelOption[] =
+      rows.length === 0
+        ? [...FALLBACK_AGENT_MODELS]
+        : rows.map(row => ({
+            provider: row.provider,
+            model: row.model,
+            label: row.label,
+            isDefault: row.isDefault === 1,
+            sortOrder: row.sortOrder,
+          }));
+
+    return toAgentCatalog(modelOptions);
+  }
+
+  function resolveDefaultModelForProvider(
+    provider: string | null,
+    catalog: Pick<AgentCatalog, 'defaultModelByProvider'>,
+  ): string | null {
+    if (!provider) {
+      return null;
+    }
+
+    return catalog.defaultModelByProvider.get(provider) ?? null;
   }
 
   async function ensureRepositoryAuth(repository: Pick<RepositoryConfig, 'provider' | 'remoteRef'>): Promise<void> {
@@ -758,7 +928,12 @@ export function createDashboardService(options: {
     topology: Pick<DashboardWorkflowDraftTopology, 'nodes' | 'edges'>,
   ): Pick<DashboardWorkflowDraftTopology, 'nodes' | 'edges'> {
     return {
-      nodes: topology.nodes.map(node => ({ ...node, nodeKey: node.nodeKey.trim() })),
+      nodes: topology.nodes.map(node => ({
+        ...node,
+        nodeKey: node.nodeKey.trim(),
+        provider: node.provider?.trim() ? node.provider.trim() : null,
+        model: node.model?.trim() ? node.model.trim() : null,
+      })),
       edges: topology.edges.map(edge => ({
         ...edge,
         sourceNodeKey: edge.sourceNodeKey.trim(),
@@ -770,6 +945,7 @@ export function createDashboardService(options: {
   function validateDraftTopology(
     topology: Pick<DashboardWorkflowDraftTopology, 'nodes' | 'edges'>,
     mode: 'save' | 'publish',
+    catalog: Pick<AgentCatalog, 'modelSetByProvider' | 'defaultModelByProvider'>,
   ): DashboardWorkflowValidationResult {
     const normalizedTopology = normalizeDraftTopologyKeys(topology);
     const errors: DashboardWorkflowValidationIssue[] = [];
@@ -818,21 +994,38 @@ export function createDashboardService(options: {
       }
 
       if (node.nodeType === 'agent') {
-        if (!node.provider || node.provider.trim().length === 0) {
+        const provider = node.provider?.trim() ?? null;
+        const model = node.model?.trim() ?? null;
+
+        if (!provider) {
           errors.push({ code: 'agent_provider_missing', message: `Agent node "${trimmedKey}" must have a provider.` });
         } else {
+          let providerSupported = true;
           try {
-            resolveAgentProvider(node.provider);
+            resolveAgentProvider(provider);
           } catch (error) {
+            providerSupported = false;
             const availableProviders =
               error instanceof UnknownAgentProviderError && error.availableProviders.length > 0
                 ? error.availableProviders.join(', ')
                 : '(none)';
             errors.push({
               code: 'agent_provider_invalid',
-              message: `Agent node "${trimmedKey}" has unsupported provider value ${JSON.stringify(node.provider)}. Available providers: ${availableProviders}.`,
+              message: `Agent node "${trimmedKey}" has unsupported provider value ${JSON.stringify(provider)}. Available providers: ${availableProviders}.`,
             });
           }
+
+          const supportedModels = catalog.modelSetByProvider.get(provider);
+          if (!model) {
+            errors.push({ code: 'agent_model_missing', message: `Agent node "${trimmedKey}" must have a model.` });
+          } else if (providerSupported && (!supportedModels || !supportedModels.has(model))) {
+            const availableModels = supportedModels && supportedModels.size > 0 ? [...supportedModels].join(', ') : '(none)';
+            errors.push({
+              code: 'agent_model_invalid',
+              message: `Agent node "${trimmedKey}" has unsupported model value ${JSON.stringify(model)} for provider ${JSON.stringify(provider)}. Available models: ${availableModels}.`,
+            });
+          }
+
         }
         if (!node.promptTemplate || node.promptTemplate.content.trim().length === 0) {
           errors.push({ code: 'agent_prompt_missing', message: `Agent node "${trimmedKey}" must have a prompt.` });
@@ -948,6 +1141,7 @@ export function createDashboardService(options: {
   function loadDraftTopologyByTreeId(
     db: Pick<AlphredDatabase, 'select'>,
     treeId: number,
+    catalog: Pick<AgentCatalog, 'defaultModelByProvider'>,
   ): Pick<DashboardWorkflowDraftTopology, 'nodes' | 'edges' | 'initialRunnableNodeKeys'> {
     const nodes = db
       .select({
@@ -955,6 +1149,7 @@ export function createDashboardService(options: {
         displayName: treeNodes.displayName,
         nodeType: treeNodes.nodeType,
         provider: treeNodes.provider,
+        model: treeNodes.model,
         maxRetries: treeNodes.maxRetries,
         sequenceIndex: treeNodes.sequenceIndex,
         positionX: treeNodes.positionX,
@@ -972,6 +1167,10 @@ export function createDashboardService(options: {
         displayName: row.displayName ?? row.nodeKey,
         nodeType: row.nodeType as 'agent' | 'human' | 'tool',
         provider: row.provider,
+        model:
+          row.nodeType === 'agent'
+            ? (row.model ?? resolveDefaultModelForProvider(row.provider, catalog))
+            : null,
         maxRetries: row.maxRetries,
         sequenceIndex: row.sequenceIndex,
         position:
@@ -1094,6 +1293,20 @@ export function createDashboardService(options: {
       });
     },
 
+    listAgentProviders(): Promise<DashboardAgentProviderOption[]> {
+      return withDatabase(async db => {
+        const catalog = loadAgentCatalog(db);
+        return catalog.providerOptions;
+      });
+    },
+
+    listAgentModels(): Promise<DashboardAgentModelOption[]> {
+      return withDatabase(async db => {
+        const catalog = loadAgentCatalog(db);
+        return catalog.modelOptions;
+      });
+    },
+
     isWorkflowTreeKeyAvailable(treeKeyRaw: string): Promise<DashboardWorkflowTreeKeyAvailability> {
       const treeKey = normalizeWorkflowTreeKey(treeKeyRaw);
 
@@ -1155,7 +1368,8 @@ export function createDashboardService(options: {
           });
         }
 
-	        const topology = loadDraftTopologyByTreeId(db, record.id);
+        const catalog = loadAgentCatalog(db);
+	        const topology = loadDraftTopologyByTreeId(db, record.id, catalog);
 	        return {
 	          status: record.status as 'draft' | 'published',
 	          treeKey,
@@ -1198,7 +1412,8 @@ export function createDashboardService(options: {
           });
         }
 
-	        const topology = loadDraftTopologyByTreeId(db, record.id);
+        const catalog = loadAgentCatalog(db);
+	        const topology = loadDraftTopologyByTreeId(db, record.id, catalog);
 	        return {
 	          status: record.status as 'draft' | 'published',
 	          treeKey,
@@ -1223,6 +1438,8 @@ export function createDashboardService(options: {
 
       return withDatabase(async db =>
         db.transaction((tx) => {
+          const catalog = loadAgentCatalog(tx);
+          const defaultCodexModel = resolveDefaultModelForProvider('codex', catalog) ?? 'gpt-5.3-codex';
           const existing = tx
             .select({ id: workflowTrees.id })
             .from(workflowTrees)
@@ -1283,6 +1500,7 @@ export function createDashboardService(options: {
                   displayName: spec.displayName,
                   nodeType: 'agent',
                   provider: 'codex',
+                  model: defaultCodexModel,
                   promptTemplateId: promptTemplateIdByNodeKey.get(spec.nodeKey) ?? null,
                   maxRetries: 0,
                   sequenceIndex: spec.sequenceIndex,
@@ -1399,7 +1617,8 @@ export function createDashboardService(options: {
 	            });
 	          }
 
-	          const topology = loadDraftTopologyByTreeId(tx, sourceRecord.id);
+          const catalog = loadAgentCatalog(tx);
+	          const topology = loadDraftTopologyByTreeId(tx, sourceRecord.id, catalog);
 
 	          const insertedTree = tx
 	            .insert(workflowTrees)
@@ -1443,6 +1662,7 @@ export function createDashboardService(options: {
 	                displayName: node.displayName,
 	                nodeType: node.nodeType,
 	                provider: node.provider,
+                  model: node.model,
 	                promptTemplateId: promptTemplateIdByNodeKey.get(node.nodeKey) ?? null,
 	                maxRetries: node.maxRetries,
 	                sequenceIndex: node.sequenceIndex,
@@ -1520,6 +1740,7 @@ export function createDashboardService(options: {
       const treeKey = normalizeWorkflowTreeKey(treeKeyRaw);
 
       return withDatabase(async db => {
+        const catalog = loadAgentCatalog(db);
         const loadLatestDraft = () =>
           db
             .select({
@@ -1545,7 +1766,7 @@ export function createDashboardService(options: {
             draftRevision: number;
           },
         ): DashboardWorkflowDraftTopology => {
-          const topology = loadDraftTopologyByTreeId(db, draftRecord.id);
+          const topology = loadDraftTopologyByTreeId(db, draftRecord.id, catalog);
           return {
             treeKey,
             version: draftRecord.version,
@@ -1604,6 +1825,7 @@ export function createDashboardService(options: {
                 displayName: treeNodes.displayName,
                 nodeType: treeNodes.nodeType,
                 provider: treeNodes.provider,
+                model: treeNodes.model,
                 maxRetries: treeNodes.maxRetries,
                 sequenceIndex: treeNodes.sequenceIndex,
                 positionX: treeNodes.positionX,
@@ -1664,6 +1886,10 @@ export function createDashboardService(options: {
                   displayName: node.displayName,
                   nodeType: node.nodeType,
                   provider: node.provider,
+                  model:
+                    node.nodeType === 'agent'
+                      ? (node.model ?? resolveDefaultModelForProvider(node.provider, catalog))
+                      : null,
                   promptTemplateId:
                     node.promptTemplateId === null ? null : (promptTemplateCloneById.get(node.promptTemplateId) ?? null),
                   maxRetries: node.maxRetries,
@@ -1746,7 +1972,8 @@ export function createDashboardService(options: {
                 .run();
             }
 
-            const topology = loadDraftTopologyByTreeId(tx, draftTreeId);
+            const nextCatalog = loadAgentCatalog(tx);
+            const topology = loadDraftTopologyByTreeId(tx, draftTreeId, nextCatalog);
             return {
               treeKey,
               version: draftVersion,
@@ -1798,19 +2025,20 @@ export function createDashboardService(options: {
 	      }
 
 	      const normalizedTopology = normalizeDraftTopologyKeys({ nodes: request.nodes, edges: request.edges });
-	      const draftValidation = validateDraftTopology(normalizedTopology, 'save');
-	      if (draftValidation.errors.length > 0) {
-	        throw new DashboardIntegrationError('invalid_request', 'Draft workflow failed validation and cannot be saved.', {
-	          status: 400,
-	          details: draftValidation as unknown as Record<string, unknown>,
-	        });
-	      }
-
 	      const description = request.description?.trim() ?? null;
 	      const versionNotes = request.versionNotes?.trim() ?? null;
 
-	      return withDatabase(async db =>
-	        db.transaction((tx) => {
+	      return withDatabase(async db => {
+          const catalog = loadAgentCatalog(db);
+          const draftValidation = validateDraftTopology(normalizedTopology, 'save', catalog);
+          if (draftValidation.errors.length > 0) {
+            throw new DashboardIntegrationError('invalid_request', 'Draft workflow failed validation and cannot be saved.', {
+              status: 400,
+              details: draftValidation as unknown as Record<string, unknown>,
+            });
+          }
+
+	        return db.transaction((tx) => {
 	          const tree = tx
 	            .select({
 	              id: workflowTrees.id,
@@ -1913,6 +2141,10 @@ export function createDashboardService(options: {
 
 	          const nodeIdByKey = new Map<string, number>();
 	          for (const node of normalizedTopology.nodes) {
+              const nodeModel =
+                node.nodeType === 'agent'
+                  ? (node.model ?? resolveDefaultModelForProvider(node.provider, catalog))
+                  : null;
 	            const inserted = tx
 	              .insert(treeNodes)
 	              .values({
@@ -1921,6 +2153,7 @@ export function createDashboardService(options: {
                 displayName: node.displayName,
                 nodeType: node.nodeType,
                 provider: node.provider,
+                model: nodeModel,
                 promptTemplateId: promptTemplateIdByNodeKey.get(node.nodeKey) ?? null,
                 maxRetries: node.maxRetries,
                 sequenceIndex: node.sequenceIndex,
@@ -1988,7 +2221,8 @@ export function createDashboardService(options: {
 	              .run();
 	          }
 
-	          const topology = loadDraftTopologyByTreeId(tx, tree.id);
+            const nextCatalog = loadAgentCatalog(tx);
+	          const topology = loadDraftTopologyByTreeId(tx, tree.id, nextCatalog);
 	          return {
 	            treeKey,
 	            version,
@@ -1998,8 +2232,8 @@ export function createDashboardService(options: {
 	            versionNotes,
 	            ...topology,
 	          };
-	        }),
-	      );
+	        });
+        });
 	    },
 
     async validateWorkflowDraft(treeKeyRaw: string, version: number): Promise<DashboardWorkflowValidationResult> {
@@ -2011,6 +2245,7 @@ export function createDashboardService(options: {
       }
 
       return withDatabase(async db => {
+        const catalog = loadAgentCatalog(db);
         const tree = db
           .select({ id: workflowTrees.id })
           .from(workflowTrees)
@@ -2022,8 +2257,8 @@ export function createDashboardService(options: {
           });
         }
 
-        const topology = loadDraftTopologyByTreeId(db, tree.id);
-        return validateDraftTopology({ nodes: topology.nodes, edges: topology.edges }, 'publish');
+        const topology = loadDraftTopologyByTreeId(db, tree.id, catalog);
+        return validateDraftTopology({ nodes: topology.nodes, edges: topology.edges }, 'publish', catalog);
       });
     },
 
@@ -2040,6 +2275,7 @@ export function createDashboardService(options: {
       }
 
       return withDatabase(async db => {
+        const catalog = loadAgentCatalog(db);
         const tree = db
           .select({
             id: workflowTrees.id,
@@ -2056,8 +2292,8 @@ export function createDashboardService(options: {
           });
         }
 
-        const topology = loadDraftTopologyByTreeId(db, tree.id);
-        const validation = validateDraftTopology({ nodes: topology.nodes, edges: topology.edges }, 'publish');
+        const topology = loadDraftTopologyByTreeId(db, tree.id, catalog);
+        const validation = validateDraftTopology({ nodes: topology.nodes, edges: topology.edges }, 'publish', catalog);
         if (validation.errors.length > 0) {
           throw new DashboardIntegrationError('invalid_request', 'Draft workflow failed validation and cannot be published.', {
             status: 400,

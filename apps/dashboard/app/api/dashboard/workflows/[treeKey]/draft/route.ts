@@ -132,6 +132,14 @@ function parseDraftNode(raw: unknown, index: number): DashboardWorkflowDraftNode
     });
   }
 
+  const model = raw.model ?? null;
+  if (model !== null && typeof model !== 'string') {
+    throw new DashboardIntegrationError('invalid_request', `Draft node at index ${index} has an invalid model.`, {
+      status: 400,
+      details: { field: `nodes[${index}].model` },
+    });
+  }
+
   const position = parseDraftNodePosition(raw.position, index);
   const promptTemplate = parseDraftNodePromptTemplate(raw.promptTemplate, index);
 
@@ -161,6 +169,7 @@ function parseDraftNode(raw: unknown, index: number): DashboardWorkflowDraftNode
     displayName: raw.displayName,
     nodeType,
     provider,
+    model,
     maxRetries: raw.maxRetries,
     sequenceIndex: raw.sequenceIndex,
     position,

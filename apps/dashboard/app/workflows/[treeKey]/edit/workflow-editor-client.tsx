@@ -27,6 +27,8 @@ import {
   type ReactFlowInstance,
 } from '@xyflow/react';
 import type {
+  DashboardAgentModelOption,
+  DashboardAgentProviderOption,
   DashboardWorkflowDraftEdge,
   DashboardWorkflowDraftNode,
   DashboardWorkflowDraftTopology,
@@ -79,6 +81,8 @@ function toReactFlowEdge(edge: DashboardWorkflowDraftEdge): Edge {
 
 type WorkflowEditorPageContentProps = Readonly<{
   initialDraft: DashboardWorkflowDraftTopology;
+  providerOptions?: DashboardAgentProviderOption[];
+  modelOptions?: DashboardAgentModelOption[];
   bootstrapDraftOnMount?: boolean;
 }>;
 
@@ -97,6 +101,8 @@ function parseDraftFromBootstrapPayload(payload: unknown): DashboardWorkflowDraf
 
 export function WorkflowEditorPageContent({
   initialDraft,
+  providerOptions = [],
+  modelOptions = [],
   bootstrapDraftOnMount = false,
 }: WorkflowEditorPageContentProps) {
   const [resolvedDraft, setResolvedDraft] = useState<DashboardWorkflowDraftTopology | null>(
@@ -172,10 +178,24 @@ export function WorkflowEditorPageContent({
     );
   }
 
-  return <WorkflowEditorLoadedContent initialDraft={resolvedDraft} />;
+  return (
+    <WorkflowEditorLoadedContent
+      initialDraft={resolvedDraft}
+      providerOptions={providerOptions}
+      modelOptions={modelOptions}
+    />
+  );
 }
 
-function WorkflowEditorLoadedContent({ initialDraft }: Readonly<{ initialDraft: DashboardWorkflowDraftTopology }>) {
+function WorkflowEditorLoadedContent({
+  initialDraft,
+  providerOptions,
+  modelOptions,
+}: Readonly<{
+  initialDraft: DashboardWorkflowDraftTopology;
+  providerOptions: DashboardAgentProviderOption[];
+  modelOptions: DashboardAgentModelOption[];
+}>) {
   const router = useRouter();
   const treeKey = initialDraft.treeKey;
   const version = initialDraft.version;
@@ -802,6 +822,8 @@ function WorkflowEditorLoadedContent({ initialDraft }: Readonly<{ initialDraft: 
         {activeTab === 'node' ? (
           <NodeInspector
             node={selectedNode}
+            providerOptions={providerOptions}
+            modelOptions={modelOptions}
             onAddConnectedNode={(nodeKey) => openPalette(nodeKey)}
             onChange={(next) => {
               if (!selectedNode) return;

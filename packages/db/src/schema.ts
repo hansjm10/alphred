@@ -86,6 +86,31 @@ export const repositories = sqliteTable(
   }),
 );
 
+export const agentModels = sqliteTable(
+  'agent_models',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    provider: text('provider').notNull(),
+    modelKey: text('model_key').notNull(),
+    displayName: text('display_name').notNull(),
+    sortOrder: integer('sort_order').notNull().default(100),
+    isDefault: integer('is_default').notNull().default(0),
+    createdAt: text('created_at').notNull().default(utcNow),
+    updatedAt: text('updated_at').notNull().default(utcNow),
+  },
+  table => ({
+    providerModelUnique: uniqueIndex('agent_models_provider_model_key_uq').on(table.provider, table.modelKey),
+    defaultPerProviderUnique: uniqueIndex('agent_models_provider_default_uq')
+      .on(table.provider)
+      .where(sql`${table.isDefault} = 1`),
+    providerCheck: check('agent_models_provider_ck', sql`${table.provider} in ('claude', 'codex')`),
+    isDefaultCheck: check('agent_models_is_default_ck', sql`${table.isDefault} in (0, 1)`),
+    sortOrderCheck: check('agent_models_sort_order_ck', sql`${table.sortOrder} >= 0`),
+    providerSortIdx: index('agent_models_provider_sort_idx').on(table.provider, table.sortOrder, table.modelKey),
+    createdAtIdx: index('agent_models_created_at_idx').on(table.createdAt),
+  }),
+);
+
 export const workflowRuns = sqliteTable(
   'workflow_runs',
   {
@@ -164,6 +189,7 @@ export const treeNodes = sqliteTable(
     displayName: text('display_name'),
     nodeType: text('node_type').notNull(),
     provider: text('provider'),
+    model: text('model'),
     promptTemplateId: integer('prompt_template_id').references(() => promptTemplates.id, { onDelete: 'restrict' }),
     maxRetries: integer('max_retries').notNull().default(0),
     sequenceIndex: integer('sequence_index').notNull(),
