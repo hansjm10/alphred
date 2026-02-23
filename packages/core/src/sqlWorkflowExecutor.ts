@@ -1,4 +1,5 @@
-import { and, asc, eq } from 'drizzle-orm';
+import { createHash } from 'node:crypto';
+import { and, asc, eq, inArray } from 'drizzle-orm';
 import {
   guardDefinitions,
   phaseArtifacts,
@@ -96,6 +97,63 @@ type LatestArtifact = {
   createdAt: string;
 };
 
+type UpstreamReportArtifact = {
+  id: number;
+  runNodeId: number;
+  contentType: 'text' | 'markdown' | 'json' | 'diff';
+  content: string;
+  createdAt: string;
+};
+
+type UpstreamArtifactSelection = {
+  latestReportsByRunNodeId: Map<number, UpstreamReportArtifact>;
+  runNodeIdsWithAnyArtifacts: Set<number>;
+};
+
+type ContextEnvelopeTruncation = {
+  applied: boolean;
+  method: 'none' | 'head_tail';
+  originalChars: number;
+  includedChars: number;
+  droppedChars: number;
+};
+
+type ContextEnvelopeCandidate = {
+  artifactId: number;
+  sourceNodeKey: string;
+  sourceRunNodeId: number;
+  sourceAttempt: number;
+  contentType: 'text' | 'markdown' | 'json' | 'diff';
+  createdAt: string;
+  originalContent: string;
+  sha256: string;
+};
+
+type ContextEnvelopeEntry = ContextEnvelopeCandidate & {
+  includedContent: string;
+  truncation: ContextEnvelopeTruncation;
+};
+
+type ContextHandoffManifest = {
+  context_policy_version: number;
+  included_artifact_ids: number[];
+  included_source_node_keys: string[];
+  included_source_run_node_ids: number[];
+  included_count: number;
+  included_chars_total: number;
+  truncated_artifact_ids: number[];
+  missing_upstream_artifacts: boolean;
+  assembly_timestamp: string;
+  no_eligible_artifact_types: boolean;
+  budget_overflow: boolean;
+  dropped_artifact_ids: number[];
+};
+
+type AssembledUpstreamContext = {
+  contextEntries: string[];
+  manifest: ContextHandoffManifest;
+};
+
 type CompletedNodeRoutingOutcome = {
   decisionType: RoutingDecisionType | null;
   selectedEdgeId: number | null;
@@ -157,6 +215,11 @@ export type SqlWorkflowExecutor = {
 const artifactContentTypes = new Set(['text', 'markdown', 'json', 'diff']);
 const runTerminalStatuses = new Set<WorkflowRunStatus>(['completed', 'failed', 'cancelled']);
 const guardOperators: ReadonlySet<GuardCondition['operator']> = new Set(['==', '!=', '>', '<', '>=', '<=']);
+const CONTEXT_POLICY_VERSION = 1;
+const MAX_UPSTREAM_ARTIFACTS = 4;
+const MAX_CONTEXT_CHARS_TOTAL = 32_000;
+const MAX_CHARS_PER_ARTIFACT = 12_000;
+const MIN_REMAINING_CONTEXT_CHARS = 1_000;
 
 function toRunNodeStatus(value: string): RunNodeStatus {
   return value as RunNodeStatus;
@@ -185,6 +248,67 @@ function normalizeArtifactContentType(value: string | null): 'text' | 'markdown'
   }
 
   return 'markdown';
+}
+
+function hashContentSha256(content: string): string {
+  return createHash('sha256').update(content).digest('hex');
+}
+
+function truncateHeadTail(content: string, limit: number): string {
+  if (limit <= 0) {
+    return '';
+  }
+
+  if (content.length <= limit) {
+    return content;
+  }
+
+  const headChars = Math.floor(limit / 2);
+  const tailChars = limit - headChars;
+  return `${content.slice(0, headChars)}${content.slice(content.length - tailChars)}`;
+}
+
+function buildTruncationMetadata(originalChars: number, includedChars: number): ContextEnvelopeTruncation {
+  const droppedChars = Math.max(originalChars - includedChars, 0);
+  return {
+    applied: droppedChars > 0,
+    method: droppedChars > 0 ? 'head_tail' : 'none',
+    originalChars,
+    includedChars,
+    droppedChars,
+  };
+}
+
+function serializeContextEnvelope(params: {
+  workflowRunId: number;
+  targetNodeKey: string;
+  entry: ContextEnvelopeEntry;
+}): string {
+  const lines = [
+    'ALPHRED_UPSTREAM_ARTIFACT v1',
+    `policy_version: ${CONTEXT_POLICY_VERSION}`,
+    'untrusted_data: true',
+    `workflow_run_id: ${params.workflowRunId}`,
+    `target_node_key: ${params.targetNodeKey}`,
+    `source_node_key: ${params.entry.sourceNodeKey}`,
+    `source_run_node_id: ${params.entry.sourceRunNodeId}`,
+    `source_attempt: ${params.entry.sourceAttempt}`,
+    `artifact_id: ${params.entry.artifactId}`,
+    'artifact_type: report',
+    `content_type: ${params.entry.contentType}`,
+    `created_at: ${params.entry.createdAt}`,
+    `sha256: ${params.entry.sha256}`,
+    'truncation:',
+    `  applied: ${params.entry.truncation.applied ? 'true' : 'false'}`,
+    `  method: ${params.entry.truncation.method}`,
+    `  original_chars: ${params.entry.truncation.originalChars}`,
+    `  included_chars: ${params.entry.truncation.includedChars}`,
+    `  dropped_chars: ${params.entry.truncation.droppedChars}`,
+    'content:',
+    '<<<BEGIN>>>',
+  ];
+
+  return `${lines.join('\n')}\n${params.entry.includedContent}\n<<<END>>>`;
 }
 
 function compareNodeOrder(a: RunNodeExecutionRow, b: RunNodeExecutionRow): number {
@@ -216,6 +340,20 @@ function getLatestRunNodeAttempts(rows: RunNodeExecutionRow[]): RunNodeExecution
   }
 
   return [...latestByTreeNodeId.values()].sort(compareNodeOrder);
+}
+
+function compareUpstreamSourceOrder(a: RunNodeExecutionRow, b: RunNodeExecutionRow): number {
+  const bySequence = a.sequenceIndex - b.sequenceIndex;
+  if (bySequence !== 0) {
+    return bySequence;
+  }
+
+  const byNodeKey = compareStringsByCodeUnit(a.nodeKey, b.nodeKey);
+  if (byNodeKey !== 0) {
+    return byNodeKey;
+  }
+
+  return a.runNodeId - b.runNodeId;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -348,6 +486,55 @@ function loadLatestArtifactsByRunNodeId(
   return latestByRunNodeId;
 }
 
+function loadUpstreamArtifactSelectionByRunNodeId(
+  db: AlphredDatabase,
+  workflowRunId: number,
+  runNodeIds: number[],
+): UpstreamArtifactSelection {
+  const latestReportsByRunNodeId = new Map<number, UpstreamReportArtifact>();
+  const runNodeIdsWithAnyArtifacts = new Set<number>();
+  if (runNodeIds.length === 0) {
+    return {
+      latestReportsByRunNodeId,
+      runNodeIdsWithAnyArtifacts,
+    };
+  }
+
+  const rows = db
+    .select({
+      id: phaseArtifacts.id,
+      runNodeId: phaseArtifacts.runNodeId,
+      artifactType: phaseArtifacts.artifactType,
+      contentType: phaseArtifacts.contentType,
+      content: phaseArtifacts.content,
+      createdAt: phaseArtifacts.createdAt,
+    })
+    .from(phaseArtifacts)
+    .where(and(eq(phaseArtifacts.workflowRunId, workflowRunId), inArray(phaseArtifacts.runNodeId, runNodeIds)))
+    .orderBy(asc(phaseArtifacts.createdAt), asc(phaseArtifacts.id))
+    .all();
+
+  for (const row of rows) {
+    runNodeIdsWithAnyArtifacts.add(row.runNodeId);
+    if (row.artifactType !== 'report') {
+      continue;
+    }
+
+    latestReportsByRunNodeId.set(row.runNodeId, {
+      id: row.id,
+      runNodeId: row.runNodeId,
+      contentType: normalizeArtifactContentType(row.contentType),
+      content: row.content,
+      createdAt: row.createdAt,
+    });
+  }
+
+  return {
+    latestReportsByRunNodeId,
+    runNodeIdsWithAnyArtifacts,
+  };
+}
+
 function appendEdgeToNodeMap(edgesByNodeId: Map<number, EdgeRow[]>, nodeId: number, edge: EdgeRow): void {
   const edges = edgesByNodeId.get(nodeId);
   if (edges) {
@@ -467,6 +654,160 @@ function buildRoutingSelection(
     unresolvedDecisionSourceNodeIds,
     hasNoRouteDecision,
     hasUnresolvedDecision: unresolvedDecisionSourceNodeIds.size > 0,
+  };
+}
+
+function selectDirectPredecessorNodes(
+  targetNode: RunNodeExecutionRow,
+  latestNodeAttempts: RunNodeExecutionRow[],
+  edgeRows: EdgeRow[],
+  latestRoutingDecisionsByRunNodeId: Map<number, RoutingDecisionRow>,
+  latestArtifactsByRunNodeId: Map<number, LatestArtifact>,
+): RunNodeExecutionRow[] {
+  const routingSelection = buildRoutingSelection(
+    latestNodeAttempts,
+    edgeRows,
+    latestRoutingDecisionsByRunNodeId,
+    latestArtifactsByRunNodeId,
+  );
+  const incomingEdges = routingSelection.incomingEdgesByTargetNodeId.get(targetNode.treeNodeId) ?? [];
+
+  const predecessors: RunNodeExecutionRow[] = [];
+  const seenSourceNodeIds = new Set<number>();
+  for (const edge of incomingEdges) {
+    if (routingSelection.selectedEdgeIdBySourceNodeId.get(edge.sourceNodeId) !== edge.edgeId) {
+      continue;
+    }
+
+    if (seenSourceNodeIds.has(edge.sourceNodeId)) {
+      continue;
+    }
+
+    const sourceNode = routingSelection.latestByTreeNodeId.get(edge.sourceNodeId);
+    if (!sourceNode || sourceNode.status !== 'completed') {
+      continue;
+    }
+
+    seenSourceNodeIds.add(edge.sourceNodeId);
+    predecessors.push(sourceNode);
+  }
+
+  return predecessors.sort(compareUpstreamSourceOrder);
+}
+
+function assembleUpstreamArtifactContext(
+  db: AlphredDatabase,
+  params: {
+    workflowRunId: number;
+    targetNode: RunNodeExecutionRow;
+    latestNodeAttempts: RunNodeExecutionRow[];
+    edgeRows: EdgeRow[];
+    latestRoutingDecisionsByRunNodeId: Map<number, RoutingDecisionRow>;
+    latestArtifactsByRunNodeId: Map<number, LatestArtifact>;
+  },
+): AssembledUpstreamContext {
+  const directPredecessors = selectDirectPredecessorNodes(
+    params.targetNode,
+    params.latestNodeAttempts,
+    params.edgeRows,
+    params.latestRoutingDecisionsByRunNodeId,
+    params.latestArtifactsByRunNodeId,
+  );
+  const predecessorRunNodeIds = directPredecessors.map(node => node.runNodeId);
+  const artifactSelection = loadUpstreamArtifactSelectionByRunNodeId(db, params.workflowRunId, predecessorRunNodeIds);
+
+  const candidateEntries: ContextEnvelopeCandidate[] = [];
+  for (const sourceNode of directPredecessors) {
+    const artifact = artifactSelection.latestReportsByRunNodeId.get(sourceNode.runNodeId);
+    if (!artifact) {
+      continue;
+    }
+
+    candidateEntries.push({
+      artifactId: artifact.id,
+      sourceNodeKey: sourceNode.nodeKey,
+      sourceRunNodeId: sourceNode.runNodeId,
+      sourceAttempt: sourceNode.attempt,
+      contentType: artifact.contentType,
+      createdAt: artifact.createdAt,
+      originalContent: artifact.content,
+      sha256: hashContentSha256(artifact.content),
+    });
+  }
+
+  const includedEntries: ContextEnvelopeEntry[] = [];
+  const droppedArtifactIds: number[] = [];
+  let remainingChars = MAX_CONTEXT_CHARS_TOTAL;
+  let budgetOverflow = false;
+  for (const candidate of candidateEntries) {
+    if (includedEntries.length >= MAX_UPSTREAM_ARTIFACTS) {
+      budgetOverflow = true;
+      droppedArtifactIds.push(candidate.artifactId);
+      continue;
+    }
+
+    if (remainingChars <= 0) {
+      budgetOverflow = true;
+      droppedArtifactIds.push(candidate.artifactId);
+      continue;
+    }
+
+    let includedContent = truncateHeadTail(candidate.originalContent, MAX_CHARS_PER_ARTIFACT);
+    if (includedContent.length > remainingChars) {
+      budgetOverflow = true;
+      if (remainingChars < MIN_REMAINING_CONTEXT_CHARS) {
+        droppedArtifactIds.push(candidate.artifactId);
+        continue;
+      }
+      includedContent = truncateHeadTail(candidate.originalContent, Math.min(MAX_CHARS_PER_ARTIFACT, remainingChars));
+    }
+
+    if (includedContent.length <= 0) {
+      budgetOverflow = true;
+      droppedArtifactIds.push(candidate.artifactId);
+      continue;
+    }
+
+    const truncation = buildTruncationMetadata(candidate.originalContent.length, includedContent.length);
+    includedEntries.push({
+      ...candidate,
+      includedContent,
+      truncation,
+    });
+    remainingChars -= includedContent.length;
+  }
+
+  const contextEntries = includedEntries.map(entry =>
+    serializeContextEnvelope({
+      workflowRunId: params.workflowRunId,
+      targetNodeKey: params.targetNode.nodeKey,
+      entry,
+    }),
+  );
+
+  const hasAnyArtifacts = directPredecessors.some(sourceNode =>
+    artifactSelection.runNodeIdsWithAnyArtifacts.has(sourceNode.runNodeId),
+  );
+  const manifest: ContextHandoffManifest = {
+    context_policy_version: CONTEXT_POLICY_VERSION,
+    included_artifact_ids: includedEntries.map(entry => entry.artifactId),
+    included_source_node_keys: includedEntries.map(entry => entry.sourceNodeKey),
+    included_source_run_node_ids: includedEntries.map(entry => entry.sourceRunNodeId),
+    included_count: includedEntries.length,
+    included_chars_total: includedEntries.reduce((total, entry) => total + entry.truncation.includedChars, 0),
+    truncated_artifact_ids: includedEntries
+      .filter(entry => entry.truncation.applied)
+      .map(entry => entry.artifactId),
+    missing_upstream_artifacts: includedEntries.length === 0,
+    assembly_timestamp: new Date().toISOString(),
+    no_eligible_artifact_types: hasAnyArtifacts && candidateEntries.length === 0,
+    budget_overflow: budgetOverflow,
+    dropped_artifact_ids: droppedArtifactIds,
+  };
+
+  return {
+    contextEntries,
+    manifest,
   };
 }
 
@@ -1342,10 +1683,18 @@ function resolveFailureReason(persistedNodeStatus: RunNodeStatus, canRetry: bool
 async function executeNodePhase(
   node: RunNodeExecutionRow,
   options: ProviderRunOptions,
+  upstreamContextEntries: string[],
   dependencies: SqlWorkflowExecutorDependencies,
 ): Promise<Awaited<ReturnType<typeof runPhase>>> {
   const phase = createExecutionPhase(node);
-  const phaseOptions = phase.model ? { ...options, model: phase.model } : options;
+  const optionsWithContext =
+    upstreamContextEntries.length === 0
+      ? options
+      : {
+          ...options,
+          context: [...(options.context ?? []), ...upstreamContextEntries],
+        };
+  const phaseOptions = phase.model ? { ...optionsWithContext, model: phase.model } : optionsWithContext;
   return runPhase(phase, phaseOptions, {
     resolveProvider: dependencies.resolveProvider,
   });
@@ -1358,6 +1707,7 @@ function handleClaimedNodeSuccess(
   edgeRows: EdgeRow[],
   currentAttempt: number,
   currentRunStatus: WorkflowRunStatus,
+  contextManifest: ContextHandoffManifest,
   phaseResult: Awaited<ReturnType<typeof runPhase>>,
 ): ClaimedNodeSuccess {
   const artifactId = persistSuccessArtifact(db, {
@@ -1374,6 +1724,7 @@ function handleClaimedNodeSuccess(
       retriesUsed: Math.max(currentAttempt - 1, 0),
       tokensUsed: phaseResult.tokensUsed,
       eventCount: phaseResult.events.length,
+      ...contextManifest,
     },
   });
 
@@ -1419,6 +1770,7 @@ function handleClaimedNodeFailure(
   node: RunNodeExecutionRow,
   currentAttempt: number,
   currentRunStatus: WorkflowRunStatus,
+  contextManifest: ContextHandoffManifest,
   error: unknown,
 ): ClaimedNodeFailure {
   const errorMessage = toErrorMessage(error);
@@ -1441,6 +1793,7 @@ function handleClaimedNodeFailure(
       errorName: error instanceof Error ? error.name : 'Error',
       failureReason,
       nodeStatusAtFailure: persistedNodeStatus,
+      ...contextManifest,
     },
   });
 
@@ -1494,8 +1847,20 @@ async function executeClaimedRunnableNode(
   let currentAttempt = node.attempt;
 
   while (true) {
+    const latestNodeAttemptsForContext = getLatestRunNodeAttempts(loadRunNodeExecutionRows(db, run.id));
+    const latestRoutingDecisionsForContext = loadLatestRoutingDecisionsByRunNodeId(db, run.id);
+    const latestArtifactsForContext = loadLatestArtifactsByRunNodeId(db, run.id);
+    const contextAssembly = assembleUpstreamArtifactContext(db, {
+      workflowRunId: run.id,
+      targetNode: node,
+      latestNodeAttempts: latestNodeAttemptsForContext,
+      edgeRows,
+      latestRoutingDecisionsByRunNodeId: latestRoutingDecisionsForContext.latestByRunNodeId,
+      latestArtifactsByRunNodeId: latestArtifactsForContext,
+    });
+
     try {
-      const phaseResult = await executeNodePhase(node, options, dependencies);
+      const phaseResult = await executeNodePhase(node, options, contextAssembly.contextEntries, dependencies);
       const success = handleClaimedNodeSuccess(
         db,
         run,
@@ -1503,12 +1868,21 @@ async function executeClaimedRunnableNode(
         edgeRows,
         currentAttempt,
         currentRunStatus,
+        contextAssembly.manifest,
         phaseResult,
       );
       currentRunStatus = success.runStatus;
       return buildExecutedNodeResult(run, node, 'completed', currentRunStatus, success.artifactId);
     } catch (error) {
-      const failure = handleClaimedNodeFailure(db, run, node, currentAttempt, currentRunStatus, error);
+      const failure = handleClaimedNodeFailure(
+        db,
+        run,
+        node,
+        currentAttempt,
+        currentRunStatus,
+        contextAssembly.manifest,
+        error,
+      );
       if (failure.nextAttempt !== null) {
         currentAttempt = failure.nextAttempt;
         continue;
