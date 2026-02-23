@@ -10,6 +10,7 @@ import {
   useEffect,
   type Dispatch,
   type DragEvent,
+  type MutableRefObject,
   type MouseEvent as ReactMouseEvent,
   type SetStateAction,
 } from 'react';
@@ -465,6 +466,138 @@ async function publishWorkflowDraft(args: Readonly<{
   } finally {
     setPublishing(false);
   }
+}
+
+function WorkflowEditorInspectorBody({
+  activeTab,
+  initialRunnableNodeKeys,
+  liveWarnings,
+  markWorkflowChanged,
+  modelOptions,
+  openPalette,
+  providerOptions,
+  publishError,
+  selectedEdge,
+  selectedEdgeIdRef,
+  selectedNode,
+  setEdges,
+  setSelectedEdgeId,
+  setWorkflowDescription,
+  setWorkflowName,
+  setWorkflowVersionNotes,
+  setNodes,
+  validation,
+  validationError,
+  workflowDescription,
+  workflowName,
+  workflowVersionNotes,
+}: Readonly<{
+  activeTab: InspectorTab;
+  initialRunnableNodeKeys: string[];
+  liveWarnings: ReturnType<typeof computeWorkflowLiveWarnings>;
+  markWorkflowChanged: () => void;
+  modelOptions: DashboardAgentModelOption[];
+  openPalette: (sourceNodeKey?: string) => void;
+  providerOptions: DashboardAgentProviderOption[];
+  publishError: string | null;
+  selectedEdge: Edge | null;
+  selectedEdgeIdRef: MutableRefObject<string | null>;
+  selectedNode: Node | null;
+  setEdges: Dispatch<SetStateAction<Edge[]>>;
+  setSelectedEdgeId: Dispatch<SetStateAction<string | null>>;
+  setWorkflowDescription: Dispatch<SetStateAction<string>>;
+  setWorkflowName: Dispatch<SetStateAction<string>>;
+  setWorkflowVersionNotes: Dispatch<SetStateAction<string>>;
+  setNodes: Dispatch<SetStateAction<Node[]>>;
+  validation: DashboardWorkflowValidationResult | null;
+  validationError: string | null;
+  workflowDescription: string;
+  workflowName: string;
+  workflowVersionNotes: string;
+}>) {
+  if (activeTab === 'node') {
+    return (
+      <NodeInspector
+        node={selectedNode}
+        providerOptions={providerOptions}
+        modelOptions={modelOptions}
+        onAddConnectedNode={(nodeKey) => openPalette(nodeKey)}
+        onChange={(next) => {
+          if (!selectedNode) return;
+          setNodes((current) =>
+            current.map((node) =>
+              node.id === selectedNode.id
+                ? {
+                    ...node,
+                    data: toReactFlowNodeData(next),
+                  }
+                : node,
+            ),
+          );
+          markWorkflowChanged();
+        }}
+      />
+    );
+  }
+
+  if (activeTab === 'transition') {
+    return (
+      <EdgeInspector
+        edge={selectedEdge}
+        onChange={(next) => {
+          if (!selectedEdge) return;
+          const nextSelectedEdgeId = buildWorkflowEdgeId(selectedEdge.source, selectedEdge.target, next.priority);
+          const label = next.auto ? `auto · ${next.priority}` : `guard · ${next.priority}`;
+          setEdges((current) =>
+            current.map((edge) =>
+              edge.id === selectedEdge.id
+                ? {
+                    ...edge,
+                    id: nextSelectedEdgeId,
+                    label,
+                    data: next,
+                  }
+                : edge,
+            ),
+          );
+          if (nextSelectedEdgeId !== selectedEdge.id) {
+            selectedEdgeIdRef.current = nextSelectedEdgeId;
+            setSelectedEdgeId(nextSelectedEdgeId);
+          }
+          markWorkflowChanged();
+        }}
+      />
+    );
+  }
+
+  if (activeTab !== 'workflow') {
+    return null;
+  }
+
+  return (
+    <WorkflowInspector
+      name={workflowName}
+      description={workflowDescription}
+      versionNotes={workflowVersionNotes}
+      onNameChange={(next) => {
+        setWorkflowName(next);
+        markWorkflowChanged();
+      }}
+      onDescriptionChange={(next) => {
+        setWorkflowDescription(next);
+        markWorkflowChanged();
+      }}
+      onVersionNotesChange={(next) => {
+        setWorkflowVersionNotes(next);
+        markWorkflowChanged();
+      }}
+      initialRunnableNodeKeys={validation?.initialRunnableNodeKeys ?? initialRunnableNodeKeys}
+      validation={validation}
+      liveWarnings={liveWarnings}
+      validationError={validationError}
+      publishError={publishError}
+    />
+  );
 }
 
 type WorkflowEditorPageContentProps = Readonly<{
@@ -1136,81 +1269,30 @@ function WorkflowEditorLoadedContent({
       </nav>
 
       <div className="workflow-editor-inspector__body">
-        {activeTab === 'node' ? (
-          <NodeInspector
-            node={selectedNode}
-            providerOptions={providerOptions}
-            modelOptions={modelOptions}
-            onAddConnectedNode={(nodeKey) => openPalette(nodeKey)}
-            onChange={(next) => {
-              if (!selectedNode) return;
-              setNodes((current) =>
-                current.map((node) =>
-                  node.id === selectedNode.id
-                    ? {
-                        ...node,
-                        data: toReactFlowNodeData(next),
-                      }
-                    : node,
-                ),
-              );
-              markWorkflowChanged();
-            }}
-          />
-        ) : null}
-
-        {activeTab === 'transition' ? (
-          <EdgeInspector
-            edge={selectedEdge}
-            onChange={(next) => {
-              if (!selectedEdge) return;
-              const nextSelectedEdgeId = buildWorkflowEdgeId(selectedEdge.source, selectedEdge.target, next.priority);
-              const label = next.auto ? `auto · ${next.priority}` : `guard · ${next.priority}`;
-              setEdges((current) =>
-                current.map((edge) =>
-                  edge.id === selectedEdge.id
-                    ? {
-                        ...edge,
-                        id: nextSelectedEdgeId,
-                        label,
-                        data: next,
-                      }
-                    : edge,
-                ),
-              );
-              if (nextSelectedEdgeId !== selectedEdge.id) {
-                selectedEdgeIdRef.current = nextSelectedEdgeId;
-                setSelectedEdgeId(nextSelectedEdgeId);
-              }
-              markWorkflowChanged();
-            }}
-          />
-        ) : null}
-
-        {activeTab === 'workflow' ? (
-          <WorkflowInspector
-            name={workflowName}
-            description={workflowDescription}
-            versionNotes={workflowVersionNotes}
-            onNameChange={(next) => {
-              setWorkflowName(next);
-              markWorkflowChanged();
-            }}
-            onDescriptionChange={(next) => {
-              setWorkflowDescription(next);
-              markWorkflowChanged();
-            }}
-            onVersionNotesChange={(next) => {
-              setWorkflowVersionNotes(next);
-              markWorkflowChanged();
-            }}
-            initialRunnableNodeKeys={validation?.initialRunnableNodeKeys ?? initialRunnableNodeKeys}
-            validation={validation}
-            liveWarnings={liveWarnings}
-            validationError={validationError}
-            publishError={publishError}
-          />
-        ) : null}
+        <WorkflowEditorInspectorBody
+          activeTab={activeTab}
+          initialRunnableNodeKeys={initialRunnableNodeKeys}
+          liveWarnings={liveWarnings}
+          markWorkflowChanged={markWorkflowChanged}
+          modelOptions={modelOptions}
+          openPalette={openPalette}
+          providerOptions={providerOptions}
+          publishError={publishError}
+          selectedEdge={selectedEdge}
+          selectedEdgeIdRef={selectedEdgeIdRef}
+          selectedNode={selectedNode}
+          setEdges={setEdges}
+          setSelectedEdgeId={setSelectedEdgeId}
+          setWorkflowDescription={setWorkflowDescription}
+          setWorkflowName={setWorkflowName}
+          setWorkflowVersionNotes={setWorkflowVersionNotes}
+          setNodes={setNodes}
+          validation={validation}
+          validationError={validationError}
+          workflowDescription={workflowDescription}
+          workflowName={workflowName}
+          workflowVersionNotes={workflowVersionNotes}
+        />
       </div>
     </aside>
   );
