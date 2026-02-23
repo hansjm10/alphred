@@ -8,8 +8,10 @@ import {
   useRef,
   useState,
   useEffect,
+  type Dispatch,
   type DragEvent,
   type MouseEvent as ReactMouseEvent,
+  type SetStateAction,
 } from 'react';
 import { useRouter } from 'next/navigation';
 import {
@@ -108,6 +110,154 @@ function toReactFlowEdge(edge: DashboardWorkflowDraftEdge): Edge {
     label: edge.auto ? `auto · ${edge.priority}` : `guard · ${edge.priority}`,
     data: edge,
   };
+}
+
+type WorkflowContextMenuState = {
+  targetType: 'node' | 'edge';
+  id: string;
+  x: number;
+  y: number;
+};
+
+type SelectionChangeState = {
+  nextNodeId: string | null;
+  nextEdgeId: string | null;
+  nextActiveTab: InspectorTab;
+  shouldOpenInspectorDrawer: boolean;
+};
+
+type AddNodeArgs = {
+  nodeType: DashboardWorkflowDraftNode['nodeType'];
+  position?: { x: number; y: number };
+  connectFromNodeKey?: string;
+  presetNode?: DashboardWorkflowDraftNode;
+};
+
+function deriveSelectionChangeState(
+  params: { nodes: Node[]; edges: Edge[] },
+  activeTab: InspectorTab,
+  isCompactViewport: boolean,
+): SelectionChangeState {
+  const nextNodeId = params.nodes[0]?.id ?? null;
+  const nextEdgeId = params.edges[0]?.id ?? null;
+  const nextActiveTab = nextNodeId ? 'node' : nextEdgeId ? 'transition' : activeTab;
+  return {
+    nextNodeId,
+    nextEdgeId,
+    nextActiveTab,
+    shouldOpenInspectorDrawer: isCompactViewport && (nextNodeId !== null || nextEdgeId !== null),
+  };
+}
+
+function handleRenameNodeFromContextMenu(args: Readonly<{
+  contextMenu: WorkflowContextMenuState | null;
+  nodes: Node[];
+  setContextMenu: Dispatch<SetStateAction<WorkflowContextMenuState | null>>;
+  setNodes: Dispatch<SetStateAction<Node[]>>;
+  markWorkflowChanged: () => void;
+}>): void {
+  const { contextMenu, markWorkflowChanged, nodes, setContextMenu, setNodes } = args;
+  if (contextMenu?.targetType !== 'node') {
+    return;
+  }
+
+  const target = nodes.find((node) => node.id === contextMenu.id);
+  if (!target) {
+    setContextMenu(null);
+    return;
+  }
+
+  const data = target.data as DashboardWorkflowDraftNode;
+  const nextDisplayName = globalThis.prompt('Rename node', data.displayName)?.trim();
+  if (!nextDisplayName) {
+    setContextMenu(null);
+    return;
+  }
+
+  setNodes((current) => current.map((node) =>
+    node.id === contextMenu.id
+      ? {
+          ...node,
+          data: toReactFlowNodeData({
+            ...data,
+            displayName: nextDisplayName,
+          }),
+        }
+      : node,
+  ));
+  setContextMenu(null);
+  markWorkflowChanged();
+}
+
+function handleDuplicateNodeFromContextMenu(args: Readonly<{
+  addNode: (args: AddNodeArgs) => DashboardWorkflowDraftNode;
+  contextMenu: WorkflowContextMenuState | null;
+  nodes: Node[];
+  setContextMenu: Dispatch<SetStateAction<WorkflowContextMenuState | null>>;
+}>): void {
+  const { addNode, contextMenu, nodes, setContextMenu } = args;
+  if (contextMenu?.targetType !== 'node') {
+    return;
+  }
+
+  const target = nodes.find((node) => node.id === contextMenu.id);
+  if (!target) {
+    setContextMenu(null);
+    return;
+  }
+
+  const sourceNode = target.data as DashboardWorkflowDraftNode;
+  const maxSequenceIndex = nodes.reduce((maxValue, node) => {
+    const value = (node.data as DashboardWorkflowDraftNode).sequenceIndex;
+    return Math.max(maxValue, value);
+  }, 0);
+  const duplicated = duplicateDraftNode({
+    sourceNode,
+    existingNodeKeys: new Set(nodes.map((node) => node.id)),
+    nextSequenceIndex: maxSequenceIndex + 10,
+  });
+
+  addNode({
+    nodeType: duplicated.nodeType,
+    presetNode: duplicated,
+  });
+  setContextMenu(null);
+}
+
+function handleDuplicateEdgeFromContextMenu(args: Readonly<{
+  contextMenu: WorkflowContextMenuState | null;
+  edges: Edge[];
+  setContextMenu: Dispatch<SetStateAction<WorkflowContextMenuState | null>>;
+  setEdges: Dispatch<SetStateAction<Edge[]>>;
+  markWorkflowChanged: () => void;
+}>): void {
+  const { contextMenu, edges, markWorkflowChanged, setContextMenu, setEdges } = args;
+  if (contextMenu?.targetType !== 'edge') {
+    return;
+  }
+
+  const sourceEdge = edges.find((edge) => edge.id === contextMenu.id);
+  if (!sourceEdge) {
+    setContextMenu(null);
+    return;
+  }
+
+  const sourceData = sourceEdge.data as DashboardWorkflowDraftEdge;
+  setEdges((current) => {
+    const sourceEdges = current.map(mapEdgeFromReactFlow);
+    const priority = sourceEdges
+      .filter((edge) => edge.sourceNodeKey === sourceEdge.source)
+      .reduce((maxValue, edge) => Math.max(maxValue, edge.priority), 90) + 10;
+    const nextEdge: DashboardWorkflowDraftEdge = {
+      ...sourceData,
+      sourceNodeKey: sourceEdge.source,
+      targetNodeKey: sourceEdge.target,
+      priority,
+    };
+    return [...current, toReactFlowEdge(nextEdge)];
+  });
+  setContextMenu(null);
+  markWorkflowChanged();
 }
 
 type WorkflowEditorPageContentProps = Readonly<{
@@ -364,12 +514,7 @@ function WorkflowEditorLoadedContent({
   const [pendingConnectionSourceNodeKey, setPendingConnectionSourceNodeKey] = useState<string | null>(null);
   const [inspectorDrawerOpen, setInspectorDrawerOpen] = useState(false);
   const [isCompactViewport, setIsCompactViewport] = useState(false);
-  const [contextMenu, setContextMenu] = useState<{
-    targetType: 'node' | 'edge';
-    id: string;
-    x: number;
-    y: number;
-  } | null>(null);
+  const [contextMenu, setContextMenu] = useState<WorkflowContextMenuState | null>(null);
   const [publishing, setPublishing] = useState(false);
 
   const selectedNode = useMemo(() => nodes.find(node => node.id === selectedNodeId) ?? null, [nodes, selectedNodeId]);
@@ -605,33 +750,17 @@ function WorkflowEditorLoadedContent({
   }, [markWorkflowChanged, openPalette]);
 
   const handleSelectionChange = useCallback((params: { nodes: Node[]; edges: Edge[] }) => {
-    const nextNode = params.nodes[0]?.id ?? null;
-    const nextEdge = params.edges[0]?.id ?? null;
+    const selectionState = deriveSelectionChangeState(params, activeTab, isCompactViewport);
     setContextMenu(null);
-    selectedNodeIdRef.current = nextNode;
-    selectedEdgeIdRef.current = nextEdge;
-    setSelectedNodeId(nextNode);
-    setSelectedEdgeId(nextEdge);
+    selectedNodeIdRef.current = selectionState.nextNodeId;
+    selectedEdgeIdRef.current = selectionState.nextEdgeId;
+    setSelectedNodeId(selectionState.nextNodeId);
+    setSelectedEdgeId(selectionState.nextEdgeId);
+    setActiveTab(selectionState.nextActiveTab);
+    setInspectorDrawerOpen((current) => current || selectionState.shouldOpenInspectorDrawer);
+  }, [activeTab, isCompactViewport]);
 
-    if (nextNode) {
-      setActiveTab('node');
-      if (isCompactViewport) {
-        setInspectorDrawerOpen(true);
-      }
-    } else if (nextEdge) {
-      setActiveTab('transition');
-      if (isCompactViewport) {
-        setInspectorDrawerOpen(true);
-      }
-    }
-  }, [isCompactViewport]);
-
-  const addNode = useCallback((args: {
-    nodeType: DashboardWorkflowDraftNode['nodeType'];
-    position?: { x: number; y: number };
-    connectFromNodeKey?: string;
-    presetNode?: DashboardWorkflowDraftNode;
-  }): DashboardWorkflowDraftNode => {
+  const addNode = useCallback((args: AddNodeArgs): DashboardWorkflowDraftNode => {
     const existingKeys = new Set(nodes.map(node => node.id));
     const lastNode = nodes.at(-1)?.data as DashboardWorkflowDraftNode | undefined;
     const nextSequenceIndex = (lastNode?.sequenceIndex ?? 0) + 10;
@@ -741,66 +870,22 @@ function WorkflowEditorLoadedContent({
   }, []);
 
   const renameNodeFromContextMenu = useCallback(() => {
-    if (contextMenu?.targetType !== 'node') {
-      return;
-    }
-
-    const target = nodes.find((node) => node.id === contextMenu.id);
-    if (!target) {
-      setContextMenu(null);
-      return;
-    }
-
-    const data = target.data as DashboardWorkflowDraftNode;
-    const nextDisplayName = globalThis.prompt('Rename node', data.displayName)?.trim();
-    if (!nextDisplayName) {
-      setContextMenu(null);
-      return;
-    }
-
-    setNodes((current) => current.map((node) => {
-      if (node.id !== contextMenu.id) {
-        return node;
-      }
-      return {
-        ...node,
-        data: toReactFlowNodeData({
-          ...data,
-          displayName: nextDisplayName,
-        }),
-      };
-    }));
-    setContextMenu(null);
-    markWorkflowChanged();
+    handleRenameNodeFromContextMenu({
+      contextMenu,
+      nodes,
+      setContextMenu,
+      setNodes,
+      markWorkflowChanged,
+    });
   }, [contextMenu, markWorkflowChanged, nodes]);
 
   const duplicateNodeFromContextMenu = useCallback(() => {
-    if (contextMenu?.targetType !== 'node') {
-      return;
-    }
-
-    const target = nodes.find((node) => node.id === contextMenu.id);
-    if (!target) {
-      setContextMenu(null);
-      return;
-    }
-
-    const sourceNode = target.data as DashboardWorkflowDraftNode;
-    const maxSequenceIndex = nodes.reduce((maxValue, node) => {
-      const value = (node.data as DashboardWorkflowDraftNode).sequenceIndex;
-      return Math.max(maxValue, value);
-    }, 0);
-    const duplicated = duplicateDraftNode({
-      sourceNode,
-      existingNodeKeys: new Set(nodes.map((node) => node.id)),
-      nextSequenceIndex: maxSequenceIndex + 10,
+    handleDuplicateNodeFromContextMenu({
+      addNode,
+      contextMenu,
+      nodes,
+      setContextMenu,
     });
-
-    addNode({
-      nodeType: duplicated.nodeType,
-      presetNode: duplicated,
-    });
-    setContextMenu(null);
   }, [addNode, contextMenu, nodes]);
 
   const addConnectedNodeFromContextMenu = useCallback(() => {
@@ -813,32 +898,13 @@ function WorkflowEditorLoadedContent({
   }, [contextMenu, openPalette]);
 
   const duplicateEdgeFromContextMenu = useCallback(() => {
-    if (contextMenu?.targetType !== 'edge') {
-      return;
-    }
-
-    const sourceEdge = edges.find((edge) => edge.id === contextMenu.id);
-    if (!sourceEdge) {
-      setContextMenu(null);
-      return;
-    }
-
-    const sourceData = sourceEdge.data as DashboardWorkflowDraftEdge;
-    setEdges((current) => {
-      const sourceEdges = current.map(mapEdgeFromReactFlow);
-      const priority = sourceEdges
-        .filter((edge) => edge.sourceNodeKey === sourceEdge.source)
-        .reduce((maxValue, edge) => Math.max(maxValue, edge.priority), 90) + 10;
-      const nextEdge: DashboardWorkflowDraftEdge = {
-        ...sourceData,
-        sourceNodeKey: sourceEdge.source,
-        targetNodeKey: sourceEdge.target,
-        priority,
-      };
-      return [...current, toReactFlowEdge(nextEdge)];
+    handleDuplicateEdgeFromContextMenu({
+      contextMenu,
+      edges,
+      setContextMenu,
+      setEdges,
+      markWorkflowChanged,
     });
-    setContextMenu(null);
-    markWorkflowChanged();
   }, [contextMenu, edges, markWorkflowChanged]);
 
   async function runValidation(): Promise<void> {
@@ -875,10 +941,7 @@ function WorkflowEditorLoadedContent({
   }
 
   function closePublishConfirm(): void {
-    if (publishing) {
-      return;
-    }
-    setPublishConfirmOpen(false);
+    setPublishConfirmOpen((current) => (publishing ? current : false));
   }
 
   async function publish(): Promise<void> {

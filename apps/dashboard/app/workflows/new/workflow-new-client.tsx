@@ -68,7 +68,7 @@ async function checkTreeKeyAvailability(
     }
 
     const parsed = parseTreeKeyAvailabilityPayload(json);
-    if (!parsed || parsed.treeKey !== effectiveTreeKey) {
+    if (parsed?.treeKey !== effectiveTreeKey) {
       return { status: 'error', message: 'Tree key validation failed.' };
     }
 
