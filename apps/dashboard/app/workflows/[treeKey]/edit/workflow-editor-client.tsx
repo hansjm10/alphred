@@ -334,6 +334,32 @@ function handleCanvasConnect(args: Readonly<{
   markWorkflowChanged();
 }
 
+function applyNodeChangesAndMaybeMarkDirty(args: Readonly<{
+  changes: NodeChange[];
+  setNodes: Dispatch<SetStateAction<Node[]>>;
+  markWorkflowChanged: () => void;
+}>): void {
+  const { changes, markWorkflowChanged, setNodes } = args;
+  const shouldMarkDirty = hasNonSelectionNodeChanges(changes);
+  setNodes((current) => applyNodeChanges(changes, current));
+  if (shouldMarkDirty) {
+    markWorkflowChanged();
+  }
+}
+
+function applyEdgeChangesAndMaybeMarkDirty(args: Readonly<{
+  changes: EdgeChange[];
+  setEdges: Dispatch<SetStateAction<Edge[]>>;
+  markWorkflowChanged: () => void;
+}>): void {
+  const { changes, markWorkflowChanged, setEdges } = args;
+  const shouldMarkDirty = hasNonSelectionEdgeChanges(changes);
+  setEdges((current) => applyEdgeChanges(changes, current));
+  if (shouldMarkDirty) {
+    markWorkflowChanged();
+  }
+}
+
 function handleCanvasDrop(args: Readonly<{
   event: DragEvent;
   reactFlowInstance: ReactFlowInstance | null;
@@ -1033,19 +1059,19 @@ function WorkflowEditorLoadedContent({
   }, [draftEdgesForSave.length, draftNodesForSave.length, version, workflowVersionNotes]);
 
   const onNodesChange = useCallback((changes: NodeChange[]) => {
-    const shouldMarkDirty = hasNonSelectionNodeChanges(changes);
-    setNodes((current) => applyNodeChanges(changes, current));
-    if (shouldMarkDirty) {
-      markWorkflowChanged();
-    }
+    applyNodeChangesAndMaybeMarkDirty({
+      changes,
+      setNodes,
+      markWorkflowChanged,
+    });
   }, [markWorkflowChanged]);
 
   const onEdgesChange = useCallback((changes: EdgeChange[]) => {
-    const shouldMarkDirty = hasNonSelectionEdgeChanges(changes);
-    setEdges((current) => applyEdgeChanges(changes, current));
-    if (shouldMarkDirty) {
-      markWorkflowChanged();
-    }
+    applyEdgeChangesAndMaybeMarkDirty({
+      changes,
+      setEdges,
+      markWorkflowChanged,
+    });
   }, [markWorkflowChanged]);
 
   const onConnect = useCallback((connection: Connection) => {
