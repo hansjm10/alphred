@@ -1559,6 +1559,254 @@ describe('createSqlWorkflowExecutor', () => {
     });
   });
 
+  it('normalizes diagnostics usage variants and tool summary fallbacks deterministically', async () => {
+    const { db, runId, runNodeId } = seedSingleAgentRun();
+    const deeplyNestedMetadata: Record<string, unknown> = {
+      level1: {
+        level2: {
+          level3: {
+            level4: {
+              level5: {
+                level6: {
+                  value: 'too-deep',
+                },
+              },
+            },
+          },
+        },
+      },
+    };
+    const executor = createSqlWorkflowExecutor(db, {
+      resolveProvider: () =>
+        createProvider([
+          {
+            type: 'system',
+            content: 'Bearer abc123TOKEN',
+            timestamp: 1,
+            metadata: {
+              notes: 'n'.repeat(2_500),
+              nested: deeplyNestedMetadata,
+              values: Array.from({ length: 30 }, (_value, index) => index),
+              weird: Symbol('diagnostic-symbol'),
+            },
+          },
+          { type: 'usage', content: 'no usage fields', timestamp: 2, metadata: {} },
+          { type: 'usage', content: 'top-level incremental', timestamp: 3, metadata: { tokens: 3 } },
+          { type: 'usage', content: 'nested incremental', timestamp: 4, metadata: { usage: { tokens: 5 } } },
+          { type: 'usage', content: 'tokens-used cumulative', timestamp: 5, metadata: { tokensUsed: 11 } },
+          {
+            type: 'usage',
+            content: 'camel-case in/out cumulative',
+            timestamp: 6,
+            metadata: { inputTokens: 7, outputTokens: 8 },
+          },
+          {
+            type: 'usage',
+            content: 'snake-case in/out cumulative',
+            timestamp: 7,
+            metadata: { input_tokens: 9, output_tokens: 10 },
+          },
+          { type: 'usage', content: 'snake total cumulative', timestamp: 8, metadata: { total_tokens: 30 } },
+          { type: 'tool_use', content: '   ', timestamp: 9, metadata: { tool_name: 'gh_search' } },
+          { type: 'tool_result', content: '', timestamp: 10, metadata: {} },
+          { type: 'tool_use', content: ' ', timestamp: 11 },
+          { type: 'result', content: 'Design report body', timestamp: 12 },
+        ]),
+    });
+
+    await executor.executeRun({
+      workflowRunId: runId,
+      options: {
+        workingDirectory: '/tmp/alphred-worktree',
+      },
+    });
+
+    const diagnostics = db
+      .select({
+        diagnostics: runNodeDiagnostics.diagnostics,
+      })
+      .from(runNodeDiagnostics)
+      .where(eq(runNodeDiagnostics.runNodeId, runNodeId))
+      .orderBy(asc(runNodeDiagnostics.id))
+      .all();
+
+    expect(diagnostics).toHaveLength(1);
+    const payload = diagnostics[0]?.diagnostics as {
+      summary: { redacted: boolean; truncated: boolean; tokensUsed: number };
+      events: {
+        type: string;
+        contentPreview: string;
+        metadata: Record<string, unknown> | null;
+        usage: { deltaTokens: number | null; cumulativeTokens: number | null } | null;
+      }[];
+      toolEvents: { type: string; toolName: string | null; summary: string }[];
+    };
+
+    expect(payload.summary.tokensUsed).toBe(30);
+    expect(payload.summary.redacted).toBe(true);
+    expect(payload.summary.truncated).toBe(true);
+    expect(payload.events[0]?.contentPreview).toBe('[REDACTED]');
+    expect(payload.events[0]?.metadata).toMatchObject({
+      truncated: true,
+    });
+
+    const usageEvents = payload.events.filter(event => event.type === 'usage');
+    expect(usageEvents.map(event => event.usage)).toEqual([
+      null,
+      { deltaTokens: 3, cumulativeTokens: 3 },
+      { deltaTokens: 5, cumulativeTokens: 8 },
+      { deltaTokens: 3, cumulativeTokens: 11 },
+      { deltaTokens: 4, cumulativeTokens: 15 },
+      { deltaTokens: 4, cumulativeTokens: 19 },
+      { deltaTokens: 11, cumulativeTokens: 30 },
+    ]);
+
+    expect(payload.toolEvents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: 'tool_use',
+          toolName: 'gh_search',
+          summary: 'tool_use event for gh_search',
+        }),
+        expect.objectContaining({
+          type: 'tool_result',
+          toolName: null,
+          summary: 'tool_result event',
+        }),
+        expect.objectContaining({
+          type: 'tool_use',
+          toolName: null,
+          summary: 'tool_use event',
+        }),
+      ]),
+    );
+  });
+
+  it('drops retained diagnostics events when payload size exceeds limit', async () => {
+    const { db, runId, runNodeId } = seedSingleAgentRun();
+    const bulkyContent = 'z'.repeat(600);
+    const noisyEvents: ProviderEvent[] = [
+      { type: 'system', content: bulkyContent, timestamp: 1 },
+      ...Array.from({ length: 124 }, (_value, index) => ({
+        type: 'assistant' as const,
+        content: bulkyContent,
+        timestamp: index + 2,
+      })),
+      { type: 'result', content: 'Design report body', timestamp: 200 },
+    ];
+    const executor = createSqlWorkflowExecutor(db, {
+      resolveProvider: () => createProvider(noisyEvents),
+    });
+
+    await executor.executeRun({
+      workflowRunId: runId,
+      options: {
+        workingDirectory: '/tmp/alphred-worktree',
+      },
+    });
+
+    const diagnostics = db
+      .select({
+        diagnostics: runNodeDiagnostics.diagnostics,
+      })
+      .from(runNodeDiagnostics)
+      .where(eq(runNodeDiagnostics.runNodeId, runNodeId))
+      .orderBy(asc(runNodeDiagnostics.id))
+      .all();
+
+    expect(diagnostics).toHaveLength(1);
+    const payload = diagnostics[0]?.diagnostics as {
+      summary: {
+        eventCount: number;
+        retainedEventCount: number;
+        droppedEventCount: number;
+        truncated: boolean;
+      };
+    };
+
+    expect(payload.summary.eventCount).toBe(noisyEvents.length);
+    expect(payload.summary.truncated).toBe(true);
+    expect(payload.summary.retainedEventCount).toBeLessThan(120);
+    expect(payload.summary.droppedEventCount).toBeGreaterThan(noisyEvents.length - 120);
+  });
+
+  it('classifies timeout failures and drops stack preview when diagnostics payload remains oversized', async () => {
+    const { db, runId, runNodeId } = seedSingleAgentRun();
+    const oversizedTimeoutError = new Error(`provider timeout: ${'x'.repeat(60_000)}`);
+    oversizedTimeoutError.stack = `Error: provider timeout\n${'at provider (/tmp/file.ts:1:1)\n'.repeat(900)}`;
+    const executor = createSqlWorkflowExecutor(db, {
+      resolveProvider: () => ({
+        async *run(): AsyncIterable<ProviderEvent> {
+          yield { type: 'system', content: 'before-timeout', timestamp: 1 };
+          throw oversizedTimeoutError;
+        },
+      }),
+    });
+
+    await executor.executeRun({
+      workflowRunId: runId,
+      options: {
+        workingDirectory: '/tmp/alphred-worktree',
+      },
+    });
+
+    const diagnostics = db
+      .select({
+        diagnostics: runNodeDiagnostics.diagnostics,
+      })
+      .from(runNodeDiagnostics)
+      .where(eq(runNodeDiagnostics.runNodeId, runNodeId))
+      .orderBy(asc(runNodeDiagnostics.id))
+      .all();
+
+    expect(diagnostics).toHaveLength(1);
+    const payload = diagnostics[0]?.diagnostics as {
+      summary: { truncated: boolean };
+      error: { classification: string; stackPreview: string | null } | null;
+    };
+
+    expect(payload.summary.truncated).toBe(true);
+    expect(payload.error?.classification).toBe('timeout');
+    expect(payload.error?.stackPreview).toBeNull();
+  });
+
+  it('classifies aborted failures in run-node diagnostics', async () => {
+    const { db, runId, runNodeId } = seedSingleAgentRun();
+    const abortedError = new Error('request was cancelled');
+    abortedError.name = 'AbortError';
+    const executor = createSqlWorkflowExecutor(db, {
+      resolveProvider: () => ({
+        async *run(): AsyncIterable<ProviderEvent> {
+          yield { type: 'system', content: 'before-abort', timestamp: 1 };
+          throw abortedError;
+        },
+      }),
+    });
+
+    await executor.executeRun({
+      workflowRunId: runId,
+      options: {
+        workingDirectory: '/tmp/alphred-worktree',
+      },
+    });
+
+    const diagnostics = db
+      .select({
+        diagnostics: runNodeDiagnostics.diagnostics,
+      })
+      .from(runNodeDiagnostics)
+      .where(eq(runNodeDiagnostics.runNodeId, runNodeId))
+      .orderBy(asc(runNodeDiagnostics.id))
+      .all();
+
+    expect(diagnostics).toHaveLength(1);
+    const payload = diagnostics[0]?.diagnostics as {
+      error: { classification: string } | null;
+    };
+
+    expect(payload.error?.classification).toBe('aborted');
+  });
+
   it('fails deterministically when provider stream misses a result event and persists failure state', async () => {
     const { db, runId, runNodeId } = seedSingleAgentRun();
     const executor = createSqlWorkflowExecutor(db, {
