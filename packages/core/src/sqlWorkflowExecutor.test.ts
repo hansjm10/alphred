@@ -556,6 +556,194 @@ function seedConvergingAutoRun() {
   };
 }
 
+function seedBrainstormPickResearchRun() {
+  const db = createDatabase(':memory:');
+  migrateDatabase(db);
+
+  const tree = db
+    .insert(workflowTrees)
+    .values({
+      treeKey: 'brainstorm_pick_research_tree',
+      version: 1,
+      name: 'Brainstorm Pick Research Tree',
+    })
+    .returning({ id: workflowTrees.id })
+    .get();
+
+  const prompt = db
+    .insert(promptTemplates)
+    .values({
+      templateKey: 'brainstorm_pick_research_prompt',
+      version: 1,
+      content: 'Generate phase output',
+      contentType: 'markdown',
+    })
+    .returning({ id: promptTemplates.id })
+    .get();
+
+  const brainstormNode = db
+    .insert(treeNodes)
+    .values({
+      workflowTreeId: tree.id,
+      nodeKey: 'brainstorm',
+      nodeType: 'agent',
+      provider: 'codex',
+      promptTemplateId: prompt.id,
+      sequenceIndex: 1,
+    })
+    .returning({ id: treeNodes.id })
+    .get();
+
+  const pickNode = db
+    .insert(treeNodes)
+    .values({
+      workflowTreeId: tree.id,
+      nodeKey: 'pick',
+      nodeType: 'agent',
+      provider: 'codex',
+      promptTemplateId: prompt.id,
+      sequenceIndex: 2,
+    })
+    .returning({ id: treeNodes.id })
+    .get();
+
+  const researchNode = db
+    .insert(treeNodes)
+    .values({
+      workflowTreeId: tree.id,
+      nodeKey: 'research',
+      nodeType: 'agent',
+      provider: 'codex',
+      promptTemplateId: prompt.id,
+      sequenceIndex: 3,
+    })
+    .returning({ id: treeNodes.id })
+    .get();
+
+  db.insert(treeEdges)
+    .values([
+      {
+        workflowTreeId: tree.id,
+        sourceNodeId: brainstormNode.id,
+        targetNodeId: pickNode.id,
+        priority: 0,
+        auto: 1,
+      },
+      {
+        workflowTreeId: tree.id,
+        sourceNodeId: pickNode.id,
+        targetNodeId: researchNode.id,
+        priority: 0,
+        auto: 1,
+      },
+    ])
+    .run();
+
+  const materialized = materializeWorkflowRunFromTree(db, {
+    treeKey: 'brainstorm_pick_research_tree',
+  });
+
+  const nodeRows = db
+    .select({
+      id: runNodes.id,
+      nodeKey: runNodes.nodeKey,
+    })
+    .from(runNodes)
+    .where(eq(runNodes.workflowRunId, materialized.run.id))
+    .all();
+
+  const runNodeIdByKey = new Map(nodeRows.map(node => [node.nodeKey, node.id]));
+  return {
+    db,
+    runId: materialized.run.id,
+    runNodeIdByKey,
+  };
+}
+
+function seedFiveSourceConvergingRun() {
+  const db = createDatabase(':memory:');
+  migrateDatabase(db);
+
+  const tree = db
+    .insert(workflowTrees)
+    .values({
+      treeKey: 'five_source_converging_tree',
+      version: 1,
+      name: 'Five Source Converging Tree',
+    })
+    .returning({ id: workflowTrees.id })
+    .get();
+
+  const prompt = db
+    .insert(promptTemplates)
+    .values({
+      templateKey: 'five_source_converging_prompt',
+      version: 1,
+      content: 'Generate phase output',
+      contentType: 'markdown',
+    })
+    .returning({ id: promptTemplates.id })
+    .get();
+
+  const sourceNodeIds: number[] = [];
+  for (const [index, sourceKey] of ['source_a', 'source_b', 'source_c', 'source_d', 'source_e'].entries()) {
+    const sourceNode = db
+      .insert(treeNodes)
+      .values({
+        workflowTreeId: tree.id,
+        nodeKey: sourceKey,
+        nodeType: 'agent',
+        provider: 'codex',
+        promptTemplateId: prompt.id,
+        sequenceIndex: index + 1,
+      })
+      .returning({ id: treeNodes.id })
+      .get();
+    sourceNodeIds.push(sourceNode.id);
+  }
+
+  const targetNode = db
+    .insert(treeNodes)
+    .values({
+      workflowTreeId: tree.id,
+      nodeKey: 'target',
+      nodeType: 'agent',
+      provider: 'codex',
+      promptTemplateId: prompt.id,
+      sequenceIndex: 6,
+    })
+    .returning({ id: treeNodes.id })
+    .get();
+
+  db.insert(treeEdges)
+    .values(
+      sourceNodeIds.map((sourceNodeId, index) => ({
+        workflowTreeId: tree.id,
+        sourceNodeId,
+        targetNodeId: targetNode.id,
+        priority: index,
+        auto: 1,
+      })),
+    )
+    .run();
+
+  const materialized = materializeWorkflowRunFromTree(db, { treeKey: 'five_source_converging_tree' });
+  const nodeRows = db
+    .select({
+      id: runNodes.id,
+      nodeKey: runNodes.nodeKey,
+    })
+    .from(runNodes)
+    .where(eq(runNodes.workflowRunId, materialized.run.id))
+    .all();
+
+  return {
+    db,
+    runId: materialized.run.id,
+    runNodeIdByKey: new Map(nodeRows.map(node => [node.nodeKey, node.id])),
+  };
+}
+
 function seedSingleAgentRunWithoutPromptTemplate() {
   const db = createDatabase(':memory:');
   migrateDatabase(db);
@@ -2877,7 +3065,7 @@ describe('createSqlWorkflowExecutor', () => {
           artifactType: 'report',
           contentType: 'markdown',
           content: 'source-v1',
-          metadata: { success: true },
+          metadata: expect.objectContaining({ success: true }),
         },
         {
           workflowRunId: runId,
@@ -2885,7 +3073,7 @@ describe('createSqlWorkflowExecutor', () => {
           artifactType: 'report',
           contentType: 'markdown',
           content: 'target-v1',
-          metadata: { success: true },
+          metadata: expect.objectContaining({ success: true }),
         },
         {
           workflowRunId: runId,
@@ -2893,7 +3081,7 @@ describe('createSqlWorkflowExecutor', () => {
           artifactType: 'report',
           contentType: 'markdown',
           content: 'source-v2',
-          metadata: { success: true },
+          metadata: expect.objectContaining({ success: true }),
         },
       ])
       .run();
@@ -2978,7 +3166,7 @@ describe('createSqlWorkflowExecutor', () => {
           artifactType: 'report',
           contentType: 'markdown',
           content: 'source-v1',
-          metadata: { success: true },
+          metadata: expect.objectContaining({ success: true }),
         },
         {
           workflowRunId: runId,
@@ -2986,7 +3174,7 @@ describe('createSqlWorkflowExecutor', () => {
           artifactType: 'report',
           contentType: 'markdown',
           content: 'target-v1',
-          metadata: { success: true },
+          metadata: expect.objectContaining({ success: true }),
         },
         {
           workflowRunId: runId,
@@ -2994,7 +3182,7 @@ describe('createSqlWorkflowExecutor', () => {
           artifactType: 'report',
           contentType: 'markdown',
           content: 'source-v2',
-          metadata: { success: true },
+          metadata: expect.objectContaining({ success: true }),
         },
       ])
       .run();
@@ -3122,7 +3310,7 @@ describe('createSqlWorkflowExecutor', () => {
           artifactType: 'report',
           contentType: 'markdown',
           content: 'source-v1',
-          metadata: { success: true },
+          metadata: expect.objectContaining({ success: true }),
         },
         {
           workflowRunId: runId,
@@ -3130,7 +3318,7 @@ describe('createSqlWorkflowExecutor', () => {
           artifactType: 'report',
           contentType: 'markdown',
           content: 'review-v1',
-          metadata: { success: true },
+          metadata: expect.objectContaining({ success: true }),
         },
         {
           workflowRunId: runId,
@@ -3138,7 +3326,7 @@ describe('createSqlWorkflowExecutor', () => {
           artifactType: 'report',
           contentType: 'markdown',
           content: 'approved-v1',
-          metadata: { success: true },
+          metadata: expect.objectContaining({ success: true }),
         },
       ])
       .run();
@@ -3172,7 +3360,7 @@ describe('createSqlWorkflowExecutor', () => {
         artifactType: 'report',
         contentType: 'markdown',
         content: 'source-v2',
-        metadata: { success: true },
+        metadata: expect.objectContaining({ success: true }),
       })
       .run();
 
@@ -3315,7 +3503,7 @@ describe('createSqlWorkflowExecutor', () => {
           artifactType: 'report',
           contentType: 'markdown',
           content: 'source-v1',
-          metadata: { success: true },
+          metadata: expect.objectContaining({ success: true }),
         },
         {
           workflowRunId: runId,
@@ -3323,7 +3511,7 @@ describe('createSqlWorkflowExecutor', () => {
           artifactType: 'report',
           contentType: 'markdown',
           content: 'review-v1',
-          metadata: { success: true },
+          metadata: expect.objectContaining({ success: true }),
         },
         {
           workflowRunId: runId,
@@ -3331,7 +3519,7 @@ describe('createSqlWorkflowExecutor', () => {
           artifactType: 'report',
           contentType: 'markdown',
           content: 'approved-v1',
-          metadata: { success: true },
+          metadata: expect.objectContaining({ success: true }),
         },
       ])
       .run();
@@ -3365,7 +3553,7 @@ describe('createSqlWorkflowExecutor', () => {
         artifactType: 'report',
         contentType: 'markdown',
         content: 'source-v2',
-        metadata: { success: true },
+        metadata: expect.objectContaining({ success: true }),
       })
       .run();
 
@@ -3513,7 +3701,7 @@ describe('createSqlWorkflowExecutor', () => {
           artifactType: 'report',
           contentType: 'markdown',
           content: 'source-v1',
-          metadata: { success: true },
+          metadata: expect.objectContaining({ success: true }),
         },
         {
           workflowRunId: runId,
@@ -3521,7 +3709,7 @@ describe('createSqlWorkflowExecutor', () => {
           artifactType: 'report',
           contentType: 'markdown',
           content: 'review-v1',
-          metadata: { success: true },
+          metadata: expect.objectContaining({ success: true }),
         },
         {
           workflowRunId: runId,
@@ -3529,7 +3717,7 @@ describe('createSqlWorkflowExecutor', () => {
           artifactType: 'report',
           contentType: 'markdown',
           content: 'approved-v1',
-          metadata: { success: true },
+          metadata: expect.objectContaining({ success: true }),
         },
       ])
       .run();
@@ -3549,7 +3737,7 @@ describe('createSqlWorkflowExecutor', () => {
         artifactType: 'report',
         contentType: 'markdown',
         content: 'source-v2',
-        metadata: { success: true },
+        metadata: expect.objectContaining({ success: true }),
       })
       .run();
 
@@ -3695,7 +3883,7 @@ describe('createSqlWorkflowExecutor', () => {
           artifactType: 'report',
           contentType: 'markdown',
           content: 'source-v1',
-          metadata: { success: true },
+          metadata: expect.objectContaining({ success: true }),
         },
         {
           workflowRunId: runId,
@@ -3703,7 +3891,7 @@ describe('createSqlWorkflowExecutor', () => {
           artifactType: 'report',
           contentType: 'markdown',
           content: 'review-v1',
-          metadata: { success: true },
+          metadata: expect.objectContaining({ success: true }),
         },
         {
           workflowRunId: runId,
@@ -3711,7 +3899,7 @@ describe('createSqlWorkflowExecutor', () => {
           artifactType: 'report',
           contentType: 'markdown',
           content: 'approved-v1',
-          metadata: { success: true },
+          metadata: expect.objectContaining({ success: true }),
         },
       ])
       .run();
@@ -3740,7 +3928,7 @@ describe('createSqlWorkflowExecutor', () => {
         artifactType: 'report',
         contentType: 'markdown',
         content: 'source-v2',
-        metadata: { success: true },
+        metadata: expect.objectContaining({ success: true }),
       })
       .run();
 
@@ -3883,7 +4071,7 @@ describe('createSqlWorkflowExecutor', () => {
           artifactType: 'report',
           contentType: 'markdown',
           content: 'source-v1',
-          metadata: { success: true },
+          metadata: expect.objectContaining({ success: true }),
         },
         {
           workflowRunId: runId,
@@ -3891,7 +4079,7 @@ describe('createSqlWorkflowExecutor', () => {
           artifactType: 'report',
           contentType: 'markdown',
           content: 'review-v1',
-          metadata: { success: true },
+          metadata: expect.objectContaining({ success: true }),
         },
         {
           workflowRunId: runId,
@@ -3899,7 +4087,7 @@ describe('createSqlWorkflowExecutor', () => {
           artifactType: 'report',
           contentType: 'markdown',
           content: 'approved-v1',
-          metadata: { success: true },
+          metadata: expect.objectContaining({ success: true }),
         },
         {
           workflowRunId: runId,
@@ -3907,7 +4095,7 @@ describe('createSqlWorkflowExecutor', () => {
           artifactType: 'report',
           contentType: 'markdown',
           content: 'source-v2',
-          metadata: { success: true },
+          metadata: expect.objectContaining({ success: true }),
         },
       ])
       .run();
@@ -4072,6 +4260,232 @@ describe('createSqlWorkflowExecutor', () => {
       runStatus: 'completed',
       artifactId: expect.any(Number),
     });
+  });
+
+  it('injects deterministic direct-predecessor report envelopes for linear downstream execution', async () => {
+    const { db, runId } = seedBrainstormPickResearchRun();
+    const capturedContexts: (string[] | undefined)[] = [];
+    let invocation = 0;
+    const executor = createSqlWorkflowExecutor(db, {
+      resolveProvider: () => ({
+        async *run(_prompt: string, options: ProviderRunOptions): AsyncIterable<ProviderEvent> {
+          invocation += 1;
+          capturedContexts.push(options.context);
+
+          if (invocation === 1) {
+            yield { type: 'result', content: 'Brainstorm output', timestamp: 10 };
+            return;
+          }
+
+          if (invocation === 2) {
+            yield { type: 'result', content: 'Pick output', timestamp: 20 };
+            return;
+          }
+
+          yield { type: 'result', content: 'Research output', timestamp: 30 };
+        },
+      }),
+    });
+
+    const result = await executor.executeRun({
+      workflowRunId: runId,
+      options: {
+        workingDirectory: '/tmp/alphred-worktree',
+      },
+    });
+
+    expect(result).toEqual({
+      workflowRunId: runId,
+      executedNodes: 3,
+      finalStep: {
+        outcome: 'run_terminal',
+        workflowRunId: runId,
+        runStatus: 'completed',
+      },
+    });
+
+    expect(capturedContexts[0]).toBeUndefined();
+    expect(capturedContexts[1]).toHaveLength(1);
+    expect(capturedContexts[1]?.[0]).toContain('ALPHRED_UPSTREAM_ARTIFACT v1');
+    expect(capturedContexts[1]?.[0]).toContain('target_node_key: pick');
+    expect(capturedContexts[1]?.[0]).toContain('source_node_key: brainstorm');
+    expect(capturedContexts[1]?.[0]).toContain('artifact_type: report');
+    expect(capturedContexts[2]).toHaveLength(1);
+    expect(capturedContexts[2]?.[0]).toContain('target_node_key: research');
+    expect(capturedContexts[2]?.[0]).toContain('source_node_key: pick');
+    expect(capturedContexts[2]?.[0]).not.toContain('source_node_key: brainstorm');
+
+    const reportArtifacts = db
+      .select({
+        nodeKey: runNodes.nodeKey,
+        metadata: phaseArtifacts.metadata,
+      })
+      .from(phaseArtifacts)
+      .innerJoin(runNodes, eq(phaseArtifacts.runNodeId, runNodes.id))
+      .where(and(eq(phaseArtifacts.workflowRunId, runId), eq(phaseArtifacts.artifactType, 'report')))
+      .orderBy(asc(phaseArtifacts.id))
+      .all();
+
+    const contextByNodeKey = new Map(
+      reportArtifacts.map((artifact) => [
+        artifact.nodeKey,
+        artifact.metadata as Record<string, unknown> | null,
+      ]),
+    );
+
+    expect(contextByNodeKey.get('brainstorm')).toEqual(
+      expect.objectContaining({
+        context_policy_version: 1,
+        included_count: 0,
+        missing_upstream_artifacts: true,
+      }),
+    );
+    expect(contextByNodeKey.get('pick')).toEqual(
+      expect.objectContaining({
+        context_policy_version: 1,
+        included_count: 1,
+        included_source_node_keys: ['brainstorm'],
+      }),
+    );
+    expect(contextByNodeKey.get('research')).toEqual(
+      expect.objectContaining({
+        context_policy_version: 1,
+        included_count: 1,
+        included_source_node_keys: ['pick'],
+      }),
+    );
+  });
+
+  it('applies deterministic overflow bounds and truncation when converging upstream artifacts exceed limits', async () => {
+    const { db, runId } = seedFiveSourceConvergingRun();
+    const capturedContexts: (string[] | undefined)[] = [];
+    const oversizedReport = 'X'.repeat(10_050);
+    let invocation = 0;
+
+    const executor = createSqlWorkflowExecutor(db, {
+      resolveProvider: () => ({
+        async *run(_prompt: string, options: ProviderRunOptions): AsyncIterable<ProviderEvent> {
+          invocation += 1;
+          capturedContexts.push(options.context);
+
+          if (invocation <= 5) {
+            yield { type: 'result', content: oversizedReport, timestamp: invocation * 10 };
+            return;
+          }
+
+          yield { type: 'result', content: 'Target output', timestamp: 60 };
+        },
+      }),
+    });
+
+    const result = await executor.executeRun({
+      workflowRunId: runId,
+      options: {
+        workingDirectory: '/tmp/alphred-worktree',
+      },
+    });
+
+    expect(result).toEqual({
+      workflowRunId: runId,
+      executedNodes: 6,
+      finalStep: {
+        outcome: 'run_terminal',
+        workflowRunId: runId,
+        runStatus: 'completed',
+      },
+    });
+
+    const targetContext = capturedContexts[5];
+    expect(targetContext).toBeDefined();
+    expect(targetContext).toHaveLength(4);
+    expect(targetContext?.[0]).toContain('source_node_key: source_a');
+    expect(targetContext?.[1]).toContain('source_node_key: source_b');
+    expect(targetContext?.[2]).toContain('source_node_key: source_c');
+    expect(targetContext?.[3]).toContain('source_node_key: source_d');
+    expect(targetContext?.some(entry => entry.includes('applied: true'))).toBe(true);
+
+    const targetArtifact = db
+      .select({
+        metadata: phaseArtifacts.metadata,
+      })
+      .from(phaseArtifacts)
+      .innerJoin(runNodes, eq(phaseArtifacts.runNodeId, runNodes.id))
+      .where(
+        and(
+          eq(phaseArtifacts.workflowRunId, runId),
+          eq(runNodes.nodeKey, 'target'),
+          eq(phaseArtifacts.artifactType, 'report'),
+        ),
+      )
+      .orderBy(asc(phaseArtifacts.id))
+      .get();
+
+    const contextHandoff = targetArtifact?.metadata as Record<string, unknown> | null;
+    expect(contextHandoff).toEqual(
+      expect.objectContaining({
+        context_policy_version: 1,
+        included_count: 4,
+        included_source_node_keys: ['source_a', 'source_b', 'source_c', 'source_d'],
+        budget_overflow: true,
+        missing_upstream_artifacts: false,
+      }),
+    );
+    expect((contextHandoff?.included_chars_total as number) <= 32_000).toBe(true);
+    expect((contextHandoff?.dropped_artifact_ids as unknown[]).length).toBeGreaterThan(0);
+    expect((contextHandoff?.truncated_artifact_ids as unknown[]).length).toBeGreaterThan(0);
+  });
+
+  it('persists context handoff metadata for failed downstream executions', async () => {
+    const { db, runId, targetRunNodeId } = seedLinearAutoRun();
+    let invocation = 0;
+    const executor = createSqlWorkflowExecutor(db, {
+      resolveProvider: () => ({
+        async *run(): AsyncIterable<ProviderEvent> {
+          invocation += 1;
+          if (invocation === 1) {
+            yield { type: 'result', content: 'Source output', timestamp: 10 };
+            return;
+          }
+          throw new Error('Target execution failed');
+        },
+      }),
+    });
+
+    const result = await executor.executeRun({
+      workflowRunId: runId,
+      options: {
+        workingDirectory: '/tmp/alphred-worktree',
+      },
+    });
+
+    expect(result).toEqual({
+      workflowRunId: runId,
+      executedNodes: 2,
+      finalStep: {
+        outcome: 'run_terminal',
+        workflowRunId: runId,
+        runStatus: 'failed',
+      },
+    });
+
+    const targetFailureArtifact = db
+      .select({
+        metadata: phaseArtifacts.metadata,
+      })
+      .from(phaseArtifacts)
+      .where(and(eq(phaseArtifacts.runNodeId, targetRunNodeId), eq(phaseArtifacts.artifactType, 'log')))
+      .orderBy(asc(phaseArtifacts.id))
+      .get();
+
+    const contextHandoff = targetFailureArtifact?.metadata as Record<string, unknown> | null;
+    expect(contextHandoff).toEqual(
+      expect.objectContaining({
+        context_policy_version: 1,
+        included_count: 1,
+        included_source_node_keys: ['source'],
+        missing_upstream_artifacts: false,
+      }),
+    );
   });
 
   it('keeps run status running when another latest attempt is already running', async () => {
