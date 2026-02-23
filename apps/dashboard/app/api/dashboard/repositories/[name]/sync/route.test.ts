@@ -76,6 +76,9 @@ describe('POST /api/dashboard/repositories/[name]/sync', () => {
       error: {
         code: 'internal_error',
         message: 'Dashboard integration request failed.',
+        details: {
+          cause: 'sync failed',
+        },
       },
     });
   });

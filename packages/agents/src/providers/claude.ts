@@ -817,7 +817,7 @@ function createClaudeQueryOptions(
 ): ClaudeQueryOptions {
   const options: ClaudeQueryOptions = {
     cwd: request.workingDirectory,
-    model: bootstrap.model,
+    model: request.model ?? bootstrap.model,
     env: createClaudeQueryEnvironment(bootstrap),
   };
 

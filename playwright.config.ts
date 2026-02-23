@@ -5,7 +5,7 @@ const DASHBOARD_PORT = 18080;
 
 export default defineConfig({
   testDir: './apps/dashboard/e2e',
-  testMatch: ['**/fallbacks.spec.ts', '**/worktree-explorer.spec.ts'],
+  testMatch: ['**/fallbacks.spec.ts', '**/worktree-explorer.spec.ts', '**/workflow-builder.spec.ts'],
   fullyParallel: false,
   // Keep local runs fast, but enable retries in CI so `trace: on-first-retry` can actually capture traces.
   retries: process.env.CI ? 1 : 0,

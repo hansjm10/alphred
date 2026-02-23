@@ -35,6 +35,7 @@ describe('AppShell', () => {
 
     expect(navQueries.getByRole('link', { name: 'Overview' })).toBeInTheDocument();
     expect(navQueries.getByRole('link', { name: 'Repositories' })).toBeInTheDocument();
+    expect(navQueries.getByRole('link', { name: 'Workflows' })).toBeInTheDocument();
     expect(navQueries.getByRole('link', { name: 'Runs' })).toBeInTheDocument();
     expect(navQueries.getByRole('link', { name: 'Integrations' })).toBeInTheDocument();
   });

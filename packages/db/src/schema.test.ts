@@ -109,6 +109,64 @@ function seedTreeState(db: ReturnType<typeof createDatabase>, keyPrefix = 'desig
 }
 
 describe('database schema hardening', () => {
+  it('adds workflow_trees columns when migrating a legacy workflow_trees table', () => {
+    const db = createDatabase(':memory:');
+
+    db.run(sql`CREATE TABLE workflow_trees (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      tree_key TEXT NOT NULL,
+      version INTEGER NOT NULL,
+      name TEXT NOT NULL,
+      description TEXT,
+      created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+      updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+    )`);
+
+    expect(() => migrateDatabase(db)).not.toThrow();
+
+    const columns = db.all<{ name: string }>(sql`SELECT name FROM pragma_table_info('workflow_trees') ORDER BY cid`);
+    const columnNames = columns.map(column => column.name);
+    expect(columnNames).toContain('status');
+    expect(columnNames).toContain('version_notes');
+    expect(columnNames).toContain('draft_revision');
+  });
+
+  it('adds tree_nodes columns when migrating a legacy tree_nodes table', () => {
+    const db = createDatabase(':memory:');
+
+    db.run(sql`CREATE TABLE workflow_trees (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      tree_key TEXT NOT NULL,
+      version INTEGER NOT NULL,
+      name TEXT NOT NULL,
+      description TEXT,
+      created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+      updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+    )`);
+
+    db.run(sql`CREATE TABLE tree_nodes (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      workflow_tree_id INTEGER NOT NULL REFERENCES workflow_trees(id) ON DELETE CASCADE,
+      node_key TEXT NOT NULL,
+      node_type TEXT NOT NULL,
+      provider TEXT,
+      prompt_template_id INTEGER,
+      max_retries INTEGER NOT NULL DEFAULT 0,
+      sequence_index INTEGER NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+      updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+    )`);
+
+    expect(() => migrateDatabase(db)).not.toThrow();
+
+    const columns = db.all<{ name: string }>(sql`SELECT name FROM pragma_table_info('tree_nodes') ORDER BY cid`);
+    const columnNames = columns.map(column => column.name);
+    expect(columnNames).toContain('display_name');
+    expect(columnNames).toContain('position_x');
+    expect(columnNames).toContain('position_y');
+    expect(columnNames).toContain('model');
+  });
+
   it('adds repositories.branch_template when migrating a legacy repositories table', () => {
     const db = createDatabase(':memory:');
 
@@ -146,6 +204,59 @@ describe('database schema hardening', () => {
 
     const trees = db.select({ id: workflowTrees.id }).from(workflowTrees).all();
     expect(trees).toHaveLength(1);
+  });
+
+  it('allows only one draft workflow tree per tree key', () => {
+    const db = createDatabase(':memory:');
+    migrateDatabase(db);
+
+    db.insert(workflowTrees).values({
+      treeKey: 'single-draft-tree',
+      version: 1,
+      status: 'draft',
+      name: 'Single Draft Tree',
+    }).run();
+
+    expect(() =>
+      db.insert(workflowTrees).values({
+        treeKey: 'single-draft-tree',
+        version: 2,
+        status: 'published',
+        name: 'Single Draft Tree',
+      }).run(),
+    ).not.toThrow();
+
+    expect(() =>
+      db.insert(workflowTrees).values({
+        treeKey: 'single-draft-tree',
+        version: 3,
+        status: 'draft',
+        name: 'Single Draft Tree',
+      }).run(),
+    ).toThrow();
+  });
+
+  it('seeds agent model catalog defaults including GPT-5.3-Codex', () => {
+    const db = createDatabase(':memory:');
+    migrateDatabase(db);
+
+    const models = db.all<{
+      provider: string;
+      model_key: string;
+      display_name: string;
+      is_default: number;
+    }>(sql`SELECT provider, model_key, display_name, is_default FROM agent_models ORDER BY provider, model_key`);
+
+    expect(models).toEqual(
+      expect.arrayContaining([
+        {
+          provider: 'codex',
+          model_key: 'gpt-5.3-codex',
+          display_name: 'GPT-5.3-Codex',
+          is_default: 1,
+        },
+      ]),
+    );
   });
 
   it('refreshes run-node transition trigger definitions on migration reruns', () => {

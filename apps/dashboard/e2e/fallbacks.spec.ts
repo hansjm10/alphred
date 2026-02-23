@@ -71,6 +71,7 @@ test('keeps primary navigation discoverable on mobile widths', async ({ page }) 
   const navLinks = {
     overview: nav.getByRole('link', { name: 'Overview' }),
     repositories: nav.getByRole('link', { name: 'Repositories' }),
+    workflows: nav.getByRole('link', { name: 'Workflows' }),
     runs: nav.getByRole('link', { name: 'Runs' }),
     integrations: nav.getByRole('link', { name: 'Integrations' }),
   } as const;
@@ -86,6 +87,8 @@ test('keeps primary navigation discoverable on mobile widths', async ({ page }) 
   await expect(navLinks.overview).toBeFocused();
   await page.keyboard.press('Tab');
   await expect(navLinks.repositories).toBeFocused();
+  await page.keyboard.press('Tab');
+  await expect(navLinks.workflows).toBeFocused();
   await page.keyboard.press('Tab');
   await expect(navLinks.runs).toBeFocused();
   await page.keyboard.press('Tab');

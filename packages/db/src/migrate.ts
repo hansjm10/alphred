@@ -7,13 +7,42 @@ export function migrateDatabase(db: AlphredDatabase): void {
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     tree_key TEXT NOT NULL,
     version INTEGER NOT NULL,
+    status TEXT NOT NULL DEFAULT 'published',
     name TEXT NOT NULL,
     description TEXT,
+    version_notes TEXT,
+    draft_revision INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
-    updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+    updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    CONSTRAINT workflow_trees_status_ck
+      CHECK (status IN ('draft', 'published'))
   )`);
+  const hasWorkflowTreeStatusColumn =
+    tx.get<{ count: number }>(
+      sql`SELECT COUNT(*) AS count FROM pragma_table_info('workflow_trees') WHERE name = 'status'`,
+    )?.count ?? 0;
+  if (hasWorkflowTreeStatusColumn === 0) {
+    tx.run(sql`ALTER TABLE workflow_trees ADD COLUMN status TEXT NOT NULL DEFAULT 'published'`);
+  }
+  const hasWorkflowTreeVersionNotesColumn =
+    tx.get<{ count: number }>(
+      sql`SELECT COUNT(*) AS count FROM pragma_table_info('workflow_trees') WHERE name = 'version_notes'`,
+    )?.count ?? 0;
+  if (hasWorkflowTreeVersionNotesColumn === 0) {
+    tx.run(sql`ALTER TABLE workflow_trees ADD COLUMN version_notes TEXT`);
+  }
+  const hasWorkflowTreeDraftRevisionColumn =
+    tx.get<{ count: number }>(
+      sql`SELECT COUNT(*) AS count FROM pragma_table_info('workflow_trees') WHERE name = 'draft_revision'`,
+    )?.count ?? 0;
+  if (hasWorkflowTreeDraftRevisionColumn === 0) {
+    tx.run(sql`ALTER TABLE workflow_trees ADD COLUMN draft_revision INTEGER NOT NULL DEFAULT 0`);
+  }
   tx.run(sql`CREATE UNIQUE INDEX IF NOT EXISTS workflow_trees_tree_key_version_uq
     ON workflow_trees(tree_key, version)`);
+  tx.run(sql`CREATE UNIQUE INDEX IF NOT EXISTS workflow_trees_tree_key_single_draft_uq
+    ON workflow_trees(tree_key)
+    WHERE status = 'draft'`);
   tx.run(sql`CREATE INDEX IF NOT EXISTS workflow_trees_created_at_idx
     ON workflow_trees(created_at)`);
 
@@ -78,6 +107,48 @@ export function migrateDatabase(db: AlphredDatabase): void {
   tx.run(sql`CREATE INDEX IF NOT EXISTS repositories_created_at_idx
     ON repositories(created_at)`);
 
+  tx.run(sql`CREATE TABLE IF NOT EXISTS agent_models (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    provider TEXT NOT NULL,
+    model_key TEXT NOT NULL,
+    display_name TEXT NOT NULL,
+    sort_order INTEGER NOT NULL DEFAULT 100,
+    is_default INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    CONSTRAINT agent_models_provider_ck
+      CHECK (provider IN ('claude', 'codex')),
+    CONSTRAINT agent_models_is_default_ck
+      CHECK (is_default IN (0, 1)),
+    CONSTRAINT agent_models_sort_order_ck
+      CHECK (sort_order >= 0)
+  )`);
+  tx.run(sql`CREATE UNIQUE INDEX IF NOT EXISTS agent_models_provider_model_key_uq
+    ON agent_models(provider, model_key)`);
+  tx.run(sql`CREATE UNIQUE INDEX IF NOT EXISTS agent_models_provider_default_uq
+    ON agent_models(provider)
+    WHERE is_default = 1`);
+  tx.run(sql`CREATE INDEX IF NOT EXISTS agent_models_provider_sort_idx
+    ON agent_models(provider, sort_order, model_key)`);
+  tx.run(sql`CREATE INDEX IF NOT EXISTS agent_models_created_at_idx
+    ON agent_models(created_at)`);
+  tx.run(sql`UPDATE agent_models
+    SET is_default = 0,
+        updated_at = (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+    WHERE provider IN ('codex', 'claude')`);
+  tx.run(sql`INSERT INTO agent_models(provider, model_key, display_name, sort_order, is_default)
+    VALUES
+      ('codex', 'gpt-5.3-codex', 'GPT-5.3-Codex', 10, 1),
+      ('codex', 'gpt-5-codex', 'GPT-5-Codex', 20, 0),
+      ('codex', 'gpt-5-codex-mini', 'GPT-5-Codex-Mini', 30, 0),
+      ('claude', 'claude-3-7-sonnet-latest', 'Claude 3.7 Sonnet (Latest)', 10, 1),
+      ('claude', 'claude-3-5-haiku-latest', 'Claude 3.5 Haiku (Latest)', 20, 0)
+    ON CONFLICT(provider, model_key) DO UPDATE SET
+      display_name = excluded.display_name,
+      sort_order = excluded.sort_order,
+      is_default = excluded.is_default,
+      updated_at = (strftime('%Y-%m-%dT%H:%M:%fZ','now'))`);
+
   tx.run(sql`CREATE TABLE IF NOT EXISTS workflow_runs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     workflow_tree_id INTEGER NOT NULL REFERENCES workflow_trees(id) ON DELETE RESTRICT,
@@ -128,11 +199,15 @@ export function migrateDatabase(db: AlphredDatabase): void {
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     workflow_tree_id INTEGER NOT NULL REFERENCES workflow_trees(id) ON DELETE CASCADE,
     node_key TEXT NOT NULL,
+    display_name TEXT,
     node_type TEXT NOT NULL,
     provider TEXT,
+    model TEXT,
     prompt_template_id INTEGER REFERENCES prompt_templates(id) ON DELETE RESTRICT,
     max_retries INTEGER NOT NULL DEFAULT 0,
     sequence_index INTEGER NOT NULL,
+    position_x INTEGER,
+    position_y INTEGER,
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
     updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
     CONSTRAINT tree_nodes_node_type_ck
@@ -142,6 +217,45 @@ export function migrateDatabase(db: AlphredDatabase): void {
     CONSTRAINT tree_nodes_max_retries_ck
       CHECK (max_retries >= 0)
   )`);
+  const hasTreeNodesDisplayNameColumn =
+    tx.get<{ count: number }>(
+      sql`SELECT COUNT(*) AS count FROM pragma_table_info('tree_nodes') WHERE name = 'display_name'`,
+    )?.count ?? 0;
+  if (hasTreeNodesDisplayNameColumn === 0) {
+    tx.run(sql`ALTER TABLE tree_nodes ADD COLUMN display_name TEXT`);
+  }
+  const hasTreeNodesPositionXColumn =
+    tx.get<{ count: number }>(
+      sql`SELECT COUNT(*) AS count FROM pragma_table_info('tree_nodes') WHERE name = 'position_x'`,
+    )?.count ?? 0;
+  if (hasTreeNodesPositionXColumn === 0) {
+    tx.run(sql`ALTER TABLE tree_nodes ADD COLUMN position_x INTEGER`);
+  }
+  const hasTreeNodesPositionYColumn =
+    tx.get<{ count: number }>(
+      sql`SELECT COUNT(*) AS count FROM pragma_table_info('tree_nodes') WHERE name = 'position_y'`,
+    )?.count ?? 0;
+  if (hasTreeNodesPositionYColumn === 0) {
+    tx.run(sql`ALTER TABLE tree_nodes ADD COLUMN position_y INTEGER`);
+  }
+  const hasTreeNodesModelColumn =
+    tx.get<{ count: number }>(
+      sql`SELECT COUNT(*) AS count FROM pragma_table_info('tree_nodes') WHERE name = 'model'`,
+    )?.count ?? 0;
+  if (hasTreeNodesModelColumn === 0) {
+    tx.run(sql`ALTER TABLE tree_nodes ADD COLUMN model TEXT`);
+  }
+  tx.run(sql`UPDATE tree_nodes
+    SET model = (
+      SELECT agent_models.model_key
+      FROM agent_models
+      WHERE agent_models.provider = tree_nodes.provider
+        AND agent_models.is_default = 1
+      LIMIT 1
+    )
+    WHERE node_type = 'agent'
+      AND model IS NULL
+      AND provider IS NOT NULL`);
   tx.run(sql`CREATE UNIQUE INDEX IF NOT EXISTS tree_nodes_tree_id_node_key_uq
     ON tree_nodes(workflow_tree_id, node_key)`);
   tx.run(sql`CREATE UNIQUE INDEX IF NOT EXISTS tree_nodes_tree_id_sequence_uq

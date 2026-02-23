@@ -65,6 +65,9 @@ describe('GET /api/dashboard/runs/[runId]', () => {
       error: {
         code: 'internal_error',
         message: 'Dashboard integration request failed.',
+        details: {
+          cause: 'lookup failed',
+        },
       },
     });
   });

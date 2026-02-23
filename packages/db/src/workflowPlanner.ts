@@ -41,6 +41,7 @@ export type PlannedTreeNode = {
   nodeKey: string;
   nodeType: string;
   provider: string | null;
+  model: string | null;
   maxRetries: number;
   sequenceIndex: number;
   promptTemplate: PlannedPromptTemplate | null;
@@ -261,7 +262,7 @@ function resolveWorkflowTreeVersion(db: TopologyReader, params: LoadWorkflowTree
       description: workflowTrees.description,
     })
     .from(workflowTrees)
-    .where(eq(workflowTrees.treeKey, params.treeKey))
+    .where(and(eq(workflowTrees.treeKey, params.treeKey), eq(workflowTrees.status, 'published')))
     .orderBy(desc(workflowTrees.version), desc(workflowTrees.id))
     .all();
 
@@ -280,6 +281,7 @@ export function loadWorkflowTreeTopology(
       nodeKey: treeNodes.nodeKey,
       nodeType: treeNodes.nodeType,
       provider: treeNodes.provider,
+      model: treeNodes.model,
       maxRetries: treeNodes.maxRetries,
       sequenceIndex: treeNodes.sequenceIndex,
       promptTemplateId: promptTemplates.id,
@@ -300,6 +302,7 @@ export function loadWorkflowTreeTopology(
       nodeKey: row.nodeKey,
       nodeType: row.nodeType,
       provider: row.provider,
+      model: row.model,
       maxRetries: row.maxRetries,
       sequenceIndex: row.sequenceIndex,
       promptTemplate:

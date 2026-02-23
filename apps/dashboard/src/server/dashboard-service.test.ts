@@ -1,10 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createSqlWorkflowExecutor, createSqlWorkflowPlanner } from '@alphred/core';
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import {
   createDatabase,
   migrateDatabase,
   phaseArtifacts,
+  promptTemplates,
   repositories,
   routingDecisions,
   runNodes,
@@ -119,6 +120,7 @@ function seedRunData(db: AlphredDatabase): void {
         nodeKey: 'design',
         nodeType: 'agent',
         provider: 'codex',
+            model: 'gpt-5.3-codex',
         promptTemplateId: null,
         maxRetries: 0,
         sequenceIndex: 0,
@@ -215,6 +217,60 @@ async function waitForBackgroundExecution(service: ReturnType<typeof createDashb
   while (Date.now() < deadline && service.hasBackgroundExecution(workflowRunId)) {
     await new Promise(resolve => setTimeout(resolve, 10));
   }
+}
+
+function createDatabaseWithWorkflowTreeInsertUniqueRace(db: AlphredDatabase): {
+  proxiedDatabase: AlphredDatabase;
+  wasInjected: () => boolean;
+} {
+  let injectedUniqueRace = false;
+  const originalTransaction = db.transaction.bind(db);
+
+  const proxiedDatabase = new Proxy(db, {
+    get(target, prop, receiver) {
+      if (prop === 'transaction') {
+        return ((callback: (tx: unknown) => unknown) =>
+          originalTransaction((tx) => {
+            const originalInsert = tx.insert.bind(tx);
+            const txProxy = new Proxy(tx, {
+              get(txTarget, txProp, txReceiver) {
+                if (txProp === 'insert') {
+                  return ((table: unknown) => {
+                    if (table !== workflowTrees || injectedUniqueRace) {
+                      return originalInsert(table as never);
+                    }
+
+                    return {
+                      values: () => ({
+                        returning: () => ({
+                          get: () => {
+                            injectedUniqueRace = true;
+                            const error = new Error('UNIQUE constraint failed: workflow_trees.tree_key');
+                            (error as { code?: string }).code = 'SQLITE_CONSTRAINT_UNIQUE';
+                            throw error;
+                          },
+                        }),
+                      }),
+                    } as unknown as ReturnType<typeof originalInsert>;
+                  }) as AlphredDatabase['insert'];
+                }
+
+                const value = Reflect.get(txTarget, txProp, txReceiver);
+                return typeof value === 'function' ? value.bind(txTarget) : value;
+              },
+            });
+            return callback(txProxy);
+          })) as unknown as AlphredDatabase['transaction'];
+      }
+
+      return Reflect.get(target, prop, receiver);
+    },
+  });
+
+  return {
+    proxiedDatabase,
+    wasInjected: () => injectedUniqueRace,
+  };
 }
 
 describe('createDashboardService', () => {
@@ -529,6 +585,973 @@ describe('createDashboardService', () => {
 
     expect(runsResponse).toHaveLength(1);
     expect(runsResponse[0]?.repository).toBeNull();
+  });
+
+  it('rejects publishing drafts that contain unsupported node types', async () => {
+    const { db, dependencies } = createHarness();
+    migrateDatabase(db);
+
+    const service = createDashboardService({ dependencies });
+
+    await service.createWorkflowDraft({
+      template: 'blank',
+      name: 'Demo Tree',
+      treeKey: 'demo-tree',
+    });
+
+    await service.saveWorkflowDraft('demo-tree', 1, {
+      draftRevision: 1,
+      name: 'Demo Tree',
+      nodes: [
+        {
+          nodeKey: 'human-review',
+          displayName: 'Human Review',
+          nodeType: 'human',
+          provider: null,
+          maxRetries: 0,
+          sequenceIndex: 10,
+          position: null,
+          promptTemplate: null,
+        },
+      ],
+      edges: [],
+    });
+
+    await expect(service.validateWorkflowDraft('demo-tree', 1)).resolves.toMatchObject({
+      errors: expect.arrayContaining([expect.objectContaining({ code: 'unsupported_node_type' })]),
+    });
+
+    await expect(service.publishWorkflowDraft('demo-tree', 1, {})).rejects.toMatchObject({
+      code: 'invalid_request',
+      status: 400,
+      details: expect.objectContaining({
+        errors: expect.arrayContaining([expect.objectContaining({ code: 'unsupported_node_type' })]),
+      }),
+    });
+  });
+
+  it('rejects publishing drafts that contain unsupported agent providers', async () => {
+    const { db, dependencies } = createHarness();
+    migrateDatabase(db);
+
+    const service = createDashboardService({ dependencies });
+
+    await service.createWorkflowDraft({
+      template: 'blank',
+      name: 'Provider Tree',
+      treeKey: 'provider-tree',
+    });
+
+    await service.saveWorkflowDraft('provider-tree', 1, {
+      draftRevision: 1,
+      name: 'Provider Tree',
+      nodes: [
+        {
+          nodeKey: 'agent-node',
+          displayName: 'Agent Node',
+          nodeType: 'agent',
+          provider: 'codex',
+            model: 'gpt-5.3-codex',
+          maxRetries: 0,
+          sequenceIndex: 10,
+          position: null,
+          promptTemplate: { content: 'Agent prompt', contentType: 'markdown' },
+        },
+      ],
+      edges: [],
+    });
+
+    const draftTree = db
+      .select({ id: workflowTrees.id })
+      .from(workflowTrees)
+      .where(and(eq(workflowTrees.treeKey, 'provider-tree'), eq(workflowTrees.version, 1), eq(workflowTrees.status, 'draft')))
+      .get();
+    expect(draftTree).toBeDefined();
+
+    db.update(treeNodes).set({ provider: 'unknown-provider' }).where(eq(treeNodes.workflowTreeId, draftTree?.id ?? -1)).run();
+
+    await expect(service.validateWorkflowDraft('provider-tree', 1)).resolves.toMatchObject({
+      errors: expect.arrayContaining([expect.objectContaining({ code: 'agent_provider_invalid' })]),
+    });
+
+    await expect(service.publishWorkflowDraft('provider-tree', 1, {})).rejects.toMatchObject({
+      code: 'invalid_request',
+      status: 400,
+      details: expect.objectContaining({
+        errors: expect.arrayContaining([expect.objectContaining({ code: 'agent_provider_invalid' })]),
+      }),
+    });
+  });
+
+  it('duplicates workflow trees into a new draft v1', async () => {
+    const { db, dependencies } = createHarness();
+    migrateDatabase(db);
+
+    const service = createDashboardService({ dependencies });
+
+    await service.createWorkflowDraft({
+      template: 'design-implement-review',
+      name: 'Demo Tree',
+      treeKey: 'demo-tree',
+    });
+
+    await expect(
+      service.duplicateWorkflowTree('demo-tree', {
+        name: 'Demo Tree Copy',
+        treeKey: 'demo-tree-copy',
+        description: 'Copied workflow',
+      }),
+    ).resolves.toEqual({
+      treeKey: 'demo-tree-copy',
+      draftVersion: 1,
+    });
+
+    const draft = await service.getOrCreateWorkflowDraft('demo-tree-copy');
+    expect(draft.version).toBe(1);
+    expect(draft.treeKey).toBe('demo-tree-copy');
+    expect(draft.nodes.map(node => node.nodeKey)).toEqual(expect.arrayContaining(['design', 'implement', 'review']));
+    expect(draft.edges.length).toBeGreaterThan(0);
+  });
+
+  it('returns conflict when create draft insert loses a post-check unique race', async () => {
+    const { db, dependencies } = createHarness();
+    migrateDatabase(db);
+
+    const { proxiedDatabase, wasInjected } = createDatabaseWithWorkflowTreeInsertUniqueRace(db);
+    const raceService = createDashboardService({
+      dependencies: {
+        ...dependencies,
+        openDatabase: () => proxiedDatabase,
+      },
+    });
+
+    await expect(
+      raceService.createWorkflowDraft({
+        template: 'blank',
+        name: 'Race Create Tree',
+        treeKey: 'race-create-tree',
+      }),
+    ).rejects.toMatchObject({
+      code: 'conflict',
+      status: 409,
+      message: 'Workflow tree "race-create-tree" already exists.',
+    });
+
+    expect(wasInjected()).toBe(true);
+  });
+
+  it('returns conflict when duplicate insert loses a post-check unique race', async () => {
+    const { db, dependencies } = createHarness();
+    migrateDatabase(db);
+
+    const bootstrapService = createDashboardService({ dependencies });
+    await bootstrapService.createWorkflowDraft({
+      template: 'blank',
+      name: 'Duplicate Source Tree',
+      treeKey: 'duplicate-source-tree',
+    });
+
+    const { proxiedDatabase, wasInjected } = createDatabaseWithWorkflowTreeInsertUniqueRace(db);
+    const raceService = createDashboardService({
+      dependencies: {
+        ...dependencies,
+        openDatabase: () => proxiedDatabase,
+      },
+    });
+
+    await expect(
+      raceService.duplicateWorkflowTree('duplicate-source-tree', {
+        name: 'Duplicate Copy Tree',
+        treeKey: 'duplicate-copy-tree',
+      }),
+    ).rejects.toMatchObject({
+      code: 'conflict',
+      status: 409,
+      message: 'Workflow tree "duplicate-copy-tree" already exists.',
+    });
+
+    expect(wasInjected()).toBe(true);
+  });
+
+  it('rejects underscore workflow tree keys across draft lifecycle actions', async () => {
+    const { db, dependencies } = createHarness();
+    migrateDatabase(db);
+
+    const service = createDashboardService({ dependencies });
+
+    await expect(
+      service.createWorkflowDraft({
+        template: 'design-implement-review',
+        name: 'Design Tree',
+        treeKey: 'design_tree',
+      }),
+    ).rejects.toMatchObject({
+      code: 'invalid_request',
+      status: 400,
+      message: 'Workflow tree key must be lowercase and contain only a-z, 0-9, and hyphens.',
+    });
+
+    await expect(service.getOrCreateWorkflowDraft('design_tree')).rejects.toMatchObject({
+      code: 'invalid_request',
+      status: 400,
+      message: 'Workflow tree key must be lowercase and contain only a-z, 0-9, and hyphens.',
+    });
+  });
+
+  it('seeds design-implement-review with an initial runnable design node', async () => {
+    const { db, dependencies } = createHarness();
+    migrateDatabase(db);
+
+    const service = createDashboardService({ dependencies });
+
+    await service.createWorkflowDraft({
+      template: 'design-implement-review',
+      name: 'Demo Tree',
+      treeKey: 'demo-tree',
+    });
+
+    const draft = await service.getOrCreateWorkflowDraft('demo-tree');
+    expect(draft.initialRunnableNodeKeys).toEqual(['design']);
+    expect(draft.edges).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          sourceNodeKey: 'design',
+          targetNodeKey: 'implement',
+          auto: true,
+        }),
+        expect.objectContaining({
+          sourceNodeKey: 'implement',
+          targetNodeKey: 'review',
+          auto: true,
+        }),
+        expect.objectContaining({
+          sourceNodeKey: 'review',
+          targetNodeKey: 'implement',
+          auto: false,
+          guardExpression: { field: 'decision', operator: '==', value: 'changes_requested' },
+        }),
+      ]),
+    );
+
+    const validation = await service.validateWorkflowDraft('demo-tree', 1);
+    expect(validation.initialRunnableNodeKeys).toEqual(['design']);
+    expect(validation.errors).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ code: 'no_initial_nodes' })]),
+    );
+  });
+
+  it('returns concurrent draft when bootstrap hits single-draft unique constraint', async () => {
+    const { db, dependencies } = createHarness();
+    migrateDatabase(db);
+
+    const bootstrapService = createDashboardService({ dependencies });
+    await bootstrapService.createWorkflowDraft({
+      template: 'design-implement-review',
+      name: 'Single Draft Race Tree',
+      treeKey: 'single-draft-race-tree',
+    });
+    await bootstrapService.publishWorkflowDraft('single-draft-race-tree', 1, {});
+
+    let injectedConcurrentDraft = false;
+    const originalTransaction = db.transaction.bind(db);
+    const proxiedDatabase = new Proxy(db, {
+      get(target, prop, receiver) {
+        if (prop === 'transaction') {
+          return ((callback: (tx: unknown) => unknown) => {
+            if (!injectedConcurrentDraft) {
+              injectedConcurrentDraft = true;
+              const publishedVersions = target
+                .select({
+                  version: workflowTrees.version,
+                  name: workflowTrees.name,
+                  description: workflowTrees.description,
+                })
+                .from(workflowTrees)
+                .where(and(eq(workflowTrees.treeKey, 'single-draft-race-tree'), eq(workflowTrees.status, 'published')))
+                .all();
+              const latestPublished = publishedVersions.reduce<(typeof publishedVersions)[number] | null>(
+                (latest, current) => (latest === null || current.version > latest.version ? current : latest),
+                null,
+              );
+              if (latestPublished) {
+                target
+                  .insert(workflowTrees)
+                  .values({
+                    treeKey: 'single-draft-race-tree',
+                    version: latestPublished.version + 2,
+                    status: 'draft',
+                    name: latestPublished.name,
+                    description: latestPublished.description,
+                  })
+                  .run();
+              }
+            }
+            return originalTransaction((tx) => callback(tx));
+          }) as typeof db.transaction;
+        }
+        return Reflect.get(target, prop, receiver);
+      },
+    });
+
+    const raceService = createDashboardService({
+      dependencies: {
+        ...dependencies,
+        openDatabase: () => proxiedDatabase,
+      },
+    });
+
+    const draft = await raceService.getOrCreateWorkflowDraft('single-draft-race-tree');
+    expect(injectedConcurrentDraft).toBe(true);
+    expect(draft.version).toBe(3);
+
+    const persistedDraft = db
+      .select({ id: workflowTrees.id })
+      .from(workflowTrees)
+      .where(
+        and(
+          eq(workflowTrees.treeKey, 'single-draft-race-tree'),
+          eq(workflowTrees.version, 3),
+          eq(workflowTrees.status, 'draft'),
+        ),
+      )
+      .get();
+    expect(persistedDraft).toBeDefined();
+  });
+
+  it('retries draft bootstrap when a concurrent publish claims the next version', async () => {
+    const { db, dependencies } = createHarness();
+    migrateDatabase(db);
+
+    const bootstrapService = createDashboardService({ dependencies });
+    await bootstrapService.createWorkflowDraft({
+      template: 'design-implement-review',
+      name: 'Race Publish Tree',
+      treeKey: 'race-publish-tree',
+    });
+    await bootstrapService.publishWorkflowDraft('race-publish-tree', 1, {});
+
+    let injectedConcurrentPublish = false;
+    const originalTransaction = db.transaction.bind(db);
+    const proxiedDatabase = new Proxy(db, {
+      get(target, prop, receiver) {
+        if (prop === 'transaction') {
+          return ((callback: (tx: unknown) => unknown) => {
+            if (!injectedConcurrentPublish) {
+              injectedConcurrentPublish = true;
+              const publishedVersions = target
+                .select({
+                  version: workflowTrees.version,
+                  name: workflowTrees.name,
+                  description: workflowTrees.description,
+                })
+                .from(workflowTrees)
+                .where(and(eq(workflowTrees.treeKey, 'race-publish-tree'), eq(workflowTrees.status, 'published')))
+                .all();
+              const latestPublished = publishedVersions.reduce<(typeof publishedVersions)[number] | null>(
+                (latest, current) => (latest === null || current.version > latest.version ? current : latest),
+                null,
+              );
+              if (latestPublished) {
+                target.insert(workflowTrees).values({
+                  treeKey: 'race-publish-tree',
+                  version: latestPublished.version + 1,
+                  status: 'published',
+                  name: latestPublished.name,
+                  description: latestPublished.description,
+                }).run();
+              }
+            }
+            return originalTransaction((tx) => callback(tx));
+          }) as typeof db.transaction;
+        }
+        return Reflect.get(target, prop, receiver);
+      },
+    });
+
+    const raceService = createDashboardService({
+      dependencies: {
+        ...dependencies,
+        openDatabase: () => proxiedDatabase,
+      },
+    });
+
+    const draft = await raceService.getOrCreateWorkflowDraft('race-publish-tree');
+    expect(injectedConcurrentPublish).toBe(true);
+    expect(draft.version).toBe(3);
+
+    const persistedDraft = db
+      .select({ id: workflowTrees.id })
+      .from(workflowTrees)
+      .where(and(eq(workflowTrees.treeKey, 'race-publish-tree'), eq(workflowTrees.version, 3), eq(workflowTrees.status, 'draft')))
+      .get();
+    expect(persistedDraft).toBeDefined();
+  });
+
+  it('returns conflict when draft bootstrap keeps racing on version allocation', async () => {
+    const { db, dependencies } = createHarness();
+    migrateDatabase(db);
+
+    const bootstrapService = createDashboardService({ dependencies });
+    await bootstrapService.createWorkflowDraft({
+      template: 'design-implement-review',
+      name: 'Hot Race Tree',
+      treeKey: 'hot-race-tree',
+    });
+    await bootstrapService.publishWorkflowDraft('hot-race-tree', 1, {});
+
+    const originalTransaction = db.transaction.bind(db);
+    const proxiedDatabase = new Proxy(db, {
+      get(target, prop, receiver) {
+        if (prop === 'transaction') {
+          return ((callback: (tx: unknown) => unknown) => {
+            const publishedVersions = target
+              .select({
+                version: workflowTrees.version,
+                name: workflowTrees.name,
+                description: workflowTrees.description,
+              })
+              .from(workflowTrees)
+              .where(and(eq(workflowTrees.treeKey, 'hot-race-tree'), eq(workflowTrees.status, 'published')))
+              .all();
+            const latestPublished = publishedVersions.reduce<(typeof publishedVersions)[number] | null>(
+              (latest, current) => (latest === null || current.version > latest.version ? current : latest),
+              null,
+            );
+            if (latestPublished) {
+              target.insert(workflowTrees).values({
+                treeKey: 'hot-race-tree',
+                version: latestPublished.version + 1,
+                status: 'published',
+                name: latestPublished.name,
+                description: latestPublished.description,
+              }).run();
+            }
+            return originalTransaction((tx) => callback(tx));
+          }) as typeof db.transaction;
+        }
+        return Reflect.get(target, prop, receiver);
+      },
+    });
+
+    const raceService = createDashboardService({
+      dependencies: {
+        ...dependencies,
+        openDatabase: () => proxiedDatabase,
+      },
+    });
+
+    await expect(raceService.getOrCreateWorkflowDraft('hot-race-tree')).rejects.toMatchObject({
+      code: 'conflict',
+      status: 409,
+      message: 'Workflow draft changed concurrently. Refresh the editor and try again.',
+      details: expect.objectContaining({
+        treeKey: 'hot-race-tree',
+        attempts: 4,
+      }),
+    });
+  });
+
+  it('rolls back draft creation when cloning fails', async () => {
+    const { db, dependencies } = createHarness();
+    migrateDatabase(db);
+
+    const service = createDashboardService({ dependencies });
+
+    await service.createWorkflowDraft({
+      template: 'blank',
+      name: 'Demo Tree',
+      treeKey: 'demo-tree',
+    });
+    await service.saveWorkflowDraft('demo-tree', 1, {
+      draftRevision: 1,
+      name: 'Demo Tree',
+      nodes: [
+        {
+          nodeKey: 'design',
+          displayName: 'Design',
+          nodeType: 'agent',
+          provider: 'codex',
+            model: 'gpt-5.3-codex',
+          maxRetries: 0,
+          sequenceIndex: 10,
+          position: null,
+          promptTemplate: { content: 'Draft prompt', contentType: 'markdown' },
+        },
+      ],
+      edges: [],
+    });
+    await service.publishWorkflowDraft('demo-tree', 1, {});
+
+    const publishedTree = db
+      .select({ id: workflowTrees.id })
+      .from(workflowTrees)
+      .where(and(eq(workflowTrees.treeKey, 'demo-tree'), eq(workflowTrees.status, 'published')))
+      .orderBy(workflowTrees.id)
+      .get();
+    expect(publishedTree).toBeDefined();
+
+    const publishedNodeWithPrompt = db
+      .select({ promptTemplateId: treeNodes.promptTemplateId })
+      .from(treeNodes)
+      .where(eq(treeNodes.workflowTreeId, publishedTree?.id ?? -1))
+      .all()
+      .find(node => node.promptTemplateId !== null);
+    expect(publishedNodeWithPrompt?.promptTemplateId).toBeTypeOf('number');
+
+    const conflictingTemplateId = publishedNodeWithPrompt?.promptTemplateId as number;
+    db.insert(promptTemplates)
+      .values({
+        templateKey: `demo-tree/v2/prompt-template/${conflictingTemplateId}`,
+        version: 1,
+        content: 'Conflicting prompt template row',
+        contentType: 'markdown',
+      })
+      .run();
+
+    await expect(service.getOrCreateWorkflowDraft('demo-tree')).rejects.toMatchObject({
+      code: 'internal_error',
+      status: 500,
+    });
+
+    const drafts = db
+      .select({ id: workflowTrees.id })
+      .from(workflowTrees)
+      .where(and(eq(workflowTrees.treeKey, 'demo-tree'), eq(workflowTrees.status, 'draft')))
+      .all();
+    expect(drafts).toHaveLength(0);
+  });
+
+  it('rejects saving drafts with invalid guard expressions', async () => {
+    const { db, dependencies } = createHarness();
+    migrateDatabase(db);
+
+    const service = createDashboardService({ dependencies });
+
+    await service.createWorkflowDraft({
+      template: 'blank',
+      name: 'Guard Tree',
+      treeKey: 'guard-tree',
+    });
+
+    await expect(
+      service.saveWorkflowDraft('guard-tree', 1, {
+        draftRevision: 1,
+        name: 'Guard Tree',
+        nodes: [
+          {
+            nodeKey: 'a',
+            displayName: 'A',
+            nodeType: 'agent',
+            provider: 'codex',
+            model: 'gpt-5.3-codex',
+            maxRetries: 0,
+            sequenceIndex: 10,
+            position: null,
+            promptTemplate: { content: 'A prompt', contentType: 'markdown' },
+          },
+          {
+            nodeKey: 'b',
+            displayName: 'B',
+            nodeType: 'agent',
+            provider: 'codex',
+            model: 'gpt-5.3-codex',
+            maxRetries: 0,
+            sequenceIndex: 20,
+            position: null,
+            promptTemplate: { content: 'B prompt', contentType: 'markdown' },
+          },
+        ],
+        edges: [
+          {
+            sourceNodeKey: 'a',
+            targetNodeKey: 'b',
+            priority: 10,
+            auto: false,
+            guardExpression: { nope: true } as unknown as import('@alphred/shared').GuardExpression,
+          },
+        ],
+      }),
+    ).rejects.toMatchObject({
+      code: 'invalid_request',
+      status: 400,
+      details: expect.objectContaining({
+        errors: expect.arrayContaining([expect.objectContaining({ code: 'guard_invalid' })]),
+      }),
+    });
+  });
+
+  it('rejects saving drafts with unsupported agent providers', async () => {
+    const { db, dependencies } = createHarness();
+    migrateDatabase(db);
+
+    const service = createDashboardService({ dependencies });
+
+    await service.createWorkflowDraft({
+      template: 'blank',
+      name: 'Provider Save Tree',
+      treeKey: 'provider-save-tree',
+    });
+
+    await expect(
+      service.saveWorkflowDraft('provider-save-tree', 1, {
+        draftRevision: 1,
+        name: 'Provider Save Tree',
+        nodes: [
+          {
+            nodeKey: 'agent-node',
+            displayName: 'Agent Node',
+            nodeType: 'agent',
+            provider: 'unknown-provider',
+            model: 'gpt-5.3-codex',
+            maxRetries: 0,
+            sequenceIndex: 10,
+            position: null,
+            promptTemplate: { content: 'Agent prompt', contentType: 'markdown' },
+          },
+        ],
+        edges: [],
+      }),
+    ).rejects.toMatchObject({
+      code: 'invalid_request',
+      status: 400,
+      details: expect.objectContaining({
+        errors: expect.arrayContaining([expect.objectContaining({ code: 'agent_provider_invalid' })]),
+      }),
+    });
+  });
+
+  it('rejects saving drafts with negative transition priorities', async () => {
+    const { db, dependencies } = createHarness();
+    migrateDatabase(db);
+
+    const service = createDashboardService({ dependencies });
+
+    await service.createWorkflowDraft({
+      template: 'blank',
+      name: 'Priority Tree',
+      treeKey: 'priority-tree',
+    });
+
+    await expect(
+      service.saveWorkflowDraft('priority-tree', 1, {
+        draftRevision: 1,
+        name: 'Priority Tree',
+        nodes: [
+          {
+            nodeKey: 'a',
+            displayName: 'A',
+            nodeType: 'agent',
+            provider: 'codex',
+            model: 'gpt-5.3-codex',
+            maxRetries: 0,
+            sequenceIndex: 10,
+            position: null,
+            promptTemplate: { content: 'A prompt', contentType: 'markdown' },
+          },
+          {
+            nodeKey: 'b',
+            displayName: 'B',
+            nodeType: 'agent',
+            provider: 'codex',
+            model: 'gpt-5.3-codex',
+            maxRetries: 0,
+            sequenceIndex: 20,
+            position: null,
+            promptTemplate: { content: 'B prompt', contentType: 'markdown' },
+          },
+        ],
+        edges: [
+          {
+            sourceNodeKey: 'a',
+            targetNodeKey: 'b',
+            priority: -1,
+            auto: true,
+            guardExpression: null,
+          },
+        ],
+      }),
+    ).rejects.toMatchObject({
+      code: 'invalid_request',
+      status: 400,
+      details: expect.objectContaining({
+        errors: expect.arrayContaining([expect.objectContaining({ code: 'transition_priority_invalid' })]),
+      }),
+    });
+  });
+
+  it('rejects saving drafts with duplicate node sequence indexes', async () => {
+    const { db, dependencies } = createHarness();
+    migrateDatabase(db);
+
+    const service = createDashboardService({ dependencies });
+
+    await service.createWorkflowDraft({
+      template: 'blank',
+      name: 'Sequence Tree',
+      treeKey: 'sequence-tree',
+    });
+
+    await expect(
+      service.saveWorkflowDraft('sequence-tree', 1, {
+        draftRevision: 1,
+        name: 'Sequence Tree',
+        nodes: [
+          {
+            nodeKey: 'a',
+            displayName: 'A',
+            nodeType: 'agent',
+            provider: 'codex',
+            model: 'gpt-5.3-codex',
+            maxRetries: 0,
+            sequenceIndex: 10,
+            position: null,
+            promptTemplate: { content: 'A prompt', contentType: 'markdown' },
+          },
+          {
+            nodeKey: 'b',
+            displayName: 'B',
+            nodeType: 'agent',
+            provider: 'codex',
+            model: 'gpt-5.3-codex',
+            maxRetries: 0,
+            sequenceIndex: 10,
+            position: null,
+            promptTemplate: { content: 'B prompt', contentType: 'markdown' },
+          },
+        ],
+        edges: [],
+      }),
+    ).rejects.toMatchObject({
+      code: 'invalid_request',
+      status: 400,
+      details: expect.objectContaining({
+        errors: expect.arrayContaining([expect.objectContaining({ code: 'duplicate_node_sequence_index' })]),
+      }),
+    });
+  });
+
+  it('normalizes node and edge keys before saving drafts', async () => {
+    const { db, dependencies } = createHarness();
+    migrateDatabase(db);
+
+    const service = createDashboardService({ dependencies });
+
+    await service.createWorkflowDraft({
+      template: 'blank',
+      name: 'Whitespace Tree',
+      treeKey: 'whitespace-tree',
+    });
+
+    const savedDraft = await service.saveWorkflowDraft('whitespace-tree', 1, {
+      draftRevision: 1,
+      name: 'Whitespace Tree',
+      nodes: [
+        {
+          nodeKey: ' source ',
+          displayName: 'Source',
+          nodeType: 'agent',
+          provider: 'codex',
+            model: 'gpt-5.3-codex',
+          maxRetries: 0,
+          sequenceIndex: 10,
+          position: null,
+          promptTemplate: { content: 'Source prompt', contentType: 'markdown' },
+        },
+        {
+          nodeKey: 'target ',
+          displayName: 'Target',
+          nodeType: 'agent',
+          provider: 'codex',
+            model: 'gpt-5.3-codex',
+          maxRetries: 0,
+          sequenceIndex: 20,
+          position: null,
+          promptTemplate: { content: 'Target prompt', contentType: 'markdown' },
+        },
+      ],
+      edges: [
+        {
+          sourceNodeKey: 'source',
+          targetNodeKey: ' target',
+          priority: 0,
+          auto: true,
+          guardExpression: null,
+        },
+      ],
+    });
+
+    expect(savedDraft.nodes.map(node => node.nodeKey)).toEqual(['source', 'target']);
+    expect(savedDraft.edges).toEqual([
+      expect.objectContaining({
+        sourceNodeKey: 'source',
+        targetNodeKey: 'target',
+      }),
+    ]);
+  });
+
+  it('requires the exact next draft revision when saving', async () => {
+    const { db, dependencies } = createHarness();
+    migrateDatabase(db);
+
+    const service = createDashboardService({ dependencies });
+
+    await service.createWorkflowDraft({
+      template: 'blank',
+      name: 'Revision Tree',
+      treeKey: 'revision-tree',
+    });
+
+    const savePayload = {
+      name: 'Revision Tree',
+      nodes: [
+        {
+          nodeKey: 'a',
+          displayName: 'A',
+          nodeType: 'agent' as const,
+          provider: 'codex',
+            model: 'gpt-5.3-codex',
+          maxRetries: 0,
+          sequenceIndex: 10,
+          position: null,
+          promptTemplate: { content: 'A prompt', contentType: 'markdown' as const },
+        },
+      ],
+      edges: [],
+    };
+
+    await service.saveWorkflowDraft('revision-tree', 1, {
+      draftRevision: 1,
+      ...savePayload,
+    });
+
+    await expect(
+      service.saveWorkflowDraft('revision-tree', 1, {
+        draftRevision: 3,
+        ...savePayload,
+      }),
+    ).rejects.toMatchObject({
+      code: 'conflict',
+      status: 409,
+      details: expect.objectContaining({
+        currentDraftRevision: 1,
+        receivedDraftRevision: 3,
+        expectedDraftRevision: 2,
+      }),
+    });
+  });
+
+  it('returns conflict when draft changes between revision check and save update', async () => {
+    const { db, dependencies } = createHarness();
+    migrateDatabase(db);
+
+    const bootstrapService = createDashboardService({ dependencies });
+    await bootstrapService.createWorkflowDraft({
+      template: 'blank',
+      name: 'Race Tree',
+      treeKey: 'race-tree',
+    });
+
+    const draftTree = db
+      .select({ id: workflowTrees.id, draftRevision: workflowTrees.draftRevision })
+      .from(workflowTrees)
+      .where(and(eq(workflowTrees.treeKey, 'race-tree'), eq(workflowTrees.version, 1), eq(workflowTrees.status, 'draft')))
+      .get();
+    expect(draftTree).toBeDefined();
+
+    let injectConcurrentChange = true;
+    const originalTransaction = db.transaction.bind(db);
+    const proxiedDatabase = new Proxy(db, {
+      get(target, prop, receiver) {
+        if (prop === 'transaction') {
+          return ((callback: (tx: unknown) => unknown) =>
+            originalTransaction((tx) => {
+              const originalUpdate = tx.update.bind(tx);
+              const txProxy = new Proxy(tx, {
+                get(txTarget, txProp, txReceiver) {
+                  if (txProp === 'update') {
+                    return ((table: unknown) => {
+                      const updateBuilder = originalUpdate(table as never);
+                      if (!injectConcurrentChange || table !== workflowTrees || !draftTree) {
+                        return updateBuilder;
+                      }
+
+                      const wrappedUpdateBuilder = {
+                        set(values: unknown) {
+                          const setBuilder = (updateBuilder as { set: (input: unknown) => unknown }).set(values) as {
+                            where: (condition: unknown) => unknown;
+                          };
+                          return {
+                            where(condition: unknown) {
+                              const whereBuilder = setBuilder.where(condition) as { run: () => unknown };
+                              return {
+                                run() {
+                                  if (injectConcurrentChange) {
+                                    injectConcurrentChange = false;
+                                    originalUpdate(workflowTrees)
+                                      .set({
+                                        status: 'published',
+                                        draftRevision: draftTree.draftRevision + 1,
+                                        updatedAt: '2026-02-22T00:00:00.000Z',
+                                      })
+                                      .where(eq(workflowTrees.id, draftTree.id))
+                                      .run();
+                                  }
+                                  return whereBuilder.run();
+                                },
+                              };
+                            },
+                          };
+                        },
+                      };
+
+                      return wrappedUpdateBuilder as unknown as ReturnType<typeof originalUpdate>;
+                    }) as AlphredDatabase['update'];
+                  }
+
+                  const value = Reflect.get(txTarget, txProp, txReceiver);
+                  return typeof value === 'function' ? value.bind(txTarget) : value;
+                },
+              });
+              return callback(txProxy);
+            })) as unknown as AlphredDatabase['transaction'];
+        }
+
+        const value = Reflect.get(target, prop, receiver);
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    });
+
+    const raceService = createDashboardService({
+      dependencies: {
+        ...dependencies,
+        openDatabase: () => proxiedDatabase,
+      },
+    });
+
+    await expect(
+      raceService.saveWorkflowDraft('race-tree', 1, {
+        draftRevision: 1,
+        name: 'Race Tree Updated',
+        nodes: [
+          {
+            nodeKey: 'design',
+            displayName: 'Design',
+            nodeType: 'agent',
+            provider: 'codex',
+            model: 'gpt-5.3-codex',
+            maxRetries: 0,
+            sequenceIndex: 10,
+            position: null,
+            promptTemplate: { content: 'Draft prompt', contentType: 'markdown' },
+          },
+        ],
+        edges: [],
+      }),
+    ).rejects.toMatchObject({
+      code: 'conflict',
+      status: 409,
+      message: 'Draft workflow changed while saving. Refresh the editor before saving again.',
+    });
   });
 
   it('syncs repositories through ensureRepositoryClone and auth check adapters', async () => {

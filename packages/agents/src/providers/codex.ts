@@ -695,7 +695,7 @@ function mapSdkStreamEvent(
 
 function toThreadOptions(bootstrap: CodexSdkBootstrap, request: CodexRunRequest): ThreadOptions {
   return {
-    model: bootstrap.model,
+    model: request.model ?? bootstrap.model,
     workingDirectory: request.workingDirectory,
   };
 }

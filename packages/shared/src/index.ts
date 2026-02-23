@@ -98,6 +98,7 @@ export type PhaseDefinition = {
   name: string;
   type: PhaseType;
   provider?: AgentProviderName;
+  model?: string;
   prompt: string;
   maxRetries?: number;
   transitions: Transition[];
@@ -131,6 +132,7 @@ export type ProviderRunOptions = {
   systemPrompt?: string;
   timeout?: number;
   context?: string[];
+  model?: string;
 };
 
 /**
