@@ -86,17 +86,122 @@ type WorkflowEditorPageContentProps = Readonly<{
   bootstrapDraftOnMount?: boolean;
 }>;
 
+function isObjectRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object';
+}
+
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value);
+}
+
+function isNullableString(value: unknown): value is string | null {
+  return typeof value === 'string' || value === null;
+}
+
+function isDraftNodeType(value: unknown): value is DashboardWorkflowDraftNode['nodeType'] {
+  return value === 'agent' || value === 'human' || value === 'tool';
+}
+
+function isDraftNodePosition(value: unknown): value is DashboardWorkflowDraftNode['position'] {
+  if (value === null) {
+    return true;
+  }
+
+  if (!isObjectRecord(value)) {
+    return false;
+  }
+
+  return isFiniteNumber(value.x) && isFiniteNumber(value.y);
+}
+
+function isDraftNodePromptTemplate(value: unknown): value is DashboardWorkflowDraftNode['promptTemplate'] {
+  if (value === null) {
+    return true;
+  }
+
+  if (!isObjectRecord(value)) {
+    return false;
+  }
+
+  return (
+    typeof value.content === 'string' &&
+    (value.contentType === 'text' || value.contentType === 'markdown')
+  );
+}
+
+function isDraftNode(value: unknown): value is DashboardWorkflowDraftNode {
+  if (!isObjectRecord(value)) {
+    return false;
+  }
+
+  const model = (value as { model?: unknown }).model;
+  return (
+    typeof value.nodeKey === 'string' &&
+    typeof value.displayName === 'string' &&
+    isDraftNodeType(value.nodeType) &&
+    (typeof value.provider === 'string' || value.provider === null) &&
+    (model === undefined || typeof model === 'string' || model === null) &&
+    isFiniteNumber(value.maxRetries) &&
+    Number.isInteger(value.maxRetries) &&
+    isFiniteNumber(value.sequenceIndex) &&
+    Number.isInteger(value.sequenceIndex) &&
+    isDraftNodePosition(value.position) &&
+    isDraftNodePromptTemplate(value.promptTemplate)
+  );
+}
+
+function isDraftEdge(value: unknown): value is DashboardWorkflowDraftEdge {
+  if (!isObjectRecord(value)) {
+    return false;
+  }
+
+  return (
+    typeof value.sourceNodeKey === 'string' &&
+    typeof value.targetNodeKey === 'string' &&
+    isFiniteNumber(value.priority) &&
+    Number.isInteger(value.priority) &&
+    typeof value.auto === 'boolean' &&
+    (value.guardExpression === null ||
+      (isObjectRecord(value.guardExpression) && !Array.isArray(value.guardExpression)))
+  );
+}
+
+function isDraftTopology(value: unknown): value is DashboardWorkflowDraftTopology {
+  if (!isObjectRecord(value)) {
+    return false;
+  }
+
+  return (
+    typeof value.treeKey === 'string' &&
+    isFiniteNumber(value.version) &&
+    Number.isInteger(value.version) &&
+    value.version > 0 &&
+    isFiniteNumber(value.draftRevision) &&
+    Number.isInteger(value.draftRevision) &&
+    value.draftRevision >= 0 &&
+    typeof value.name === 'string' &&
+    isNullableString(value.description) &&
+    isNullableString(value.versionNotes) &&
+    Array.isArray(value.nodes) &&
+    value.nodes.every(isDraftNode) &&
+    Array.isArray(value.edges) &&
+    value.edges.every(isDraftEdge) &&
+    Array.isArray(value.initialRunnableNodeKeys) &&
+    value.initialRunnableNodeKeys.every((nodeKey) => typeof nodeKey === 'string')
+  );
+}
+
 function parseDraftFromBootstrapPayload(payload: unknown): DashboardWorkflowDraftTopology | null {
-  if (!payload || typeof payload !== 'object' || !('draft' in payload)) {
+  if (!isObjectRecord(payload) || !('draft' in payload)) {
     return null;
   }
 
   const draft = (payload as { draft?: unknown }).draft;
-  if (!draft || typeof draft !== 'object') {
+  if (!isDraftTopology(draft)) {
     return null;
   }
 
-  return draft as DashboardWorkflowDraftTopology;
+  return draft;
 }
 
 export function WorkflowEditorPageContent({

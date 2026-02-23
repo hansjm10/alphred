@@ -195,6 +195,13 @@ describe('WorkflowEditorPageContent', () => {
     expect(screen.queryByRole('dialog', { name: 'Add node' })).toBeNull();
   });
 
+  it('does not open the add-node palette on Ctrl+N', () => {
+    render(<WorkflowEditorPageContent initialDraft={createInitialDraft()} />);
+
+    fireEvent.keyDown(window, { key: 'n', ctrlKey: true });
+    expect(screen.queryByRole('dialog', { name: 'Add node' })).toBeNull();
+  });
+
   it('adds workflow inspector edits to the undo stack', async () => {
     const fetchMock = vi.fn(async () => createJsonResponse({ draft: {} }, { status: 200 }));
     vi.stubGlobal('fetch', fetchMock);
@@ -282,6 +289,19 @@ describe('WorkflowEditorPageContent', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Redo' }));
     await vi.advanceTimersByTimeAsync(0);
+    expect((screen.getByLabelText('Name') as HTMLInputElement).value).toBe('Updated Tree');
+  });
+
+  it('does not trigger global undo shortcuts while typing in an input', async () => {
+    render(<WorkflowEditorPageContent initialDraft={createInitialDraft()} />);
+
+    const nameInput = screen.getByLabelText('Name') as HTMLInputElement;
+    fireEvent.change(nameInput, { target: { value: 'Updated Tree' } });
+    expect(nameInput.value).toBe('Updated Tree');
+
+    fireEvent.keyDown(nameInput, { key: 'z', ctrlKey: true });
+    await vi.advanceTimersByTimeAsync(0);
+
     expect((screen.getByLabelText('Name') as HTMLInputElement).value).toBe('Updated Tree');
   });
 
@@ -1967,6 +1987,22 @@ describe('WorkflowEditorPageContent', () => {
     expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument();
   });
 
+  it('shows a generic bootstrap error when the API payload draft is malformed', async () => {
+    vi.useRealTimers();
+    const fetchMock = vi.fn(async () => createJsonResponse({ draft: {} }, { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(
+      <WorkflowEditorPageContent
+        initialDraft={createInitialDraft()}
+        bootstrapDraftOnMount
+      />,
+    );
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Preparing draft failed.');
+    expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument();
+  });
+
   it('shows bootstrap network errors from thrown exceptions', async () => {
     vi.useRealTimers();
     const fetchMock = vi.fn(async () => {
@@ -2002,6 +2038,20 @@ describe('WorkflowEditorPageContent', () => {
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(screen.getByRole('alert')).toHaveTextContent('validation exploded');
+  });
+
+  it('shows a save error and skips validation when draft flush fails', async () => {
+    const fetchMock = vi.fn(async () => createJsonResponse({ error: { message: 'conflict' } }, { status: 409 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(<WorkflowEditorPageContent initialDraft={createInitialDraft({ nodes: [], initialRunnableNodeKeys: [] })} />);
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Validate' }));
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(screen.getByText('Save the latest draft changes before validating.')).toBeInTheDocument();
   });
 
   it('shows validation network errors when validation throws', async () => {
