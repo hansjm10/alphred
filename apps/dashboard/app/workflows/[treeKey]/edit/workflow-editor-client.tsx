@@ -54,6 +54,7 @@ import {
   useDraftAutosave,
   useWorkflowHistory,
   useWorkflowKeyboardShortcuts,
+  type SaveState,
   type WorkflowSnapshot,
 } from './workflow-editor-hooks';
 import { EdgeInspector, NodeInspector, WorkflowInspector } from './workflow-editor-inspectors';
@@ -67,6 +68,36 @@ function hasNonSelectionNodeChanges(changes: NodeChange[]): boolean {
 
 function hasNonSelectionEdgeChanges(changes: EdgeChange[]): boolean {
   return changes.some(change => change.type !== 'select');
+}
+
+type LegacyMediaQueryList = {
+  addListener?: (listener: (event: MediaQueryListEvent) => void) => void;
+  removeListener?: (listener: (event: MediaQueryListEvent) => void) => void;
+};
+
+function subscribeToMediaQueryChanges(mediaQuery: MediaQueryList, listener: () => void): () => void {
+  if (typeof mediaQuery.addEventListener === 'function' && typeof mediaQuery.removeEventListener === 'function') {
+    mediaQuery.addEventListener('change', listener);
+    return () => mediaQuery.removeEventListener('change', listener);
+  }
+
+  const legacyMediaQuery = mediaQuery as unknown as LegacyMediaQueryList;
+  const legacyListener = listener as (event: MediaQueryListEvent) => void;
+  legacyMediaQuery.addListener?.(legacyListener);
+  return () => legacyMediaQuery.removeListener?.(legacyListener);
+}
+
+function statusBadgeForSaveState(saveState: SaveState): { status: 'running' | 'completed' | 'failed' | 'pending'; label: string } {
+  switch (saveState) {
+    case 'saving':
+      return { status: 'running', label: 'Saving…' };
+    case 'saved':
+      return { status: 'completed', label: 'Saved' };
+    case 'error':
+      return { status: 'failed', label: 'Error' };
+    default:
+      return { status: 'pending', label: 'Draft' };
+  }
 }
 
 function toReactFlowEdge(edge: DashboardWorkflowDraftEdge): Edge {
@@ -92,6 +123,14 @@ function isObjectRecord(value: unknown): value is Record<string, unknown> {
 
 function isFiniteNumber(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value);
+}
+
+function isPositiveInteger(value: unknown): value is number {
+  return isFiniteNumber(value) && Number.isInteger(value) && value > 0;
+}
+
+function isNonNegativeInteger(value: unknown): value is number {
+  return isFiniteNumber(value) && Number.isInteger(value) && value >= 0;
 }
 
 function isNullableString(value: unknown): value is string | null {
@@ -171,24 +210,27 @@ function isDraftTopology(value: unknown): value is DashboardWorkflowDraftTopolog
     return false;
   }
 
-  return (
-    typeof value.treeKey === 'string' &&
-    isFiniteNumber(value.version) &&
-    Number.isInteger(value.version) &&
-    value.version > 0 &&
-    isFiniteNumber(value.draftRevision) &&
-    Number.isInteger(value.draftRevision) &&
-    value.draftRevision >= 0 &&
-    typeof value.name === 'string' &&
-    isNullableString(value.description) &&
-    isNullableString(value.versionNotes) &&
-    Array.isArray(value.nodes) &&
-    value.nodes.every(isDraftNode) &&
-    Array.isArray(value.edges) &&
-    value.edges.every(isDraftEdge) &&
-    Array.isArray(value.initialRunnableNodeKeys) &&
-    value.initialRunnableNodeKeys.every((nodeKey) => typeof nodeKey === 'string')
-  );
+  if (
+    typeof value.treeKey !== 'string' ||
+    !isPositiveInteger(value.version) ||
+    !isNonNegativeInteger(value.draftRevision) ||
+    typeof value.name !== 'string' ||
+    !isNullableString(value.description) ||
+    !isNullableString(value.versionNotes)
+  ) {
+    return false;
+  }
+
+  if (!Array.isArray(value.nodes) || !value.nodes.every(isDraftNode)) {
+    return false;
+  }
+
+  if (!Array.isArray(value.edges) || !value.edges.every(isDraftEdge)) {
+    return false;
+  }
+
+  return Array.isArray(value.initialRunnableNodeKeys)
+    && value.initialRunnableNodeKeys.every((nodeKey) => typeof nodeKey === 'string');
 }
 
 function parseDraftFromBootstrapPayload(payload: unknown): DashboardWorkflowDraftTopology | null {
@@ -378,14 +420,7 @@ function WorkflowEditorLoadedContent({
     };
 
     update();
-
-    if (typeof mediaQuery.addEventListener === 'function') {
-      mediaQuery.addEventListener('change', update);
-      return () => mediaQuery.removeEventListener('change', update);
-    }
-
-    mediaQuery.addListener(update);
-    return () => mediaQuery.removeListener(update);
+    return subscribeToMediaQueryChanges(mediaQuery, update);
   }, []);
 
   useEffect(() => {
@@ -706,7 +741,7 @@ function WorkflowEditorLoadedContent({
   }, []);
 
   const renameNodeFromContextMenu = useCallback(() => {
-    if (!contextMenu || contextMenu.targetType !== 'node') {
+    if (contextMenu?.targetType !== 'node') {
       return;
     }
 
@@ -740,7 +775,7 @@ function WorkflowEditorLoadedContent({
   }, [contextMenu, markWorkflowChanged, nodes]);
 
   const duplicateNodeFromContextMenu = useCallback(() => {
-    if (!contextMenu || contextMenu.targetType !== 'node') {
+    if (contextMenu?.targetType !== 'node') {
       return;
     }
 
@@ -769,7 +804,7 @@ function WorkflowEditorLoadedContent({
   }, [addNode, contextMenu, nodes]);
 
   const addConnectedNodeFromContextMenu = useCallback(() => {
-    if (!contextMenu || contextMenu.targetType !== 'node') {
+    if (contextMenu?.targetType !== 'node') {
       return;
     }
 
@@ -778,7 +813,7 @@ function WorkflowEditorLoadedContent({
   }, [contextMenu, openPalette]);
 
   const duplicateEdgeFromContextMenu = useCallback(() => {
-    if (!contextMenu || contextMenu.targetType !== 'edge') {
+    if (contextMenu?.targetType !== 'edge') {
       return;
     }
 
@@ -889,18 +924,7 @@ function WorkflowEditorLoadedContent({
     setInspectorDrawerOpen(false);
   }
 
-  const statusBadge = useMemo(() => {
-    switch (saveState) {
-      case 'saving':
-        return { status: 'running' as const, label: 'Saving…' };
-      case 'saved':
-        return { status: 'completed' as const, label: 'Saved' };
-      case 'error':
-        return { status: 'failed' as const, label: 'Error' };
-      default:
-        return { status: 'pending' as const, label: 'Draft' };
-    }
-  }, [saveState]);
+  const statusBadge = useMemo(() => statusBadgeForSaveState(saveState), [saveState]);
 
   const inspector = (
     <aside

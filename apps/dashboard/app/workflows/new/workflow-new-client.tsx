@@ -15,6 +15,19 @@ function isTreeKeyFormatValid(value: string): boolean {
 }
 
 type TreeKeyAvailability = 'idle' | 'checking' | 'available' | 'taken' | 'error';
+type TreeKeyAvailabilityLookup = 'available' | 'taken';
+
+type TreeKeyAvailabilityCheckResult =
+  | {
+      status: TreeKeyAvailabilityLookup;
+    }
+  | {
+      status: 'error';
+      message: string;
+    }
+  | {
+      status: 'aborted';
+    };
 
 function parseTreeKeyAvailabilityPayload(payload: unknown): { treeKey: string; available: boolean } | null {
   if (!payload || typeof payload !== 'object') {
@@ -32,6 +45,117 @@ function parseTreeKeyAvailabilityPayload(payload: unknown): { treeKey: string; a
   }
 
   return { treeKey, available };
+}
+
+async function checkTreeKeyAvailability(
+  effectiveTreeKey: string,
+  signal: AbortSignal,
+): Promise<TreeKeyAvailabilityCheckResult> {
+  try {
+    const response = await fetch(
+      `/api/dashboard/workflows/catalog?treeKey=${encodeURIComponent(effectiveTreeKey)}`,
+      {
+        method: 'GET',
+        signal,
+      },
+    );
+    const json = await response.json().catch(() => null);
+    if (!response.ok) {
+      return {
+        status: 'error',
+        message: resolveApiError(response.status, json, 'Tree key validation failed'),
+      };
+    }
+
+    const parsed = parseTreeKeyAvailabilityPayload(json);
+    if (!parsed || parsed.treeKey !== effectiveTreeKey) {
+      return { status: 'error', message: 'Tree key validation failed.' };
+    }
+
+    return { status: parsed.available ? 'available' : 'taken' };
+  } catch (error_) {
+    if (error_ instanceof DOMException && error_.name === 'AbortError') {
+      return { status: 'aborted' };
+    }
+    return {
+      status: 'error',
+      message: error_ instanceof Error ? error_.message : 'Tree key validation failed.',
+    };
+  }
+}
+
+async function createWorkflow(payload: DashboardCreateWorkflowRequest): Promise<{ ok: true } | { ok: false; message: string }> {
+  try {
+    const response = await fetch('/api/dashboard/workflows', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+
+    const json = await response.json().catch(() => null);
+    if (!response.ok) {
+      return {
+        ok: false,
+        message: resolveApiError(response.status, json, 'Workflow creation failed'),
+      };
+    }
+
+    return { ok: true };
+  } catch (error_) {
+    return {
+      ok: false,
+      message: error_ instanceof Error ? error_.message : 'Workflow creation failed.',
+    };
+  }
+}
+
+function TreeKeyValidationMessage({
+  effectiveTreeKey,
+  showTreeKeyValidation,
+  treeKeyAvailability,
+  treeKeyAvailabilityError,
+  treeKeyValidationError,
+}: Readonly<{
+  effectiveTreeKey: string;
+  showTreeKeyValidation: boolean;
+  treeKeyAvailability: TreeKeyAvailability;
+  treeKeyAvailabilityError: string | null;
+  treeKeyValidationError: string | null;
+}>) {
+  if (!showTreeKeyValidation) {
+    return <span className="meta-text">Lowercase a-z, 0-9, hyphens. Unique across workflows.</span>;
+  }
+
+  if (treeKeyValidationError) {
+    return (
+      <span className="workflow-field-validation workflow-field-validation--error" role="alert">
+        {treeKeyValidationError}
+      </span>
+    );
+  }
+
+  switch (treeKeyAvailability) {
+    case 'checking':
+      return <span className="workflow-field-validation">Checking availability…</span>;
+    case 'taken':
+      return (
+        <span className="workflow-field-validation workflow-field-validation--error" role="alert">
+          Tree key &quot;{effectiveTreeKey}&quot; already exists.
+        </span>
+      );
+    case 'error':
+      return (
+        <span className="workflow-field-validation workflow-field-validation--error" role="alert">
+          {treeKeyAvailabilityError ?? 'Tree key validation failed.'}
+        </span>
+      );
+    default:
+      return (
+        <span className="workflow-field-validation workflow-field-validation--success">
+          Tree key is available.
+        </span>
+      );
+  }
 }
 
 export function NewWorkflowPageContent() {
@@ -69,40 +193,19 @@ export function NewWorkflowPageContent() {
     setTreeKeyAvailability('checking');
     setTreeKeyAvailabilityError(null);
 
-    async function checkTreeKeyAvailability(): Promise<void> {
-      try {
-        const response = await fetch(
-          `/api/dashboard/workflows/catalog?treeKey=${encodeURIComponent(effectiveTreeKey)}`,
-          {
-            method: 'GET',
-            signal: abortController.signal,
-          },
-        );
-        const json = await response.json().catch(() => null);
-        if (!response.ok) {
+    checkTreeKeyAvailability(effectiveTreeKey, abortController.signal)
+      .then((result) => {
+        if (result.status === 'aborted') {
+          return;
+        }
+        if (result.status === 'error') {
           setTreeKeyAvailability('error');
-          setTreeKeyAvailabilityError(resolveApiError(response.status, json, 'Tree key validation failed'));
+          setTreeKeyAvailabilityError(result.message);
           return;
         }
-
-        const parsed = parseTreeKeyAvailabilityPayload(json);
-        if (!parsed || parsed.treeKey !== effectiveTreeKey) {
-          setTreeKeyAvailability('error');
-          setTreeKeyAvailabilityError('Tree key validation failed.');
-          return;
-        }
-
-        setTreeKeyAvailability(parsed.available ? 'available' : 'taken');
-      } catch (error_) {
-        if (error_ instanceof DOMException && error_.name === 'AbortError') {
-          return;
-        }
-        setTreeKeyAvailability('error');
-        setTreeKeyAvailabilityError(error_ instanceof Error ? error_.message : 'Tree key validation failed.');
-      }
-    }
-
-    checkTreeKeyAvailability().catch(() => undefined);
+        setTreeKeyAvailability(result.status);
+      })
+      .catch(() => undefined);
     return () => abortController.abort();
   }, [effectiveTreeKey, showTreeKeyValidation, treeKeyValidationError]);
 
@@ -128,22 +231,13 @@ export function NewWorkflowPageContent() {
     };
 
     try {
-      const response = await fetch('/api/dashboard/workflows', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(payload),
-      });
-
-      const json = await response.json().catch(() => null);
-
-      if (!response.ok) {
-        setError(resolveApiError(response.status, json, 'Workflow creation failed'));
+      const result = await createWorkflow(payload);
+      if (!result.ok) {
+        setError(result.message);
         return;
       }
 
       router.push(`/workflows/${encodeURIComponent(effectiveTreeKey)}/edit`);
-    } catch (error_) {
-      setError(error_ instanceof Error ? error_.message : 'Workflow creation failed.');
     } finally {
       setCreating(false);
     }
@@ -228,27 +322,13 @@ export function NewWorkflowPageContent() {
                   }}
                   placeholder={suggestedTreeKey || 'tree-key'}
                 />
-                {!showTreeKeyValidation ? (
-                  <span className="meta-text">Lowercase a-z, 0-9, hyphens. Unique across workflows.</span>
-                ) : treeKeyValidationError ? (
-                  <span className="workflow-field-validation workflow-field-validation--error" role="alert">
-                    {treeKeyValidationError}
-                  </span>
-                ) : treeKeyAvailability === 'checking' ? (
-                  <span className="workflow-field-validation">Checking availability…</span>
-                ) : treeKeyAvailability === 'taken' ? (
-                  <span className="workflow-field-validation workflow-field-validation--error" role="alert">
-                    Tree key &quot;{effectiveTreeKey}&quot; already exists.
-                  </span>
-                ) : treeKeyAvailability === 'error' ? (
-                  <span className="workflow-field-validation workflow-field-validation--error" role="alert">
-                    {treeKeyAvailabilityError ?? 'Tree key validation failed.'}
-                  </span>
-                ) : (
-                  <span className="workflow-field-validation workflow-field-validation--success">
-                    Tree key is available.
-                  </span>
-                )}
+                <TreeKeyValidationMessage
+                  effectiveTreeKey={effectiveTreeKey}
+                  showTreeKeyValidation={showTreeKeyValidation}
+                  treeKeyAvailability={treeKeyAvailability}
+                  treeKeyAvailabilityError={treeKeyAvailabilityError}
+                  treeKeyValidationError={treeKeyValidationError}
+                />
               </label>
 
               <label>

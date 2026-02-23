@@ -18,10 +18,23 @@ const guardOperators: readonly GuardOperator[] = ['==', '!=', '>', '<', '>=', '<
 type GuardEditorMode = 'guided' | 'advanced';
 
 type GuidedConditionDraft = {
+  id: string;
   field: string;
   operator: GuardOperator;
   value: string;
 };
+
+let guidedConditionDraftId = 0;
+
+function createGuidedConditionDraft(partial?: Partial<Omit<GuidedConditionDraft, 'id'>>): GuidedConditionDraft {
+  guidedConditionDraftId += 1;
+  return {
+    id: `guard-condition-${guidedConditionDraftId}`,
+    field: partial?.field ?? 'decision',
+    operator: partial?.operator ?? '==',
+    value: partial?.value ?? 'approved',
+  };
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -75,11 +88,11 @@ function parseGuardValue(value: string): string | number | boolean {
 }
 
 function toGuidedCondition(condition: GuardCondition): GuidedConditionDraft {
-  return {
+  return createGuidedConditionDraft({
     field: condition.field,
     operator: condition.operator,
     value: String(condition.value),
-  };
+  });
 }
 
 function toGuidedState(expression: GuardExpression | null): {
@@ -89,7 +102,7 @@ function toGuidedState(expression: GuardExpression | null): {
   if (!expression) {
     return {
       logic: 'and',
-      conditions: [{ field: 'decision', operator: '==', value: 'approved' }],
+      conditions: [createGuidedConditionDraft()],
     };
   }
 
@@ -115,7 +128,7 @@ function toGuidedState(expression: GuardExpression | null): {
 
   return {
     logic: 'and',
-    conditions: [{ field: 'decision', operator: '==', value: 'approved' }],
+    conditions: [createGuidedConditionDraft()],
   };
 }
 
@@ -369,7 +382,7 @@ function EdgeInspectorContent({
   const [mode, setMode] = useState<GuardEditorMode>('guided');
   const [guidedLogic, setGuidedLogic] = useState<'and' | 'or'>('and');
   const [guidedConditions, setGuidedConditions] = useState<GuidedConditionDraft[]>([
-    { field: 'decision', operator: '==', value: 'approved' },
+    createGuidedConditionDraft(),
   ]);
   const [advancedExpression, setAdvancedExpression] = useState('');
   const [advancedError, setAdvancedError] = useState<string | null>(null);
@@ -421,7 +434,7 @@ function EdgeInspectorContent({
   function addGuidedCondition() {
     const nextConditions: GuidedConditionDraft[] = [
       ...guidedConditions,
-      { field: 'decision', operator: '==', value: 'approved' },
+      createGuidedConditionDraft(),
     ];
     applyGuidedState(guidedLogic, nextConditions);
   }
@@ -482,23 +495,25 @@ function EdgeInspectorContent({
       ) : (
         <>
           <div className="workflow-inspector-field">
-            <span>Guard mode</span>
-            <div className="workflow-segmented-control" role="group" aria-label="Guard editor mode">
-              <button
-                type="button"
-                className={mode === 'guided' ? 'active' : ''}
-                onClick={() => setMode('guided')}
-              >
-                Guided
-              </button>
-              <button
-                type="button"
-                className={mode === 'advanced' ? 'active' : ''}
-                onClick={() => setMode('advanced')}
-              >
-                Advanced
-              </button>
-            </div>
+            <fieldset className="workflow-inspector-field">
+              <legend>Guard mode</legend>
+              <div className="workflow-segmented-control" aria-label="Guard editor mode">
+                <button
+                  type="button"
+                  className={mode === 'guided' ? 'active' : ''}
+                  onClick={() => setMode('guided')}
+                >
+                  Guided
+                </button>
+                <button
+                  type="button"
+                  className={mode === 'advanced' ? 'active' : ''}
+                  onClick={() => setMode('advanced')}
+                >
+                  Advanced
+                </button>
+              </div>
+            </fieldset>
             <span className="meta-text">Current guard: {guardSummary}</span>
           </div>
 
@@ -518,7 +533,7 @@ function EdgeInspectorContent({
 
               <ul className="workflow-guard-condition-list">
                 {guidedConditions.map((condition, index) => (
-                  <li key={`condition-${index}`} className="workflow-guard-condition-row">
+                  <li key={condition.id} className="workflow-guard-condition-row">
                     <input
                       aria-label={`Guard field ${index + 1}`}
                       value={condition.field}
