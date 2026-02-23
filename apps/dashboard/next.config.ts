@@ -1,6 +1,7 @@
 import type { NextConfig } from 'next';
 
 const nextConfig: NextConfig = {
+  serverExternalPackages: ['@alphred/agents', '@openai/codex-sdk'],
   env: {
     // This value is baked into the build output and cannot be flipped at runtime by `next start`.
     ALPHRED_DASHBOARD_TEST_ROUTES_BUILD:

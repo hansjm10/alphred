@@ -2,18 +2,15 @@ import { spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { createRequire } from 'node:module';
+import { fileURLToPath } from 'node:url';
 import { Codex, type CodexOptions } from '@openai/codex-sdk';
-
-const require = createRequire(import.meta.url);
-const SDK_IMPORT_RESOLUTION_CONDITIONS = new Set(['import', 'node', 'default']);
 
 const CODEX_API_KEY_ENV_VAR = 'CODEX_API_KEY';
 const OPENAI_API_KEY_ENV_VAR = 'OPENAI_API_KEY';
 const CODEX_MODEL_ENV_VAR = 'CODEX_MODEL';
 const OPENAI_BASE_URL_ENV_VAR = 'OPENAI_BASE_URL';
 const CODEX_HOME_ENV_VAR = 'CODEX_HOME';
-const CODEX_SDK_PACKAGE_SPECIFIER_PARTS = ['@openai', 'codex-sdk'] as const;
+const CODEX_SDK_PACKAGE_JSON_PATH_SEGMENTS = ['node_modules', '@openai', 'codex-sdk', 'package.json'] as const;
 
 const DEFAULT_CODEX_MODEL = 'gpt-5-codex';
 
@@ -218,44 +215,39 @@ function defaultCheckCliSession(codexBinaryPath: string, env: NodeJS.ProcessEnv)
   };
 }
 
-function resolveSdkPackageJsonPathFromEntrypoint(): string {
-  const sdkPackageSpecifier = CODEX_SDK_PACKAGE_SPECIFIER_PARTS.join('/');
-  let sdkEntrypointPath: string;
-  try {
-    // Node supports custom resolution conditions at runtime, but the bundled type
-    // definition for require.resolve does not include "conditions".
-    const resolveOptions = {
-      conditions: SDK_IMPORT_RESOLUTION_CONDITIONS,
-    } as unknown as Parameters<typeof require.resolve>[1];
-    sdkEntrypointPath = require.resolve(sdkPackageSpecifier, resolveOptions);
-  } catch (error) {
-    throw new CodexBootstrapError(
-      'CODEX_BOOTSTRAP_INVALID_CONFIG',
-      'Codex provider could not resolve @openai/codex-sdk from the current runtime.',
-      undefined,
-      error,
-    );
-  }
-
-  let currentDirectory = dirname(sdkEntrypointPath);
+function findSdkPackageJsonPathFromRoot(rootDirectory: string): string | undefined {
+  let currentDirectory = rootDirectory;
   while (true) {
-    const packageJsonPath = join(currentDirectory, 'package.json');
-    if (existsSync(packageJsonPath)) {
-      return packageJsonPath;
+    const candidatePackageJsonPath = join(currentDirectory, ...CODEX_SDK_PACKAGE_JSON_PATH_SEGMENTS);
+    if (existsSync(candidatePackageJsonPath)) {
+      return candidatePackageJsonPath;
     }
 
     const parentDirectory = dirname(currentDirectory);
     if (parentDirectory === currentDirectory) {
-      break;
+      return undefined;
     }
 
     currentDirectory = parentDirectory;
   }
+}
+
+function resolveSdkPackageJsonPathFromEntrypoint(): string {
+  const moduleDirectory = dirname(fileURLToPath(import.meta.url));
+  const lookupRoots = new Set([moduleDirectory, process.cwd()]);
+  for (const lookupRoot of lookupRoots) {
+    const sdkPackageJsonPath = findSdkPackageJsonPathFromRoot(lookupRoot);
+    if (sdkPackageJsonPath) {
+      return sdkPackageJsonPath;
+    }
+  }
 
   throw new CodexBootstrapError(
     'CODEX_BOOTSTRAP_INVALID_CONFIG',
-    'Codex provider could not determine the @openai/codex-sdk package root from its exported entry.',
-    { sdkEntrypointPath },
+    'Codex provider could not resolve @openai/codex-sdk from the current runtime.',
+    {
+      checkedRoots: [...lookupRoots],
+    },
   );
 }
 
