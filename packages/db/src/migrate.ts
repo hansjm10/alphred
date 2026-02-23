@@ -40,6 +40,9 @@ export function migrateDatabase(db: AlphredDatabase): void {
   }
   tx.run(sql`CREATE UNIQUE INDEX IF NOT EXISTS workflow_trees_tree_key_version_uq
     ON workflow_trees(tree_key, version)`);
+  tx.run(sql`CREATE UNIQUE INDEX IF NOT EXISTS workflow_trees_tree_key_single_draft_uq
+    ON workflow_trees(tree_key)
+    WHERE status = 'draft'`);
   tx.run(sql`CREATE INDEX IF NOT EXISTS workflow_trees_created_at_idx
     ON workflow_trees(created_at)`);
 

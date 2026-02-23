@@ -73,6 +73,7 @@ const DEFAULT_GITHUB_AUTH_REPO = 'octocat/Hello-World';
 const MAX_ARTIFACT_PREVIEW_LENGTH = 280;
 const RECENT_SNAPSHOT_LIMIT = 30;
 const AGENT_PROVIDER_ORDER: readonly string[] = ['codex', 'claude'];
+const MAX_DRAFT_BOOTSTRAP_ATTEMPTS = 4;
 
 const AGENT_PROVIDER_LABELS: Readonly<Record<string, string>> = Object.freeze({
   codex: 'Codex',
@@ -853,16 +854,15 @@ export function createDashboardService(options: {
     }
 
     const code = 'code' in error ? (error as { code?: unknown }).code : undefined;
-    if (code === 'SQLITE_CONSTRAINT_UNIQUE') {
-      return true;
-    }
 
     const message =
       'message' in error && typeof (error as { message?: unknown }).message === 'string'
         ? (error as { message: string }).message.toLowerCase()
         : '';
 
-    if (!message.includes('unique constraint failed')) {
+    const isUniqueConstraint =
+      code === 'SQLITE_CONSTRAINT_UNIQUE' || message.includes('unique constraint failed');
+    if (!isUniqueConstraint) {
       return false;
     }
 
@@ -1778,30 +1778,28 @@ export function createDashboardService(options: {
           };
         };
 
-        const existingDraft = loadLatestDraft();
-        if (existingDraft) {
-          return toDraftTopology(existingDraft);
-        }
+        const loadLatestPublished = () =>
+          db
+            .select({
+              id: workflowTrees.id,
+              version: workflowTrees.version,
+              name: workflowTrees.name,
+              description: workflowTrees.description,
+            })
+            .from(workflowTrees)
+            .where(and(eq(workflowTrees.treeKey, treeKey), eq(workflowTrees.status, 'published')))
+            .orderBy(desc(workflowTrees.version), desc(workflowTrees.id))
+            .get();
 
-        const published = db
-          .select({
-            id: workflowTrees.id,
-            version: workflowTrees.version,
-            name: workflowTrees.name,
-            description: workflowTrees.description,
-          })
-          .from(workflowTrees)
-          .where(and(eq(workflowTrees.treeKey, treeKey), eq(workflowTrees.status, 'published')))
-          .orderBy(desc(workflowTrees.version), desc(workflowTrees.id))
-          .get();
-        if (!published) {
-          throw new DashboardIntegrationError('not_found', `Workflow tree "${treeKey}" was not found.`, {
-            status: 404,
-          });
-        }
-
-        const draftVersion = published.version + 1;
-        const createDraftFromPublished = () =>
+        const createDraftFromPublished = (
+          published: {
+            id: number;
+            version: number;
+            name: string;
+            description: string | null;
+          },
+          draftVersion: number,
+        ) =>
           db.transaction((tx) => {
             const insertedDraft = tx
               .insert(workflowTrees)
@@ -1985,19 +1983,48 @@ export function createDashboardService(options: {
             };
           });
 
-        try {
-          return createDraftFromPublished();
-        } catch (error) {
-          if (!isWorkflowTreeVersionUniqueConstraintError(error)) {
-            throw error;
+        let lastVersionConflictError: unknown = null;
+        for (let attempt = 1; attempt <= MAX_DRAFT_BOOTSTRAP_ATTEMPTS; attempt += 1) {
+          const existingDraft = loadLatestDraft();
+          if (existingDraft) {
+            return toDraftTopology(existingDraft);
           }
 
-          const concurrentDraft = loadLatestDraft();
-          if (!concurrentDraft) {
-            throw error;
+          const published = loadLatestPublished();
+          if (!published) {
+            throw new DashboardIntegrationError('not_found', `Workflow tree "${treeKey}" was not found.`, {
+              status: 404,
+            });
           }
-          return toDraftTopology(concurrentDraft);
+
+          try {
+            return createDraftFromPublished(published, published.version + 1);
+          } catch (error) {
+            if (!isWorkflowTreeVersionUniqueConstraintError(error)) {
+              throw error;
+            }
+
+            const concurrentDraft = loadLatestDraft();
+            if (concurrentDraft) {
+              return toDraftTopology(concurrentDraft);
+            }
+
+            lastVersionConflictError = error;
+          }
         }
+
+        throw new DashboardIntegrationError(
+          'conflict',
+          'Workflow draft changed concurrently. Refresh the editor and try again.',
+          {
+            status: 409,
+            details: {
+              treeKey,
+              attempts: MAX_DRAFT_BOOTSTRAP_ATTEMPTS,
+            },
+            cause: lastVersionConflictError,
+          },
+        );
       });
     },
 

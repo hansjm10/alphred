@@ -726,6 +726,139 @@ describe('createDashboardService', () => {
     );
   });
 
+  it('retries draft bootstrap when a concurrent publish claims the next version', async () => {
+    const { db, dependencies } = createHarness();
+    migrateDatabase(db);
+
+    const bootstrapService = createDashboardService({ dependencies });
+    await bootstrapService.createWorkflowDraft({
+      template: 'design-implement-review',
+      name: 'Race Publish Tree',
+      treeKey: 'race-publish-tree',
+    });
+    await bootstrapService.publishWorkflowDraft('race-publish-tree', 1, {});
+
+    let injectedConcurrentPublish = false;
+    const originalTransaction = db.transaction.bind(db);
+    const proxiedDatabase = new Proxy(db, {
+      get(target, prop, receiver) {
+        if (prop === 'transaction') {
+          return ((callback: (tx: unknown) => unknown) => {
+            if (!injectedConcurrentPublish) {
+              injectedConcurrentPublish = true;
+              const publishedVersions = target
+                .select({
+                  version: workflowTrees.version,
+                  name: workflowTrees.name,
+                  description: workflowTrees.description,
+                })
+                .from(workflowTrees)
+                .where(and(eq(workflowTrees.treeKey, 'race-publish-tree'), eq(workflowTrees.status, 'published')))
+                .all();
+              const latestPublished = publishedVersions.reduce<(typeof publishedVersions)[number] | null>(
+                (latest, current) => (latest === null || current.version > latest.version ? current : latest),
+                null,
+              );
+              if (latestPublished) {
+                target.insert(workflowTrees).values({
+                  treeKey: 'race-publish-tree',
+                  version: latestPublished.version + 1,
+                  status: 'published',
+                  name: latestPublished.name,
+                  description: latestPublished.description,
+                }).run();
+              }
+            }
+            return originalTransaction((tx) => callback(tx));
+          }) as typeof db.transaction;
+        }
+        return Reflect.get(target, prop, receiver);
+      },
+    });
+
+    const raceService = createDashboardService({
+      dependencies: {
+        ...dependencies,
+        openDatabase: () => proxiedDatabase,
+      },
+    });
+
+    const draft = await raceService.getOrCreateWorkflowDraft('race-publish-tree');
+    expect(injectedConcurrentPublish).toBe(true);
+    expect(draft.version).toBe(3);
+
+    const persistedDraft = db
+      .select({ id: workflowTrees.id })
+      .from(workflowTrees)
+      .where(and(eq(workflowTrees.treeKey, 'race-publish-tree'), eq(workflowTrees.version, 3), eq(workflowTrees.status, 'draft')))
+      .get();
+    expect(persistedDraft).toBeDefined();
+  });
+
+  it('returns conflict when draft bootstrap keeps racing on version allocation', async () => {
+    const { db, dependencies } = createHarness();
+    migrateDatabase(db);
+
+    const bootstrapService = createDashboardService({ dependencies });
+    await bootstrapService.createWorkflowDraft({
+      template: 'design-implement-review',
+      name: 'Hot Race Tree',
+      treeKey: 'hot-race-tree',
+    });
+    await bootstrapService.publishWorkflowDraft('hot-race-tree', 1, {});
+
+    const originalTransaction = db.transaction.bind(db);
+    const proxiedDatabase = new Proxy(db, {
+      get(target, prop, receiver) {
+        if (prop === 'transaction') {
+          return ((callback: (tx: unknown) => unknown) => {
+            const publishedVersions = target
+              .select({
+                version: workflowTrees.version,
+                name: workflowTrees.name,
+                description: workflowTrees.description,
+              })
+              .from(workflowTrees)
+              .where(and(eq(workflowTrees.treeKey, 'hot-race-tree'), eq(workflowTrees.status, 'published')))
+              .all();
+            const latestPublished = publishedVersions.reduce<(typeof publishedVersions)[number] | null>(
+              (latest, current) => (latest === null || current.version > latest.version ? current : latest),
+              null,
+            );
+            if (latestPublished) {
+              target.insert(workflowTrees).values({
+                treeKey: 'hot-race-tree',
+                version: latestPublished.version + 1,
+                status: 'published',
+                name: latestPublished.name,
+                description: latestPublished.description,
+              }).run();
+            }
+            return originalTransaction((tx) => callback(tx));
+          }) as typeof db.transaction;
+        }
+        return Reflect.get(target, prop, receiver);
+      },
+    });
+
+    const raceService = createDashboardService({
+      dependencies: {
+        ...dependencies,
+        openDatabase: () => proxiedDatabase,
+      },
+    });
+
+    await expect(raceService.getOrCreateWorkflowDraft('hot-race-tree')).rejects.toMatchObject({
+      code: 'conflict',
+      status: 409,
+      message: 'Workflow draft changed concurrently. Refresh the editor and try again.',
+      details: expect.objectContaining({
+        treeKey: 'hot-race-tree',
+        attempts: 4,
+      }),
+    });
+  });
+
   it('rolls back draft creation when cloning fails', async () => {
     const { db, dependencies } = createHarness();
     migrateDatabase(db);

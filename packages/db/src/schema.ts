@@ -19,6 +19,9 @@ export const workflowTrees = sqliteTable(
   },
   table => ({
     treeKeyVersionUnique: uniqueIndex('workflow_trees_tree_key_version_uq').on(table.treeKey, table.version),
+    singleDraftPerTreeUnique: uniqueIndex('workflow_trees_tree_key_single_draft_uq')
+      .on(table.treeKey)
+      .where(sql`${table.status} = 'draft'`),
     statusCheck: check('workflow_trees_status_ck', sql`${table.status} in ('draft', 'published')`),
     createdAtIdx: index('workflow_trees_created_at_idx').on(table.createdAt),
   }),

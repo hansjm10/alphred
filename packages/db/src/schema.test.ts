@@ -206,6 +206,36 @@ describe('database schema hardening', () => {
     expect(trees).toHaveLength(1);
   });
 
+  it('allows only one draft workflow tree per tree key', () => {
+    const db = createDatabase(':memory:');
+    migrateDatabase(db);
+
+    db.insert(workflowTrees).values({
+      treeKey: 'single-draft-tree',
+      version: 1,
+      status: 'draft',
+      name: 'Single Draft Tree',
+    }).run();
+
+    expect(() =>
+      db.insert(workflowTrees).values({
+        treeKey: 'single-draft-tree',
+        version: 2,
+        status: 'published',
+        name: 'Single Draft Tree',
+      }).run(),
+    ).not.toThrow();
+
+    expect(() =>
+      db.insert(workflowTrees).values({
+        treeKey: 'single-draft-tree',
+        version: 3,
+        status: 'draft',
+        name: 'Single Draft Tree',
+      }).run(),
+    ).toThrow();
+  });
+
   it('seeds agent model catalog defaults including GPT-5.3-Codex', () => {
     const db = createDatabase(':memory:');
     migrateDatabase(db);
