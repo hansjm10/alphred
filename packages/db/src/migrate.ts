@@ -544,5 +544,49 @@ export function migrateDatabase(db: AlphredDatabase): void {
     ON phase_artifacts(workflow_run_id, created_at)`);
   tx.run(sql`CREATE INDEX IF NOT EXISTS phase_artifacts_created_at_idx
     ON phase_artifacts(created_at)`);
+
+  tx.run(sql`CREATE TABLE IF NOT EXISTS run_node_diagnostics (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    workflow_run_id INTEGER NOT NULL REFERENCES workflow_runs(id) ON DELETE CASCADE,
+    run_node_id INTEGER NOT NULL REFERENCES run_nodes(id) ON DELETE CASCADE,
+    attempt INTEGER NOT NULL,
+    outcome TEXT NOT NULL,
+    event_count INTEGER NOT NULL DEFAULT 0,
+    retained_event_count INTEGER NOT NULL DEFAULT 0,
+    dropped_event_count INTEGER NOT NULL DEFAULT 0,
+    redacted INTEGER NOT NULL DEFAULT 0,
+    truncated INTEGER NOT NULL DEFAULT 0,
+    payload_chars INTEGER NOT NULL DEFAULT 0,
+    diagnostics TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    CONSTRAINT run_node_diagnostics_run_id_run_node_id_fk
+      FOREIGN KEY (workflow_run_id, run_node_id)
+      REFERENCES run_nodes(workflow_run_id, id)
+      ON DELETE CASCADE,
+    CONSTRAINT run_node_diagnostics_attempt_ck
+      CHECK (attempt > 0),
+    CONSTRAINT run_node_diagnostics_outcome_ck
+      CHECK (outcome IN ('completed', 'failed')),
+    CONSTRAINT run_node_diagnostics_event_count_ck
+      CHECK (event_count >= 0),
+    CONSTRAINT run_node_diagnostics_retained_event_count_ck
+      CHECK (retained_event_count >= 0),
+    CONSTRAINT run_node_diagnostics_dropped_event_count_ck
+      CHECK (dropped_event_count >= 0),
+    CONSTRAINT run_node_diagnostics_redacted_bool_ck
+      CHECK (redacted IN (0, 1)),
+    CONSTRAINT run_node_diagnostics_truncated_bool_ck
+      CHECK (truncated IN (0, 1)),
+    CONSTRAINT run_node_diagnostics_payload_chars_ck
+      CHECK (payload_chars >= 0)
+  )`);
+  tx.run(sql`CREATE UNIQUE INDEX IF NOT EXISTS run_node_diagnostics_run_id_run_node_attempt_uq
+    ON run_node_diagnostics(workflow_run_id, run_node_id, attempt)`);
+  tx.run(sql`CREATE INDEX IF NOT EXISTS run_node_diagnostics_run_id_created_at_idx
+    ON run_node_diagnostics(workflow_run_id, created_at)`);
+  tx.run(sql`CREATE INDEX IF NOT EXISTS run_node_diagnostics_run_node_id_created_at_idx
+    ON run_node_diagnostics(run_node_id, created_at)`);
+  tx.run(sql`CREATE INDEX IF NOT EXISTS run_node_diagnostics_created_at_idx
+    ON run_node_diagnostics(created_at)`);
   });
 }

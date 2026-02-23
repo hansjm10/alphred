@@ -248,11 +248,19 @@ SQL-first workflow topology and execution state are modeled with normalized tabl
   - Constraint/index rationale:
     - Content/artifact type checks enforce valid storage classes.
     - `(workflow_run_id, created_at)` and `created_at` indexes support artifact retrieval patterns.
+- `run_node_diagnostics`
+  - Immutable per-node/per-attempt diagnostics snapshots for operator inspection.
+  - Constraint/index rationale:
+    - Unique `(workflow_run_id, run_node_id, attempt)` enforces one persisted diagnostics payload per completed attempt.
+    - `outcome` check (`completed`/`failed`) and non-negative count checks harden audit metadata integrity.
+    - `(workflow_run_id, created_at)`, `(run_node_id, created_at)`, and `created_at` indexes support run timeline and node drill-down queries.
+  - Runtime boundary:
+    - Diagnostics are inspection-only by default and are not re-injected into downstream execution context.
 
 FK behavior is explicit:
 - Template topology rows cascade from `workflow_trees`.
 - Execution rows cascade from `workflow_runs` and `run_nodes`.
-- Composite FKs bind `routing_decisions`/`phase_artifacts` to the same `(workflow_run_id, run_node_id)` tuple from `run_nodes`.
+- Composite FKs bind `routing_decisions`/`phase_artifacts`/`run_node_diagnostics` to the same `(workflow_run_id, run_node_id)` tuple from `run_nodes`.
 - Shared references (`prompt_templates`, `guard_definitions`) use `RESTRICT` to prevent dangling refs.
 - Trigger guards enforce cross-row invariants not representable as a single-column FK:
   - `tree_edges.workflow_tree_id` must match both endpoint node tree IDs.

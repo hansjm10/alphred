@@ -446,6 +446,11 @@ Path parameters:
 
 Response `200`: `DashboardRunDetail`.
 
+Run detail includes:
+- `artifacts`: latest artifact previews for run triage.
+- `routingDecisions`: latest routing decisions.
+- `diagnostics`: persisted per-node/per-attempt diagnostics payloads for post-run inspection (inspection-only, not execution context).
+
 ### `GET /runs/[runId]/worktrees`
 
 Gets worktree metadata for a run.

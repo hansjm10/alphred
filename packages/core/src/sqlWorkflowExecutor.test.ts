@@ -13,6 +13,7 @@ import {
   migrateDatabase,
   phaseArtifacts,
   promptTemplates,
+  runNodeDiagnostics,
   runNodes,
   routingDecisions,
   transitionRunNodeStatus,
@@ -1328,6 +1329,233 @@ describe('createSqlWorkflowExecutor', () => {
       artifactType: 'report',
       contentType: 'markdown',
       content: 'Design report body',
+    });
+  });
+
+  it('persists diagnostics for each executed node attempt in a multi-node run', async () => {
+    const seeded = seedBrainstormPickResearchRun();
+    let invocation = 0;
+    const executor = createSqlWorkflowExecutor(seeded.db, {
+      resolveProvider: () => ({
+        async *run(): AsyncIterable<ProviderEvent> {
+          invocation += 1;
+          yield { type: 'system', content: `node invocation ${invocation}`, timestamp: invocation * 10 };
+          yield { type: 'result', content: `result ${invocation}`, timestamp: invocation * 10 + 1 };
+        },
+      }),
+    });
+
+    const result = await executor.executeRun({
+      workflowRunId: seeded.runId,
+      options: {
+        workingDirectory: '/tmp/alphred-worktree',
+      },
+    });
+
+    expect(result.finalStep).toEqual({
+      outcome: 'run_terminal',
+      workflowRunId: seeded.runId,
+      runStatus: 'completed',
+    });
+    expect(result.executedNodes).toBe(3);
+
+    const diagnosticsRows = seeded.db
+      .select({
+        runNodeId: runNodeDiagnostics.runNodeId,
+        attempt: runNodeDiagnostics.attempt,
+        outcome: runNodeDiagnostics.outcome,
+      })
+      .from(runNodeDiagnostics)
+      .where(eq(runNodeDiagnostics.workflowRunId, seeded.runId))
+      .orderBy(asc(runNodeDiagnostics.runNodeId), asc(runNodeDiagnostics.attempt), asc(runNodeDiagnostics.id))
+      .all();
+
+    expect(diagnosticsRows).toHaveLength(3);
+    expect(new Set(diagnosticsRows.map(row => row.runNodeId))).toEqual(
+      new Set([
+        seeded.runNodeIdByKey.get('brainstorm'),
+        seeded.runNodeIdByKey.get('pick'),
+        seeded.runNodeIdByKey.get('research'),
+      ]),
+    );
+    expect(diagnosticsRows.every(row => row.attempt === 1)).toBe(true);
+    expect(diagnosticsRows.every(row => row.outcome === 'completed')).toBe(true);
+  });
+
+  it('captures tool events with deterministic ordering metadata in diagnostics payloads', async () => {
+    const { db, runId, runNodeId } = seedSingleAgentRun();
+    const executor = createSqlWorkflowExecutor(db, {
+      resolveProvider: () =>
+        createProvider([
+          { type: 'system', content: 'start', timestamp: 100 },
+          {
+            type: 'tool_use',
+            content: 'query issues',
+            timestamp: 101,
+            metadata: { toolName: 'github_search', args: { q: 'issue 150' } },
+          },
+          {
+            type: 'tool_result',
+            content: 'found issue',
+            timestamp: 102,
+            metadata: { toolName: 'github_search', resultCount: 1 },
+          },
+          { type: 'usage', content: '', timestamp: 103, metadata: { totalTokens: 19 } },
+          { type: 'result', content: 'Design report body', timestamp: 104 },
+        ]),
+    });
+
+    await executor.executeRun({
+      workflowRunId: runId,
+      options: {
+        workingDirectory: '/tmp/alphred-worktree',
+      },
+    });
+
+    const diagnostics = db
+      .select({
+        attempt: runNodeDiagnostics.attempt,
+        outcome: runNodeDiagnostics.outcome,
+        diagnostics: runNodeDiagnostics.diagnostics,
+      })
+      .from(runNodeDiagnostics)
+      .where(eq(runNodeDiagnostics.runNodeId, runNodeId))
+      .orderBy(asc(runNodeDiagnostics.id))
+      .all();
+
+    expect(diagnostics).toHaveLength(1);
+    const payload = diagnostics[0]?.diagnostics as {
+      events: { eventIndex: number; timestamp: number; type: string }[];
+      toolEvents: { type: string; toolName: string | null }[];
+      summary: { tokensUsed: number };
+    };
+    expect(diagnostics[0]?.attempt).toBe(1);
+    expect(diagnostics[0]?.outcome).toBe('completed');
+    expect(payload.events.map(event => event.eventIndex)).toEqual([0, 1, 2, 3, 4]);
+    expect(payload.events.map(event => event.type)).toEqual(['system', 'tool_use', 'tool_result', 'usage', 'result']);
+    expect(payload.events.map(event => event.timestamp)).toEqual([100, 101, 102, 103, 104]);
+    expect(payload.toolEvents).toHaveLength(2);
+    expect(payload.toolEvents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: 'tool_use',
+          toolName: 'github_search',
+        }),
+        expect.objectContaining({
+          type: 'tool_result',
+          toolName: 'github_search',
+        }),
+      ]),
+    );
+    expect(payload.summary.tokensUsed).toBe(19);
+  });
+
+  it('captures structured failure diagnostics when an attempt fails', async () => {
+    const { db, runId, runNodeId } = seedSingleAgentRun();
+    const executor = createSqlWorkflowExecutor(db, {
+      resolveProvider: () =>
+        createProvider([
+          { type: 'system', content: 'start', timestamp: 100 },
+          { type: 'assistant', content: 'partial response', timestamp: 101 },
+        ]),
+    });
+
+    await executor.executeRun({
+      workflowRunId: runId,
+      options: {
+        workingDirectory: '/tmp/alphred-worktree',
+      },
+    });
+
+    const diagnostics = db
+      .select({
+        outcome: runNodeDiagnostics.outcome,
+        diagnostics: runNodeDiagnostics.diagnostics,
+      })
+      .from(runNodeDiagnostics)
+      .where(eq(runNodeDiagnostics.runNodeId, runNodeId))
+      .orderBy(asc(runNodeDiagnostics.id))
+      .all();
+
+    expect(diagnostics).toHaveLength(1);
+    expect(diagnostics[0]?.outcome).toBe('failed');
+    const payload = diagnostics[0]?.diagnostics as {
+      status: string;
+      error: { classification: string; message: string } | null;
+      summary: { eventCount: number; droppedEventCount: number };
+    };
+    expect(payload.status).toBe('failed');
+    expect(payload.error?.classification).toBe('provider_result_missing');
+    expect(payload.error?.message).toContain('without a result event');
+    expect(payload.summary.eventCount).toBe(0);
+    expect(payload.summary.droppedEventCount).toBe(0);
+  });
+
+  it('applies deterministic redaction and truncation bounds to diagnostics payloads', async () => {
+    const { db, runId, runNodeId } = seedSingleAgentRun();
+    const longPayload = 'x'.repeat(2_000);
+    const noisyEvents: ProviderEvent[] = [
+      {
+        type: 'tool_use',
+        content: longPayload,
+        timestamp: 1,
+        metadata: {
+          toolName: 'lookup',
+          apiKey: 'sk-secret-key-value',
+          authorization: 'Bearer abcdefghijklmnop',
+        },
+      },
+      ...Array.from({ length: 125 }, (_, index) => ({
+        type: 'assistant' as const,
+        content: `step-${index}`,
+        timestamp: index + 2,
+      })),
+      {
+        type: 'result',
+        content: 'final report',
+        timestamp: 200,
+      },
+    ];
+
+    const executor = createSqlWorkflowExecutor(db, {
+      resolveProvider: () => createProvider(noisyEvents),
+    });
+
+    await executor.executeRun({
+      workflowRunId: runId,
+      options: {
+        workingDirectory: '/tmp/alphred-worktree',
+      },
+    });
+
+    const diagnostics = db
+      .select({
+        redacted: runNodeDiagnostics.redacted,
+        truncated: runNodeDiagnostics.truncated,
+        diagnostics: runNodeDiagnostics.diagnostics,
+      })
+      .from(runNodeDiagnostics)
+      .where(eq(runNodeDiagnostics.runNodeId, runNodeId))
+      .orderBy(asc(runNodeDiagnostics.id))
+      .all();
+
+    expect(diagnostics).toHaveLength(1);
+    expect(diagnostics[0]?.redacted).toBe(1);
+    expect(diagnostics[0]?.truncated).toBe(1);
+
+    const payload = diagnostics[0]?.diagnostics as {
+      summary: { retainedEventCount: number; droppedEventCount: number; truncated: boolean; redacted: boolean };
+      events: { contentPreview: string; metadata: Record<string, unknown> | null }[];
+    };
+
+    expect(payload.summary.redacted).toBe(true);
+    expect(payload.summary.truncated).toBe(true);
+    expect(payload.summary.retainedEventCount).toBe(120);
+    expect(payload.summary.droppedEventCount).toBe(7);
+    expect(payload.events[0]?.contentPreview.length).toBeLessThanOrEqual(600);
+    expect(payload.events[0]?.metadata).toMatchObject({
+      apiKey: '[REDACTED]',
+      authorization: '[REDACTED]',
     });
   });
 

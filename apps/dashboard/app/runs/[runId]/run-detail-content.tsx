@@ -23,6 +23,7 @@ type PrimaryActionState = Readonly<{
 }>;
 
 type RealtimeChannelState = 'disabled' | 'live' | 'reconnecting' | 'stale';
+type DiagnosticErrorClassification = 'provider_result_missing' | 'timeout' | 'aborted' | 'unknown';
 
 type RunDetailContentProps = Readonly<{
   initialDetail: DashboardRunDetail;
@@ -71,6 +72,25 @@ const ROUTING_DECISION_TYPES = new Set<DashboardRunDetail['routingDecisions'][nu
   'retry',
   'no_route',
 ]);
+const DIAGNOSTIC_OUTCOMES = new Set<DashboardRunDetail['diagnostics'][number]['outcome']>(['completed', 'failed']);
+const DIAGNOSTIC_EVENT_TYPES = new Set<DashboardRunDetail['diagnostics'][number]['diagnostics']['events'][number]['type']>([
+  'system',
+  'assistant',
+  'result',
+  'tool_use',
+  'tool_result',
+  'usage',
+]);
+const DIAGNOSTIC_TOOL_EVENT_TYPES = new Set<DashboardRunDetail['diagnostics'][number]['diagnostics']['toolEvents'][number]['type']>([
+  'tool_use',
+  'tool_result',
+]);
+const DIAGNOSTIC_ERROR_CLASSIFICATIONS = new Set<DiagnosticErrorClassification>([
+  'provider_result_missing',
+  'timeout',
+  'aborted',
+  'unknown',
+]);
 const WORKTREE_STATUSES = new Set<DashboardRunDetail['worktrees'][number]['status']>(['active', 'removed']);
 
 export const RUN_DETAIL_POLL_INTERVAL_MS = 4_000;
@@ -83,6 +103,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function isInteger(value: unknown): value is number {
   return typeof value === 'number' && Number.isInteger(value);
+}
+
+function isBoolean(value: unknown): value is boolean {
+  return typeof value === 'boolean';
 }
 
 function isNullableString(value: unknown): value is string | null {
@@ -138,6 +162,145 @@ function hasRoutingDecisionShape(value: unknown): value is DashboardRunDetail['r
   );
 }
 
+function hasDiagnosticsShape(value: unknown): value is DashboardRunDetail['diagnostics'][number] {
+  if (!isRecord(value)) {
+    return false;
+  }
+
+  if (
+    !isInteger(value.id) ||
+    !isInteger(value.runNodeId) ||
+    !isInteger(value.attempt) ||
+    typeof value.outcome !== 'string' ||
+    !DIAGNOSTIC_OUTCOMES.has(value.outcome as DashboardRunDetail['diagnostics'][number]['outcome']) ||
+    !isInteger(value.eventCount) ||
+    !isInteger(value.retainedEventCount) ||
+    !isInteger(value.droppedEventCount) ||
+    !isBoolean(value.redacted) ||
+    !isBoolean(value.truncated) ||
+    !isInteger(value.payloadChars) ||
+    typeof value.createdAt !== 'string' ||
+    !isRecord(value.diagnostics)
+  ) {
+    return false;
+  }
+
+  const payload = value.diagnostics;
+  if (
+    !isInteger(payload.schemaVersion) ||
+    !isInteger(payload.workflowRunId) ||
+    !isInteger(payload.runNodeId) ||
+    typeof payload.nodeKey !== 'string' ||
+    !isInteger(payload.attempt) ||
+    typeof payload.outcome !== 'string' ||
+    !DIAGNOSTIC_OUTCOMES.has(payload.outcome as DashboardRunDetail['diagnostics'][number]['outcome']) ||
+    typeof payload.status !== 'string' ||
+    !DIAGNOSTIC_OUTCOMES.has(payload.status as DashboardRunDetail['diagnostics'][number]['outcome']) ||
+    !isNullableString(payload.provider) ||
+    !isRecord(payload.timing) ||
+    !isRecord(payload.summary) ||
+    !isRecord(payload.contextHandoff) ||
+    !isRecord(payload.eventTypeCounts) ||
+    !Array.isArray(payload.events) ||
+    !Array.isArray(payload.toolEvents) ||
+    !(payload.routingDecision === null || typeof payload.routingDecision === 'string') ||
+    !(payload.error === null || isRecord(payload.error))
+  ) {
+    return false;
+  }
+
+  if (
+    !isNullableString(payload.timing.queuedAt) ||
+    !isNullableString(payload.timing.startedAt) ||
+    !isNullableString(payload.timing.completedAt) ||
+    !isNullableString(payload.timing.failedAt) ||
+    typeof payload.timing.persistedAt !== 'string'
+  ) {
+    return false;
+  }
+
+  if (
+    !isInteger(payload.summary.tokensUsed) ||
+    !isInteger(payload.summary.eventCount) ||
+    !isInteger(payload.summary.retainedEventCount) ||
+    !isInteger(payload.summary.droppedEventCount) ||
+    !isInteger(payload.summary.toolEventCount) ||
+    !isBoolean(payload.summary.redacted) ||
+    !isBoolean(payload.summary.truncated)
+  ) {
+    return false;
+  }
+
+  if (
+    !payload.events.every((event) => {
+      if (!isRecord(event)) {
+        return false;
+      }
+
+      const usage = event.usage;
+      if (usage !== null) {
+        if (
+          !isRecord(usage) ||
+          !(usage.deltaTokens === null || isInteger(usage.deltaTokens)) ||
+          !(usage.cumulativeTokens === null || isInteger(usage.cumulativeTokens))
+        ) {
+          return false;
+        }
+      }
+
+      return (
+        isInteger(event.eventIndex) &&
+        typeof event.type === 'string' &&
+        DIAGNOSTIC_EVENT_TYPES.has(
+          event.type as DashboardRunDetail['diagnostics'][number]['diagnostics']['events'][number]['type'],
+        ) &&
+        isInteger(event.timestamp) &&
+        isInteger(event.contentChars) &&
+        typeof event.contentPreview === 'string' &&
+        (event.metadata === null || isRecord(event.metadata))
+      );
+    })
+  ) {
+    return false;
+  }
+
+  if (
+    !payload.toolEvents.every((event) => {
+      if (!isRecord(event)) {
+        return false;
+      }
+
+      return (
+        isInteger(event.eventIndex) &&
+        typeof event.type === 'string' &&
+        DIAGNOSTIC_TOOL_EVENT_TYPES.has(
+          event.type as DashboardRunDetail['diagnostics'][number]['diagnostics']['toolEvents'][number]['type'],
+        ) &&
+        isInteger(event.timestamp) &&
+        isNullableString(event.toolName) &&
+        typeof event.summary === 'string'
+      );
+    })
+  ) {
+    return false;
+  }
+
+  if (
+    payload.error !== null &&
+    (
+      typeof payload.error.name !== 'string' ||
+      typeof payload.error.message !== 'string' ||
+      typeof payload.error.classification !== 'string' ||
+      !DIAGNOSTIC_ERROR_CLASSIFICATIONS.has(payload.error.classification as DiagnosticErrorClassification) ||
+      !isNullableString(payload.error.stackPreview)
+    )
+  ) {
+    return false;
+  }
+
+  return true;
+}
+
 function hasRunNodeShape(value: unknown): value is DashboardRunDetail['nodes'][number] {
   if (!isRecord(value)) {
     return false;
@@ -162,6 +325,10 @@ function hasRunNodeShape(value: unknown): value is DashboardRunDetail['nodes'][n
   }
 
   if (value.latestRoutingDecision !== null && !hasRoutingDecisionShape(value.latestRoutingDecision)) {
+    return false;
+  }
+
+  if (value.latestDiagnostics !== null && !hasDiagnosticsShape(value.latestDiagnostics)) {
     return false;
   }
 
@@ -263,6 +430,10 @@ function parseRunDetailPayload(payload: unknown, expectedRunId: number): Dashboa
     !Array.isArray(payload.routingDecisions) ||
     !payload.routingDecisions.every((decision) => hasRoutingDecisionShape(decision))
   ) {
+    return null;
+  }
+
+  if (!Array.isArray(payload.diagnostics) || !payload.diagnostics.every((diagnostics) => hasDiagnosticsShape(diagnostics))) {
     return null;
   }
 
@@ -424,6 +595,16 @@ function buildTimeline(detail: DashboardRunDetail): readonly TimelineItem[] {
       timestamp: createdAt,
       summary: `Routing decision: ${decision.decisionType}.`,
       relatedNodeId: decision.runNodeId,
+    });
+  }
+
+  for (const diagnostics of detail.diagnostics) {
+    const createdAt = parseDateValue(diagnostics.createdAt) ?? fallbackDate;
+    events.push({
+      key: `diagnostics-${diagnostics.id}`,
+      timestamp: createdAt,
+      summary: `Diagnostics persisted (attempt ${diagnostics.attempt}, ${diagnostics.outcome}).`,
+      relatedNodeId: diagnostics.runNodeId,
     });
   }
 
@@ -928,7 +1109,7 @@ export function RunDetailContent({
         </Panel>
       </div>
 
-      <Card title="Artifacts and routing decisions" description="Recent snapshots for operator triage.">
+      <Card title="Artifacts, diagnostics, and routing decisions" description="Recent snapshots for operator triage.">
         <p className="meta-text">Artifacts</p>
         {detail.artifacts.length === 0 ? <p>No artifacts captured yet.</p> : null}
         <ul className="page-stack" aria-label="Run artifacts">
@@ -938,6 +1119,39 @@ export function RunDetailContent({
               <p className="meta-text">{truncatePreview(artifact.contentPreview)}</p>
             </li>
           ))}
+        </ul>
+
+        <p className="meta-text">Node diagnostics</p>
+        {detail.diagnostics.length === 0 ? <p>No node diagnostics captured yet.</p> : null}
+        <ul className="page-stack" aria-label="Run node diagnostics">
+          {detail.diagnostics.map((diagnostics) => {
+            const node = detail.nodes.find((candidate) => candidate.id === diagnostics.runNodeId);
+            const nodeLabel = node ? `${node.nodeKey} (attempt ${diagnostics.attempt})` : `Node #${diagnostics.runNodeId}`;
+
+            return (
+              <li key={diagnostics.id}>
+                <p>{`${nodeLabel}: ${diagnostics.outcome}`}</p>
+                <p className="meta-text">
+                  {`Events ${diagnostics.retainedEventCount}/${diagnostics.eventCount}; tools ${diagnostics.diagnostics.summary.toolEventCount}; tokens ${diagnostics.diagnostics.summary.tokensUsed}.`}
+                </p>
+                <p className="meta-text">
+                  {diagnostics.truncated || diagnostics.redacted
+                    ? `Payload normalized${diagnostics.redacted ? ' with redaction' : ''}${diagnostics.truncated ? ' and truncation' : ''}.`
+                    : 'Payload stored without truncation.'}
+                </p>
+                {diagnostics.diagnostics.error ? (
+                  <p className="meta-text">
+                    {`Failure: ${diagnostics.diagnostics.error.classification} (${truncatePreview(diagnostics.diagnostics.error.message)}).`}
+                  </p>
+                ) : null}
+                {diagnostics.diagnostics.toolEvents.length > 0 ? (
+                  <p className="meta-text">
+                    {`Tool activity: ${truncatePreview(diagnostics.diagnostics.toolEvents.map(event => event.summary).join('; '))}`}
+                  </p>
+                ) : null}
+              </li>
+            );
+          })}
         </ul>
 
         <p className="meta-text">Routing decisions</p>
