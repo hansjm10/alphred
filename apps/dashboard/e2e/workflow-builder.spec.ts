@@ -34,8 +34,9 @@ test('supports palette search and mobile inspector drawer behavior in the editor
   await expect(inspector).not.toHaveClass(/workflow-editor-inspector--open/);
   await page.getByRole('button', { name: 'Inspector' }).click();
   await expect(inspector).toHaveClass(/workflow-editor-inspector--open/);
-  await expect(page.locator('.workflow-editor-inspector-backdrop')).toBeVisible();
+  const closeInspectorBackdrop = page.getByRole('button', { name: 'Close inspector drawer' });
+  await expect(closeInspectorBackdrop).toBeVisible();
 
-  await page.locator('.workflow-editor-inspector-backdrop').click();
+  await closeInspectorBackdrop.click({ position: { x: 4, y: 4 } });
   await expect(inspector).not.toHaveClass(/workflow-editor-inspector--open/);
 });
