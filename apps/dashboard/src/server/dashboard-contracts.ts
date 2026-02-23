@@ -1,3 +1,5 @@
+import type { GuardExpression } from '@alphred/shared';
+
 export type DashboardNodeStatus = 'pending' | 'running' | 'completed' | 'failed' | 'skipped' | 'cancelled';
 
 export type DashboardNodeStatusSummary = {
@@ -26,6 +28,11 @@ export type DashboardWorkflowCatalogItem = {
   publishedVersion: number | null;
   draftVersion: number | null;
   updatedAt: string;
+};
+
+export type DashboardWorkflowTreeKeyAvailability = {
+  treeKey: string;
+  available: boolean;
 };
 
 export type DashboardWorkflowTemplateKey = 'design-implement-review' | 'blank';
@@ -71,7 +78,7 @@ export type DashboardWorkflowDraftEdge = {
   targetNodeKey: string;
   priority: number;
   auto: boolean;
-  guardExpression: unknown | null;
+  guardExpression: GuardExpression | null;
 };
 
 export type DashboardWorkflowDraftTopology = {

@@ -1214,6 +1214,19 @@ output {
   justify-content: flex-end;
 }
 
+.workflow-field-validation {
+  color: var(--text-secondary);
+  font: 500 12px/18px var(--font-data);
+}
+
+.workflow-field-validation--error {
+  color: var(--status-error);
+}
+
+.workflow-field-validation--success {
+  color: var(--status-ok);
+}
+
 .workflow-json {
   background: var(--bg-canvas);
   border: 1px solid var(--border-default);
@@ -1229,6 +1242,7 @@ output {
 .workflow-editor-shell {
   display: grid;
   gap: var(--space-3);
+  position: relative;
 }
 
 .workflow-editor-topbar {
@@ -1240,6 +1254,9 @@ output {
   flex-wrap: wrap;
   gap: var(--space-2);
   justify-content: space-between;
+  position: sticky;
+  top: 0;
+  z-index: 12;
   padding: var(--space-3);
 }
 
@@ -1252,6 +1269,10 @@ output {
   display: flex;
   flex-wrap: wrap;
   gap: var(--space-2);
+}
+
+.workflow-editor-inspector-toggle {
+  display: none;
 }
 
 .workflow-editor-body {
@@ -1285,13 +1306,38 @@ output {
   border: 1px solid var(--border-default);
   border-radius: var(--radius-sm);
   cursor: grab;
+  display: grid;
+  gap: 4px;
+  text-align: left;
   font: 600 14px/20px var(--font-display);
   padding: 10px 12px;
   user-select: none;
 }
 
+.workflow-palette-draggable span {
+  color: var(--text-secondary);
+  font: 400 12px/18px var(--font-data);
+}
+
 .workflow-palette-draggable:active {
   cursor: grabbing;
+}
+
+.workflow-palette-search {
+  display: grid;
+  gap: 6px;
+}
+
+.workflow-palette-search input {
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  font: 400 14px/20px var(--font-body);
+  padding: 8px 10px;
+}
+
+.workflow-palette-search input:focus-visible {
+  outline: 2px solid var(--accent-active);
+  outline-offset: 2px;
 }
 
 .workflow-palette-actions {
@@ -1305,6 +1351,14 @@ output {
 
 .workflow-editor-inspector {
   border-left: 1px solid var(--border-default);
+}
+
+.workflow-editor-inspector__mobile-header {
+  display: none;
+}
+
+.workflow-editor-inspector-close {
+  display: none;
 }
 
 .workflow-editor-canvas {
@@ -1379,6 +1433,95 @@ output {
   font-family: var(--font-data);
 }
 
+.workflow-inspector-actions {
+  display: flex;
+  justify-content: flex-start;
+}
+
+.workflow-segmented-control {
+  display: inline-flex;
+  gap: 4px;
+  padding: 4px;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  background: var(--bg-canvas);
+}
+
+.workflow-segmented-control button {
+  border: 0;
+  border-radius: calc(var(--radius-sm) - 2px);
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font: 600 12px/18px var(--font-data);
+  padding: 6px 10px;
+}
+
+.workflow-segmented-control button.active {
+  background: color-mix(in srgb, var(--accent-active) 12%, var(--bg-surface));
+  color: var(--accent-active);
+}
+
+.workflow-guard-condition-list {
+  display: grid;
+  gap: 8px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.workflow-guard-condition-row {
+  display: grid;
+  gap: 6px;
+  grid-template-columns: 1.2fr auto 1fr auto;
+}
+
+.workflow-guard-condition-row input,
+.workflow-guard-condition-row select,
+.workflow-guard-condition-row button {
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  font: 400 13px/18px var(--font-data);
+  padding: 8px 10px;
+}
+
+.workflow-guard-condition-row button {
+  cursor: pointer;
+  background: var(--bg-canvas);
+}
+
+.workflow-context-menu {
+  position: fixed;
+  z-index: 60;
+  min-width: 190px;
+  display: grid;
+  gap: 4px;
+  padding: 8px;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  background: var(--bg-surface);
+  box-shadow: 0 10px 28px rgba(16, 24, 40, 0.2);
+}
+
+.workflow-context-menu button {
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-primary);
+  cursor: pointer;
+  font: 500 13px/18px var(--font-data);
+  padding: 8px 10px;
+  text-align: left;
+}
+
+.workflow-context-menu button:hover {
+  background: color-mix(in srgb, var(--accent-active) 8%, var(--bg-surface));
+}
+
+.workflow-editor-inspector-backdrop {
+  display: none;
+}
+
 .workflow-inspector-field input:focus-visible,
 .workflow-inspector-field select:focus-visible,
 .workflow-inspector-field textarea:focus-visible {
@@ -1421,7 +1564,7 @@ output {
 
   .workflow-editor-body {
     grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: auto minmax(0, 1fr) auto;
+    grid-template-rows: auto minmax(0, 1fr);
   }
 
   .workflow-editor-palette {
@@ -1429,10 +1572,47 @@ output {
     border-bottom: 1px solid var(--border-default);
   }
 
+  .workflow-editor-inspector-toggle {
+    display: inline-flex;
+  }
+
   .workflow-editor-inspector {
-    border-left: 0;
-    border-top: 1px solid var(--border-default);
-    max-height: 360px;
+    border-left: 1px solid var(--border-default);
+    border-top: 0;
+    bottom: 0;
+    max-height: 100vh;
+    position: fixed;
+    right: 0;
+    top: 0;
+    transform: translateX(110%);
+    transition: transform 220ms ease;
+    width: min(92vw, 420px);
+    z-index: 40;
+  }
+
+  .workflow-editor-shell.workflow-editor-shell--drawer-open .workflow-editor-inspector,
+  .workflow-editor-inspector.workflow-editor-inspector--open {
+    transform: translateX(0);
+  }
+
+  .workflow-editor-inspector__mobile-header {
+    align-items: center;
+    display: flex;
+    justify-content: space-between;
+  }
+
+  .workflow-editor-inspector-close {
+    display: inline-flex;
+  }
+
+  .workflow-editor-inspector-backdrop {
+    border: 0;
+    background: rgba(15, 23, 42, 0.36);
+    display: block;
+    inset: 0;
+    padding: 0;
+    position: fixed;
+    z-index: 30;
   }
 }
 

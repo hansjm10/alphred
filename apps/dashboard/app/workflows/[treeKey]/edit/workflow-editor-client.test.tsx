@@ -341,6 +341,51 @@ describe('WorkflowEditorPageContent', () => {
     expect(flowNode?.data.label).toBe('Design');
   });
 
+  it('shows live warnings before manual validation runs', async () => {
+    const fetchMock = vi.fn(async () => createJsonResponse({ draft: {} }, { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(
+      <WorkflowEditorPageContent
+        initialDraft={{
+          treeKey: 'demo-tree',
+          version: 1,
+          draftRevision: 0,
+          name: 'Demo Tree',
+          description: null,
+          versionNotes: null,
+          nodes: [
+            {
+              nodeKey: 'design',
+              displayName: 'Design',
+              nodeType: 'agent',
+              provider: 'codex',
+              maxRetries: 0,
+              sequenceIndex: 10,
+              position: { x: 0, y: 0 },
+              promptTemplate: { content: 'Draft prompt', contentType: 'markdown' },
+            },
+            {
+              nodeKey: 'review',
+              displayName: 'Review',
+              nodeType: 'agent',
+              provider: 'codex',
+              maxRetries: 0,
+              sequenceIndex: 20,
+              position: { x: 100, y: 20 },
+              promptTemplate: { content: 'Review prompt', contentType: 'markdown' },
+            },
+          ],
+          edges: [],
+          initialRunnableNodeKeys: ['design', 'review'],
+        }}
+      />,
+    );
+
+    expect(screen.getByText(/Multiple initial runnable nodes detected/i)).toBeInTheDocument();
+    expect(screen.getAllByText(/has no outgoing transitions/i)).toHaveLength(2);
+  });
+
   it('runs validation and renders errors and warnings', async () => {
     vi.useRealTimers();
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
@@ -696,6 +741,115 @@ describe('WorkflowEditorPageContent', () => {
     ]);
   });
 
+  it('opens add-node palette when a connection is dropped on empty canvas and links the new node', async () => {
+    const fetchMock = vi.fn(async () => createJsonResponse({ draft: {} }, { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(
+      <WorkflowEditorPageContent
+        initialDraft={{
+          treeKey: 'demo-tree',
+          version: 1,
+          draftRevision: 0,
+          name: 'Demo Tree',
+          description: null,
+          versionNotes: null,
+          nodes: [
+            {
+              nodeKey: 'design',
+              displayName: 'Design',
+              nodeType: 'agent',
+              provider: 'codex',
+              maxRetries: 0,
+              sequenceIndex: 10,
+              position: { x: 0, y: 0 },
+              promptTemplate: { content: 'Draft prompt', contentType: 'markdown' },
+            },
+          ],
+          edges: [],
+          initialRunnableNodeKeys: ['design'],
+        }}
+      />,
+    );
+
+    const onConnect = latestReactFlowProps?.onConnect;
+    expect(typeof onConnect).toBe('function');
+    await act(async () => {
+      (onConnect as (connection: { source?: string; target?: string }) => void)({
+        source: 'design',
+      });
+    });
+
+    const addNodeDialog = screen.getByRole('dialog', { name: 'Add node' });
+    expect(addNodeDialog).toBeInTheDocument();
+    fireEvent.click(within(addNodeDialog).getByRole('button', { name: /Agent node/i }));
+    await vi.advanceTimersByTimeAsync(1000);
+
+    const call = fetchMock.mock.calls[0] as unknown as [RequestInfo | URL, RequestInit | undefined];
+    const payload = JSON.parse(call[1]?.body as string) as { edges?: unknown[] };
+    expect(payload.edges).toEqual([
+      {
+        sourceNodeKey: 'design',
+        targetNodeKey: 'agent',
+        priority: 100,
+        auto: true,
+        guardExpression: null,
+      },
+    ]);
+  });
+
+  it('duplicates nodes from the context menu', async () => {
+    const fetchMock = vi.fn(async () => createJsonResponse({ draft: {} }, { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(
+      <WorkflowEditorPageContent
+        initialDraft={{
+          treeKey: 'demo-tree',
+          version: 1,
+          draftRevision: 0,
+          name: 'Demo Tree',
+          description: null,
+          versionNotes: null,
+          nodes: [
+            {
+              nodeKey: 'design',
+              displayName: 'Design',
+              nodeType: 'agent',
+              provider: 'codex',
+              maxRetries: 0,
+              sequenceIndex: 10,
+              position: { x: 0, y: 0 },
+              promptTemplate: { content: 'Draft prompt', contentType: 'markdown' },
+            },
+          ],
+          edges: [],
+          initialRunnableNodeKeys: ['design'],
+        }}
+      />,
+    );
+
+    const onNodeContextMenu = latestReactFlowProps?.onNodeContextMenu;
+    expect(typeof onNodeContextMenu).toBe('function');
+    await act(async () => {
+      (onNodeContextMenu as (event: unknown, node: unknown) => void)(
+        {
+          preventDefault: () => undefined,
+          clientX: 24,
+          clientY: 36,
+        },
+        { id: 'design' },
+      );
+    });
+
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Duplicate' }));
+    await vi.advanceTimersByTimeAsync(1000);
+
+    const call = fetchMock.mock.calls[0] as unknown as [RequestInfo | URL, RequestInit | undefined];
+    const payload = JSON.parse(call[1]?.body as string) as { nodes?: { nodeKey: string }[] };
+    expect(payload.nodes?.map((node) => node.nodeKey)).toContain('design-copy');
+  });
+
   it('deletes a selected transition and autosaves', async () => {
     const fetchMock = vi.fn(async () => createJsonResponse({ draft: {} }, { status: 200 }));
     vi.stubGlobal('fetch', fetchMock);
@@ -823,7 +977,7 @@ describe('WorkflowEditorPageContent', () => {
     expect(screen.getByText('Auto transitions are unconditional.')).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('checkbox', { name: 'Auto' }));
-    fireEvent.change(screen.getByLabelText('Guard (decision)'), { target: { value: 'blocked' } });
+    fireEvent.change(screen.getByLabelText('Guard value 1'), { target: { value: 'blocked' } });
 
     await vi.advanceTimersByTimeAsync(1000);
 
@@ -836,6 +990,91 @@ describe('WorkflowEditorPageContent', () => {
         priority: 100,
         auto: false,
         guardExpression: { field: 'decision', operator: '==', value: 'blocked' },
+      },
+    ]);
+  });
+
+  it('supports advanced guard JSON mode and persists parsed expressions', async () => {
+    const fetchMock = vi.fn(async () => createJsonResponse({ draft: {} }, { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(
+      <WorkflowEditorPageContent
+        initialDraft={{
+          treeKey: 'demo-tree',
+          version: 1,
+          draftRevision: 0,
+          name: 'Demo Tree',
+          description: null,
+          versionNotes: null,
+          nodes: [
+            {
+              nodeKey: 'design',
+              displayName: 'Design',
+              nodeType: 'agent',
+              provider: 'codex',
+              maxRetries: 0,
+              sequenceIndex: 10,
+              position: { x: 0, y: 0 },
+              promptTemplate: { content: 'Draft prompt', contentType: 'markdown' },
+            },
+            {
+              nodeKey: 'review',
+              displayName: 'Review',
+              nodeType: 'agent',
+              provider: 'codex',
+              maxRetries: 0,
+              sequenceIndex: 20,
+              position: { x: 200, y: 0 },
+              promptTemplate: { content: 'Review prompt', contentType: 'markdown' },
+            },
+          ],
+          edges: [
+            {
+              sourceNodeKey: 'design',
+              targetNodeKey: 'review',
+              priority: 100,
+              auto: false,
+              guardExpression: { field: 'decision', operator: '==', value: 'approved' },
+            },
+          ],
+          initialRunnableNodeKeys: ['design'],
+        }}
+      />,
+    );
+
+    const selectionChange = latestReactFlowProps?.onSelectionChange;
+    expect(typeof selectionChange).toBe('function');
+    await act(async () => {
+      (selectionChange as (params: { nodes: unknown[]; edges: unknown[] }) => void)({
+        nodes: [],
+        edges: [{ id: 'design->review:100' }],
+      });
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Advanced' }));
+    fireEvent.change(screen.getByLabelText('Raw guard expression'), {
+      target: {
+        value: '{"logic":"or","conditions":[{"field":"decision","operator":"==","value":"blocked"},{"field":"decision","operator":"==","value":"retry"}]}',
+      },
+    });
+    await vi.advanceTimersByTimeAsync(1000);
+
+    const call = fetchMock.mock.calls[0] as unknown as [RequestInfo | URL, RequestInit | undefined];
+    const payload = JSON.parse(call[1]?.body as string) as { edges?: unknown[] };
+    expect(payload.edges).toEqual([
+      {
+        sourceNodeKey: 'design',
+        targetNodeKey: 'review',
+        priority: 100,
+        auto: false,
+        guardExpression: {
+          logic: 'or',
+          conditions: [
+            { field: 'decision', operator: '==', value: 'blocked' },
+            { field: 'decision', operator: '==', value: 'retry' },
+          ],
+        },
       },
     ]);
   });

@@ -9,6 +9,7 @@ import {
   useState,
   useEffect,
   type DragEvent,
+  type MouseEvent as ReactMouseEvent,
 } from 'react';
 import { useRouter } from 'next/navigation';
 import {
@@ -16,7 +17,6 @@ import {
   Controls,
   MiniMap,
   ReactFlow,
-  addEdge,
   applyEdgeChanges,
   applyNodeChanges,
   type Connection,
@@ -38,10 +38,12 @@ import { WorkflowEditorAddNodeDialog } from './workflow-editor-add-node-dialog';
 import {
   buildReactFlowEdges,
   buildReactFlowNodes,
+  computeWorkflowLiveWarnings,
+  createConnectedDraftEdge,
   createDraftNode,
+  duplicateDraftNode,
   mapEdgeFromReactFlow,
   mapNodeFromReactFlow,
-  nextPriorityForSource,
   toReactFlowNodeData,
   toFlowPosition,
 } from './workflow-editor-helpers';
@@ -62,6 +64,16 @@ function hasNonSelectionNodeChanges(changes: NodeChange[]): boolean {
 
 function hasNonSelectionEdgeChanges(changes: EdgeChange[]): boolean {
   return changes.some(change => change.type !== 'select');
+}
+
+function toReactFlowEdge(edge: DashboardWorkflowDraftEdge): Edge {
+  return {
+    id: `${edge.sourceNodeKey}->${edge.targetNodeKey}:${edge.priority}`,
+    source: edge.sourceNodeKey,
+    target: edge.targetNodeKey,
+    label: edge.auto ? `auto · ${edge.priority}` : `guard · ${edge.priority}`,
+    data: edge,
+  };
 }
 
 type WorkflowEditorPageContentProps = Readonly<{
@@ -181,6 +193,15 @@ function WorkflowEditorLoadedContent({ initialDraft }: Readonly<{ initialDraft: 
   const [publishError, setPublishError] = useState<string | null>(null);
   const [addNodePaletteOpen, setAddNodePaletteOpen] = useState(false);
   const [publishConfirmOpen, setPublishConfirmOpen] = useState(false);
+  const [pendingConnectionSourceNodeKey, setPendingConnectionSourceNodeKey] = useState<string | null>(null);
+  const [inspectorDrawerOpen, setInspectorDrawerOpen] = useState(false);
+  const [isCompactViewport, setIsCompactViewport] = useState(false);
+  const [contextMenu, setContextMenu] = useState<{
+    targetType: 'node' | 'edge';
+    id: string;
+    x: number;
+    y: number;
+  } | null>(null);
   const [publishing, setPublishing] = useState(false);
 
   const selectedNode = useMemo(() => nodes.find(node => node.id === selectedNodeId) ?? null, [nodes, selectedNodeId]);
@@ -215,6 +236,45 @@ function WorkflowEditorLoadedContent({ initialDraft }: Readonly<{ initialDraft: 
       edges: draftEdgesForSave,
     };
   }, [draftEdgesForSave, draftNodesForSave, workflowDescription, workflowName, workflowVersionNotes]);
+
+  useEffect(() => {
+    if (typeof globalThis.matchMedia !== 'function') {
+      setIsCompactViewport(false);
+      return;
+    }
+
+    const mediaQuery = globalThis.matchMedia('(max-width: 960px)');
+    const update = () => {
+      setIsCompactViewport(mediaQuery.matches);
+      if (!mediaQuery.matches) {
+        setInspectorDrawerOpen(false);
+      }
+    };
+
+    update();
+
+    if (typeof mediaQuery.addEventListener === 'function') {
+      mediaQuery.addEventListener('change', update);
+      return () => mediaQuery.removeEventListener('change', update);
+    }
+
+    mediaQuery.addListener(update);
+    return () => mediaQuery.removeListener(update);
+  }, []);
+
+  useEffect(() => {
+    if (!contextMenu) {
+      return;
+    }
+
+    const closeContextMenu = () => setContextMenu(null);
+    globalThis.addEventListener('click', closeContextMenu);
+    globalThis.addEventListener('contextmenu', closeContextMenu);
+    return () => {
+      globalThis.removeEventListener('click', closeContextMenu);
+      globalThis.removeEventListener('contextmenu', closeContextMenu);
+    };
+  }, [contextMenu]);
 
   const { flushSave, markDirty, saveError, saveNow, saveState, scheduleSave } = useDraftAutosave({
     treeKey,
@@ -278,17 +338,20 @@ function WorkflowEditorLoadedContent({ initialDraft }: Readonly<{ initialDraft: 
     edgesRef.current = edges;
   }, [edges]);
 
-  const openPalette = useCallback(() => {
+  const openPalette = useCallback((sourceNodeKey?: string) => {
+    setPendingConnectionSourceNodeKey(sourceNodeKey ?? null);
     addNodePaletteOpenRef.current = true;
     setAddNodePaletteOpen(true);
   }, [addNodePaletteOpenRef]);
 
   const closePalette = useCallback(() => {
+    setPendingConnectionSourceNodeKey(null);
     addNodePaletteOpenRef.current = false;
     setAddNodePaletteOpen(false);
   }, [addNodePaletteOpenRef]);
 
   const deleteEdgeById = useCallback((edgeId: string) => {
+    setContextMenu((current) => (current?.id === edgeId ? null : current));
     setEdges((current) => current.filter(edge => edge.id !== edgeId));
     selectedEdgeIdRef.current = null;
     setSelectedEdgeId(null);
@@ -296,6 +359,7 @@ function WorkflowEditorLoadedContent({ initialDraft }: Readonly<{ initialDraft: 
   }, [markWorkflowChanged]);
 
   const deleteNodeById = useCallback((nodeId: string) => {
+    setContextMenu((current) => (current?.id === nodeId ? null : current));
     setEdges((current) => current.filter(edge => edge.source !== nodeId && edge.target !== nodeId));
     setNodes((current) => current.filter(node => node.id !== nodeId));
     selectedNodeIdRef.current = null;
@@ -322,6 +386,10 @@ function WorkflowEditorLoadedContent({ initialDraft }: Readonly<{ initialDraft: 
   const initialRunnableNodeKeys = useMemo(() => {
     const incoming = new Set(draftEdgesForSave.map(edge => edge.targetNodeKey));
     return draftNodesForSave.filter(node => !incoming.has(node.nodeKey)).map(node => node.nodeKey);
+  }, [draftEdgesForSave, draftNodesForSave]);
+
+  const liveWarnings = useMemo(() => {
+    return computeWorkflowLiveWarnings(draftNodesForSave, draftEdgesForSave);
   }, [draftEdgesForSave, draftNodesForSave]);
 
   const publishSummary = useMemo(() => {
@@ -353,35 +421,32 @@ function WorkflowEditorLoadedContent({ initialDraft }: Readonly<{ initialDraft: 
   }, [markWorkflowChanged]);
 
   const onConnect = useCallback((connection: Connection) => {
-    if (!connection.source || !connection.target) {
+    if (!connection.source) {
+      return;
+    }
+
+    if (!connection.target) {
+      openPalette(connection.source);
       return;
     }
 
     setEdges((current) => {
       const draftEdges = current.map(mapEdgeFromReactFlow);
-      const priority = nextPriorityForSource(draftEdges, connection.source);
-      const next: Edge = {
-        id: `${connection.source}->${connection.target}:${priority}`,
-        source: connection.source,
-        target: connection.target,
-        label: `auto · ${priority}`,
-        data: {
-          sourceNodeKey: connection.source,
-          targetNodeKey: connection.target,
-          priority,
-          auto: true,
-          guardExpression: null,
-        } satisfies DashboardWorkflowDraftEdge,
-      };
-      return addEdge(next, current);
+      const next = createConnectedDraftEdge({
+        sourceNodeKey: connection.source,
+        targetNodeKey: connection.target,
+        existingEdges: draftEdges,
+      });
+      return [...current, toReactFlowEdge(next)];
     });
 
     markWorkflowChanged();
-  }, [markWorkflowChanged]);
+  }, [markWorkflowChanged, openPalette]);
 
   const handleSelectionChange = useCallback((params: { nodes: Node[]; edges: Edge[] }) => {
     const nextNode = params.nodes[0]?.id ?? null;
     const nextEdge = params.edges[0]?.id ?? null;
+    setContextMenu(null);
     selectedNodeIdRef.current = nextNode;
     selectedEdgeIdRef.current = nextEdge;
     setSelectedNodeId(nextNode);
@@ -389,26 +454,36 @@ function WorkflowEditorLoadedContent({ initialDraft }: Readonly<{ initialDraft: 
 
     if (nextNode) {
       setActiveTab('node');
+      if (isCompactViewport) {
+        setInspectorDrawerOpen(true);
+      }
     } else if (nextEdge) {
       setActiveTab('transition');
+      if (isCompactViewport) {
+        setInspectorDrawerOpen(true);
+      }
     }
-  }, []);
+  }, [isCompactViewport]);
 
   const addNode = useCallback((args: {
     nodeType: DashboardWorkflowDraftNode['nodeType'];
     position?: { x: number; y: number };
-  }) => {
+    connectFromNodeKey?: string;
+    presetNode?: DashboardWorkflowDraftNode;
+  }): DashboardWorkflowDraftNode => {
     const existingKeys = new Set(nodes.map(node => node.id));
     const lastNode = nodes.at(-1)?.data as DashboardWorkflowDraftNode | undefined;
     const nextSequenceIndex = (lastNode?.sequenceIndex ?? 0) + 10;
     const fallbackPosition = { x: 80, y: 80 + nodes.length * 60 };
 
-    const newNode = createDraftNode({
-      nodeType: args.nodeType,
-      existingNodeKeys: existingKeys,
-      nextSequenceIndex,
-      position: args.position ?? fallbackPosition,
-    });
+    const newNode =
+      args.presetNode ??
+      createDraftNode({
+        nodeType: args.nodeType,
+        existingNodeKeys: existingKeys,
+        nextSequenceIndex,
+        position: args.position ?? fallbackPosition,
+      });
 
     setNodes((current) => [
       ...current,
@@ -420,18 +495,35 @@ function WorkflowEditorLoadedContent({ initialDraft }: Readonly<{ initialDraft: 
       },
     ]);
 
+    if (args.connectFromNodeKey) {
+      setEdges((current) => {
+        const draftEdges = current.map(mapEdgeFromReactFlow);
+        const nextEdge = createConnectedDraftEdge({
+          sourceNodeKey: args.connectFromNodeKey as string,
+          targetNodeKey: newNode.nodeKey,
+          existingEdges: draftEdges,
+        });
+        return [...current, toReactFlowEdge(nextEdge)];
+      });
+    }
+
     selectedNodeIdRef.current = newNode.nodeKey;
     selectedEdgeIdRef.current = null;
     setSelectedNodeId(newNode.nodeKey);
     setSelectedEdgeId(null);
     setActiveTab('node');
+    if (isCompactViewport) {
+      setInspectorDrawerOpen(true);
+    }
     markWorkflowChanged();
-  }, [markWorkflowChanged, nodes]);
+    return newNode;
+  }, [isCompactViewport, markWorkflowChanged, nodes]);
 
   const handlePaletteSelect = useCallback((nodeType: DashboardWorkflowDraftNode['nodeType']) => {
+    const sourceNodeKey = pendingConnectionSourceNodeKey;
     closePalette();
-    addNode({ nodeType });
-  }, [addNode, closePalette]);
+    addNode({ nodeType, connectFromNodeKey: sourceNodeKey ?? undefined });
+  }, [addNode, closePalette, pendingConnectionSourceNodeKey]);
 
   const onDragOver = useCallback((event: DragEvent) => {
     event.preventDefault();
@@ -456,6 +548,137 @@ function WorkflowEditorLoadedContent({ initialDraft }: Readonly<{ initialDraft: 
 
     addNode({ nodeType: nodeType as DashboardWorkflowDraftNode['nodeType'], position });
   }, [addNode, reactFlowInstance]);
+
+  const onNodeContextMenu = useCallback((event: ReactMouseEvent, node: Node) => {
+    event.preventDefault();
+    selectedNodeIdRef.current = node.id;
+    selectedEdgeIdRef.current = null;
+    setSelectedNodeId(node.id);
+    setSelectedEdgeId(null);
+    setActiveTab('node');
+    setContextMenu({
+      targetType: 'node',
+      id: node.id,
+      x: event.clientX,
+      y: event.clientY,
+    });
+  }, []);
+
+  const onEdgeContextMenu = useCallback((event: ReactMouseEvent, edge: Edge) => {
+    event.preventDefault();
+    selectedNodeIdRef.current = null;
+    selectedEdgeIdRef.current = edge.id;
+    setSelectedNodeId(null);
+    setSelectedEdgeId(edge.id);
+    setActiveTab('transition');
+    setContextMenu({
+      targetType: 'edge',
+      id: edge.id,
+      x: event.clientX,
+      y: event.clientY,
+    });
+  }, []);
+
+  const renameNodeFromContextMenu = useCallback(() => {
+    if (!contextMenu || contextMenu.targetType !== 'node') {
+      return;
+    }
+
+    const target = nodes.find((node) => node.id === contextMenu.id);
+    if (!target) {
+      setContextMenu(null);
+      return;
+    }
+
+    const data = target.data as DashboardWorkflowDraftNode;
+    const nextDisplayName = globalThis.prompt('Rename node', data.displayName)?.trim();
+    if (!nextDisplayName) {
+      setContextMenu(null);
+      return;
+    }
+
+    setNodes((current) => current.map((node) => {
+      if (node.id !== contextMenu.id) {
+        return node;
+      }
+      return {
+        ...node,
+        data: toReactFlowNodeData({
+          ...data,
+          displayName: nextDisplayName,
+        }),
+      };
+    }));
+    setContextMenu(null);
+    markWorkflowChanged();
+  }, [contextMenu, markWorkflowChanged, nodes]);
+
+  const duplicateNodeFromContextMenu = useCallback(() => {
+    if (!contextMenu || contextMenu.targetType !== 'node') {
+      return;
+    }
+
+    const target = nodes.find((node) => node.id === contextMenu.id);
+    if (!target) {
+      setContextMenu(null);
+      return;
+    }
+
+    const sourceNode = target.data as DashboardWorkflowDraftNode;
+    const maxSequenceIndex = nodes.reduce((maxValue, node) => {
+      const value = (node.data as DashboardWorkflowDraftNode).sequenceIndex;
+      return Math.max(maxValue, value);
+    }, 0);
+    const duplicated = duplicateDraftNode({
+      sourceNode,
+      existingNodeKeys: new Set(nodes.map((node) => node.id)),
+      nextSequenceIndex: maxSequenceIndex + 10,
+    });
+
+    addNode({
+      nodeType: duplicated.nodeType,
+      presetNode: duplicated,
+    });
+    setContextMenu(null);
+  }, [addNode, contextMenu, nodes]);
+
+  const addConnectedNodeFromContextMenu = useCallback(() => {
+    if (!contextMenu || contextMenu.targetType !== 'node') {
+      return;
+    }
+
+    setContextMenu(null);
+    openPalette(contextMenu.id);
+  }, [contextMenu, openPalette]);
+
+  const duplicateEdgeFromContextMenu = useCallback(() => {
+    if (!contextMenu || contextMenu.targetType !== 'edge') {
+      return;
+    }
+
+    const sourceEdge = edges.find((edge) => edge.id === contextMenu.id);
+    if (!sourceEdge) {
+      setContextMenu(null);
+      return;
+    }
+
+    const sourceData = sourceEdge.data as DashboardWorkflowDraftEdge;
+    setEdges((current) => {
+      const sourceEdges = current.map(mapEdgeFromReactFlow);
+      const priority = sourceEdges
+        .filter((edge) => edge.sourceNodeKey === sourceEdge.source)
+        .reduce((maxValue, edge) => Math.max(maxValue, edge.priority), 90) + 10;
+      const nextEdge: DashboardWorkflowDraftEdge = {
+        ...sourceData,
+        sourceNodeKey: sourceEdge.source,
+        targetNodeKey: sourceEdge.target,
+        priority,
+      };
+      return [...current, toReactFlowEdge(nextEdge)];
+    });
+    setContextMenu(null);
+    markWorkflowChanged();
+  }, [contextMenu, edges, markWorkflowChanged]);
 
   async function runValidation(): Promise<void> {
     setValidationError(null);
@@ -532,6 +755,14 @@ function WorkflowEditorLoadedContent({ initialDraft }: Readonly<{ initialDraft: 
     }
   }
 
+  function openInspectorDrawer(): void {
+    setInspectorDrawerOpen(true);
+  }
+
+  function closeInspectorDrawer(): void {
+    setInspectorDrawerOpen(false);
+  }
+
   const statusBadge = useMemo(() => {
     switch (saveState) {
       case 'saving':
@@ -546,7 +777,14 @@ function WorkflowEditorLoadedContent({ initialDraft }: Readonly<{ initialDraft: 
   }, [saveState]);
 
   const inspector = (
-    <aside className="workflow-editor-inspector" aria-label="Workflow inspector">
+    <aside
+      className={`workflow-editor-inspector${inspectorDrawerOpen ? ' workflow-editor-inspector--open' : ''}`}
+      aria-label="Workflow inspector"
+    >
+      <div className="workflow-editor-inspector__mobile-header">
+        <p className="meta-text">Inspector</p>
+        <ActionButton className="workflow-editor-inspector-close" onClick={closeInspectorDrawer}>Close</ActionButton>
+      </div>
       <nav className="workflow-editor-tabs" aria-label="Inspector tabs">
         <button type="button" className={activeTab === 'node' ? 'active' : ''} onClick={() => setActiveTab('node')} disabled={!selectedNode}>
           Node
@@ -563,6 +801,7 @@ function WorkflowEditorLoadedContent({ initialDraft }: Readonly<{ initialDraft: 
         {activeTab === 'node' ? (
           <NodeInspector
             node={selectedNode}
+            onAddConnectedNode={(nodeKey) => openPalette(nodeKey)}
             onChange={(next) => {
               if (!selectedNode) return;
               setNodes((current) =>
@@ -621,6 +860,7 @@ function WorkflowEditorLoadedContent({ initialDraft }: Readonly<{ initialDraft: 
             }}
             initialRunnableNodeKeys={validation?.initialRunnableNodeKeys ?? initialRunnableNodeKeys}
             validation={validation}
+            liveWarnings={liveWarnings}
             validationError={validationError}
             publishError={publishError}
           />
@@ -629,9 +869,10 @@ function WorkflowEditorLoadedContent({ initialDraft }: Readonly<{ initialDraft: 
     </aside>
   );
 
-	return (
-	    <div className="workflow-editor-shell">
-	      <WorkflowEditorAddNodeDialog open={addNodePaletteOpen} onClose={closePalette} onSelect={handlePaletteSelect} />
+  return (
+    <div className={`workflow-editor-shell${inspectorDrawerOpen ? ' workflow-editor-shell--drawer-open' : ''}`}>
+      <WorkflowEditorAddNodeDialog open={addNodePaletteOpen} onClose={closePalette} onSelect={handlePaletteSelect} />
+
       {publishConfirmOpen ? (
         <div className="workflow-overlay">
           <button
@@ -683,9 +924,7 @@ function WorkflowEditorLoadedContent({ initialDraft }: Readonly<{ initialDraft: 
                 </li>
               </ul>
 
-              {publishError ? (
-                <p className="run-launch-banner--error" role="alert">{publishError}</p>
-              ) : null}
+              {publishError ? <p className="run-launch-banner--error" role="alert">{publishError}</p> : null}
 
               <div className="workflow-dialog__actions">
                 <ActionButton onClick={closePublishConfirm} disabled={publishing}>
@@ -699,35 +938,69 @@ function WorkflowEditorLoadedContent({ initialDraft }: Readonly<{ initialDraft: 
           </dialog>
         </div>
       ) : null}
-	      <header className="workflow-editor-topbar">
-	        <div className="workflow-editor-topbar__meta">
-	          <p className="meta-text">Workflows / {treeKey}</p>
-	          <h2>{workflowName}</h2>
-	        </div>
+
+      {isCompactViewport && inspectorDrawerOpen ? (
+        <button
+          type="button"
+          className="workflow-editor-inspector-backdrop"
+          aria-label="Close inspector drawer"
+          onClick={closeInspectorDrawer}
+        />
+      ) : null}
+
+      {contextMenu ? (
+        <div
+          className="workflow-context-menu"
+          role="menu"
+          aria-label={`${contextMenu.targetType} context menu`}
+          style={{ left: contextMenu.x, top: contextMenu.y }}
+        >
+          {contextMenu.targetType === 'node' ? (
+            <>
+              <button type="button" role="menuitem" onClick={renameNodeFromContextMenu}>Rename</button>
+              <button type="button" role="menuitem" onClick={duplicateNodeFromContextMenu}>Duplicate</button>
+              <button type="button" role="menuitem" onClick={addConnectedNodeFromContextMenu}>Add connected node</button>
+              <button type="button" role="menuitem" onClick={() => deleteNodeById(contextMenu.id)}>Delete</button>
+            </>
+          ) : (
+            <>
+              <button type="button" role="menuitem" onClick={duplicateEdgeFromContextMenu}>Duplicate</button>
+              <button type="button" role="menuitem" onClick={() => deleteEdgeById(contextMenu.id)}>Delete</button>
+            </>
+          )}
+        </div>
+      ) : null}
+
+      <header className="workflow-editor-topbar">
+        <div className="workflow-editor-topbar__meta">
+          <p className="meta-text">Workflows / {treeKey}</p>
+          <h2>{workflowName}</h2>
+        </div>
         <div className="workflow-editor-topbar__actions">
           <StatusBadge status={statusBadge.status} label={statusBadge.label} />
           <ActionButton onClick={undo}>Undo</ActionButton>
           <ActionButton onClick={redo}>Redo</ActionButton>
           <ActionButton onClick={runValidation}>Validate</ActionButton>
+          <ActionButton className="workflow-editor-inspector-toggle" onClick={openInspectorDrawer}>Inspector</ActionButton>
           <ActionButton tone="primary" onClick={openPublishConfirm}>Publish</ActionButton>
           <ButtonLink href="/workflows">Exit</ButtonLink>
         </div>
       </header>
 
-	      <div className="workflow-editor-body">
-	        <aside className="workflow-editor-palette" aria-label="Node palette">
-	          <WorkflowEditorNodePalette onAdd={(nodeType) => addNode({ nodeType })} />
+      <div className="workflow-editor-body">
+        <aside className="workflow-editor-palette" aria-label="Node palette">
+          <WorkflowEditorNodePalette onAdd={(nodeType) => addNode({ nodeType })} />
 
-		          <Panel title="Draft version">
-		            <p className="meta-text">v{version} (unpublished)</p>
-		            {saveError ? <p className="run-launch-banner--error" role="alert">{saveError}</p> : null}
-		            {saveState === 'error' ? (
-			              <ActionButton onClick={() => saveNow().catch(() => undefined)}>
-			                Retry save
-			              </ActionButton>
-			            ) : null}
-		          </Panel>
-		        </aside>
+          <Panel title="Draft version">
+            <p className="meta-text">v{version} (unpublished)</p>
+            {saveError ? <p className="run-launch-banner--error" role="alert">{saveError}</p> : null}
+            {saveState === 'error' ? (
+              <ActionButton onClick={() => saveNow().catch(() => undefined)}>
+                Retry save
+              </ActionButton>
+            ) : null}
+          </Panel>
+        </aside>
 
         <section className="workflow-editor-canvas" aria-label="Workflow canvas">
           <ReactFlow
@@ -740,6 +1013,9 @@ function WorkflowEditorLoadedContent({ initialDraft }: Readonly<{ initialDraft: 
             onInit={setReactFlowInstance}
             onDrop={onDrop}
             onDragOver={onDragOver}
+            onPaneClick={() => setContextMenu(null)}
+            onNodeContextMenu={onNodeContextMenu}
+            onEdgeContextMenu={onEdgeContextMenu}
             fitView
           >
             <Background />

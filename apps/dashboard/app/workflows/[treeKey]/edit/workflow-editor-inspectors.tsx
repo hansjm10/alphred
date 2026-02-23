@@ -1,33 +1,161 @@
 'use client';
 
-import type { ChangeEvent } from 'react';
+import { useEffect, useMemo, useState, type ChangeEvent } from 'react';
+import type { GuardCondition, GuardExpression, GuardOperator } from '@alphred/shared';
 import type { Edge, Node } from '@xyflow/react';
 import type {
   DashboardWorkflowDraftEdge,
   DashboardWorkflowDraftNode,
+  DashboardWorkflowValidationIssue,
   DashboardWorkflowValidationResult,
 } from '../../../../src/server/dashboard-contracts';
-import { Panel } from '../../../ui/primitives';
+import { ActionButton, Panel } from '../../../ui/primitives';
 
-function readGuardDecisionValue(expression: unknown): string {
-  if (!expression || typeof expression !== 'object') {
-    return 'approved';
+const guardOperators: readonly GuardOperator[] = ['==', '!=', '>', '<', '>=', '<='];
+
+type GuardEditorMode = 'guided' | 'advanced';
+
+type GuidedConditionDraft = {
+  field: string;
+  operator: GuardOperator;
+  value: string;
+};
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function isGuardExpression(value: unknown): value is GuardExpression {
+  if (!isRecord(value)) {
+    return false;
   }
 
-  if (!('value' in expression)) {
-    return 'approved';
+  if ('logic' in value) {
+    if ((value.logic !== 'and' && value.logic !== 'or') || !Array.isArray(value.conditions)) {
+      return false;
+    }
+
+    return value.conditions.every(isGuardExpression);
   }
 
-  const value = (expression as { value?: unknown }).value;
-  return typeof value === 'string' ? value : 'approved';
+  if (!('field' in value) || !('operator' in value) || !('value' in value)) {
+    return false;
+  }
+
+  if (typeof value.field !== 'string') {
+    return false;
+  }
+
+  if (typeof value.operator !== 'string' || !guardOperators.includes(value.operator as GuardOperator)) {
+    return false;
+  }
+
+  return ['string', 'number', 'boolean'].includes(typeof value.value);
+}
+
+function parseGuardValue(value: string): string | number | boolean {
+  const trimmed = value.trim();
+  if (trimmed === 'true') {
+    return true;
+  }
+  if (trimmed === 'false') {
+    return false;
+  }
+
+  if (/^-?\d+(\.\d+)?$/.test(trimmed)) {
+    const parsed = Number(trimmed);
+    if (Number.isFinite(parsed)) {
+      return parsed;
+    }
+  }
+
+  return value;
+}
+
+function toGuidedCondition(condition: GuardCondition): GuidedConditionDraft {
+  return {
+    field: condition.field,
+    operator: condition.operator,
+    value: String(condition.value),
+  };
+}
+
+function toGuidedState(expression: GuardExpression | null): {
+  logic: 'and' | 'or';
+  conditions: GuidedConditionDraft[];
+} {
+  if (!expression) {
+    return {
+      logic: 'and',
+      conditions: [{ field: 'decision', operator: '==', value: 'approved' }],
+    };
+  }
+
+  if ('logic' in expression) {
+    const flatConditions = expression.conditions.filter((condition): condition is GuardCondition => {
+      return !('logic' in condition);
+    });
+
+    if (flatConditions.length > 0) {
+      return {
+        logic: expression.logic,
+        conditions: flatConditions.map(toGuidedCondition),
+      };
+    }
+  }
+
+  if (!('logic' in expression)) {
+    return {
+      logic: 'and',
+      conditions: [toGuidedCondition(expression)],
+    };
+  }
+
+  return {
+    logic: 'and',
+    conditions: [{ field: 'decision', operator: '==', value: 'approved' }],
+  };
+}
+
+function toGuardExpression(logic: 'and' | 'or', conditions: GuidedConditionDraft[]): GuardExpression {
+  const normalized = conditions.map((condition): GuardCondition => {
+    return {
+      field: condition.field.trim(),
+      operator: condition.operator,
+      value: parseGuardValue(condition.value),
+    };
+  });
+
+  if (normalized.length === 1) {
+    return normalized[0];
+  }
+
+  return {
+    logic,
+    conditions: normalized,
+  };
+}
+
+function summarizeGuardExpression(expression: GuardExpression | null): string {
+  if (!expression) {
+    return 'decision == approved';
+  }
+
+  if ('logic' in expression) {
+    return `${expression.logic.toUpperCase()} group (${expression.conditions.length} conditions)`;
+  }
+
+  return `${expression.field} ${expression.operator} ${String(expression.value)}`;
 }
 
 export function NodeInspector({
   node,
   onChange,
+  onAddConnectedNode,
 }: Readonly<{
   node: Node | null;
   onChange: (next: DashboardWorkflowDraftNode) => void;
+  onAddConnectedNode?: (nodeKey: string) => void;
 }>) {
   if (!node) {
     return <p className="meta-text">Select a node to edit details.</p>;
@@ -100,22 +228,44 @@ export function NodeInspector({
           onChange={(event) => handleFieldChange('maxRetries', Number(event.target.value))}
         />
       </label>
+
+      {onAddConnectedNode ? (
+        <div className="workflow-inspector-actions">
+          <ActionButton onClick={() => onAddConnectedNode(data.nodeKey)}>Add connected node</ActionButton>
+        </div>
+      ) : null}
     </div>
   );
 }
 
-export function EdgeInspector({
+function EdgeInspectorContent({
   edge,
+  data,
   onChange,
 }: Readonly<{
-  edge: Edge | null;
+  edge: Edge;
+  data: DashboardWorkflowDraftEdge;
   onChange: (next: DashboardWorkflowDraftEdge) => void;
 }>) {
-  if (!edge) {
-    return <p className="meta-text">Select a transition to edit details.</p>;
-  }
+  const [mode, setMode] = useState<GuardEditorMode>('guided');
+  const [guidedLogic, setGuidedLogic] = useState<'and' | 'or'>('and');
+  const [guidedConditions, setGuidedConditions] = useState<GuidedConditionDraft[]>([
+    { field: 'decision', operator: '==', value: 'approved' },
+  ]);
+  const [advancedExpression, setAdvancedExpression] = useState('');
+  const [advancedError, setAdvancedError] = useState<string | null>(null);
 
-  const data = edge.data as DashboardWorkflowDraftEdge;
+  useEffect(() => {
+    const guided = toGuidedState(data.auto ? null : data.guardExpression);
+    setGuidedLogic(guided.logic);
+    setGuidedConditions(guided.conditions);
+    setAdvancedExpression(JSON.stringify(data.auto ? { field: 'decision', operator: '==', value: 'approved' } : data.guardExpression, null, 2));
+    setAdvancedError(null);
+  }, [data.auto, data.guardExpression]);
+
+  const guardSummary = useMemo(() => {
+    return summarizeGuardExpression(data.auto ? null : data.guardExpression);
+  }, [data.auto, data.guardExpression]);
 
   function handleAutoChange(nextAuto: boolean) {
     if (nextAuto) {
@@ -123,25 +273,75 @@ export function EdgeInspector({
       return;
     }
 
+    const fallback = data.guardExpression ?? { field: 'decision', operator: '==', value: 'approved' };
     onChange({
       ...data,
       auto: false,
-      guardExpression: data.guardExpression ?? { field: 'decision', operator: '==', value: 'approved' },
+      guardExpression: fallback,
     });
   }
 
-  function handleGuardValueChange(nextValue: string) {
+  function applyGuidedState(nextLogic: 'and' | 'or', nextConditions: GuidedConditionDraft[]) {
+    setGuidedLogic(nextLogic);
+    setGuidedConditions(nextConditions);
     onChange({
       ...data,
       auto: false,
-      guardExpression: { field: 'decision', operator: '==', value: nextValue },
+      guardExpression: toGuardExpression(nextLogic, nextConditions),
     });
+  }
+
+  function handleGuidedConditionChange(index: number, patch: Partial<GuidedConditionDraft>) {
+    const nextConditions = guidedConditions.map((condition, conditionIndex) => {
+      return conditionIndex === index ? { ...condition, ...patch } : condition;
+    });
+
+    applyGuidedState(guidedLogic, nextConditions);
+  }
+
+  function addGuidedCondition() {
+    const nextConditions: GuidedConditionDraft[] = [
+      ...guidedConditions,
+      { field: 'decision', operator: '==', value: 'approved' },
+    ];
+    applyGuidedState(guidedLogic, nextConditions);
+  }
+
+  function removeGuidedCondition(index: number) {
+    if (guidedConditions.length <= 1) {
+      return;
+    }
+
+    const nextConditions = guidedConditions.filter((_, conditionIndex) => conditionIndex !== index);
+    applyGuidedState(guidedLogic, nextConditions);
+  }
+
+  function handleAdvancedChange(nextRaw: string) {
+    setAdvancedExpression(nextRaw);
+
+    try {
+      const parsed = JSON.parse(nextRaw) as unknown;
+      if (!isGuardExpression(parsed)) {
+        setAdvancedError('Guard expression must be a valid condition or logical group JSON object.');
+        return;
+      }
+
+      setAdvancedError(null);
+      onChange({
+        ...data,
+        auto: false,
+        guardExpression: parsed,
+      });
+    } catch (error_) {
+      setAdvancedError(error_ instanceof Error ? error_.message : 'Guard expression JSON is invalid.');
+    }
   }
 
   return (
     <div className="workflow-inspector-stack">
       <h3>Transition</h3>
       <p className="meta-text">{edge.source} → {edge.target}</p>
+      <p className="meta-text">Transitions are evaluated by priority; first match wins.</p>
 
       <label className="workflow-inspector-field">
         <span>Priority</span>
@@ -161,21 +361,110 @@ export function EdgeInspector({
       {data.auto ? (
         <p className="meta-text">Auto transitions are unconditional.</p>
       ) : (
-        <label className="workflow-inspector-field">
-          <span>Guard (decision)</span>
-          <select
-            value={readGuardDecisionValue(data.guardExpression)}
-            onChange={(event) => handleGuardValueChange(event.target.value)}
-          >
-            <option value="approved">approved</option>
-            <option value="changes_requested">changes_requested</option>
-            <option value="blocked">blocked</option>
-            <option value="retry">retry</option>
-          </select>
-        </label>
+        <>
+          <div className="workflow-inspector-field">
+            <span>Guard mode</span>
+            <div className="workflow-segmented-control" role="group" aria-label="Guard editor mode">
+              <button
+                type="button"
+                className={mode === 'guided' ? 'active' : ''}
+                onClick={() => setMode('guided')}
+              >
+                Guided
+              </button>
+              <button
+                type="button"
+                className={mode === 'advanced' ? 'active' : ''}
+                onClick={() => setMode('advanced')}
+              >
+                Advanced
+              </button>
+            </div>
+            <span className="meta-text">Current guard: {guardSummary}</span>
+          </div>
+
+          {mode === 'guided' ? (
+            <div className="workflow-inspector-field">
+              <span>Guided guard builder</span>
+              <label className="workflow-inspector-field">
+                <span>Group logic</span>
+                <select
+                  value={guidedLogic}
+                  onChange={(event) => applyGuidedState(event.target.value as 'and' | 'or', guidedConditions)}
+                >
+                  <option value="and">and</option>
+                  <option value="or">or</option>
+                </select>
+              </label>
+
+              <ul className="workflow-guard-condition-list">
+                {guidedConditions.map((condition, index) => (
+                  <li key={`condition-${index}`} className="workflow-guard-condition-row">
+                    <input
+                      aria-label={`Guard field ${index + 1}`}
+                      value={condition.field}
+                      onChange={(event) => handleGuidedConditionChange(index, { field: event.target.value })}
+                      placeholder="field"
+                    />
+                    <select
+                      aria-label={`Guard operator ${index + 1}`}
+                      value={condition.operator}
+                      onChange={(event) => handleGuidedConditionChange(index, { operator: event.target.value as GuardOperator })}
+                    >
+                      {guardOperators.map((operator) => (
+                        <option key={operator} value={operator}>{operator}</option>
+                      ))}
+                    </select>
+                    <input
+                      aria-label={`Guard value ${index + 1}`}
+                      value={condition.value}
+                      onChange={(event) => handleGuidedConditionChange(index, { value: event.target.value })}
+                      placeholder="value"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => removeGuidedCondition(index)}
+                      disabled={guidedConditions.length <= 1}
+                    >
+                      Remove
+                    </button>
+                  </li>
+                ))}
+              </ul>
+
+              <ActionButton onClick={addGuidedCondition}>Add condition</ActionButton>
+            </div>
+          ) : (
+            <label className="workflow-inspector-field">
+              <span>Raw guard expression (JSON)</span>
+              <textarea
+                rows={10}
+                value={advancedExpression}
+                onChange={(event) => handleAdvancedChange(event.target.value)}
+                aria-label="Raw guard expression"
+              />
+              {advancedError ? <span className="workflow-field-validation workflow-field-validation--error">{advancedError}</span> : null}
+            </label>
+          )}
+        </>
       )}
     </div>
   );
+}
+
+export function EdgeInspector({
+  edge,
+  onChange,
+}: Readonly<{
+  edge: Edge | null;
+  onChange: (next: DashboardWorkflowDraftEdge) => void;
+}>) {
+  if (!edge) {
+    return <p className="meta-text">Select a transition to edit details.</p>;
+  }
+
+  const data = edge.data as DashboardWorkflowDraftEdge;
+  return <EdgeInspectorContent edge={edge} data={data} onChange={onChange} />;
 }
 
 export function WorkflowInspector({
@@ -187,6 +476,7 @@ export function WorkflowInspector({
   onVersionNotesChange,
   initialRunnableNodeKeys,
   validation,
+  liveWarnings,
   validationError,
   publishError,
 }: Readonly<{
@@ -198,19 +488,20 @@ export function WorkflowInspector({
   onVersionNotesChange: (next: string) => void;
   initialRunnableNodeKeys: readonly string[];
   validation: DashboardWorkflowValidationResult | null;
+  liveWarnings: readonly DashboardWorkflowValidationIssue[];
   validationError: string | null;
   publishError: string | null;
 }>) {
   const errors = validation?.errors ?? [];
-  const warnings = validation?.warnings ?? [];
+  const validationWarnings = validation?.warnings ?? [];
 
   const validationBody = (() => {
     if (validation === null) {
       return <p className="meta-text">Run validation to see publish blockers and warnings.</p>;
     }
 
-    if (errors.length === 0 && warnings.length === 0) {
-      return <p className="meta-text">No issues detected.</p>;
+    if (errors.length === 0 && validationWarnings.length === 0) {
+      return <p className="meta-text">No validation issues detected.</p>;
     }
 
     return (
@@ -225,11 +516,11 @@ export function WorkflowInspector({
             </ul>
           </div>
         ) : null}
-        {warnings.length > 0 ? (
+        {validationWarnings.length > 0 ? (
           <div>
             <h4>Warnings</h4>
             <ul className="workflow-issue-list">
-              {warnings.map((issue) => (
+              {validationWarnings.map((issue) => (
                 <li key={`warn-${issue.code}-${issue.message}`}>{issue.message}</li>
               ))}
             </ul>
@@ -267,6 +558,18 @@ export function WorkflowInspector({
               <span key={key} className="workflow-chip">{key}</span>
             ))}
           </div>
+        )}
+      </Panel>
+
+      <Panel title="Live warnings">
+        {liveWarnings.length === 0 ? (
+          <p className="meta-text">No live warnings.</p>
+        ) : (
+          <ul className="workflow-issue-list">
+            {liveWarnings.map((issue) => (
+              <li key={`live-${issue.code}-${issue.message}`}>{issue.message}</li>
+            ))}
+          </ul>
         )}
       </Panel>
 

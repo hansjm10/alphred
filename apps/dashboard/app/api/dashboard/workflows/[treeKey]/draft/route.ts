@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import type { GuardExpression } from '@alphred/shared';
 import { toErrorResponse } from '../../../../../../src/server/dashboard-http';
 import type {
   DashboardSaveWorkflowDraftRequest,
@@ -14,6 +15,55 @@ type RouteContext = {
     treeKey: string;
   }>;
 };
+
+const guardOperators = new Set(['==', '!=', '>', '<', '>=', '<=']);
+
+function isGuardExpression(value: unknown): value is GuardExpression {
+  if (!isRecord(value)) {
+    return false;
+  }
+
+  if ('logic' in value) {
+    if ((value.logic !== 'and' && value.logic !== 'or') || !Array.isArray(value.conditions)) {
+      return false;
+    }
+
+    return value.conditions.every(isGuardExpression);
+  }
+
+  if (!('field' in value) || !('operator' in value) || !('value' in value)) {
+    return false;
+  }
+
+  if (typeof value.field !== 'string') {
+    return false;
+  }
+
+  if (typeof value.operator !== 'string' || !guardOperators.has(value.operator)) {
+    return false;
+  }
+
+  return ['string', 'number', 'boolean'].includes(typeof value.value);
+}
+
+function parseDraftEdgeGuardExpression(value: unknown, index: number): GuardExpression | null {
+  if (value === undefined || value === null) {
+    return null;
+  }
+
+  if (!isGuardExpression(value)) {
+    throw new DashboardIntegrationError(
+      'invalid_request',
+      `Draft edge at index ${index} has an invalid guardExpression.`,
+      {
+        status: 400,
+        details: { field: `edges[${index}].guardExpression` },
+      },
+    );
+  }
+
+  return value;
+}
 
 function parseDraftNodePosition(value: unknown, index: number): { x: number; y: number } | null {
   if (value === null) {
@@ -147,14 +197,14 @@ function parseDraftEdge(raw: unknown, index: number): DashboardWorkflowDraftEdge
     });
   }
 
-  const guardExpression = raw.guardExpression;
+  const guardExpression = parseDraftEdgeGuardExpression(raw.guardExpression, index);
 
   return {
     sourceNodeKey: raw.sourceNodeKey,
     targetNodeKey: raw.targetNodeKey,
     priority: raw.priority,
     auto: raw.auto,
-    guardExpression: guardExpression === undefined ? null : guardExpression,
+    guardExpression,
   };
 }
 

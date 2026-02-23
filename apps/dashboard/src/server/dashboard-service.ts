@@ -30,7 +30,7 @@ import {
   resolveSandboxDir,
   type ScmProviderConfig,
 } from '@alphred/git';
-import type { AuthStatus, RepositoryConfig } from '@alphred/shared';
+import type { AuthStatus, GuardExpression, RepositoryConfig } from '@alphred/shared';
 import type {
   DashboardArtifactSnapshot,
   DashboardCreateRepositoryRequest,
@@ -55,6 +55,7 @@ import type {
 	  DashboardSaveWorkflowDraftRequest,
 	  DashboardWorkflowCatalogItem,
 	  DashboardWorkflowDraftTopology,
+	  DashboardWorkflowTreeKeyAvailability,
 	  DashboardWorkflowTreeSnapshot,
   DashboardWorkflowValidationIssue,
   DashboardWorkflowValidationResult,
@@ -623,7 +624,7 @@ export function createDashboardService(options: {
     return value !== null && typeof value === 'object' && !Array.isArray(value);
   }
 
-  function isGuardExpression(value: unknown): boolean {
+  function isGuardExpression(value: unknown): value is GuardExpression {
     if (!isRecord(value)) {
       return false;
     }
@@ -1013,7 +1014,7 @@ export function createDashboardService(options: {
         targetNodeKey: nodeKeyById.get(row.targetNodeId) ?? 'unknown',
         priority: row.priority,
         auto: row.auto === 1,
-        guardExpression: row.auto === 1 ? null : row.guardExpression,
+        guardExpression: row.auto === 1 ? null : (row.guardExpression as GuardExpression | null),
       }));
 
     const initialRunnableNodeKeys = computeInitialRunnableNodeKeys(nodes, edges);
@@ -1090,6 +1091,24 @@ export function createDashboardService(options: {
         }
 
         return [...catalogByKey.values()];
+      });
+    },
+
+    isWorkflowTreeKeyAvailable(treeKeyRaw: string): Promise<DashboardWorkflowTreeKeyAvailability> {
+      const treeKey = normalizeWorkflowTreeKey(treeKeyRaw);
+
+      return withDatabase(async db => {
+        const existing = db
+          .select({ id: workflowTrees.id })
+          .from(workflowTrees)
+          .where(eq(workflowTrees.treeKey, treeKey))
+          .limit(1)
+          .get();
+
+        return {
+          treeKey,
+          available: existing === undefined,
+        };
       });
     },
 

@@ -837,7 +837,7 @@ describe('createDashboardService', () => {
             targetNodeKey: 'b',
             priority: 10,
             auto: false,
-            guardExpression: { nope: true },
+            guardExpression: { nope: true } as unknown as import('@alphred/shared').GuardExpression,
           },
         ],
       }),

@@ -3,6 +3,7 @@ import type {
   DashboardWorkflowDraftEdge,
   DashboardWorkflowDraftNode,
   DashboardWorkflowDraftTopology,
+  DashboardWorkflowValidationIssue,
 } from '../../../../src/server/dashboard-contracts';
 import { slugifyKey } from '../../workflows-shared';
 
@@ -40,6 +41,20 @@ export function nextPriorityForSource(edges: readonly DashboardWorkflowDraftEdge
   }
 
   return Math.max(...priorities) + 10;
+}
+
+export function createConnectedDraftEdge(args: Readonly<{
+  sourceNodeKey: string;
+  targetNodeKey: string;
+  existingEdges: readonly DashboardWorkflowDraftEdge[];
+}>): DashboardWorkflowDraftEdge {
+  return {
+    sourceNodeKey: args.sourceNodeKey,
+    targetNodeKey: args.targetNodeKey,
+    priority: nextPriorityForSource(args.existingEdges, args.sourceNodeKey),
+    auto: true,
+    guardExpression: null,
+  };
 }
 
 export function buildReactFlowNodes(draft: DashboardWorkflowDraftTopology): Node[] {
@@ -93,6 +108,104 @@ export function mapEdgeFromReactFlow(edge: Edge): DashboardWorkflowDraftEdge {
   };
 }
 
+function computeInitialRunnableNodeKeys(
+  nodes: readonly DashboardWorkflowDraftNode[],
+  edges: readonly DashboardWorkflowDraftEdge[],
+): string[] {
+  const incoming = new Set(edges.map(edge => edge.targetNodeKey));
+  return nodes.filter(node => !incoming.has(node.nodeKey)).map(node => node.nodeKey);
+}
+
+function hasCycle(
+  nodes: readonly DashboardWorkflowDraftNode[],
+  edges: readonly DashboardWorkflowDraftEdge[],
+): boolean {
+  const adjacency = new Map<string, string[]>();
+  for (const node of nodes) {
+    adjacency.set(node.nodeKey, []);
+  }
+  for (const edge of edges) {
+    adjacency.get(edge.sourceNodeKey)?.push(edge.targetNodeKey);
+  }
+
+  const visited = new Set<string>();
+  const visiting = new Set<string>();
+
+  function visit(nodeKey: string): boolean {
+    if (visiting.has(nodeKey)) {
+      return true;
+    }
+    if (visited.has(nodeKey)) {
+      return false;
+    }
+
+    visiting.add(nodeKey);
+    const targets = adjacency.get(nodeKey) ?? [];
+    for (const target of targets) {
+      if (visit(target)) {
+        return true;
+      }
+    }
+    visiting.delete(nodeKey);
+    visited.add(nodeKey);
+    return false;
+  }
+
+  for (const node of nodes) {
+    if (visit(node.nodeKey)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+export function computeWorkflowLiveWarnings(
+  nodes: readonly DashboardWorkflowDraftNode[],
+  edges: readonly DashboardWorkflowDraftEdge[],
+): DashboardWorkflowValidationIssue[] {
+  if (nodes.length === 0) {
+    return [];
+  }
+
+  const warnings: DashboardWorkflowValidationIssue[] = [];
+  const initialRunnableNodeKeys = computeInitialRunnableNodeKeys(nodes, edges);
+  if (initialRunnableNodeKeys.length === 0) {
+    warnings.push({
+      code: 'no_initial_nodes',
+      message: 'No initial runnable nodes detected. Publishing will fail until at least one node has no incoming transition.',
+    });
+  } else if (initialRunnableNodeKeys.length > 1) {
+    warnings.push({
+      code: 'multiple_initial_nodes',
+      message: `Multiple initial runnable nodes detected: ${initialRunnableNodeKeys.join(', ')}.`,
+    });
+  }
+
+  if (hasCycle(nodes, edges)) {
+    warnings.push({
+      code: 'cycles_present',
+      message: 'Cycles are present in the workflow graph.',
+    });
+  }
+
+  const outgoingBySource = new Map<string, number>();
+  for (const edge of edges) {
+    outgoingBySource.set(edge.sourceNodeKey, (outgoingBySource.get(edge.sourceNodeKey) ?? 0) + 1);
+  }
+
+  for (const node of nodes) {
+    if ((outgoingBySource.get(node.nodeKey) ?? 0) === 0) {
+      warnings.push({
+        code: 'terminal_node',
+        message: `Node "${node.nodeKey}" has no outgoing transitions (terminal).`,
+      });
+    }
+  }
+
+  return warnings;
+}
+
 function nodeTypeLabel(nodeType: DashboardWorkflowDraftNode['nodeType']): 'Agent' | 'Human' | 'Tool' {
   switch (nodeType) {
     case 'agent':
@@ -143,5 +256,30 @@ export function createDraftNode(args: Readonly<{
     sequenceIndex: args.nextSequenceIndex,
     position: { x: Math.round(args.position.x), y: Math.round(args.position.y) },
     promptTemplate: defaultPromptTemplate(args.nodeType),
+  };
+}
+
+export function duplicateDraftNode(args: Readonly<{
+  sourceNode: DashboardWorkflowDraftNode;
+  existingNodeKeys: ReadonlySet<string>;
+  nextSequenceIndex: number;
+}>): DashboardWorkflowDraftNode {
+  const keyBase = slugifyNodeKey(args.sourceNode.nodeKey) || 'node';
+
+  let nodeKey = `${keyBase}-copy`;
+  let counter = 2;
+  while (args.existingNodeKeys.has(nodeKey)) {
+    nodeKey = `${keyBase}-copy-${counter}`;
+    counter += 1;
+  }
+
+  return {
+    ...args.sourceNode,
+    nodeKey,
+    displayName: `${args.sourceNode.displayName} Copy`,
+    sequenceIndex: args.nextSequenceIndex,
+    position: args.sourceNode.position
+      ? { x: Math.round(args.sourceNode.position.x + 40), y: Math.round(args.sourceNode.position.y + 40) }
+      : { x: 120, y: 120 },
   };
 }
