@@ -50,6 +50,22 @@ The SQL workflow executor reads routing intent from structured provider result m
 - A persisted `no_route` for completed nodes with outgoing edges is treated as terminal failure (`runStatus = failed`).
 - Completed guarded nodes that have outgoing edges but no persisted routing decision are treated as unresolved routing state and also fail the run to avoid indefinite `running` + `blocked` deadlocks.
 
+## Upstream Artifact Context Handoff (Policy v1)
+
+Context handoff into downstream provider executions is intentionally bounded and deterministic:
+
+- Default eligible artifact: latest successful upstream `report` per source run node.
+- Default upstream scope: selected direct predecessors only.
+- Hard caps:
+  - `MAX_UPSTREAM_ARTIFACTS = 4`
+  - `MAX_CONTEXT_CHARS_TOTAL = 32_000`
+  - `MAX_CHARS_PER_ARTIFACT = 12_000`
+- Deterministic truncation: `head_tail` with persisted metadata for auditability.
+- Envelopes are serialized into `ProviderRunOptions.context` entries and tracked in downstream artifact metadata.
+
+Full policy specification:
+- `packages/core/docs/upstream-artifact-handoff-policy-v1.md`
+
 ## Retry and Iteration Limits
 
 - Node retries are enforced from `tree_nodes.max_retries`, using `run_nodes.attempt` as the persisted attempt counter.
