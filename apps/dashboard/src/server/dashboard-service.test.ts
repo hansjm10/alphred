@@ -219,6 +219,60 @@ async function waitForBackgroundExecution(service: ReturnType<typeof createDashb
   }
 }
 
+function createDatabaseWithWorkflowTreeInsertUniqueRace(db: AlphredDatabase): {
+  proxiedDatabase: AlphredDatabase;
+  wasInjected: () => boolean;
+} {
+  let injectedUniqueRace = false;
+  const originalTransaction = db.transaction.bind(db);
+
+  const proxiedDatabase = new Proxy(db, {
+    get(target, prop, receiver) {
+      if (prop === 'transaction') {
+        return ((callback: (tx: unknown) => unknown) =>
+          originalTransaction((tx) => {
+            const originalInsert = tx.insert.bind(tx);
+            const txProxy = new Proxy(tx, {
+              get(txTarget, txProp, txReceiver) {
+                if (txProp === 'insert') {
+                  return ((table: unknown) => {
+                    if (table !== workflowTrees || injectedUniqueRace) {
+                      return originalInsert(table as never);
+                    }
+
+                    return {
+                      values: () => ({
+                        returning: () => ({
+                          get: () => {
+                            injectedUniqueRace = true;
+                            const error = new Error('UNIQUE constraint failed: workflow_trees.tree_key');
+                            (error as { code?: string }).code = 'SQLITE_CONSTRAINT_UNIQUE';
+                            throw error;
+                          },
+                        }),
+                      }),
+                    } as unknown as ReturnType<typeof originalInsert>;
+                  }) as AlphredDatabase['insert'];
+                }
+
+                const value = Reflect.get(txTarget, txProp, txReceiver);
+                return typeof value === 'function' ? value.bind(txTarget) : value;
+              },
+            });
+            return callback(txProxy);
+          })) as unknown as AlphredDatabase['transaction'];
+      }
+
+      return Reflect.get(target, prop, receiver);
+    },
+  });
+
+  return {
+    proxiedDatabase,
+    wasInjected: () => injectedUniqueRace,
+  };
+}
+
 describe('createDashboardService', () => {
   it('closes database handles after each operation', async () => {
     const closeDatabase = vi.fn(() => undefined);
@@ -659,6 +713,66 @@ describe('createDashboardService', () => {
     expect(draft.edges.length).toBeGreaterThan(0);
   });
 
+  it('returns conflict when create draft insert loses a post-check unique race', async () => {
+    const { db, dependencies } = createHarness();
+    migrateDatabase(db);
+
+    const { proxiedDatabase, wasInjected } = createDatabaseWithWorkflowTreeInsertUniqueRace(db);
+    const raceService = createDashboardService({
+      dependencies: {
+        ...dependencies,
+        openDatabase: () => proxiedDatabase,
+      },
+    });
+
+    await expect(
+      raceService.createWorkflowDraft({
+        template: 'blank',
+        name: 'Race Create Tree',
+        treeKey: 'race-create-tree',
+      }),
+    ).rejects.toMatchObject({
+      code: 'conflict',
+      status: 409,
+      message: 'Workflow tree "race-create-tree" already exists.',
+    });
+
+    expect(wasInjected()).toBe(true);
+  });
+
+  it('returns conflict when duplicate insert loses a post-check unique race', async () => {
+    const { db, dependencies } = createHarness();
+    migrateDatabase(db);
+
+    const bootstrapService = createDashboardService({ dependencies });
+    await bootstrapService.createWorkflowDraft({
+      template: 'blank',
+      name: 'Duplicate Source Tree',
+      treeKey: 'duplicate-source-tree',
+    });
+
+    const { proxiedDatabase, wasInjected } = createDatabaseWithWorkflowTreeInsertUniqueRace(db);
+    const raceService = createDashboardService({
+      dependencies: {
+        ...dependencies,
+        openDatabase: () => proxiedDatabase,
+      },
+    });
+
+    await expect(
+      raceService.duplicateWorkflowTree('duplicate-source-tree', {
+        name: 'Duplicate Copy Tree',
+        treeKey: 'duplicate-copy-tree',
+      }),
+    ).rejects.toMatchObject({
+      code: 'conflict',
+      status: 409,
+      message: 'Workflow tree "duplicate-copy-tree" already exists.',
+    });
+
+    expect(wasInjected()).toBe(true);
+  });
+
   it('rejects underscore workflow tree keys across draft lifecycle actions', async () => {
     const { db, dependencies } = createHarness();
     migrateDatabase(db);
@@ -724,6 +838,84 @@ describe('createDashboardService', () => {
     expect(validation.errors).not.toEqual(
       expect.arrayContaining([expect.objectContaining({ code: 'no_initial_nodes' })]),
     );
+  });
+
+  it('returns concurrent draft when bootstrap hits single-draft unique constraint', async () => {
+    const { db, dependencies } = createHarness();
+    migrateDatabase(db);
+
+    const bootstrapService = createDashboardService({ dependencies });
+    await bootstrapService.createWorkflowDraft({
+      template: 'design-implement-review',
+      name: 'Single Draft Race Tree',
+      treeKey: 'single-draft-race-tree',
+    });
+    await bootstrapService.publishWorkflowDraft('single-draft-race-tree', 1, {});
+
+    let injectedConcurrentDraft = false;
+    const originalTransaction = db.transaction.bind(db);
+    const proxiedDatabase = new Proxy(db, {
+      get(target, prop, receiver) {
+        if (prop === 'transaction') {
+          return ((callback: (tx: unknown) => unknown) => {
+            if (!injectedConcurrentDraft) {
+              injectedConcurrentDraft = true;
+              const publishedVersions = target
+                .select({
+                  version: workflowTrees.version,
+                  name: workflowTrees.name,
+                  description: workflowTrees.description,
+                })
+                .from(workflowTrees)
+                .where(and(eq(workflowTrees.treeKey, 'single-draft-race-tree'), eq(workflowTrees.status, 'published')))
+                .all();
+              const latestPublished = publishedVersions.reduce<(typeof publishedVersions)[number] | null>(
+                (latest, current) => (latest === null || current.version > latest.version ? current : latest),
+                null,
+              );
+              if (latestPublished) {
+                target
+                  .insert(workflowTrees)
+                  .values({
+                    treeKey: 'single-draft-race-tree',
+                    version: latestPublished.version + 2,
+                    status: 'draft',
+                    name: latestPublished.name,
+                    description: latestPublished.description,
+                  })
+                  .run();
+              }
+            }
+            return originalTransaction((tx) => callback(tx));
+          }) as typeof db.transaction;
+        }
+        return Reflect.get(target, prop, receiver);
+      },
+    });
+
+    const raceService = createDashboardService({
+      dependencies: {
+        ...dependencies,
+        openDatabase: () => proxiedDatabase,
+      },
+    });
+
+    const draft = await raceService.getOrCreateWorkflowDraft('single-draft-race-tree');
+    expect(injectedConcurrentDraft).toBe(true);
+    expect(draft.version).toBe(3);
+
+    const persistedDraft = db
+      .select({ id: workflowTrees.id })
+      .from(workflowTrees)
+      .where(
+        and(
+          eq(workflowTrees.treeKey, 'single-draft-race-tree'),
+          eq(workflowTrees.version, 3),
+          eq(workflowTrees.status, 'draft'),
+        ),
+      )
+      .get();
+    expect(persistedDraft).toBeDefined();
   });
 
   it('retries draft bootstrap when a concurrent publish claims the next version', async () => {

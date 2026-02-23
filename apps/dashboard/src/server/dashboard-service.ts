@@ -848,7 +848,7 @@ export function createDashboardService(options: {
     return value;
   }
 
-  function isWorkflowTreeVersionUniqueConstraintError(error: unknown): boolean {
+  function isWorkflowTreeUniqueConstraintError(error: unknown): boolean {
     if (typeof error !== 'object' || error === null) {
       return false;
     }
@@ -867,8 +867,10 @@ export function createDashboardService(options: {
     }
 
     return (
+      message.includes('workflow_trees_tree_key_single_draft_uq') ||
       (message.includes('workflow_trees.tree_key') && message.includes('workflow_trees.version')) ||
-      message.includes('workflow_trees_tree_key_version_uq')
+      message.includes('workflow_trees_tree_key_version_uq') ||
+      message.includes('workflow_trees.tree_key')
     );
   }
 
@@ -1449,19 +1451,30 @@ export function createDashboardService(options: {
             throw new DashboardIntegrationError('conflict', `Workflow tree "${treeKey}" already exists.`, { status: 409 });
           }
 
-	          const tree = tx
-	            .insert(workflowTrees)
-	            .values({
-	              treeKey,
-	              version: 1,
-	              status: 'draft',
-	              name,
-	              description,
-                versionNotes: null,
-                draftRevision: 0,
-	            })
-	            .returning({ id: workflowTrees.id })
-	            .get();
+          let tree: { id: number };
+          try {
+	            tree = tx
+	              .insert(workflowTrees)
+	              .values({
+	                treeKey,
+	                version: 1,
+	                status: 'draft',
+	                name,
+	                description,
+                  versionNotes: null,
+                  draftRevision: 0,
+	              })
+	              .returning({ id: workflowTrees.id })
+	              .get();
+          } catch (error) {
+            if (isWorkflowTreeUniqueConstraintError(error)) {
+              throw new DashboardIntegrationError('conflict', `Workflow tree "${treeKey}" already exists.`, {
+                status: 409,
+                cause: error,
+              });
+            }
+            throw error;
+          }
 
           if (request.template === 'design-implement-review') {
             const nodeSpecs: {
@@ -1620,19 +1633,30 @@ export function createDashboardService(options: {
           const catalog = loadAgentCatalog(tx);
 	          const topology = loadDraftTopologyByTreeId(tx, sourceRecord.id, catalog);
 
-	          const insertedTree = tx
-	            .insert(workflowTrees)
-	            .values({
-	              treeKey,
-	              version: 1,
-	              status: 'draft',
-	              name,
-	              description,
-	              versionNotes: null,
-	              draftRevision: 0,
-	            })
-	            .returning({ id: workflowTrees.id })
-	            .get();
+          let insertedTree: { id: number };
+          try {
+	            insertedTree = tx
+	              .insert(workflowTrees)
+	              .values({
+	                treeKey,
+	                version: 1,
+	                status: 'draft',
+	                name,
+	                description,
+	                versionNotes: null,
+	                draftRevision: 0,
+	              })
+	              .returning({ id: workflowTrees.id })
+	              .get();
+          } catch (error) {
+            if (isWorkflowTreeUniqueConstraintError(error)) {
+              throw new DashboardIntegrationError('conflict', `Workflow tree "${treeKey}" already exists.`, {
+                status: 409,
+                cause: error,
+              });
+            }
+            throw error;
+          }
 
 	          const promptTemplateIdByNodeKey = new Map<string, number>();
 	          for (const node of topology.nodes) {
@@ -2000,7 +2024,7 @@ export function createDashboardService(options: {
           try {
             return createDraftFromPublished(published, published.version + 1);
           } catch (error) {
-            if (!isWorkflowTreeVersionUniqueConstraintError(error)) {
+            if (!isWorkflowTreeUniqueConstraintError(error)) {
               throw error;
             }
 
