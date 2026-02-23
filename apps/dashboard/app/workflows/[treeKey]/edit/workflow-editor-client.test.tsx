@@ -850,6 +850,177 @@ describe('WorkflowEditorPageContent', () => {
     expect(payload.nodes?.map((node) => node.nodeKey)).toContain('design-copy');
   });
 
+  it('recomputes transition edge ids when priority changes and keeps the transition selected', async () => {
+    const fetchMock = vi.fn(async () => createJsonResponse({ draft: {} }, { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(
+      <WorkflowEditorPageContent
+        initialDraft={{
+          treeKey: 'demo-tree',
+          version: 1,
+          draftRevision: 0,
+          name: 'Demo Tree',
+          description: null,
+          versionNotes: null,
+          nodes: [
+            {
+              nodeKey: 'design',
+              displayName: 'Design',
+              nodeType: 'agent',
+              provider: 'codex',
+              maxRetries: 0,
+              sequenceIndex: 10,
+              position: { x: 0, y: 0 },
+              promptTemplate: { content: 'Draft prompt', contentType: 'markdown' },
+            },
+            {
+              nodeKey: 'implement',
+              displayName: 'Implement',
+              nodeType: 'agent',
+              provider: 'codex',
+              maxRetries: 0,
+              sequenceIndex: 20,
+              position: { x: 200, y: 0 },
+              promptTemplate: { content: 'Draft prompt', contentType: 'markdown' },
+            },
+          ],
+          edges: [
+            {
+              sourceNodeKey: 'design',
+              targetNodeKey: 'implement',
+              priority: 100,
+              auto: true,
+              guardExpression: null,
+            },
+          ],
+          initialRunnableNodeKeys: ['design'],
+        }}
+      />,
+    );
+
+    const selectionChange = latestReactFlowProps?.onSelectionChange;
+    expect(typeof selectionChange).toBe('function');
+    await act(async () => {
+      (selectionChange as (params: { nodes: unknown[]; edges: unknown[] }) => void)({
+        nodes: [],
+        edges: [{ id: 'design->implement:100' }],
+      });
+    });
+
+    fireEvent.change(screen.getByLabelText('Priority'), { target: { value: '90' } });
+
+    const flowEdges = latestReactFlowProps?.edges as { id: string }[];
+    const ids = flowEdges.map((edge) => edge.id);
+    expect(ids).toContain('design->implement:90');
+    expect(ids).not.toContain('design->implement:100');
+    expect((screen.getByLabelText('Priority') as HTMLInputElement).value).toBe('90');
+    expect(screen.queryByText('Select a transition to edit details.')).toBeNull();
+  });
+
+  it('keeps transition ids unique after reprioritize then duplicate', async () => {
+    const fetchMock = vi.fn(async () => createJsonResponse({ draft: {} }, { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(
+      <WorkflowEditorPageContent
+        initialDraft={{
+          treeKey: 'demo-tree',
+          version: 1,
+          draftRevision: 0,
+          name: 'Demo Tree',
+          description: null,
+          versionNotes: null,
+          nodes: [
+            {
+              nodeKey: 'design',
+              displayName: 'Design',
+              nodeType: 'agent',
+              provider: 'codex',
+              maxRetries: 0,
+              sequenceIndex: 10,
+              position: { x: 0, y: 0 },
+              promptTemplate: { content: 'Draft prompt', contentType: 'markdown' },
+            },
+            {
+              nodeKey: 'implement',
+              displayName: 'Implement',
+              nodeType: 'agent',
+              provider: 'codex',
+              maxRetries: 0,
+              sequenceIndex: 20,
+              position: { x: 200, y: 0 },
+              promptTemplate: { content: 'Draft prompt', contentType: 'markdown' },
+            },
+          ],
+          edges: [
+            {
+              sourceNodeKey: 'design',
+              targetNodeKey: 'implement',
+              priority: 100,
+              auto: true,
+              guardExpression: null,
+            },
+          ],
+          initialRunnableNodeKeys: ['design'],
+        }}
+      />,
+    );
+
+    const selectionChange = latestReactFlowProps?.onSelectionChange;
+    expect(typeof selectionChange).toBe('function');
+    await act(async () => {
+      (selectionChange as (params: { nodes: unknown[]; edges: unknown[] }) => void)({
+        nodes: [],
+        edges: [{ id: 'design->implement:100' }],
+      });
+    });
+
+    fireEvent.change(screen.getByLabelText('Priority'), { target: { value: '90' } });
+
+    const onEdgeContextMenu = latestReactFlowProps?.onEdgeContextMenu;
+    expect(typeof onEdgeContextMenu).toBe('function');
+    await act(async () => {
+      (onEdgeContextMenu as (event: unknown, edge: unknown) => void)(
+        {
+          preventDefault: () => undefined,
+          clientX: 28,
+          clientY: 40,
+        },
+        { id: 'design->implement:90', source: 'design', target: 'implement' },
+      );
+    });
+
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Duplicate' }));
+
+    const flowEdges = latestReactFlowProps?.edges as { id: string }[];
+    const ids = flowEdges.map((edge) => edge.id);
+    expect(ids).toContain('design->implement:90');
+    expect(ids).toContain('design->implement:100');
+    expect(new Set(ids).size).toBe(ids.length);
+
+    await vi.advanceTimersByTimeAsync(1000);
+
+    const call = fetchMock.mock.calls[0] as unknown as [RequestInfo | URL, RequestInit | undefined];
+    const payload = JSON.parse(call[1]?.body as string) as { edges?: unknown[] };
+    expect(payload.edges).toEqual([
+      {
+        sourceNodeKey: 'design',
+        targetNodeKey: 'implement',
+        priority: 90,
+        auto: true,
+        guardExpression: null,
+      },
+      {
+        sourceNodeKey: 'design',
+        targetNodeKey: 'implement',
+        priority: 100,
+        auto: true,
+        guardExpression: null,
+      },
+    ]);
+  });
+
   it('deletes a selected transition and autosaves', async () => {
     const fetchMock = vi.fn(async () => createJsonResponse({ draft: {} }, { status: 200 }));
     vi.stubGlobal('fetch', fetchMock);

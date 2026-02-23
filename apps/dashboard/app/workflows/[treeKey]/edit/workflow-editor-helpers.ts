@@ -10,6 +10,10 @@ import { slugifyKey } from '../../workflows-shared';
 type FlowPoint = Readonly<{ x: number; y: number }>;
 type ReactFlowNodeData = DashboardWorkflowDraftNode & { label?: string };
 
+export function buildWorkflowEdgeId(sourceNodeKey: string, targetNodeKey: string, priority: number): string {
+  return `${sourceNodeKey}->${targetNodeKey}:${priority}`;
+}
+
 export function toFlowPosition(instance: ReactFlowInstance, point: FlowPoint): FlowPoint | null {
   const maybe = instance as unknown as {
     screenToFlowPosition?: (input: FlowPoint) => FlowPoint;
@@ -68,7 +72,7 @@ export function buildReactFlowNodes(draft: DashboardWorkflowDraftTopology): Node
 
 export function buildReactFlowEdges(draft: DashboardWorkflowDraftTopology): Edge[] {
   return draft.edges.map(edge => ({
-    id: `${edge.sourceNodeKey}->${edge.targetNodeKey}:${edge.priority}`,
+    id: buildWorkflowEdgeId(edge.sourceNodeKey, edge.targetNodeKey, edge.priority),
     source: edge.sourceNodeKey,
     target: edge.targetNodeKey,
     label: edge.auto ? `auto · ${edge.priority}` : `guard · ${edge.priority}`,

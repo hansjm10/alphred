@@ -36,6 +36,7 @@ import { ActionButton, ButtonLink, Panel, StatusBadge } from '../../../ui/primit
 import { resolveApiError } from '../../workflows-shared';
 import { WorkflowEditorAddNodeDialog } from './workflow-editor-add-node-dialog';
 import {
+  buildWorkflowEdgeId,
   buildReactFlowEdges,
   buildReactFlowNodes,
   computeWorkflowLiveWarnings,
@@ -68,7 +69,7 @@ function hasNonSelectionEdgeChanges(changes: EdgeChange[]): boolean {
 
 function toReactFlowEdge(edge: DashboardWorkflowDraftEdge): Edge {
   return {
-    id: `${edge.sourceNodeKey}->${edge.targetNodeKey}:${edge.priority}`,
+    id: buildWorkflowEdgeId(edge.sourceNodeKey, edge.targetNodeKey, edge.priority),
     source: edge.sourceNodeKey,
     target: edge.targetNodeKey,
     label: edge.auto ? `auto · ${edge.priority}` : `guard · ${edge.priority}`,
@@ -824,18 +825,24 @@ function WorkflowEditorLoadedContent({ initialDraft }: Readonly<{ initialDraft: 
             edge={selectedEdge}
             onChange={(next) => {
               if (!selectedEdge) return;
+              const nextSelectedEdgeId = buildWorkflowEdgeId(selectedEdge.source, selectedEdge.target, next.priority);
               const label = next.auto ? `auto · ${next.priority}` : `guard · ${next.priority}`;
               setEdges((current) =>
                 current.map((edge) =>
                   edge.id === selectedEdge.id
                     ? {
                         ...edge,
+                        id: nextSelectedEdgeId,
                         label,
                         data: next,
                       }
                     : edge,
                 ),
               );
+              if (nextSelectedEdgeId !== selectedEdge.id) {
+                selectedEdgeIdRef.current = nextSelectedEdgeId;
+                setSelectedEdgeId(nextSelectedEdgeId);
+              }
               markWorkflowChanged();
             }}
           />
