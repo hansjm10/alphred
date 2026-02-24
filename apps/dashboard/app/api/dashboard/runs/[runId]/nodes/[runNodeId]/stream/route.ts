@@ -133,7 +133,8 @@ function createSseResponse(params: {
             lastHeartbeatMs = Date.now();
           }
 
-          if (snapshot.ended) {
+          const hasUnseenEvents = snapshot.latestSequence > lastEventSequence;
+          if (snapshot.ended && !hasUnseenEvents) {
             write(
               encodeSseChunk(
                 'stream_end',
@@ -146,6 +147,13 @@ function createSseResponse(params: {
               ),
             );
             break;
+          }
+
+          if (snapshot.ended && hasUnseenEvents) {
+            if (snapshot.events.length === 0) {
+              await waitForNextPoll(STREAM_POLL_INTERVAL_MS, request.signal);
+            }
+            continue;
           }
 
           if (Date.now() - lastHeartbeatMs >= STREAM_HEARTBEAT_INTERVAL_MS) {

@@ -3,7 +3,11 @@
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { DashboardRepositoryState, DashboardRunDetail } from '../../../src/server/dashboard-contracts';
+import type {
+  DashboardRepositoryState,
+  DashboardRunDetail,
+  DashboardRunNodeStreamEvent,
+} from '../../../src/server/dashboard-contracts';
 import { RunDetailContent } from './run-detail-content';
 
 function createRepository(overrides: Partial<DashboardRepositoryState> = {}): DashboardRepositoryState {
@@ -194,6 +198,27 @@ function createJsonResponse(payload: unknown, status = 200): Response {
       'content-type': 'application/json',
     },
   });
+}
+
+function createStreamEvent(
+  overrides: Partial<DashboardRunNodeStreamEvent> & Pick<DashboardRunNodeStreamEvent, 'sequence'>,
+): DashboardRunNodeStreamEvent {
+  const sequence = overrides.sequence;
+
+  return {
+    id: overrides.id ?? sequence,
+    workflowRunId: overrides.workflowRunId ?? 412,
+    runNodeId: overrides.runNodeId ?? 2,
+    attempt: overrides.attempt ?? 1,
+    sequence,
+    type: overrides.type ?? 'assistant',
+    timestamp: overrides.timestamp ?? sequence,
+    contentChars: overrides.contentChars ?? 12,
+    contentPreview: overrides.contentPreview ?? `event ${sequence}`,
+    metadata: overrides.metadata ?? null,
+    usage: overrides.usage ?? null,
+    createdAt: overrides.createdAt ?? '2026-02-18T00:00:40.000Z',
+  };
 }
 
 class MockEventSource {
@@ -509,6 +534,11 @@ describe('RunDetailContent realtime updates', () => {
 
     const source = MockEventSource.instances[0]!;
     source.emitOpen();
+    source.emit('stream_state', {
+      connectionState: 'live',
+      nodeStatus: 'running',
+      latestSequence: 2,
+    });
     source.emit('stream_event', {
       id: 201,
       workflowRunId: 412,
@@ -555,6 +585,158 @@ describe('RunDetailContent realtime updates', () => {
     await waitFor(() => {
       expect(screen.getByText('buffered update')).toBeInTheDocument();
     });
+  });
+
+  it('paginates ended stream snapshots until persisted history is fully loaded', async () => {
+    vi.stubGlobal('EventSource', MockEventSource as unknown as typeof EventSource);
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/nodes/2/stream')) {
+        const parsed = new URL(url, 'http://localhost');
+        const lastEventSequence = Number(parsed.searchParams.get('lastEventSequence') ?? '0');
+
+        if (lastEventSequence === 0) {
+          return createJsonResponse({
+            workflowRunId: 412,
+            runNodeId: 2,
+            attempt: 1,
+            nodeStatus: 'completed',
+            ended: true,
+            latestSequence: 3,
+            events: [
+              createStreamEvent({
+                sequence: 1,
+                contentPreview: 'seeded event',
+              }),
+            ],
+          });
+        }
+
+        if (lastEventSequence === 1) {
+          return createJsonResponse({
+            workflowRunId: 412,
+            runNodeId: 2,
+            attempt: 1,
+            nodeStatus: 'completed',
+            ended: true,
+            latestSequence: 3,
+            events: [
+              createStreamEvent({
+                sequence: 2,
+                contentPreview: 'second page one',
+              }),
+              createStreamEvent({
+                sequence: 3,
+                contentPreview: 'second page two',
+              }),
+            ],
+          });
+        }
+
+        return createJsonResponse({
+          workflowRunId: 412,
+          runNodeId: 2,
+          attempt: 1,
+          nodeStatus: 'completed',
+          ended: true,
+          latestSequence: 3,
+          events: [],
+        });
+      }
+
+      return createJsonResponse(createRunDetail());
+    });
+
+    render(
+      <RunDetailContent
+        initialDetail={createRunDetail()}
+        repositories={[createRepository()]}
+        enableRealtime={false}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        expect.stringContaining('/api/dashboard/runs/412/nodes/2/stream?attempt=1&lastEventSequence=0'),
+        expect.objectContaining({ method: 'GET' }),
+      );
+    });
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        expect.stringContaining('/api/dashboard/runs/412/nodes/2/stream?attempt=1&lastEventSequence=1'),
+        expect.objectContaining({ method: 'GET' }),
+      );
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText('seeded event')).toBeInTheDocument();
+      expect(screen.getByText('second page one')).toBeInTheDocument();
+      expect(screen.getByText('second page two')).toBeInTheDocument();
+    });
+
+    expect(MockEventSource.instances).toHaveLength(0);
+  });
+
+  it('resumes SSE from the last loaded snapshot event when latestSequence is ahead', async () => {
+    vi.stubGlobal('EventSource', MockEventSource as unknown as typeof EventSource);
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/nodes/2/stream')) {
+        const parsed = new URL(url, 'http://localhost');
+        const lastEventSequence = Number(parsed.searchParams.get('lastEventSequence') ?? '0');
+
+        if (lastEventSequence === 0) {
+          return createJsonResponse({
+            workflowRunId: 412,
+            runNodeId: 2,
+            attempt: 1,
+            nodeStatus: 'running',
+            ended: false,
+            latestSequence: 2,
+            events: [
+              createStreamEvent({
+                sequence: 1,
+                contentPreview: 'first page',
+              }),
+            ],
+          });
+        }
+
+        return createJsonResponse({
+          workflowRunId: 412,
+          runNodeId: 2,
+          attempt: 1,
+          nodeStatus: 'running',
+          ended: false,
+          latestSequence: 2,
+          events: [],
+        });
+      }
+
+      return createJsonResponse(createRunDetail());
+    });
+
+    render(
+      <RunDetailContent
+        initialDetail={createRunDetail()}
+        repositories={[createRepository()]}
+        enableRealtime={false}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        expect.stringContaining('/api/dashboard/runs/412/nodes/2/stream?attempt=1&lastEventSequence=1'),
+        expect.objectContaining({ method: 'GET' }),
+      );
+    });
+
+    await waitFor(() => {
+      expect(MockEventSource.instances).toHaveLength(1);
+    });
+
+    expect(MockEventSource.instances[0]?.url).toContain('lastEventSequence=1');
   });
 
   it('reconnects the agent stream after drops and transitions to ended on terminal event', async () => {

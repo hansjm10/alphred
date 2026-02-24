@@ -1322,9 +1322,6 @@ export function RunDetailContent({
           latestNodeStatus = payload.nodeStatus as DashboardRunDetail['nodes'][number]['status'];
         }
 
-        if (isInteger(payload.latestSequence) && payload.latestSequence > streamLastSequenceRef.current) {
-          streamLastSequenceRef.current = payload.latestSequence;
-        }
       });
 
       source.addEventListener('stream_end', (rawEvent: Event) => {
@@ -1389,7 +1386,7 @@ export function RunDetailContent({
         let mergedEvents = mergeAgentStreamEvents([], snapshot.events);
         let resumeSequence =
           mergedEvents.length > 0 ? (mergedEvents[mergedEvents.length - 1]?.sequence ?? 0) : 0;
-        while (!snapshot.ended && snapshot.latestSequence > resumeSequence && snapshot.events.length > 0 && !disposed) {
+        while (snapshot.latestSequence > resumeSequence && snapshot.events.length > 0 && !disposed) {
           snapshot = await fetchStreamSnapshot(resumeSequence);
           mergedEvents = mergeAgentStreamEvents(mergedEvents, snapshot.events);
           resumeSequence =
@@ -1401,7 +1398,7 @@ export function RunDetailContent({
         }
 
         latestNodeStatus = snapshot.nodeStatus;
-        streamLastSequenceRef.current = Math.max(snapshot.latestSequence, resumeSequence);
+        streamLastSequenceRef.current = resumeSequence;
         setStreamEvents(mergedEvents);
         setStreamLastUpdatedAtMs(Date.now());
 
