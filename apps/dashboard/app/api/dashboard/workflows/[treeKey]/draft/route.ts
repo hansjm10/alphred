@@ -34,6 +34,133 @@ const approvalPolicyValues = new Set(providerApprovalPolicies);
 const sandboxModeValues = new Set(providerSandboxModes);
 const webSearchModeValues = new Set(providerWebSearchModes);
 
+function executionPermissionsFieldPath(index: number, field?: string): string {
+  if (!field) {
+    return `nodes[${index}].executionPermissions`;
+  }
+
+  return `nodes[${index}].executionPermissions.${field}`;
+}
+
+function createExecutionPermissionsError(index: number, field: string | undefined, message: string): DashboardIntegrationError {
+  return new DashboardIntegrationError('invalid_request', message, {
+    status: 400,
+    details: { field: executionPermissionsFieldPath(index, field) },
+  });
+}
+
+function throwInvalidExecutionPermissions(index: number, field?: string): never {
+  const suffix = field ? `.${field}` : '';
+  throw createExecutionPermissionsError(
+    index,
+    field,
+    `Draft node at index ${index} has invalid executionPermissions${suffix}.`,
+  );
+}
+
+function assertSupportedExecutionPermissionKeys(rawPermissions: Record<string, unknown>, index: number): void {
+  for (const key of Object.keys(rawPermissions)) {
+    if (executionPermissionKeys.has(key)) {
+      continue;
+    }
+
+    throw createExecutionPermissionsError(
+      index,
+      key,
+      `Draft node at index ${index} has unsupported executionPermissions field "${key}".`,
+    );
+  }
+}
+
+function parseExecutionPermissionApprovalPolicy(
+  rawPermissions: Record<string, unknown>,
+  index: number,
+): (typeof providerApprovalPolicies)[number] | undefined {
+  const approvalPolicy = rawPermissions.approvalPolicy;
+  if (approvalPolicy === undefined) {
+    return undefined;
+  }
+
+  if (
+    typeof approvalPolicy !== 'string'
+    || !approvalPolicyValues.has(approvalPolicy as (typeof providerApprovalPolicies)[number])
+  ) {
+    throwInvalidExecutionPermissions(index, 'approvalPolicy');
+  }
+
+  return approvalPolicy as (typeof providerApprovalPolicies)[number];
+}
+
+function parseExecutionPermissionSandboxMode(
+  rawPermissions: Record<string, unknown>,
+  index: number,
+): (typeof providerSandboxModes)[number] | undefined {
+  const sandboxMode = rawPermissions.sandboxMode;
+  if (sandboxMode === undefined) {
+    return undefined;
+  }
+
+  if (
+    typeof sandboxMode !== 'string'
+    || !sandboxModeValues.has(sandboxMode as (typeof providerSandboxModes)[number])
+  ) {
+    throwInvalidExecutionPermissions(index, 'sandboxMode');
+  }
+
+  return sandboxMode as (typeof providerSandboxModes)[number];
+}
+
+function parseExecutionPermissionNetworkAccessEnabled(
+  rawPermissions: Record<string, unknown>,
+  index: number,
+): boolean | undefined {
+  const networkAccessEnabled = rawPermissions.networkAccessEnabled;
+  if (networkAccessEnabled === undefined) {
+    return undefined;
+  }
+
+  if (typeof networkAccessEnabled !== 'boolean') {
+    throwInvalidExecutionPermissions(index, 'networkAccessEnabled');
+  }
+
+  return networkAccessEnabled;
+}
+
+function parseExecutionPermissionAdditionalDirectories(
+  rawPermissions: Record<string, unknown>,
+  index: number,
+): string[] | undefined {
+  const additionalDirectories = rawPermissions.additionalDirectories;
+  if (additionalDirectories === undefined) {
+    return undefined;
+  }
+
+  if (!Array.isArray(additionalDirectories) || additionalDirectories.some((item) => typeof item !== 'string')) {
+    throwInvalidExecutionPermissions(index, 'additionalDirectories');
+  }
+
+  return [...additionalDirectories];
+}
+
+function parseExecutionPermissionWebSearchMode(
+  rawPermissions: Record<string, unknown>,
+  index: number,
+): (typeof providerWebSearchModes)[number] | undefined {
+  const webSearchMode = rawPermissions.webSearchMode;
+  if (webSearchMode === undefined) {
+    return undefined;
+  }
+
+  if (
+    typeof webSearchMode !== 'string'
+    || !webSearchModeValues.has(webSearchMode as (typeof providerWebSearchModes)[number])
+  ) {
+    throwInvalidExecutionPermissions(index, 'webSearchMode');
+  }
+
+  return webSearchMode as (typeof providerWebSearchModes)[number];
+}
+
 function isGuardExpression(value: unknown): value is GuardExpression {
   if (!isRecord(value)) {
     return false;
@@ -130,111 +257,35 @@ function parseDraftNodeExecutionPermissions(value: unknown, index: number): Prov
   }
 
   if (!isRecord(value)) {
-    throw new DashboardIntegrationError(
-      'invalid_request',
-      `Draft node at index ${index} has invalid executionPermissions.`,
-      {
-        status: 400,
-        details: { field: `nodes[${index}].executionPermissions` },
-      },
-    );
+    throwInvalidExecutionPermissions(index);
   }
 
-  for (const key of Object.keys(value)) {
-    if (!executionPermissionKeys.has(key)) {
-      throw new DashboardIntegrationError(
-        'invalid_request',
-        `Draft node at index ${index} has unsupported executionPermissions field "${key}".`,
-        {
-          status: 400,
-          details: { field: `nodes[${index}].executionPermissions.${key}` },
-        },
-      );
-    }
-  }
+  assertSupportedExecutionPermissionKeys(value, index);
 
   const parsed: ProviderExecutionPermissions = {};
-
-  if ('approvalPolicy' in value && value.approvalPolicy !== undefined) {
-    const approvalPolicy = value.approvalPolicy;
-    if (
-      typeof approvalPolicy !== 'string'
-      || !approvalPolicyValues.has(approvalPolicy as (typeof providerApprovalPolicies)[number])
-    ) {
-      throw new DashboardIntegrationError(
-        'invalid_request',
-        `Draft node at index ${index} has invalid executionPermissions.approvalPolicy.`,
-        {
-          status: 400,
-          details: { field: `nodes[${index}].executionPermissions.approvalPolicy` },
-        },
-      );
-    }
-    parsed.approvalPolicy = approvalPolicy as (typeof providerApprovalPolicies)[number];
+  const approvalPolicy = parseExecutionPermissionApprovalPolicy(value, index);
+  if (approvalPolicy !== undefined) {
+    parsed.approvalPolicy = approvalPolicy;
   }
 
-  if ('sandboxMode' in value && value.sandboxMode !== undefined) {
-    const sandboxMode = value.sandboxMode;
-    if (
-      typeof sandboxMode !== 'string'
-      || !sandboxModeValues.has(sandboxMode as (typeof providerSandboxModes)[number])
-    ) {
-      throw new DashboardIntegrationError(
-        'invalid_request',
-        `Draft node at index ${index} has invalid executionPermissions.sandboxMode.`,
-        {
-          status: 400,
-          details: { field: `nodes[${index}].executionPermissions.sandboxMode` },
-        },
-      );
-    }
-    parsed.sandboxMode = sandboxMode as (typeof providerSandboxModes)[number];
+  const sandboxMode = parseExecutionPermissionSandboxMode(value, index);
+  if (sandboxMode !== undefined) {
+    parsed.sandboxMode = sandboxMode;
   }
 
-  if ('networkAccessEnabled' in value && value.networkAccessEnabled !== undefined) {
-    if (typeof value.networkAccessEnabled !== 'boolean') {
-      throw new DashboardIntegrationError(
-        'invalid_request',
-        `Draft node at index ${index} has invalid executionPermissions.networkAccessEnabled.`,
-        {
-          status: 400,
-          details: { field: `nodes[${index}].executionPermissions.networkAccessEnabled` },
-        },
-      );
-    }
-    parsed.networkAccessEnabled = value.networkAccessEnabled;
+  const networkAccessEnabled = parseExecutionPermissionNetworkAccessEnabled(value, index);
+  if (networkAccessEnabled !== undefined) {
+    parsed.networkAccessEnabled = networkAccessEnabled;
   }
 
-  if ('additionalDirectories' in value && value.additionalDirectories !== undefined) {
-    if (!Array.isArray(value.additionalDirectories) || value.additionalDirectories.some(item => typeof item !== 'string')) {
-      throw new DashboardIntegrationError(
-        'invalid_request',
-        `Draft node at index ${index} has invalid executionPermissions.additionalDirectories.`,
-        {
-          status: 400,
-          details: { field: `nodes[${index}].executionPermissions.additionalDirectories` },
-        },
-      );
-    }
-    parsed.additionalDirectories = [...value.additionalDirectories];
+  const additionalDirectories = parseExecutionPermissionAdditionalDirectories(value, index);
+  if (additionalDirectories !== undefined) {
+    parsed.additionalDirectories = additionalDirectories;
   }
 
-  if ('webSearchMode' in value && value.webSearchMode !== undefined) {
-    const webSearchMode = value.webSearchMode;
-    if (
-      typeof webSearchMode !== 'string'
-      || !webSearchModeValues.has(webSearchMode as (typeof providerWebSearchModes)[number])
-    ) {
-      throw new DashboardIntegrationError(
-        'invalid_request',
-        `Draft node at index ${index} has invalid executionPermissions.webSearchMode.`,
-        {
-          status: 400,
-          details: { field: `nodes[${index}].executionPermissions.webSearchMode` },
-        },
-      );
-    }
-    parsed.webSearchMode = webSearchMode as (typeof providerWebSearchModes)[number];
+  const webSearchMode = parseExecutionPermissionWebSearchMode(value, index);
+  if (webSearchMode !== undefined) {
+    parsed.webSearchMode = webSearchMode;
   }
 
   return Object.keys(parsed).length > 0 ? parsed : null;

@@ -292,6 +292,13 @@ export type SqlWorkflowExecutor = {
 const artifactContentTypes = new Set(['text', 'markdown', 'json', 'diff']);
 const runTerminalStatuses = new Set<WorkflowRunStatus>(['completed', 'failed', 'cancelled']);
 const guardOperators: ReadonlySet<GuardCondition['operator']> = new Set(['==', '!=', '>', '<', '>=', '<=']);
+const executionPermissionKeys = new Set([
+  'approvalPolicy',
+  'sandboxMode',
+  'networkAccessEnabled',
+  'additionalDirectories',
+  'webSearchMode',
+]);
 const executionApprovalPolicies = new Set(providerApprovalPolicies);
 const executionSandboxModes = new Set(providerSandboxModes);
 const executionWebSearchModes = new Set(providerWebSearchModes);
@@ -453,6 +460,119 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
+function assertSupportedRunNodeExecutionPermissionKeys(value: Record<string, unknown>, nodeKey: string): void {
+  for (const key of Object.keys(value)) {
+    if (executionPermissionKeys.has(key)) {
+      continue;
+    }
+
+    throw new Error(`Run node "${nodeKey}" execution permissions include unsupported field "${key}".`);
+  }
+}
+
+function parseRunNodeExecutionApprovalPolicy(
+  value: Record<string, unknown>,
+  nodeKey: string,
+): (typeof providerApprovalPolicies)[number] | undefined {
+  const approvalPolicy = value.approvalPolicy;
+  if (approvalPolicy === undefined) {
+    return undefined;
+  }
+
+  if (
+    typeof approvalPolicy !== 'string'
+    || !executionApprovalPolicies.has(approvalPolicy as (typeof providerApprovalPolicies)[number])
+  ) {
+    throw new Error(`Run node "${nodeKey}" has invalid execution approval policy.`);
+  }
+
+  return approvalPolicy as (typeof providerApprovalPolicies)[number];
+}
+
+function parseRunNodeExecutionSandboxMode(
+  value: Record<string, unknown>,
+  nodeKey: string,
+): (typeof providerSandboxModes)[number] | undefined {
+  const sandboxMode = value.sandboxMode;
+  if (sandboxMode === undefined) {
+    return undefined;
+  }
+
+  if (
+    typeof sandboxMode !== 'string'
+    || !executionSandboxModes.has(sandboxMode as (typeof providerSandboxModes)[number])
+  ) {
+    throw new Error(`Run node "${nodeKey}" has invalid execution sandbox mode.`);
+  }
+
+  return sandboxMode as (typeof providerSandboxModes)[number];
+}
+
+function parseRunNodeExecutionNetworkAccessEnabled(
+  value: Record<string, unknown>,
+  nodeKey: string,
+): boolean | undefined {
+  const networkAccessEnabled = value.networkAccessEnabled;
+  if (networkAccessEnabled === undefined) {
+    return undefined;
+  }
+
+  if (typeof networkAccessEnabled !== 'boolean') {
+    throw new TypeError(`Run node "${nodeKey}" has invalid execution networkAccessEnabled value.`);
+  }
+
+  return networkAccessEnabled;
+}
+
+function parseRunNodeExecutionAdditionalDirectories(
+  value: Record<string, unknown>,
+  nodeKey: string,
+): string[] | undefined {
+  const additionalDirectories = value.additionalDirectories;
+  if (additionalDirectories === undefined) {
+    return undefined;
+  }
+
+  if (!Array.isArray(additionalDirectories)) {
+    throw new TypeError(`Run node "${nodeKey}" has invalid execution additionalDirectories value.`);
+  }
+
+  const normalizedDirectories = additionalDirectories.map((directory, index) => {
+    if (typeof directory !== 'string' || directory.trim().length === 0) {
+      throw new TypeError(
+        `Run node "${nodeKey}" has invalid execution additionalDirectories entry at index ${index}.`,
+      );
+    }
+
+    return directory.trim();
+  });
+
+  if (normalizedDirectories.length === 0) {
+    throw new Error(`Run node "${nodeKey}" must provide at least one execution additional directory.`);
+  }
+
+  return normalizedDirectories;
+}
+
+function parseRunNodeExecutionWebSearchMode(
+  value: Record<string, unknown>,
+  nodeKey: string,
+): (typeof providerWebSearchModes)[number] | undefined {
+  const webSearchMode = value.webSearchMode;
+  if (webSearchMode === undefined) {
+    return undefined;
+  }
+
+  if (
+    typeof webSearchMode !== 'string'
+    || !executionWebSearchModes.has(webSearchMode as (typeof providerWebSearchModes)[number])
+  ) {
+    throw new Error(`Run node "${nodeKey}" has invalid execution web search mode.`);
+  }
+
+  return webSearchMode as (typeof providerWebSearchModes)[number];
+}
+
 function normalizeRunNodeExecutionPermissions(
   value: unknown,
   nodeKey: string,
@@ -462,84 +582,35 @@ function normalizeRunNodeExecutionPermissions(
   }
 
   if (!isRecord(value)) {
-    throw new Error(`Run node "${nodeKey}" has invalid execution permissions payload.`);
+    throw new TypeError(`Run node "${nodeKey}" has invalid execution permissions payload.`);
   }
 
-  const allowedKeys = new Set([
-    'approvalPolicy',
-    'sandboxMode',
-    'networkAccessEnabled',
-    'additionalDirectories',
-    'webSearchMode',
-  ]);
-  for (const key of Object.keys(value)) {
-    if (!allowedKeys.has(key)) {
-      throw new Error(`Run node "${nodeKey}" execution permissions include unsupported field "${key}".`);
-    }
-  }
+  assertSupportedRunNodeExecutionPermissionKeys(value, nodeKey);
 
   const normalized: ProviderExecutionPermissions = {};
-
-  if ('approvalPolicy' in value && value.approvalPolicy !== undefined) {
-    const approvalPolicy = value.approvalPolicy;
-    if (
-      typeof approvalPolicy !== 'string'
-      || !executionApprovalPolicies.has(approvalPolicy as (typeof providerApprovalPolicies)[number])
-    ) {
-      throw new Error(`Run node "${nodeKey}" has invalid execution approval policy.`);
-    }
-    normalized.approvalPolicy = approvalPolicy as (typeof providerApprovalPolicies)[number];
+  const approvalPolicy = parseRunNodeExecutionApprovalPolicy(value, nodeKey);
+  if (approvalPolicy !== undefined) {
+    normalized.approvalPolicy = approvalPolicy;
   }
 
-  if ('sandboxMode' in value && value.sandboxMode !== undefined) {
-    const sandboxMode = value.sandboxMode;
-    if (
-      typeof sandboxMode !== 'string'
-      || !executionSandboxModes.has(sandboxMode as (typeof providerSandboxModes)[number])
-    ) {
-      throw new Error(`Run node "${nodeKey}" has invalid execution sandbox mode.`);
-    }
-    normalized.sandboxMode = sandboxMode as (typeof providerSandboxModes)[number];
+  const sandboxMode = parseRunNodeExecutionSandboxMode(value, nodeKey);
+  if (sandboxMode !== undefined) {
+    normalized.sandboxMode = sandboxMode;
   }
 
-  if ('networkAccessEnabled' in value && value.networkAccessEnabled !== undefined) {
-    if (typeof value.networkAccessEnabled !== 'boolean') {
-      throw new Error(`Run node "${nodeKey}" has invalid execution networkAccessEnabled value.`);
-    }
-    normalized.networkAccessEnabled = value.networkAccessEnabled;
+  const networkAccessEnabled = parseRunNodeExecutionNetworkAccessEnabled(value, nodeKey);
+  if (networkAccessEnabled !== undefined) {
+    normalized.networkAccessEnabled = networkAccessEnabled;
   }
 
-  if ('additionalDirectories' in value && value.additionalDirectories !== undefined) {
-    if (!Array.isArray(value.additionalDirectories)) {
-      throw new Error(`Run node "${nodeKey}" has invalid execution additionalDirectories value.`);
-    }
-
-    const normalizedDirectories = value.additionalDirectories.map((directory, index) => {
-      if (typeof directory !== 'string' || directory.trim().length === 0) {
-        throw new Error(
-          `Run node "${nodeKey}" has invalid execution additionalDirectories entry at index ${index}.`,
-        );
-      }
-
-      return directory.trim();
-    });
-
-    if (normalizedDirectories.length === 0) {
-      throw new Error(`Run node "${nodeKey}" must provide at least one execution additional directory.`);
-    }
-
-    normalized.additionalDirectories = normalizedDirectories;
+  const additionalDirectories = parseRunNodeExecutionAdditionalDirectories(value, nodeKey);
+  if (additionalDirectories !== undefined) {
+    normalized.additionalDirectories = additionalDirectories;
   }
 
-  if ('webSearchMode' in value && value.webSearchMode !== undefined) {
-    const webSearchMode = value.webSearchMode;
-    if (
-      typeof webSearchMode !== 'string'
-      || !executionWebSearchModes.has(webSearchMode as (typeof providerWebSearchModes)[number])
-    ) {
-      throw new Error(`Run node "${nodeKey}" has invalid execution web search mode.`);
-    }
-    normalized.webSearchMode = webSearchMode as (typeof providerWebSearchModes)[number];
+  const webSearchMode = parseRunNodeExecutionWebSearchMode(value, nodeKey);
+  if (webSearchMode !== undefined) {
+    normalized.webSearchMode = webSearchMode;
   }
 
   return Object.keys(normalized).length > 0 ? normalized : undefined;
@@ -553,9 +624,17 @@ function mergeExecutionPermissions(
     return undefined;
   }
 
+  if (!basePermissions) {
+    return nodePermissions;
+  }
+
+  if (!nodePermissions) {
+    return basePermissions;
+  }
+
   return {
-    ...(basePermissions ?? {}),
-    ...(nodePermissions ?? {}),
+    ...basePermissions,
+    ...nodePermissions,
   };
 }
 

@@ -298,6 +298,177 @@ function normalizeModel<Code extends string, TError extends Error>(
   return normalizedModel;
 }
 
+function createExecutionPermissionsValidationError<Code extends string, TError extends Error>(
+  config: AdapterProviderConfig<Code, TError>,
+  executionPermissions: unknown,
+  message: string,
+  details?: Record<string, unknown>,
+): TError {
+  return config.createError(
+    config.codes.invalidOptions,
+    message,
+    details ? { executionPermissions, ...details } : { executionPermissions },
+  );
+}
+
+function toRawExecutionPermissions<Code extends string, TError extends Error>(
+  executionPermissions: ProviderRunOptions['executionPermissions'] | null,
+  config: AdapterProviderConfig<Code, TError>,
+): Record<string, unknown> {
+  if (typeof executionPermissions !== 'object' || Array.isArray(executionPermissions)) {
+    throw createExecutionPermissionsValidationError(
+      config,
+      executionPermissions,
+      `${config.providerDisplayName} provider requires executionPermissions to be an object when provided.`,
+    );
+  }
+
+  return executionPermissions as Record<string, unknown>;
+}
+
+function assertExecutionPermissionKeysAreSupported<Code extends string, TError extends Error>(
+  rawPermissions: Record<string, unknown>,
+  executionPermissions: unknown,
+  config: AdapterProviderConfig<Code, TError>,
+): void {
+  for (const key of Object.keys(rawPermissions)) {
+    if (executionPermissionKeys.has(key)) {
+      continue;
+    }
+
+    throw createExecutionPermissionsValidationError(
+      config,
+      executionPermissions,
+      `${config.providerDisplayName} provider does not recognize executionPermissions.${key}.`,
+    );
+  }
+}
+
+function parseExecutionPermissionApprovalPolicy<Code extends string, TError extends Error>(
+  rawPermissions: Record<string, unknown>,
+  executionPermissions: unknown,
+  config: AdapterProviderConfig<Code, TError>,
+): (typeof providerApprovalPolicies)[number] | undefined {
+  const approvalPolicy = rawPermissions.approvalPolicy;
+  if (approvalPolicy === undefined) {
+    return undefined;
+  }
+
+  if (
+    typeof approvalPolicy !== 'string'
+    || !executionApprovalPolicies.has(approvalPolicy as (typeof providerApprovalPolicies)[number])
+  ) {
+    throw createExecutionPermissionsValidationError(
+      config,
+      executionPermissions,
+      `${config.providerDisplayName} provider requires executionPermissions.approvalPolicy to be a supported value.`,
+    );
+  }
+
+  return approvalPolicy as (typeof providerApprovalPolicies)[number];
+}
+
+function parseExecutionPermissionSandboxMode<Code extends string, TError extends Error>(
+  rawPermissions: Record<string, unknown>,
+  executionPermissions: unknown,
+  config: AdapterProviderConfig<Code, TError>,
+): (typeof providerSandboxModes)[number] | undefined {
+  const sandboxMode = rawPermissions.sandboxMode;
+  if (sandboxMode === undefined) {
+    return undefined;
+  }
+
+  if (
+    typeof sandboxMode !== 'string'
+    || !executionSandboxModes.has(sandboxMode as (typeof providerSandboxModes)[number])
+  ) {
+    throw createExecutionPermissionsValidationError(
+      config,
+      executionPermissions,
+      `${config.providerDisplayName} provider requires executionPermissions.sandboxMode to be a supported value.`,
+    );
+  }
+
+  return sandboxMode as (typeof providerSandboxModes)[number];
+}
+
+function parseExecutionPermissionNetworkAccessEnabled<Code extends string, TError extends Error>(
+  rawPermissions: Record<string, unknown>,
+  executionPermissions: unknown,
+  config: AdapterProviderConfig<Code, TError>,
+): boolean | undefined {
+  const networkAccessEnabled = rawPermissions.networkAccessEnabled;
+  if (networkAccessEnabled === undefined) {
+    return undefined;
+  }
+
+  if (typeof networkAccessEnabled !== 'boolean') {
+    throw createExecutionPermissionsValidationError(
+      config,
+      executionPermissions,
+      `${config.providerDisplayName} provider requires executionPermissions.networkAccessEnabled to be a boolean.`,
+    );
+  }
+
+  return networkAccessEnabled;
+}
+
+function parseExecutionPermissionAdditionalDirectories<Code extends string, TError extends Error>(
+  rawPermissions: Record<string, unknown>,
+  executionPermissions: unknown,
+  config: AdapterProviderConfig<Code, TError>,
+): string[] | undefined {
+  const additionalDirectories = rawPermissions.additionalDirectories;
+  if (additionalDirectories === undefined) {
+    return undefined;
+  }
+
+  if (!Array.isArray(additionalDirectories)) {
+    throw createExecutionPermissionsValidationError(
+      config,
+      executionPermissions,
+      `${config.providerDisplayName} provider requires executionPermissions.additionalDirectories to be an array when provided.`,
+    );
+  }
+
+  return additionalDirectories.map((directory, index) => {
+    if (typeof directory !== 'string' || directory.trim().length === 0) {
+      throw createExecutionPermissionsValidationError(
+        config,
+        executionPermissions,
+        `${config.providerDisplayName} provider requires executionPermissions.additionalDirectories entries to be non-empty strings.`,
+        { index },
+      );
+    }
+
+    return directory.trim();
+  });
+}
+
+function parseExecutionPermissionWebSearchMode<Code extends string, TError extends Error>(
+  rawPermissions: Record<string, unknown>,
+  executionPermissions: unknown,
+  config: AdapterProviderConfig<Code, TError>,
+): (typeof providerWebSearchModes)[number] | undefined {
+  const webSearchMode = rawPermissions.webSearchMode;
+  if (webSearchMode === undefined) {
+    return undefined;
+  }
+
+  if (
+    typeof webSearchMode !== 'string'
+    || !executionWebSearchModes.has(webSearchMode as (typeof providerWebSearchModes)[number])
+  ) {
+    throw createExecutionPermissionsValidationError(
+      config,
+      executionPermissions,
+      `${config.providerDisplayName} provider requires executionPermissions.webSearchMode to be a supported value.`,
+    );
+  }
+
+  return webSearchMode as (typeof providerWebSearchModes)[number];
+}
+
 function normalizeExecutionPermissions<Code extends string, TError extends Error>(
   executionPermissions: ProviderRunOptions['executionPermissions'] | null,
   config: AdapterProviderConfig<Code, TError>,
@@ -306,107 +477,33 @@ function normalizeExecutionPermissions<Code extends string, TError extends Error
     return undefined;
   }
 
-  if (typeof executionPermissions !== 'object' || Array.isArray(executionPermissions)) {
-    throw config.createError(
-      config.codes.invalidOptions,
-      `${config.providerDisplayName} provider requires executionPermissions to be an object when provided.`,
-      { executionPermissions },
-    );
-  }
-
-  const rawPermissions = executionPermissions as Record<string, unknown>;
-  for (const key of Object.keys(rawPermissions)) {
-    if (!executionPermissionKeys.has(key)) {
-      throw config.createError(
-        config.codes.invalidOptions,
-        `${config.providerDisplayName} provider does not recognize executionPermissions.${key}.`,
-        { executionPermissions },
-      );
-    }
-  }
+  const rawPermissions = toRawExecutionPermissions(executionPermissions, config);
+  assertExecutionPermissionKeysAreSupported(rawPermissions, executionPermissions, config);
 
   const normalized: ProviderExecutionPermissions = {};
-
-  if ('approvalPolicy' in rawPermissions && rawPermissions.approvalPolicy !== undefined) {
-    const approvalPolicy = rawPermissions.approvalPolicy;
-    if (
-      typeof approvalPolicy !== 'string'
-      || !executionApprovalPolicies.has(approvalPolicy as (typeof providerApprovalPolicies)[number])
-    ) {
-      throw config.createError(
-        config.codes.invalidOptions,
-        `${config.providerDisplayName} provider requires executionPermissions.approvalPolicy to be a supported value.`,
-        { executionPermissions },
-      );
-    }
-    normalized.approvalPolicy = approvalPolicy as (typeof providerApprovalPolicies)[number];
+  const approvalPolicy = parseExecutionPermissionApprovalPolicy(rawPermissions, executionPermissions, config);
+  if (approvalPolicy !== undefined) {
+    normalized.approvalPolicy = approvalPolicy;
   }
 
-  if ('sandboxMode' in rawPermissions && rawPermissions.sandboxMode !== undefined) {
-    const sandboxMode = rawPermissions.sandboxMode;
-    if (
-      typeof sandboxMode !== 'string'
-      || !executionSandboxModes.has(sandboxMode as (typeof providerSandboxModes)[number])
-    ) {
-      throw config.createError(
-        config.codes.invalidOptions,
-        `${config.providerDisplayName} provider requires executionPermissions.sandboxMode to be a supported value.`,
-        { executionPermissions },
-      );
-    }
-    normalized.sandboxMode = sandboxMode as (typeof providerSandboxModes)[number];
+  const sandboxMode = parseExecutionPermissionSandboxMode(rawPermissions, executionPermissions, config);
+  if (sandboxMode !== undefined) {
+    normalized.sandboxMode = sandboxMode;
   }
 
-  if ('networkAccessEnabled' in rawPermissions && rawPermissions.networkAccessEnabled !== undefined) {
-    if (typeof rawPermissions.networkAccessEnabled !== 'boolean') {
-      throw config.createError(
-        config.codes.invalidOptions,
-        `${config.providerDisplayName} provider requires executionPermissions.networkAccessEnabled to be a boolean.`,
-        { executionPermissions },
-      );
-    }
-    normalized.networkAccessEnabled = rawPermissions.networkAccessEnabled;
+  const networkAccessEnabled = parseExecutionPermissionNetworkAccessEnabled(rawPermissions, executionPermissions, config);
+  if (networkAccessEnabled !== undefined) {
+    normalized.networkAccessEnabled = networkAccessEnabled;
   }
 
-  if ('additionalDirectories' in rawPermissions && rawPermissions.additionalDirectories !== undefined) {
-    if (!Array.isArray(rawPermissions.additionalDirectories)) {
-      throw config.createError(
-        config.codes.invalidOptions,
-        `${config.providerDisplayName} provider requires executionPermissions.additionalDirectories to be an array when provided.`,
-        { executionPermissions },
-      );
-    }
-
-    const normalizedDirectories = rawPermissions.additionalDirectories.map((directory, index) => {
-      if (typeof directory !== 'string' || directory.trim().length === 0) {
-        throw config.createError(
-          config.codes.invalidOptions,
-          `${config.providerDisplayName} provider requires executionPermissions.additionalDirectories entries to be non-empty strings.`,
-          { executionPermissions, index },
-        );
-      }
-
-      return directory.trim();
-    });
-
-    if (normalizedDirectories.length > 0) {
-      normalized.additionalDirectories = normalizedDirectories;
-    }
+  const additionalDirectories = parseExecutionPermissionAdditionalDirectories(rawPermissions, executionPermissions, config);
+  if (additionalDirectories !== undefined && additionalDirectories.length > 0) {
+    normalized.additionalDirectories = additionalDirectories;
   }
 
-  if ('webSearchMode' in rawPermissions && rawPermissions.webSearchMode !== undefined) {
-    const webSearchMode = rawPermissions.webSearchMode;
-    if (
-      typeof webSearchMode !== 'string'
-      || !executionWebSearchModes.has(webSearchMode as (typeof providerWebSearchModes)[number])
-    ) {
-      throw config.createError(
-        config.codes.invalidOptions,
-        `${config.providerDisplayName} provider requires executionPermissions.webSearchMode to be a supported value.`,
-        { executionPermissions },
-      );
-    }
-    normalized.webSearchMode = webSearchMode as (typeof providerWebSearchModes)[number];
+  const webSearchMode = parseExecutionPermissionWebSearchMode(rawPermissions, executionPermissions, config);
+  if (webSearchMode !== undefined) {
+    normalized.webSearchMode = webSearchMode;
   }
 
   if (Object.keys(normalized).length === 0) {
@@ -414,10 +511,10 @@ function normalizeExecutionPermissions<Code extends string, TError extends Error
   }
 
   if (config.supportsExecutionPermissions !== true) {
-    throw config.createError(
-      config.codes.invalidOptions,
+    throw createExecutionPermissionsValidationError(
+      config,
+      normalized,
       `${config.providerDisplayName} provider does not support executionPermissions.`,
-      { executionPermissions: normalized },
     );
   }
 
