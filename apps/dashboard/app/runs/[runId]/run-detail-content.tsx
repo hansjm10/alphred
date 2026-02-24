@@ -2136,9 +2136,17 @@ export function RunDetailContent({
       if (node) {
         const canOpenStream = node.status === 'running' || node.status === 'completed' || node.status === 'failed';
         if (canOpenStream) {
-          setStreamTarget(toAgentStreamTarget(node));
-          setStreamAutoScroll(true);
-          setStreamBufferedEvents([]);
+          const nextStreamTarget = toAgentStreamTarget(node);
+          const streamTargetChanged =
+            streamTarget === null ||
+            streamTarget.runNodeId !== nextStreamTarget.runNodeId ||
+            streamTarget.attempt !== nextStreamTarget.attempt ||
+            streamTarget.nodeKey !== nextStreamTarget.nodeKey;
+          if (streamTargetChanged) {
+            setStreamTarget(nextStreamTarget);
+            setStreamAutoScroll(true);
+            setStreamBufferedEvents([]);
+          }
         }
       }
     }

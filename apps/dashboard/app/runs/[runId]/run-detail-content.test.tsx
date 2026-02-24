@@ -658,6 +658,76 @@ describe('RunDetailContent realtime updates', () => {
     });
   });
 
+  it('does not restart stream when selecting the active node in the status panel', async () => {
+    vi.stubGlobal('EventSource', MockEventSource as unknown as typeof EventSource);
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/nodes/2/stream')) {
+        return createJsonResponse({
+          workflowRunId: 412,
+          runNodeId: 2,
+          attempt: 1,
+          nodeStatus: 'running',
+          ended: false,
+          latestSequence: 1,
+          events: [
+            createStreamEvent({
+              sequence: 1,
+              contentPreview: 'seeded event',
+            }),
+          ],
+        });
+      }
+
+      return createJsonResponse(createRunDetail());
+    });
+
+    const user = userEvent.setup();
+
+    render(
+      <RunDetailContent
+        initialDetail={createRunDetail()}
+        repositories={[createRepository()]}
+        enableRealtime={false}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        expect.stringContaining('/api/dashboard/runs/412/nodes/2/stream?attempt=1&lastEventSequence=0'),
+        expect.objectContaining({ method: 'GET' }),
+      );
+    });
+
+    await waitFor(() => {
+      expect(MockEventSource.instances).toHaveLength(1);
+    });
+
+    const source = MockEventSource.instances[0]!;
+    source.emitOpen();
+
+    await user.click(screen.getByRole('button', { name: 'Pause auto-scroll' }));
+    source.emit('stream_event', createStreamEvent({ sequence: 2, contentPreview: 'buffered update' }));
+
+    await waitFor(() => {
+      expect(screen.getByText('1 new events buffered.')).toBeInTheDocument();
+    });
+    expect(screen.queryByText('buffered update')).toBeNull();
+
+    const nodeStatusPanel = screen.getByRole('heading', { level: 3, name: 'Node status' }).closest('aside');
+    expect(nodeStatusPanel).not.toBeNull();
+    const streamCallsBeforeClick = fetchMock.mock.calls.filter(([input]) => String(input).includes('/nodes/2/stream')).length;
+    const streamConnectionsBeforeClick = MockEventSource.instances.length;
+    await user.click(within(nodeStatusPanel!).getByRole('button', { name: 'implement (attempt 1)' }));
+
+    expect(screen.getByText('1 new events buffered.')).toBeInTheDocument();
+    expect(screen.queryByText('buffered update')).toBeNull();
+    expect(MockEventSource.instances).toHaveLength(streamConnectionsBeforeClick);
+
+    const streamCallsAfterClick = fetchMock.mock.calls.filter(([input]) => String(input).includes('/nodes/2/stream')).length;
+    expect(streamCallsAfterClick).toBe(streamCallsBeforeClick);
+  });
+
   it('paginates ended stream snapshots until persisted history is fully loaded', async () => {
     vi.stubGlobal('EventSource', MockEventSource as unknown as typeof EventSource);
     fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
