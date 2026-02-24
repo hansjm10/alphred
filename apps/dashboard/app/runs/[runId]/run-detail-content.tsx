@@ -1640,6 +1640,39 @@ function resolvePayloadStorageSummary(diagnostics: DashboardRunDetail['diagnosti
   return `Payload normalized with ${normalizationActions.join(' and ')}.`;
 }
 
+type StreamEventItemsProps = Readonly<{
+  partition: RecentPartition<DashboardRunNodeStreamEvent>;
+  renderEvent: (event: DashboardRunNodeStreamEvent) => React.ReactNode;
+}>;
+
+function StreamEventItems({ partition, renderEvent }: StreamEventItemsProps) {
+  if (partition.earlier.length === 0 && partition.recent.length === 0) {
+    return (
+      <li>
+        <p>No streamed events captured yet for this node attempt.</p>
+      </li>
+    );
+  }
+
+  return (
+    <>
+      {partition.earlier.length > 0 ? (
+        <li>
+          <details className="run-collapsible-history">
+            <summary className="run-collapsible-history__summary">
+              {`Show ${partition.earlier.length} earlier stream events`}
+            </summary>
+            <ol className="page-stack run-collapsible-history__list" aria-label="Earlier agent stream events">
+              {partition.earlier.map((event) => renderEvent(event))}
+            </ol>
+          </details>
+        </li>
+      ) : null}
+      {partition.recent.map((event) => renderEvent(event))}
+    </>
+  );
+}
+
 type RunAgentStreamCardProps = Readonly<{
   isTerminalRun: boolean;
   selectedStreamNode: DashboardRunDetail['nodes'][number] | null;
@@ -1732,27 +1765,7 @@ function RunAgentStreamCard({
       ) : null}
 
       <ol ref={streamEventListRef} className="page-stack run-agent-stream-events" aria-label="Agent stream events">
-        {streamEvents.length > 0 ? (
-          <>
-            {streamEventPartition.earlier.length > 0 ? (
-              <li>
-                <details className="run-collapsible-history">
-                  <summary className="run-collapsible-history__summary">
-                    {`Show ${streamEventPartition.earlier.length} earlier stream events`}
-                  </summary>
-                  <ol className="page-stack run-collapsible-history__list" aria-label="Earlier agent stream events">
-                    {streamEventPartition.earlier.map((event) => renderStreamEvent(event))}
-                  </ol>
-                </details>
-              </li>
-            ) : null}
-            {streamEventPartition.recent.map((event) => renderStreamEvent(event))}
-          </>
-        ) : (
-          <li>
-            <p>No streamed events captured yet for this node attempt.</p>
-          </li>
-        )}
+        <StreamEventItems partition={streamEventPartition} renderEvent={renderStreamEvent} />
       </ol>
     </>
   ) : (
@@ -1763,8 +1776,9 @@ function RunAgentStreamCard({
     const streamTargetLabel = selectedStreamNode
       ? `${selectedStreamNode.nodeKey} (attempt ${selectedStreamNode.attempt})`
       : 'no target selected';
+    const eventSuffix = streamEvents.length === 1 ? '' : 's';
     const eventCountLabel = streamEvents.length > 0
-      ? `${streamEvents.length} event${streamEvents.length === 1 ? '' : 's'} captured`
+      ? `${streamEvents.length} event${eventSuffix} captured`
       : 'no events captured';
 
     return (
