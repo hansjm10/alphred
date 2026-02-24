@@ -123,6 +123,15 @@ const RUN_DETAIL_POLL_BACKOFF_MAX_MS = 20_000;
 const RUN_DETAIL_STALE_THRESHOLD_MS = 15_000;
 const AGENT_STREAM_RECONNECT_MAX_MS = 20_000;
 const AGENT_STREAM_STALE_THRESHOLD_MS = 15_000;
+const RUN_TIMELINE_RECENT_EVENT_COUNT = 8;
+const RUN_AGENT_STREAM_RECENT_EVENT_COUNT = 8;
+const RUN_OBSERVABILITY_RECENT_ENTRY_COUNT = 2;
+
+type RecentPartition<T> = Readonly<{
+  recent: readonly T[];
+  earlier: readonly T[];
+}>;
+type RecentPartitionOrder = 'oldest-first' | 'newest-first';
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
@@ -646,6 +655,32 @@ function toNodeTerminalSummary(node: DashboardRunDetail['nodes'][number]): strin
 
 function isTerminalNodeStatus(status: DashboardRunDetail['nodes'][number]['status']): boolean {
   return status === 'completed' || status === 'failed' || status === 'skipped' || status === 'cancelled';
+}
+
+function partitionByRecency<T>(
+  items: readonly T[],
+  recentCount: number,
+  order: RecentPartitionOrder = 'oldest-first',
+): RecentPartition<T> {
+  if (recentCount <= 0 || items.length <= recentCount) {
+    return {
+      recent: [...items],
+      earlier: [],
+    };
+  }
+
+  if (order === 'newest-first') {
+    return {
+      recent: items.slice(0, recentCount),
+      earlier: items.slice(recentCount),
+    };
+  }
+
+  const splitIndex = items.length - recentCount;
+  return {
+    recent: items.slice(splitIndex),
+    earlier: items.slice(0, splitIndex),
+  };
 }
 
 function buildTimeline(detail: DashboardRunDetail): readonly TimelineItem[] {
@@ -1595,6 +1630,28 @@ function RunAgentStreamCard({
   setStreamBufferedEvents,
   setStreamEvents,
 }: RunAgentStreamCardProps) {
+  const streamEventPartition = partitionByRecency(streamEvents, RUN_AGENT_STREAM_RECENT_EVENT_COUNT);
+
+  const renderStreamEvent = (event: DashboardRunNodeStreamEvent) => (
+    <li key={`${event.runNodeId}-${event.attempt}-${event.sequence}`} className="run-agent-stream-event">
+      <p className="meta-text">{`#${event.sequence} · ${formatStreamTimestamp(event.timestamp)}`}</p>
+      <p>
+        <span className={`run-agent-stream-event-type run-agent-stream-event-type--${event.type}`}>{event.type}</span>
+      </p>
+      <ExpandablePreview
+        value={event.contentPreview}
+        label="event payload"
+        previewLength={160}
+        className="run-agent-stream-event-content"
+      />
+      {event.usage ? (
+        <p className="meta-text">
+          {`Usage Δ ${event.usage.deltaTokens ?? 'n/a'} · cumulative ${event.usage.cumulativeTokens ?? 'n/a'}`}
+        </p>
+      ) : null}
+    </li>
+  );
+
   return (
     <Card title="Agent stream" description="Live provider events for a selected node attempt.">
       <ul className="entity-list run-node-status-list" aria-label="Agent stream targets">
@@ -1666,25 +1723,21 @@ function RunAgentStreamCard({
 
           <ol ref={streamEventListRef} className="page-stack run-agent-stream-events" aria-label="Agent stream events">
             {streamEvents.length > 0 ? (
-              streamEvents.map((event) => (
-                <li key={`${event.runNodeId}-${event.attempt}-${event.sequence}`} className="run-agent-stream-event">
-                  <p className="meta-text">{`#${event.sequence} · ${formatStreamTimestamp(event.timestamp)}`}</p>
-                  <p>
-                    <span className={`run-agent-stream-event-type run-agent-stream-event-type--${event.type}`}>{event.type}</span>
-                  </p>
-                  <ExpandablePreview
-                    value={event.contentPreview}
-                    label="event payload"
-                    previewLength={220}
-                    className="run-agent-stream-event-content"
-                  />
-                  {event.usage ? (
-                    <p className="meta-text">
-                      {`Usage Δ ${event.usage.deltaTokens ?? 'n/a'} · cumulative ${event.usage.cumulativeTokens ?? 'n/a'}`}
-                    </p>
-                  ) : null}
-                </li>
-              ))
+              <>
+                {streamEventPartition.earlier.length > 0 ? (
+                  <li>
+                    <details className="run-collapsible-history">
+                      <summary className="run-collapsible-history__summary">
+                        {`Show ${streamEventPartition.earlier.length} earlier stream events`}
+                      </summary>
+                      <ol className="page-stack run-collapsible-history__list" aria-label="Earlier agent stream events">
+                        {streamEventPartition.earlier.map((event) => renderStreamEvent(event))}
+                      </ol>
+                    </details>
+                  </li>
+                ) : null}
+                {streamEventPartition.recent.map((event) => renderStreamEvent(event))}
+              </>
             ) : (
               <li>
                 <p>No streamed events captured yet for this node attempt.</p>
@@ -1704,61 +1757,107 @@ type RunObservabilityCardProps = Readonly<{
 }>;
 
 function RunObservabilityCard({ detail }: RunObservabilityCardProps) {
+  const artifactPartition = partitionByRecency(detail.artifacts, RUN_OBSERVABILITY_RECENT_ENTRY_COUNT, 'newest-first');
+  const diagnosticsPartition = partitionByRecency(
+    detail.diagnostics,
+    RUN_OBSERVABILITY_RECENT_ENTRY_COUNT,
+    'newest-first',
+  );
+
+  const renderDiagnosticsEntry = (
+    diagnostics: DashboardRunDetail['diagnostics'][number],
+  ) => {
+    const node = detail.nodes.find((candidate) => candidate.id === diagnostics.runNodeId);
+    const nodeLabel = node ? `${node.nodeKey} (attempt ${diagnostics.attempt})` : `Node #${diagnostics.runNodeId}`;
+    const payloadStorageSummary = resolvePayloadStorageSummary(diagnostics);
+
+    return (
+      <li key={diagnostics.id}>
+        <p>{`${nodeLabel}: ${diagnostics.outcome}`}</p>
+        <p className="meta-text">
+          {`Events ${diagnostics.retainedEventCount}/${diagnostics.eventCount}; tools ${diagnostics.diagnostics.summary.toolEventCount}; tokens ${diagnostics.diagnostics.summary.tokensUsed}.`}
+        </p>
+        <p className="meta-text">{payloadStorageSummary}</p>
+        {diagnostics.diagnostics.error ? (
+          <ExpandablePreview
+            value={`Failure: ${diagnostics.diagnostics.error.classification} (${diagnostics.diagnostics.error.message}).`}
+            label="failure diagnostics"
+          />
+        ) : null}
+        {diagnostics.diagnostics.toolEvents.length > 0 ? (
+          <ExpandablePreview
+            value={`Tool activity: ${diagnostics.diagnostics.toolEvents.map(event => event.summary).join('; ')}`}
+            label="tool activity"
+          />
+        ) : null}
+      </li>
+    );
+  };
+
   return (
     <Card title="Artifacts, diagnostics, and routing decisions" description="Recent snapshots for operator triage.">
-      <p className="meta-text">Artifacts</p>
-      {detail.artifacts.length === 0 ? <p>No artifacts captured yet.</p> : null}
-      <ul className="page-stack" aria-label="Run artifacts">
-        {detail.artifacts.map((artifact) => (
-          <li key={artifact.id}>
-            <p>{`${artifact.artifactType} (${artifact.contentType})`}</p>
-            <ExpandablePreview value={artifact.contentPreview} label="artifact preview" />
-          </li>
-        ))}
-      </ul>
-
-      <p className="meta-text">Node diagnostics</p>
-      {detail.diagnostics.length === 0 ? <p>No node diagnostics captured yet.</p> : null}
-      <ul className="page-stack" aria-label="Run node diagnostics">
-        {detail.diagnostics.map((diagnostics) => {
-          const node = detail.nodes.find((candidate) => candidate.id === diagnostics.runNodeId);
-          const nodeLabel = node ? `${node.nodeKey} (attempt ${diagnostics.attempt})` : `Node #${diagnostics.runNodeId}`;
-          const payloadStorageSummary = resolvePayloadStorageSummary(diagnostics);
-
-          return (
-            <li key={diagnostics.id}>
-              <p>{`${nodeLabel}: ${diagnostics.outcome}`}</p>
-              <p className="meta-text">
-                {`Events ${diagnostics.retainedEventCount}/${diagnostics.eventCount}; tools ${diagnostics.diagnostics.summary.toolEventCount}; tokens ${diagnostics.diagnostics.summary.tokensUsed}.`}
-              </p>
-              <p className="meta-text">{payloadStorageSummary}</p>
-              {diagnostics.diagnostics.error ? (
-                <ExpandablePreview
-                  value={`Failure: ${diagnostics.diagnostics.error.classification} (${diagnostics.diagnostics.error.message}).`}
-                  label="failure diagnostics"
-                />
-              ) : null}
-              {diagnostics.diagnostics.toolEvents.length > 0 ? (
-                <ExpandablePreview
-                  value={`Tool activity: ${diagnostics.diagnostics.toolEvents.map(event => event.summary).join('; ')}`}
-                  label="tool activity"
-                />
-              ) : null}
+      <section className="run-observability-section">
+        <p className="meta-text">Artifacts</p>
+        {detail.artifacts.length === 0 ? <p>No artifacts captured yet.</p> : null}
+        <ul className="page-stack run-observability-list" aria-label="Run artifacts">
+          {artifactPartition.recent.map((artifact) => (
+            <li key={artifact.id}>
+              <p>{`${artifact.artifactType} (${artifact.contentType})`}</p>
+              <ExpandablePreview value={artifact.contentPreview} label="artifact preview" />
             </li>
-          );
-        })}
-      </ul>
+          ))}
+          {artifactPartition.earlier.length > 0 ? (
+            <li>
+              <details className="run-collapsible-history">
+                <summary className="run-collapsible-history__summary">
+                  {`Show ${artifactPartition.earlier.length} earlier artifacts`}
+                </summary>
+                <ul className="page-stack run-collapsible-history__list" aria-label="Earlier run artifacts">
+                  {artifactPartition.earlier.map((artifact) => (
+                    <li key={`older-${artifact.id}`}>
+                      <p>{`${artifact.artifactType} (${artifact.contentType})`}</p>
+                      <ExpandablePreview value={artifact.contentPreview} label="artifact preview" />
+                    </li>
+                  ))}
+                </ul>
+              </details>
+            </li>
+          ) : null}
+        </ul>
+      </section>
 
-      <p className="meta-text">Routing decisions</p>
-      {detail.routingDecisions.length === 0 ? <p>No routing decisions captured yet.</p> : null}
-      <ul className="page-stack" aria-label="Run routing decisions">
-        {detail.routingDecisions.map((decision) => (
-          <li key={decision.id}>
-            <p>{decision.decisionType}</p>
-            <p className="meta-text">{decision.rationale ?? 'No rationale provided.'}</p>
-          </li>
-        ))}
-      </ul>
+      <section className="run-observability-section">
+        <p className="meta-text">Node diagnostics</p>
+        {detail.diagnostics.length === 0 ? <p>No node diagnostics captured yet.</p> : null}
+        <ul className="page-stack run-observability-list" aria-label="Run node diagnostics">
+          {diagnosticsPartition.recent.map((diagnostics) => renderDiagnosticsEntry(diagnostics))}
+          {diagnosticsPartition.earlier.length > 0 ? (
+            <li>
+              <details className="run-collapsible-history">
+                <summary className="run-collapsible-history__summary">
+                  {`Show ${diagnosticsPartition.earlier.length} earlier diagnostics`}
+                </summary>
+                <ul className="page-stack run-collapsible-history__list" aria-label="Earlier run node diagnostics">
+                  {diagnosticsPartition.earlier.map((diagnostics) => renderDiagnosticsEntry(diagnostics))}
+                </ul>
+              </details>
+            </li>
+          ) : null}
+        </ul>
+      </section>
+
+      <section className="run-observability-section">
+        <p className="meta-text">Routing decisions</p>
+        {detail.routingDecisions.length === 0 ? <p>No routing decisions captured yet.</p> : null}
+        <ul className="page-stack run-observability-list" aria-label="Run routing decisions">
+          {detail.routingDecisions.map((decision) => (
+            <li key={decision.id}>
+              <p>{decision.decisionType}</p>
+              <p className="meta-text">{decision.rationale ?? 'No rationale provided.'}</p>
+            </li>
+          ))}
+        </ul>
+      </section>
     </Card>
   );
 }
@@ -1957,6 +2056,11 @@ export function RunDetailContent({
         : timeline.filter((event) => event.relatedNodeId === null || event.relatedNodeId === filteredNodeId),
     [filteredNodeId, timeline],
   );
+  const latestTimelineEvent = timeline.at(-1) ?? null;
+  const visibleTimelinePartition = useMemo(
+    () => partitionByRecency(visibleTimeline, RUN_TIMELINE_RECENT_EVENT_COUNT),
+    [visibleTimeline],
+  );
   const realtimeLabel = resolveRealtimeLabel(channelState, pollIntervalMs, retryCountdownSeconds);
   const agentStreamLabel = resolveAgentStreamLabel(streamConnectionState, streamRetryCountdownSeconds);
   const selectedStreamNode = useMemo(
@@ -1969,6 +2073,26 @@ export function RunDetailContent({
     setHighlightedNodeId(nextNodeId);
   };
 
+  const renderTimelineEvent = (event: TimelineItem) => {
+    const highlighted = highlightedNodeId !== null && event.relatedNodeId === highlightedNodeId;
+
+    return (
+      <li key={event.key}>
+        <button
+          type="button"
+          className={`run-timeline-event${highlighted ? ' run-timeline-event--selected' : ''}`}
+          aria-pressed={highlighted}
+          onClick={() => {
+            setHighlightedNodeId(event.relatedNodeId);
+          }}
+        >
+          <p className="meta-text">{formatTimelineTime(event.timestamp, hasHydrated)}</p>
+          <p>{event.summary}</p>
+        </button>
+      </li>
+    );
+  };
+
   return (
     <div className="page-stack">
       <section className="page-heading">
@@ -1976,38 +2100,35 @@ export function RunDetailContent({
         <p>Timeline and node lifecycle reflect persisted run data from dashboard APIs.</p>
       </section>
 
-      <div className="page-grid">
-        <Card title="Run summary" description="Current status and context">
-          <ul className="entity-list">
+      <div className="page-grid run-detail-priority-grid">
+        <Card
+          title="Operator focus"
+          description="Current run status, latest event, and next likely operator action."
+          className="run-operator-focus"
+        >
+          <ul className="entity-list run-operator-focus-list">
             <li>
-              <span>Status</span>
+              <span>Current status</span>
               <StatusBadge status={detail.run.status} />
             </li>
             <li>
-              <span>Workflow</span>
-              <span className="meta-text">{`${detail.run.tree.name} (${detail.run.tree.treeKey})`}</span>
+              <span>Latest event</span>
+              {latestTimelineEvent ? (
+                <div className="run-operator-focus-list__value">
+                  <p>{latestTimelineEvent.summary}</p>
+                  <p className="meta-text">{formatTimelineTime(latestTimelineEvent.timestamp, hasHydrated)}</p>
+                </div>
+              ) : (
+                <span className="meta-text">No lifecycle events captured yet.</span>
+              )}
             </li>
             <li>
-              <span>Repository context</span>
-              <span className="meta-text">{repositoryContext}</span>
-            </li>
-            <li>
-              <span>Worktrees</span>
-              <span className="meta-text">{detail.worktrees.length}</span>
-            </li>
-            <li>
-              <span>Started</span>
-              <span className="meta-text">{formatDateTime(detail.run.startedAt, 'Not started', hasHydrated)}</span>
-            </li>
-            <li>
-              <span>Completed</span>
-              <span className="meta-text">{formatDateTime(detail.run.completedAt, 'In progress', hasHydrated)}</span>
+              <span>Next action</span>
+              <span className="meta-text">{primaryAction.label}</span>
             </li>
           </ul>
-        </Card>
 
-        <Panel title="Actions" description="Invalid actions are blocked by current lifecycle state.">
-          <div className="action-row">
+          <div className="action-row run-detail-primary-actions">
             {primaryAction.href ? (
               <ButtonLink href={primaryAction.href} tone="primary">
                 {primaryAction.label}
@@ -2035,6 +2156,31 @@ export function RunDetailContent({
               {`Update channel degraded: ${updateError}`}
             </output>
           ) : null}
+        </Card>
+
+        <Panel title="Run summary" description="Workflow context and timestamps." className="run-detail-summary-panel">
+          <ul className="entity-list run-detail-summary-list">
+            <li>
+              <span>Workflow</span>
+              <span className="meta-text">{`${detail.run.tree.name} (${detail.run.tree.treeKey})`}</span>
+            </li>
+            <li>
+              <span>Repository context</span>
+              <span className="meta-text">{repositoryContext}</span>
+            </li>
+            <li>
+              <span>Worktrees</span>
+              <span className="meta-text">{detail.worktrees.length}</span>
+            </li>
+            <li>
+              <span>Started</span>
+              <span className="meta-text">{formatDateTime(detail.run.startedAt, 'Not started', hasHydrated)}</span>
+            </li>
+            <li>
+              <span>Completed</span>
+              <span className="meta-text">{formatDateTime(detail.run.completedAt, 'In progress', hasHydrated)}</span>
+            </li>
+          </ul>
         </Panel>
       </div>
 
@@ -2055,27 +2201,23 @@ export function RunDetailContent({
             </div>
           ) : null}
 
-          <ol className="page-stack" aria-label="Run timeline">
+          <ol className="page-stack run-timeline-list" aria-label="Run timeline">
             {visibleTimeline.length > 0 ? (
-              visibleTimeline.map((event) => {
-                const highlighted = highlightedNodeId !== null && event.relatedNodeId === highlightedNodeId;
-
-                return (
-                  <li key={event.key}>
-                    <button
-                      type="button"
-                      className={`run-timeline-event${highlighted ? ' run-timeline-event--selected' : ''}`}
-                      aria-pressed={highlighted}
-                      onClick={() => {
-                        setHighlightedNodeId(event.relatedNodeId);
-                      }}
-                    >
-                      <p className="meta-text">{formatTimelineTime(event.timestamp, hasHydrated)}</p>
-                      <p>{event.summary}</p>
-                    </button>
+              <>
+                {visibleTimelinePartition.earlier.length > 0 ? (
+                  <li>
+                    <details className="run-collapsible-history">
+                      <summary className="run-collapsible-history__summary">
+                        {`Show ${visibleTimelinePartition.earlier.length} earlier events`}
+                      </summary>
+                      <ol className="page-stack run-collapsible-history__list" aria-label="Earlier run timeline events">
+                        {visibleTimelinePartition.earlier.map((event) => renderTimelineEvent(event))}
+                      </ol>
+                    </details>
                   </li>
-                );
-              })
+                ) : null}
+                {visibleTimelinePartition.recent.map((event) => renderTimelineEvent(event))}
+              </>
             ) : (
               <li>
                 <p>{filteredNodeId === null ? 'No lifecycle events captured yet.' : 'No events match the selected node.'}</p>

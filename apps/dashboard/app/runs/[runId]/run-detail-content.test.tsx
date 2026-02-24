@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { act, render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { hydrateRoot } from 'react-dom/client';
 import { renderToString } from 'react-dom/server';
@@ -878,12 +878,13 @@ describe('RunDetailContent realtime updates', () => {
       />,
     );
 
-    expect(screen.getByText('implement started (attempt 1).')).toBeInTheDocument();
+    const timeline = screen.getByRole('list', { name: 'Run timeline' });
+    expect(within(timeline).getByText('implement started (attempt 1).')).toBeInTheDocument();
 
     await user.click(screen.getAllByRole('button', { name: 'design (attempt 1)' })[0]!);
 
-    expect(screen.getByText('design completed.')).toBeInTheDocument();
-    expect(screen.queryByText('implement started (attempt 1).')).toBeNull();
+    expect(within(timeline).getByText('design completed.')).toBeInTheDocument();
+    expect(within(timeline).queryByText('implement started (attempt 1).')).toBeNull();
   });
 
   it('keeps timeline events visible when selecting an event from the timeline', async () => {
@@ -897,10 +898,11 @@ describe('RunDetailContent realtime updates', () => {
       />,
     );
 
-    await user.click(screen.getByRole('button', { name: /design completed\./i }));
+    const timeline = screen.getByRole('list', { name: 'Run timeline' });
+    await user.click(within(timeline).getByRole('button', { name: /design completed\./i }));
 
-    expect(screen.getByText('design completed.')).toBeInTheDocument();
-    expect(screen.getByText('implement started (attempt 1).')).toBeInTheDocument();
+    expect(within(timeline).getByText('design completed.')).toBeInTheDocument();
+    expect(within(timeline).getByText('implement started (attempt 1).')).toBeInTheDocument();
     expect(screen.getAllByRole('button', { name: 'design (attempt 1)' })[0]!).toHaveAttribute('aria-pressed', 'false');
     expect(screen.queryByText(/Filtered to design \(attempt 1\)\./i)).toBeNull();
   });
@@ -916,15 +918,16 @@ describe('RunDetailContent realtime updates', () => {
       />,
     );
 
+    const timeline = screen.getByRole('list', { name: 'Run timeline' });
     const designFilterButton = screen.getAllByRole('button', { name: 'design (attempt 1)' })[0]!;
     await user.click(designFilterButton);
 
-    expect(screen.queryByText('implement started (attempt 1).')).toBeNull();
+    expect(within(timeline).queryByText('implement started (attempt 1).')).toBeNull();
     expect(designFilterButton).toHaveAttribute('aria-pressed', 'true');
 
-    await user.click(screen.getByRole('button', { name: /run started\./i }));
+    await user.click(within(timeline).getByRole('button', { name: /run started\./i }));
 
-    expect(screen.queryByText('implement started (attempt 1).')).toBeNull();
+    expect(within(timeline).queryByText('implement started (attempt 1).')).toBeNull();
     expect(screen.getByText(/Filtered to design \(attempt 1\)\./i)).toBeInTheDocument();
     expect(designFilterButton).toHaveAttribute('aria-pressed', 'true');
   });
@@ -1023,5 +1026,134 @@ describe('RunDetailContent realtime updates', () => {
     await user.click(toggle);
     expect(details).toHaveAttribute('open');
     expect(details).toHaveTextContent(longStreamPayload.trim());
+  });
+
+  it('surfaces operator focus with current status, latest event, and next action', () => {
+    render(
+      <RunDetailContent
+        initialDetail={createRunDetail()}
+        repositories={[createRepository()]}
+        enableRealtime={false}
+      />,
+    );
+
+    const focusHeading = screen.getByRole('heading', { level: 3, name: 'Operator focus' });
+    const focusCard = focusHeading.closest('section');
+
+    expect(focusCard).not.toBeNull();
+    expect(within(focusCard!).getByText('Current status')).toBeInTheDocument();
+    expect(within(focusCard!).getByText('Latest event')).toBeInTheDocument();
+    expect(within(focusCard!).getByText('Next action')).toBeInTheDocument();
+    expect(within(focusCard!).getByRole('button', { name: 'Pause' })).toBeDisabled();
+    expect(within(focusCard!).getByText(/implement started \(attempt 1\)\./i)).toBeInTheDocument();
+  });
+
+  it('collapses earlier timeline entries behind disclosure when the timeline is long', () => {
+    const nodes = Array.from({ length: 6 }, (_, index) => {
+      const minuteOffset = index + 1;
+      const startedAt = `2026-02-18T00:${String(minuteOffset).padStart(2, '0')}:00.000Z`;
+      const completedAt = `2026-02-18T00:${String(minuteOffset).padStart(2, '0')}:30.000Z`;
+
+      return {
+        id: index + 1,
+        treeNodeId: index + 1,
+        nodeKey: `phase-${index + 1}`,
+        sequenceIndex: index,
+        attempt: 1,
+        status: 'completed' as const,
+        startedAt,
+        completedAt,
+        latestArtifact: null,
+        latestRoutingDecision: null,
+        latestDiagnostics: null,
+      };
+    });
+
+    render(
+      <RunDetailContent
+        initialDetail={createRunDetail({
+          run: {
+            status: 'completed',
+            completedAt: '2026-02-18T00:07:00.000Z',
+          },
+          nodes,
+          artifacts: [],
+          routingDecisions: [],
+          diagnostics: [],
+        })}
+        repositories={[createRepository()]}
+        enableRealtime={false}
+      />,
+    );
+
+    const timelineDisclosure = screen.getByText('Show 6 earlier events');
+    const timelineDisclosureDetails = timelineDisclosure.closest('details');
+
+    expect(timelineDisclosure).toBeInTheDocument();
+    expect(timelineDisclosureDetails).not.toHaveAttribute('open');
+  });
+
+  it('collapses older observability entries behind disclosure while keeping newest snapshots visible', () => {
+    const baseDetail = createRunDetail();
+    const baseDiagnostics = baseDetail.diagnostics[0]!;
+    const diagnostics = Array.from({ length: 4 }, (_, index) => {
+      const attempt = index + 1;
+      return {
+        ...baseDiagnostics,
+        id: 20 + attempt,
+        attempt,
+        createdAt: `2026-02-18T00:0${attempt}:32.000Z`,
+        diagnostics: {
+          ...baseDiagnostics.diagnostics,
+          attempt,
+        },
+      };
+    }).reverse();
+    const artifacts = Array.from({ length: 4 }, (_, index) => {
+      const entry = index + 1;
+      return {
+        id: entry,
+        runNodeId: 1,
+        artifactType: 'report' as const,
+        contentType: 'markdown' as const,
+        contentPreview: `artifact ${entry} ${'content '.repeat(20)}`,
+        createdAt: `2026-02-18T00:0${entry}:25.000Z`,
+      };
+    }).reverse();
+
+    render(
+      <RunDetailContent
+        initialDetail={createRunDetail({
+          artifacts,
+          diagnostics,
+        })}
+        repositories={[createRepository()]}
+        enableRealtime={false}
+      />,
+    );
+
+    const artifactDisclosure = screen.getByText('Show 2 earlier artifacts');
+    const diagnosticDisclosure = screen.getByText('Show 2 earlier diagnostics');
+    const artifactList = screen.getByRole('list', { name: 'Run artifacts' });
+    const diagnosticsList = screen.getByRole('list', { name: 'Run node diagnostics' });
+    const artifactItems = artifactList.querySelectorAll(':scope > li');
+    const diagnosticItems = diagnosticsList.querySelectorAll(':scope > li');
+
+    expect(artifactDisclosure.closest('details')).not.toHaveAttribute('open');
+    expect(diagnosticDisclosure.closest('details')).not.toHaveAttribute('open');
+    expect(artifactItems).toHaveLength(3);
+    expect(diagnosticItems).toHaveLength(3);
+    expect(
+      within(artifactItems[0] as HTMLElement).getByText(/artifact 4/i, {
+        selector: 'div.run-expandable-preview > p.meta-text',
+      }),
+    ).toBeInTheDocument();
+    expect(
+      within(artifactItems[1] as HTMLElement).getByText(/artifact 3/i, {
+        selector: 'div.run-expandable-preview > p.meta-text',
+      }),
+    ).toBeInTheDocument();
+    expect(within(diagnosticItems[0] as HTMLElement).getByText(/attempt 4\): completed/i)).toBeInTheDocument();
+    expect(within(diagnosticItems[1] as HTMLElement).getByText(/attempt 3\): completed/i)).toBeInTheDocument();
   });
 });
