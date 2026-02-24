@@ -1,6 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import {
   compareStringsByCodeUnit,
+  providerApprovalPolicies,
+  providerSandboxModes,
+  providerWebSearchModes,
   type AuthStatus,
   type CloneStatus,
   type CreatePrParams,
@@ -62,6 +65,16 @@ describe('shared types', () => {
     const sorted = [...names].sort(compareStringsByCodeUnit);
 
     expect(sorted).toEqual(['alpha', 'angstrom', 'zeta', 'ångstrom']);
+  });
+
+  it('exposes unique provider execution permission option values', () => {
+    expect([...providerApprovalPolicies]).toEqual(['never', 'on-request', 'on-failure', 'untrusted']);
+    expect([...providerSandboxModes]).toEqual(['read-only', 'workspace-write', 'danger-full-access']);
+    expect([...providerWebSearchModes]).toEqual(['disabled', 'cached', 'live']);
+
+    expect(new Set(providerApprovalPolicies).size).toBe(providerApprovalPolicies.length);
+    expect(new Set(providerSandboxModes).size).toBe(providerSandboxModes.length);
+    expect(new Set(providerWebSearchModes).size).toBe(providerWebSearchModes.length);
   });
 
   it('should type-check normalized scm types', () => {

@@ -223,6 +223,18 @@ describe('NodeInspector', () => {
     expect(onChange).toHaveBeenLastCalledWith(expect.objectContaining({
       executionPermissions: { networkAccessEnabled: true },
     }));
+
+    fireEvent.change(screen.getByLabelText('Web search mode'), { target: { value: 'cached' } });
+    expect(onChange).toHaveBeenLastCalledWith(expect.objectContaining({
+      executionPermissions: { webSearchMode: 'cached' },
+    }));
+
+    fireEvent.change(screen.getByLabelText('Additional directories (one path per line)'), {
+      target: { value: '  /tmp/cache  \n\n/tmp/worktree ' },
+    });
+    expect(onChange).toHaveBeenLastCalledWith(expect.objectContaining({
+      executionPermissions: { additionalDirectories: ['/tmp/cache', '/tmp/worktree'] },
+    }));
   });
 
   it('disables model selection when no models exist for the selected provider', () => {
@@ -290,6 +302,29 @@ describe('NodeInspector', () => {
       provider: 'claude',
       executionPermissions: null,
     }));
+  });
+
+  it('shows execution-permission support guidance for non-codex providers', () => {
+    const providerOptions: DashboardAgentProviderOption[] = [
+      { provider: 'codex', label: 'Codex', defaultModel: 'gpt-5.3-codex' },
+      { provider: 'claude', label: 'Claude', defaultModel: 'claude-3-7-sonnet-latest' },
+    ];
+    const modelOptions: DashboardAgentModelOption[] = [
+      { provider: 'codex', model: 'gpt-5.3-codex', label: 'GPT-5.3', isDefault: true, sortOrder: 10 },
+      { provider: 'claude', model: 'claude-3-7-sonnet-latest', label: 'Claude Sonnet', isDefault: true, sortOrder: 10 },
+    ];
+
+    render(
+      <NodeInspector
+        node={createNode(createDraftNode({ provider: 'claude', model: 'claude-3-7-sonnet-latest' }))}
+        providerOptions={providerOptions}
+        modelOptions={modelOptions}
+        onChange={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText('Execution permission controls are currently supported for Codex nodes only.')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Approval policy')).toBeNull();
   });
 });
 

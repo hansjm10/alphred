@@ -19,7 +19,7 @@ import {
   workflowTrees,
   type AlphredDatabase,
 } from '@alphred/db';
-import type { AuthStatus, RepositoryConfig } from '@alphred/shared';
+import type { AuthStatus, ProviderExecutionPermissions, RepositoryConfig } from '@alphred/shared';
 import { createDashboardService, type DashboardServiceDependencies } from './dashboard-service';
 
 function createHarness(overrides: Partial<DashboardServiceDependencies> = {}): {
@@ -1391,6 +1391,116 @@ describe('createDashboardService', () => {
       status: 400,
       details: expect.objectContaining({
         errors: expect.arrayContaining([expect.objectContaining({ code: 'execution_permissions_provider_unsupported' })]),
+      }),
+    });
+  });
+
+  it('rejects execution permissions for non-agent nodes', async () => {
+    const { db, dependencies } = createHarness();
+    migrateDatabase(db);
+
+    const service = createDashboardService({ dependencies });
+
+    await service.createWorkflowDraft({
+      template: 'blank',
+      name: 'Execution Permission Node Types',
+      treeKey: 'execution-permission-node-types',
+    });
+
+    await expect(
+      service.saveWorkflowDraft('execution-permission-node-types', 1, {
+        draftRevision: 1,
+        name: 'Execution Permission Node Types',
+        nodes: [
+          {
+            nodeKey: 'human-node',
+            displayName: 'Human Node',
+            nodeType: 'human',
+            provider: null,
+            model: null,
+            executionPermissions: {
+              sandboxMode: 'workspace-write',
+            },
+            maxRetries: 0,
+            sequenceIndex: 10,
+            position: null,
+            promptTemplate: null,
+          },
+        ],
+        edges: [],
+      }),
+    ).rejects.toMatchObject({
+      code: 'invalid_request',
+      status: 400,
+      details: expect.objectContaining({
+        errors: expect.arrayContaining([expect.objectContaining({ code: 'execution_permissions_non_agent' })]),
+      }),
+    });
+  });
+
+  it.each([
+    {
+      name: 'approval policy',
+      code: 'execution_permissions_approval_policy_invalid',
+      executionPermissions: { approvalPolicy: 'invalid-policy' } as unknown as ProviderExecutionPermissions,
+    },
+    {
+      name: 'sandbox mode',
+      code: 'execution_permissions_sandbox_mode_invalid',
+      executionPermissions: { sandboxMode: 'invalid-sandbox' } as unknown as ProviderExecutionPermissions,
+    },
+    {
+      name: 'network access',
+      code: 'execution_permissions_network_access_invalid',
+      executionPermissions: { networkAccessEnabled: 'true' } as unknown as ProviderExecutionPermissions,
+    },
+    {
+      name: 'additional directories',
+      code: 'execution_permissions_additional_directories_invalid',
+      executionPermissions: { additionalDirectories: [' /tmp/ok ', '   '] },
+    },
+    {
+      name: 'web search mode',
+      code: 'execution_permissions_web_search_mode_invalid',
+      executionPermissions: { webSearchMode: 'sometimes' } as unknown as ProviderExecutionPermissions,
+    },
+  ])('rejects invalid execution permissions: $name', async ({ code, executionPermissions }) => {
+    const { db, dependencies } = createHarness();
+    migrateDatabase(db);
+
+    const service = createDashboardService({ dependencies });
+
+    await service.createWorkflowDraft({
+      template: 'blank',
+      name: 'Execution Permission Validation',
+      treeKey: 'execution-permission-validation',
+    });
+
+    await expect(
+      service.saveWorkflowDraft('execution-permission-validation', 1, {
+        draftRevision: 1,
+        name: 'Execution Permission Validation',
+        nodes: [
+          {
+            nodeKey: 'agent-node',
+            displayName: 'Agent Node',
+            nodeType: 'agent',
+            provider: 'codex',
+            model: 'gpt-5.3-codex',
+            executionPermissions,
+            maxRetries: 0,
+            sequenceIndex: 10,
+            position: null,
+            promptTemplate: { content: 'Agent prompt', contentType: 'markdown' },
+          },
+        ],
+        edges: [],
+      }),
+    ).rejects.toMatchObject({
+      code: 'invalid_request',
+      status: 400,
+      details: expect.objectContaining({
+        errors: expect.arrayContaining([expect.objectContaining({ code })]),
       }),
     });
   });
