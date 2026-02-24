@@ -1093,7 +1093,7 @@ describe('RunDetailContent realtime updates', () => {
     expect(timelineDisclosureDetails).not.toHaveAttribute('open');
   });
 
-  it('collapses older observability entries behind disclosure', () => {
+  it('collapses older observability entries behind disclosure while keeping newest snapshots visible', () => {
     const baseDetail = createRunDetail();
     const baseDiagnostics = baseDetail.diagnostics[0]!;
     const diagnostics = Array.from({ length: 4 }, (_, index) => {
@@ -1108,7 +1108,7 @@ describe('RunDetailContent realtime updates', () => {
           attempt,
         },
       };
-    });
+    }).reverse();
     const artifacts = Array.from({ length: 4 }, (_, index) => {
       const entry = index + 1;
       return {
@@ -1119,7 +1119,7 @@ describe('RunDetailContent realtime updates', () => {
         contentPreview: `artifact ${entry} ${'content '.repeat(20)}`,
         createdAt: `2026-02-18T00:0${entry}:25.000Z`,
       };
-    });
+    }).reverse();
 
     render(
       <RunDetailContent
@@ -1134,8 +1134,26 @@ describe('RunDetailContent realtime updates', () => {
 
     const artifactDisclosure = screen.getByText('Show 2 earlier artifacts');
     const diagnosticDisclosure = screen.getByText('Show 2 earlier diagnostics');
+    const artifactList = screen.getByRole('list', { name: 'Run artifacts' });
+    const diagnosticsList = screen.getByRole('list', { name: 'Run node diagnostics' });
+    const artifactItems = artifactList.querySelectorAll(':scope > li');
+    const diagnosticItems = diagnosticsList.querySelectorAll(':scope > li');
 
     expect(artifactDisclosure.closest('details')).not.toHaveAttribute('open');
     expect(diagnosticDisclosure.closest('details')).not.toHaveAttribute('open');
+    expect(artifactItems).toHaveLength(3);
+    expect(diagnosticItems).toHaveLength(3);
+    expect(
+      within(artifactItems[0] as HTMLElement).getByText(/artifact 4/i, {
+        selector: 'div.run-expandable-preview > p.meta-text',
+      }),
+    ).toBeInTheDocument();
+    expect(
+      within(artifactItems[1] as HTMLElement).getByText(/artifact 3/i, {
+        selector: 'div.run-expandable-preview > p.meta-text',
+      }),
+    ).toBeInTheDocument();
+    expect(within(diagnosticItems[0] as HTMLElement).getByText(/attempt 4\): completed/i)).toBeInTheDocument();
+    expect(within(diagnosticItems[1] as HTMLElement).getByText(/attempt 3\): completed/i)).toBeInTheDocument();
   });
 });

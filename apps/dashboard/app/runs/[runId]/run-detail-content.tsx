@@ -131,6 +131,7 @@ type RecentPartition<T> = Readonly<{
   recent: readonly T[];
   earlier: readonly T[];
 }>;
+type RecentPartitionOrder = 'oldest-first' | 'newest-first';
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
@@ -659,11 +660,19 @@ function isTerminalNodeStatus(status: DashboardRunDetail['nodes'][number]['statu
 function partitionByRecency<T>(
   items: readonly T[],
   recentCount: number,
+  order: RecentPartitionOrder = 'oldest-first',
 ): RecentPartition<T> {
   if (recentCount <= 0 || items.length <= recentCount) {
     return {
       recent: [...items],
       earlier: [],
+    };
+  }
+
+  if (order === 'newest-first') {
+    return {
+      recent: items.slice(0, recentCount),
+      earlier: items.slice(recentCount),
     };
   }
 
@@ -1748,8 +1757,12 @@ type RunObservabilityCardProps = Readonly<{
 }>;
 
 function RunObservabilityCard({ detail }: RunObservabilityCardProps) {
-  const artifactPartition = partitionByRecency(detail.artifacts, RUN_OBSERVABILITY_RECENT_ENTRY_COUNT);
-  const diagnosticsPartition = partitionByRecency(detail.diagnostics, RUN_OBSERVABILITY_RECENT_ENTRY_COUNT);
+  const artifactPartition = partitionByRecency(detail.artifacts, RUN_OBSERVABILITY_RECENT_ENTRY_COUNT, 'newest-first');
+  const diagnosticsPartition = partitionByRecency(
+    detail.diagnostics,
+    RUN_OBSERVABILITY_RECENT_ENTRY_COUNT,
+    'newest-first',
+  );
 
   const renderDiagnosticsEntry = (
     diagnostics: DashboardRunDetail['diagnostics'][number],
