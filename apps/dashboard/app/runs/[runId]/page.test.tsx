@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { render, screen } from '@testing-library/react';
+import { render, screen, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { DashboardRepositoryState, DashboardRunDetail } from '../../../src/server/dashboard-contracts';
 import { DashboardIntegrationError } from '../../../src/server/dashboard-errors';
@@ -309,7 +309,8 @@ describe('RunDetailPage', () => {
 
     expect(screen.getByText('Not started')).toBeInTheDocument();
     expect(screen.queryByText('Run started.')).toBeNull();
-    expect(screen.getByText('No lifecycle events captured yet.')).toBeInTheDocument();
+    const timeline = screen.getByRole('list', { name: 'Run timeline' });
+    expect(within(timeline).getByText('No lifecycle events captured yet.')).toBeInTheDocument();
   });
 
   it('renders cancelled run actions and truncates long artifact previews', async () => {

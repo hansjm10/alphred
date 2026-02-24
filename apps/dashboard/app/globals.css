@@ -682,6 +682,33 @@ output {
   margin-top: var(--space-2);
 }
 
+.run-detail-priority-grid {
+  align-items: start;
+}
+
+.run-operator-focus-list {
+  gap: var(--space-2);
+}
+
+.run-operator-focus-list li {
+  align-items: flex-start;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.run-operator-focus-list__value {
+  display: grid;
+  gap: 2px;
+}
+
+.run-detail-primary-actions {
+  margin-top: var(--space-1);
+}
+
+.run-detail-primary-actions .button-link {
+  min-height: 36px;
+}
+
 .run-realtime-status {
   border: 1px solid var(--border-default);
   border-radius: var(--radius-sm);
@@ -728,6 +755,31 @@ output {
   display: flex;
   flex-wrap: wrap;
   gap: var(--space-2);
+}
+
+.run-timeline-list {
+  gap: var(--space-1);
+}
+
+.run-collapsible-history {
+  border: 1px dashed color-mix(in srgb, var(--border-default) 75%, transparent);
+  border-radius: var(--radius-sm);
+  padding: 8px;
+}
+
+.run-collapsible-history__summary {
+  color: var(--accent-active);
+  cursor: pointer;
+  font: 600 12px/18px var(--font-display);
+  width: fit-content;
+}
+
+.run-collapsible-history__summary:hover {
+  text-decoration: underline;
+}
+
+.run-collapsible-history__list {
+  margin-top: var(--space-2);
 }
 
 .run-timeline-clear {
@@ -778,7 +830,7 @@ output {
   border: 1px solid var(--border-default);
   border-radius: var(--radius-sm);
   margin-top: var(--space-2);
-  max-height: 360px;
+  max-height: clamp(220px, 42vh, 360px);
   overflow-y: auto;
   padding: var(--space-2);
 }
@@ -846,6 +898,17 @@ output {
 
 .run-expandable-preview__details[open] .run-expandable-preview__summary {
   margin-bottom: 4px;
+}
+
+.run-observability-section + .run-observability-section {
+  border-top: 1px solid var(--border-default);
+  padding-top: var(--space-2);
+}
+
+.run-observability-list > li {
+  border: 1px solid color-mix(in srgb, var(--border-default) 70%, transparent);
+  border-radius: var(--radius-sm);
+  padding: 8px;
 }
 
 .meta-text {
@@ -1735,6 +1798,45 @@ output {
   .page-grid .surface-card,
   .page-grid .surface-panel {
     grid-column: span 12;
+  }
+
+  .run-detail-priority-grid {
+    gap: var(--space-2);
+  }
+
+  .run-detail-primary-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .run-detail-primary-actions .button-link {
+    width: 100%;
+  }
+
+  .run-detail-summary-list li,
+  .run-node-status-list li {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .run-timeline-filter {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .run-timeline-event {
+    gap: 6px;
+    padding: 10px;
+  }
+
+  .run-agent-stream-controls {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .run-agent-stream-events {
+    max-height: clamp(220px, 38vh, 320px);
   }
 
   .worktree-grid {
