@@ -196,11 +196,72 @@ function createJsonResponse(payload: unknown, status = 200): Response {
   });
 }
 
+class MockEventSource {
+  static instances: MockEventSource[] = [];
+
+  readonly url: string;
+  onopen: ((event: Event) => void) | null = null;
+  onerror: ((event: Event) => void) | null = null;
+  private listeners = new Map<string, ((event: MessageEvent<string>) => void)[]>();
+
+  constructor(url: string) {
+    this.url = url;
+    MockEventSource.instances.push(this);
+  }
+
+  addEventListener(type: string, listener: EventListenerOrEventListenerObject): void {
+    const handler =
+      typeof listener === 'function'
+        ? (listener as (event: MessageEvent<string>) => void)
+        : ((event: MessageEvent<string>) => listener.handleEvent(event));
+    const listeners = this.listeners.get(type) ?? [];
+    listeners.push(handler);
+    this.listeners.set(type, listeners);
+  }
+
+  removeEventListener(type: string, listener: EventListenerOrEventListenerObject): void {
+    const listeners = this.listeners.get(type);
+    if (!listeners) {
+      return;
+    }
+
+    const handler =
+      typeof listener === 'function'
+        ? (listener as (event: MessageEvent<string>) => void)
+        : ((event: MessageEvent<string>) => listener.handleEvent(event));
+    const nextListeners = listeners.filter(existing => existing !== handler);
+    this.listeners.set(type, nextListeners);
+  }
+
+  close(): void {
+    return;
+  }
+
+  emitOpen(): void {
+    this.onopen?.(new Event('open'));
+  }
+
+  emitError(): void {
+    this.onerror?.(new Event('error'));
+  }
+
+  emit(type: string, payload: unknown): void {
+    const listeners = this.listeners.get(type) ?? [];
+    const event = new MessageEvent('message', {
+      data: JSON.stringify(payload),
+    });
+    for (const listener of listeners) {
+      listener(event);
+    }
+  }
+}
+
 describe('RunDetailContent realtime updates', () => {
   const fetchMock = vi.fn();
 
   beforeEach(() => {
     fetchMock.mockReset();
+    MockEventSource.instances = [];
     vi.stubGlobal('fetch', fetchMock);
   });
 
@@ -391,6 +452,168 @@ describe('RunDetailContent realtime updates', () => {
     }, { timeout: 2_000 });
   });
 
+  it('loads persisted agent stream history and buffers new events while auto-scroll is paused', async () => {
+    vi.stubGlobal('EventSource', MockEventSource as unknown as typeof EventSource);
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/nodes/2/stream')) {
+        return createJsonResponse({
+          workflowRunId: 412,
+          runNodeId: 2,
+          attempt: 1,
+          nodeStatus: 'running',
+          ended: false,
+          latestSequence: 1,
+          events: [
+            {
+              id: 200,
+              workflowRunId: 412,
+              runNodeId: 2,
+              attempt: 1,
+              sequence: 1,
+              type: 'system',
+              timestamp: 100,
+              contentChars: 11,
+              contentPreview: 'seeded event',
+              metadata: null,
+              usage: null,
+              createdAt: '2026-02-18T00:00:40.000Z',
+            },
+          ],
+        });
+      }
+
+      return createJsonResponse(createRunDetail());
+    });
+
+    const user = userEvent.setup();
+
+    render(
+      <RunDetailContent
+        initialDetail={createRunDetail()}
+        repositories={[createRepository()]}
+        enableRealtime={false}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        expect.stringContaining('/api/dashboard/runs/412/nodes/2/stream?attempt=1&lastEventSequence=0'),
+        expect.objectContaining({ method: 'GET' }),
+      );
+    });
+
+    await waitFor(() => {
+      expect(MockEventSource.instances).toHaveLength(1);
+    });
+
+    const source = MockEventSource.instances[0]!;
+    source.emitOpen();
+    source.emit('stream_event', {
+      id: 201,
+      workflowRunId: 412,
+      runNodeId: 2,
+      attempt: 1,
+      sequence: 2,
+      type: 'assistant',
+      timestamp: 101,
+      contentChars: 9,
+      contentPreview: 'phase two',
+      metadata: null,
+      usage: null,
+      createdAt: '2026-02-18T00:00:41.000Z',
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText('phase two')).toBeInTheDocument();
+    });
+
+    await user.click(screen.getByRole('button', { name: 'Pause auto-scroll' }));
+
+    source.emit('stream_event', {
+      id: 202,
+      workflowRunId: 412,
+      runNodeId: 2,
+      attempt: 1,
+      sequence: 3,
+      type: 'assistant',
+      timestamp: 102,
+      contentChars: 14,
+      contentPreview: 'buffered update',
+      metadata: null,
+      usage: null,
+      createdAt: '2026-02-18T00:00:42.000Z',
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText('1 new events buffered.')).toBeInTheDocument();
+    });
+    expect(screen.queryByText('buffered update')).toBeNull();
+
+    await user.click(screen.getByRole('button', { name: 'Resume auto-scroll' }));
+
+    await waitFor(() => {
+      expect(screen.getByText('buffered update')).toBeInTheDocument();
+    });
+  });
+
+  it('reconnects the agent stream after drops and transitions to ended on terminal event', async () => {
+    vi.stubGlobal('EventSource', MockEventSource as unknown as typeof EventSource);
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/nodes/2/stream')) {
+        return createJsonResponse({
+          workflowRunId: 412,
+          runNodeId: 2,
+          attempt: 1,
+          nodeStatus: 'running',
+          ended: false,
+          latestSequence: 0,
+          events: [],
+        });
+      }
+
+      return createJsonResponse(createRunDetail());
+    });
+
+    render(
+      <RunDetailContent
+        initialDetail={createRunDetail()}
+        repositories={[createRepository()]}
+        enableRealtime={false}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(MockEventSource.instances).toHaveLength(1);
+    });
+
+    const firstSource = MockEventSource.instances[0]!;
+    firstSource.emitOpen();
+    firstSource.emitError();
+
+    await waitFor(() => {
+      expect(screen.getByText(/Agent stream connection interrupted\. Retrying in/i)).toBeInTheDocument();
+    });
+
+    await waitFor(() => {
+      expect(MockEventSource.instances).toHaveLength(2);
+    }, { timeout: 2_500 });
+
+    const secondSource = MockEventSource.instances[1]!;
+    secondSource.emitOpen();
+    secondSource.emit('stream_end', {
+      connectionState: 'ended',
+      nodeStatus: 'failed',
+      latestSequence: 0,
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText('Ended')).toBeInTheDocument();
+      expect(screen.getByText(/Node attempt reached terminal state; stream is closed\./i)).toBeInTheDocument();
+    });
+  });
+
   it('filters timeline events when selecting a node from the status panel', async () => {
     const user = userEvent.setup();
 
@@ -404,7 +627,7 @@ describe('RunDetailContent realtime updates', () => {
 
     expect(screen.getByText('implement started (attempt 1).')).toBeInTheDocument();
 
-    await user.click(screen.getByRole('button', { name: 'design (attempt 1)' }));
+    await user.click(screen.getAllByRole('button', { name: 'design (attempt 1)' })[0]!);
 
     expect(screen.getByText('design completed.')).toBeInTheDocument();
     expect(screen.queryByText('implement started (attempt 1).')).toBeNull();
@@ -425,7 +648,7 @@ describe('RunDetailContent realtime updates', () => {
 
     expect(screen.getByText('design completed.')).toBeInTheDocument();
     expect(screen.getByText('implement started (attempt 1).')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'design (attempt 1)' })).toHaveAttribute('aria-pressed', 'false');
+    expect(screen.getAllByRole('button', { name: 'design (attempt 1)' })[0]!).toHaveAttribute('aria-pressed', 'false');
     expect(screen.queryByText(/Filtered to design \(attempt 1\)\./i)).toBeNull();
   });
 
@@ -440,7 +663,7 @@ describe('RunDetailContent realtime updates', () => {
       />,
     );
 
-    const designFilterButton = screen.getByRole('button', { name: 'design (attempt 1)' });
+    const designFilterButton = screen.getAllByRole('button', { name: 'design (attempt 1)' })[0]!;
     await user.click(designFilterButton);
 
     expect(screen.queryByText('implement started (attempt 1).')).toBeNull();

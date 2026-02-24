@@ -15,6 +15,7 @@ import {
   promptTemplates,
   repositories as repositoryTable,
   runNodeDiagnostics,
+  runNodeStreamEvents,
   routingDecisions,
   runNodes,
   runWorktrees,
@@ -50,6 +51,8 @@ import type {
   DashboardRunLaunchResult,
   DashboardRunNodeDiagnosticPayload,
   DashboardRunNodeDiagnosticsSnapshot,
+  DashboardRunNodeStreamEvent,
+  DashboardRunNodeStreamSnapshot,
   DashboardRunNodeSnapshot,
   DashboardRunSummary,
   DashboardRunWorktreeMetadata,
@@ -75,6 +78,7 @@ const BACKGROUND_RUN_STATUS: RunStatus = 'running';
 const DEFAULT_GITHUB_AUTH_REPO = 'octocat/Hello-World';
 const MAX_ARTIFACT_PREVIEW_LENGTH = 280;
 const RECENT_SNAPSHOT_LIMIT = 30;
+const MAX_STREAM_SNAPSHOT_EVENTS = 500;
 const AGENT_PROVIDER_ORDER: readonly string[] = ['codex', 'claude'];
 const MAX_DRAFT_BOOTSTRAP_ATTEMPTS = 4;
 
@@ -439,6 +443,52 @@ function createRunNodeDiagnosticsSnapshot(
     createdAt: diagnosticsRow.createdAt,
     diagnostics: payload,
   };
+}
+
+function createRunNodeStreamEventSnapshot(
+  row: {
+    id: number;
+    workflowRunId: number;
+    runNodeId: number;
+    attempt: number;
+    sequence: number;
+    eventType: string;
+    timestamp: number;
+    contentChars: number;
+    contentPreview: string;
+    metadata: unknown;
+    usageDeltaTokens: number | null;
+    usageCumulativeTokens: number | null;
+    createdAt: string;
+  },
+): DashboardRunNodeStreamEvent {
+  const metadata = isRecordValue(row.metadata) ? row.metadata : null;
+  const usage =
+    row.usageDeltaTokens !== null || row.usageCumulativeTokens !== null
+      ? {
+          deltaTokens: row.usageDeltaTokens,
+          cumulativeTokens: row.usageCumulativeTokens,
+        }
+      : null;
+
+  return {
+    id: row.id,
+    workflowRunId: row.workflowRunId,
+    runNodeId: row.runNodeId,
+    attempt: row.attempt,
+    sequence: row.sequence,
+    type: row.eventType as DashboardRunNodeStreamEvent['type'],
+    timestamp: row.timestamp,
+    contentChars: row.contentChars,
+    contentPreview: row.contentPreview,
+    metadata,
+    usage,
+    createdAt: row.createdAt,
+  };
+}
+
+function isTerminalNodeStatus(status: DashboardNodeStatus): boolean {
+  return status === 'completed' || status === 'failed' || status === 'skipped' || status === 'cancelled';
 }
 
 function toWorktreeMetadata(worktree: {
@@ -2667,6 +2717,173 @@ export function createDashboardService(options: {
           routingDecisions: recentDecisions.map(createRoutingDecisionSnapshot),
           diagnostics: recentDiagnosticsSnapshots,
           worktrees: allRunWorktrees.map(toWorktreeMetadata),
+        };
+      });
+    },
+
+    getRunNodeStreamSnapshot(params: {
+      runId: number;
+      runNodeId: number;
+      attempt: number;
+      lastEventSequence?: number;
+      limit?: number;
+    }): Promise<DashboardRunNodeStreamSnapshot> {
+      if (!Number.isInteger(params.runId) || params.runId < 1) {
+        throw new DashboardIntegrationError('invalid_request', 'Run id must be a positive integer.', {
+          status: 400,
+        });
+      }
+
+      if (!Number.isInteger(params.runNodeId) || params.runNodeId < 1) {
+        throw new DashboardIntegrationError('invalid_request', 'Run node id must be a positive integer.', {
+          status: 400,
+        });
+      }
+
+      if (!Number.isInteger(params.attempt) || params.attempt < 1) {
+        throw new DashboardIntegrationError('invalid_request', 'Attempt must be a positive integer.', {
+          status: 400,
+        });
+      }
+
+      const resumeFromSequence = params.lastEventSequence ?? 0;
+      if (!Number.isInteger(resumeFromSequence) || resumeFromSequence < 0) {
+        throw new DashboardIntegrationError('invalid_request', 'lastEventSequence must be a non-negative integer.', {
+          status: 400,
+        });
+      }
+
+      const limit = params.limit ?? MAX_STREAM_SNAPSHOT_EVENTS;
+      if (!Number.isInteger(limit) || limit < 1) {
+        throw new DashboardIntegrationError('invalid_request', 'Limit must be a positive integer.', {
+          status: 400,
+        });
+      }
+
+      const boundedLimit = Math.min(limit, MAX_STREAM_SNAPSHOT_EVENTS);
+
+      return withDatabase(async db => {
+        const run = db
+          .select({
+            id: workflowRuns.id,
+            status: workflowRuns.status,
+          })
+          .from(workflowRuns)
+          .where(eq(workflowRuns.id, params.runId))
+          .get();
+
+        if (!run) {
+          throw new DashboardIntegrationError('not_found', `Workflow run ${params.runId} was not found.`, {
+            status: 404,
+          });
+        }
+
+        const runNode = db
+          .select({
+            id: runNodes.id,
+            status: runNodes.status,
+            attempt: runNodes.attempt,
+          })
+          .from(runNodes)
+          .where(and(eq(runNodes.id, params.runNodeId), eq(runNodes.workflowRunId, params.runId)))
+          .get();
+
+        if (!runNode) {
+          throw new DashboardIntegrationError(
+            'not_found',
+            `Run node ${params.runNodeId} was not found in run ${params.runId}.`,
+            { status: 404 },
+          );
+        }
+
+        if (params.attempt > runNode.attempt) {
+          throw new DashboardIntegrationError(
+            'not_found',
+            `Run node ${params.runNodeId} does not have attempt ${params.attempt}.`,
+            { status: 404 },
+          );
+        }
+
+        let nodeStatus: DashboardNodeStatus;
+        if (params.attempt === runNode.attempt) {
+          nodeStatus = runNode.status as DashboardNodeStatus;
+        } else {
+          const historicalAttempt = db
+            .select({
+              status: runNodeDiagnostics.outcome,
+            })
+            .from(runNodeDiagnostics)
+            .where(
+              and(
+                eq(runNodeDiagnostics.workflowRunId, params.runId),
+                eq(runNodeDiagnostics.runNodeId, params.runNodeId),
+                eq(runNodeDiagnostics.attempt, params.attempt),
+              ),
+            )
+            .orderBy(desc(runNodeDiagnostics.createdAt), desc(runNodeDiagnostics.id))
+            .limit(1)
+            .get();
+          nodeStatus = (historicalAttempt?.status as DashboardNodeStatus | undefined) ?? 'failed';
+        }
+
+        const latestEvent = db
+          .select({
+            sequence: runNodeStreamEvents.sequence,
+          })
+          .from(runNodeStreamEvents)
+          .where(
+            and(
+              eq(runNodeStreamEvents.workflowRunId, params.runId),
+              eq(runNodeStreamEvents.runNodeId, params.runNodeId),
+              eq(runNodeStreamEvents.attempt, params.attempt),
+            ),
+          )
+          .orderBy(desc(runNodeStreamEvents.sequence), desc(runNodeStreamEvents.id))
+          .limit(1)
+          .get();
+
+        const events = db
+          .select({
+            id: runNodeStreamEvents.id,
+            workflowRunId: runNodeStreamEvents.workflowRunId,
+            runNodeId: runNodeStreamEvents.runNodeId,
+            attempt: runNodeStreamEvents.attempt,
+            sequence: runNodeStreamEvents.sequence,
+            eventType: runNodeStreamEvents.eventType,
+            timestamp: runNodeStreamEvents.timestamp,
+            contentChars: runNodeStreamEvents.contentChars,
+            contentPreview: runNodeStreamEvents.contentPreview,
+            metadata: runNodeStreamEvents.metadata,
+            usageDeltaTokens: runNodeStreamEvents.usageDeltaTokens,
+            usageCumulativeTokens: runNodeStreamEvents.usageCumulativeTokens,
+            createdAt: runNodeStreamEvents.createdAt,
+          })
+          .from(runNodeStreamEvents)
+          .where(
+            and(
+              eq(runNodeStreamEvents.workflowRunId, params.runId),
+              eq(runNodeStreamEvents.runNodeId, params.runNodeId),
+              eq(runNodeStreamEvents.attempt, params.attempt),
+              sql`${runNodeStreamEvents.sequence} > ${resumeFromSequence}`,
+            ),
+          )
+          .orderBy(asc(runNodeStreamEvents.sequence), asc(runNodeStreamEvents.id))
+          .limit(boundedLimit)
+          .all()
+          .map(createRunNodeStreamEventSnapshot);
+
+        const runIsTerminal = run.status === 'completed' || run.status === 'failed' || run.status === 'cancelled';
+        const ended =
+          params.attempt < runNode.attempt || isTerminalNodeStatus(nodeStatus) || (runIsTerminal && nodeStatus !== 'running');
+
+        return {
+          workflowRunId: params.runId,
+          runNodeId: params.runNodeId,
+          attempt: params.attempt,
+          nodeStatus,
+          ended,
+          latestSequence: latestEvent?.sequence ?? 0,
+          events,
         };
       });
     },

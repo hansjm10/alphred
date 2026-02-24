@@ -205,6 +205,34 @@ export type DashboardRunNodeDiagnosticToolEvent = {
   summary: string;
 };
 
+export type DashboardRunNodeStreamEvent = {
+  id: number;
+  workflowRunId: number;
+  runNodeId: number;
+  attempt: number;
+  sequence: number;
+  type: 'system' | 'assistant' | 'result' | 'tool_use' | 'tool_result' | 'usage';
+  timestamp: number;
+  contentChars: number;
+  contentPreview: string;
+  metadata: Record<string, unknown> | null;
+  usage: {
+    deltaTokens: number | null;
+    cumulativeTokens: number | null;
+  } | null;
+  createdAt: string;
+};
+
+export type DashboardRunNodeStreamSnapshot = {
+  workflowRunId: number;
+  runNodeId: number;
+  attempt: number;
+  nodeStatus: DashboardNodeStatus;
+  ended: boolean;
+  latestSequence: number;
+  events: DashboardRunNodeStreamEvent[];
+};
+
 export type DashboardRunNodeDiagnosticPayload = {
   schemaVersion: number;
   workflowRunId: number;

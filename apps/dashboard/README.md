@@ -451,6 +451,27 @@ Run detail includes:
 - `routingDecisions`: latest routing decisions.
 - `diagnostics`: persisted per-node/per-attempt diagnostics payloads for post-run inspection (inspection-only, not execution context).
 
+### `GET /runs/[runId]/nodes/[runNodeId]/stream`
+
+Gets persisted provider stream events for a specific run-node attempt and supports live SSE transport.
+
+Path parameters:
+- `runId`: positive integer.
+- `runNodeId`: positive integer.
+
+Query parameters:
+- `attempt` (required): positive integer run-node attempt.
+- `lastEventSequence` (optional): non-negative integer resume pointer.
+- `transport` (optional): set to `sse` for live Server-Sent Events.
+
+Snapshot response `200`: `DashboardRunNodeStreamSnapshot`.
+
+SSE transport events (`transport=sse`):
+- `stream_event`: one normalized provider event payload.
+- `stream_state`: connection and node status updates.
+- `stream_end`: terminal closure for the selected node attempt.
+- `stream_error`: stream-channel failure details.
+
 ### `GET /runs/[runId]/worktrees`
 
 Gets worktree metadata for a run.

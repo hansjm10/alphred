@@ -256,11 +256,20 @@ SQL-first workflow topology and execution state are modeled with normalized tabl
     - `(workflow_run_id, created_at)`, `(run_node_id, created_at)`, and `created_at` indexes support run timeline and node drill-down queries.
   - Runtime boundary:
     - Diagnostics are inspection-only by default and are not re-injected into downstream execution context.
+- `run_node_stream_events`
+  - Append-only per-node/per-attempt provider stream events for live operator monitoring.
+  - Constraint/index rationale:
+    - Unique `(workflow_run_id, run_node_id, attempt, sequence)` enforces deterministic, gap-free ordering identity per attempt.
+    - `event_type` check enforces normalized provider event taxonomy (`system`, `assistant`, `tool_use`, `tool_result`, `usage`, `result`).
+    - Non-negative bounds on token/size counters protect stream payload integrity.
+    - `(workflow_run_id, run_node_id, attempt, sequence)` and chronological indexes support snapshot+resume and timeline drill-down.
+  - Runtime boundary:
+    - Stream payloads reuse diagnostics redaction/truncation policy before persistence.
 
 FK behavior is explicit:
 - Template topology rows cascade from `workflow_trees`.
 - Execution rows cascade from `workflow_runs` and `run_nodes`.
-- Composite FKs bind `routing_decisions`/`phase_artifacts`/`run_node_diagnostics` to the same `(workflow_run_id, run_node_id)` tuple from `run_nodes`.
+- Composite FKs bind `routing_decisions`/`phase_artifacts`/`run_node_diagnostics`/`run_node_stream_events` to the same `(workflow_run_id, run_node_id)` tuple from `run_nodes`.
 - Shared references (`prompt_templates`, `guard_definitions`) use `RESTRICT` to prevent dangling refs.
 - Trigger guards enforce cross-row invariants not representable as a single-column FK:
   - `tree_edges.workflow_tree_id` must match both endpoint node tree IDs.

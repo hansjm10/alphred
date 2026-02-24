@@ -14,6 +14,7 @@ import {
   phaseArtifacts,
   promptTemplates,
   runNodeDiagnostics,
+  runNodeStreamEvents,
   runNodes,
   routingDecisions,
   transitionRunNodeStatus,
@@ -1450,6 +1451,62 @@ describe('createSqlWorkflowExecutor', () => {
     expect(payload.summary.tokensUsed).toBe(19);
   });
 
+  it('persists per-attempt stream events with deterministic sequence ordering and normalized redaction', async () => {
+    const { db, runId, runNodeId } = seedSingleAgentRun();
+    const executor = createSqlWorkflowExecutor(db, {
+      resolveProvider: () =>
+        createProvider([
+          { type: 'system', content: 'starting', timestamp: 100 },
+          {
+            type: 'tool_use',
+            content: 'Bearer ABCDEFGHIJKLMNOP',
+            timestamp: 101,
+            metadata: { authorization: 'Bearer SECRET-TOKEN', toolName: 'search' },
+          },
+          { type: 'usage', content: '', timestamp: 102, metadata: { tokens: 9 } },
+          { type: 'result', content: 'Design report body', timestamp: 103 },
+        ]),
+    });
+
+    await executor.executeRun({
+      workflowRunId: runId,
+      options: {
+        workingDirectory: '/tmp/alphred-worktree',
+      },
+    });
+
+    const streamEvents = db
+      .select({
+        attempt: runNodeStreamEvents.attempt,
+        sequence: runNodeStreamEvents.sequence,
+        eventType: runNodeStreamEvents.eventType,
+        timestamp: runNodeStreamEvents.timestamp,
+        contentPreview: runNodeStreamEvents.contentPreview,
+        metadata: runNodeStreamEvents.metadata,
+        usageDeltaTokens: runNodeStreamEvents.usageDeltaTokens,
+        usageCumulativeTokens: runNodeStreamEvents.usageCumulativeTokens,
+      })
+      .from(runNodeStreamEvents)
+      .where(eq(runNodeStreamEvents.runNodeId, runNodeId))
+      .orderBy(asc(runNodeStreamEvents.sequence), asc(runNodeStreamEvents.id))
+      .all();
+
+    expect(streamEvents).toHaveLength(4);
+    expect(streamEvents.map(event => event.attempt)).toEqual([1, 1, 1, 1]);
+    expect(streamEvents.map(event => event.sequence)).toEqual([1, 2, 3, 4]);
+    expect(streamEvents.map(event => event.eventType)).toEqual(['system', 'tool_use', 'usage', 'result']);
+    expect(streamEvents.map(event => event.timestamp)).toEqual([100, 101, 102, 103]);
+    expect(streamEvents[1]?.contentPreview).toBe('[REDACTED]');
+    expect(streamEvents[1]?.metadata).toMatchObject({
+      authorization: '[REDACTED]',
+      toolName: 'search',
+    });
+    expect(streamEvents[2]?.usageDeltaTokens).toBe(9);
+    expect(streamEvents[2]?.usageCumulativeTokens).toBe(9);
+    expect(streamEvents[3]?.usageDeltaTokens).toBeNull();
+    expect(streamEvents[3]?.usageCumulativeTokens).toBeNull();
+  });
+
   it('captures structured failure diagnostics when an attempt fails', async () => {
     const { db, runId, runNodeId } = seedSingleAgentRun();
     const executor = createSqlWorkflowExecutor(db, {
@@ -1487,8 +1544,76 @@ describe('createSqlWorkflowExecutor', () => {
     expect(payload.status).toBe('failed');
     expect(payload.error?.classification).toBe('provider_result_missing');
     expect(payload.error?.message).toContain('without a result event');
-    expect(payload.summary.eventCount).toBe(0);
+    expect(payload.summary.eventCount).toBe(2);
     expect(payload.summary.droppedEventCount).toBe(0);
+  });
+
+  it('retains partial stream history and diagnostics payload events when a node fails mid-stream', async () => {
+    const { db, runId, runNodeId } = seedSingleAgentRun();
+    const timeoutError = new Error('provider timeout while awaiting result');
+    const executor = createSqlWorkflowExecutor(db, {
+      resolveProvider: () => ({
+        async *run(): AsyncIterable<ProviderEvent> {
+          yield { type: 'system', content: 'started', timestamp: 100 };
+          yield { type: 'assistant', content: 'partial response', timestamp: 101 };
+          yield { type: 'usage', content: '', timestamp: 102, metadata: { tokens: 7 } };
+          throw timeoutError;
+        },
+      }),
+    });
+
+    const result = await executor.executeRun({
+      workflowRunId: runId,
+      options: {
+        workingDirectory: '/tmp/alphred-worktree',
+      },
+    });
+
+    expect(result.finalStep).toEqual({
+      outcome: 'run_terminal',
+      workflowRunId: runId,
+      runStatus: 'failed',
+    });
+
+    const streamEvents = db
+      .select({
+        sequence: runNodeStreamEvents.sequence,
+        eventType: runNodeStreamEvents.eventType,
+        timestamp: runNodeStreamEvents.timestamp,
+      })
+      .from(runNodeStreamEvents)
+      .where(eq(runNodeStreamEvents.runNodeId, runNodeId))
+      .orderBy(asc(runNodeStreamEvents.sequence), asc(runNodeStreamEvents.id))
+      .all();
+
+    expect(streamEvents).toEqual([
+      { sequence: 1, eventType: 'system', timestamp: 100 },
+      { sequence: 2, eventType: 'assistant', timestamp: 101 },
+      { sequence: 3, eventType: 'usage', timestamp: 102 },
+    ]);
+
+    const diagnostics = db
+      .select({
+        diagnostics: runNodeDiagnostics.diagnostics,
+      })
+      .from(runNodeDiagnostics)
+      .where(eq(runNodeDiagnostics.runNodeId, runNodeId))
+      .orderBy(asc(runNodeDiagnostics.id))
+      .all();
+
+    expect(diagnostics).toHaveLength(1);
+    const payload = diagnostics[0]?.diagnostics as {
+      summary: { eventCount: number; retainedEventCount: number; droppedEventCount: number; tokensUsed: number };
+      error: { classification: string } | null;
+      events: { type: string; timestamp: number }[];
+    };
+    expect(payload.summary.eventCount).toBe(3);
+    expect(payload.summary.retainedEventCount).toBe(3);
+    expect(payload.summary.droppedEventCount).toBe(0);
+    expect(payload.summary.tokensUsed).toBe(7);
+    expect(payload.error?.classification).toBe('timeout');
+    expect(payload.events.map(event => event.type)).toEqual(['system', 'assistant', 'usage']);
+    expect(payload.events.map(event => event.timestamp)).toEqual([100, 101, 102]);
   });
 
   it('applies deterministic redaction and truncation bounds to diagnostics payloads', async () => {

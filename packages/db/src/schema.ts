@@ -420,3 +420,63 @@ export const runNodeDiagnostics = sqliteTable(
     createdAtIdx: index('run_node_diagnostics_created_at_idx').on(table.createdAt),
   }),
 );
+
+export const runNodeStreamEvents = sqliteTable(
+  'run_node_stream_events',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    workflowRunId: integer('workflow_run_id')
+      .notNull()
+      .references(() => workflowRuns.id, { onDelete: 'cascade' }),
+    runNodeId: integer('run_node_id')
+      .notNull()
+      .references(() => runNodes.id, { onDelete: 'cascade' }),
+    attempt: integer('attempt').notNull(),
+    sequence: integer('sequence').notNull(),
+    eventType: text('event_type').notNull(),
+    timestamp: integer('timestamp').notNull(),
+    contentChars: integer('content_chars').notNull().default(0),
+    contentPreview: text('content_preview').notNull(),
+    metadata: text('metadata', { mode: 'json' }),
+    usageDeltaTokens: integer('usage_delta_tokens'),
+    usageCumulativeTokens: integer('usage_cumulative_tokens'),
+    createdAt: text('created_at').notNull().default(utcNow),
+  },
+  table => ({
+    runNodeBelongsToRunFk: foreignKey({
+      columns: [table.workflowRunId, table.runNodeId],
+      foreignColumns: [runNodes.workflowRunId, runNodes.id],
+      name: 'run_node_stream_events_run_id_run_node_id_fk',
+    }).onDelete('cascade'),
+    runNodeAttemptSequenceUnique: uniqueIndex('run_node_stream_events_run_id_run_node_attempt_seq_uq').on(
+      table.workflowRunId,
+      table.runNodeId,
+      table.attempt,
+      table.sequence,
+    ),
+    attemptCheck: check('run_node_stream_events_attempt_ck', sql`${table.attempt} > 0`),
+    sequenceCheck: check('run_node_stream_events_sequence_ck', sql`${table.sequence} > 0`),
+    eventTypeCheck: check(
+      'run_node_stream_events_event_type_ck',
+      sql`${table.eventType} in ('system', 'assistant', 'tool_use', 'tool_result', 'usage', 'result')`,
+    ),
+    contentCharsCheck: check('run_node_stream_events_content_chars_ck', sql`${table.contentChars} >= 0`),
+    usageDeltaTokensCheck: check(
+      'run_node_stream_events_usage_delta_tokens_ck',
+      sql`${table.usageDeltaTokens} is null or ${table.usageDeltaTokens} >= 0`,
+    ),
+    usageCumulativeTokensCheck: check(
+      'run_node_stream_events_usage_cumulative_tokens_ck',
+      sql`${table.usageCumulativeTokens} is null or ${table.usageCumulativeTokens} >= 0`,
+    ),
+    runAttemptSequenceIdx: index('run_node_stream_events_run_id_attempt_sequence_idx').on(
+      table.workflowRunId,
+      table.runNodeId,
+      table.attempt,
+      table.sequence,
+    ),
+    runCreatedAtIdx: index('run_node_stream_events_run_id_created_at_idx').on(table.workflowRunId, table.createdAt),
+    runNodeCreatedAtIdx: index('run_node_stream_events_run_node_id_created_at_idx').on(table.runNodeId, table.createdAt),
+    createdAtIdx: index('run_node_stream_events_created_at_idx').on(table.createdAt),
+  }),
+);
