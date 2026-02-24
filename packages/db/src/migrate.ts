@@ -203,6 +203,7 @@ export function migrateDatabase(db: AlphredDatabase): void {
     node_type TEXT NOT NULL,
     provider TEXT,
     model TEXT,
+    execution_permissions TEXT,
     prompt_template_id INTEGER REFERENCES prompt_templates(id) ON DELETE RESTRICT,
     max_retries INTEGER NOT NULL DEFAULT 0,
     sequence_index INTEGER NOT NULL,
@@ -244,6 +245,13 @@ export function migrateDatabase(db: AlphredDatabase): void {
     )?.count ?? 0;
   if (hasTreeNodesModelColumn === 0) {
     tx.run(sql`ALTER TABLE tree_nodes ADD COLUMN model TEXT`);
+  }
+  const hasTreeNodesExecutionPermissionsColumn =
+    tx.get<{ count: number }>(
+      sql`SELECT COUNT(*) AS count FROM pragma_table_info('tree_nodes') WHERE name = 'execution_permissions'`,
+    )?.count ?? 0;
+  if (hasTreeNodesExecutionPermissionsColumn === 0) {
+    tx.run(sql`ALTER TABLE tree_nodes ADD COLUMN execution_permissions TEXT`);
   }
   tx.run(sql`UPDATE tree_nodes
     SET model = (

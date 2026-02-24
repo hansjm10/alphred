@@ -74,6 +74,7 @@ const codexProviderConfig: AdapterProviderConfig<CodexProviderErrorCode, CodexPr
   } as const,
   createError: (code, message, details, cause) => new CodexProviderError(code, message, details, cause),
   isProviderError: (error: unknown): error is CodexProviderError => error instanceof CodexProviderError,
+  supportsExecutionPermissions: true,
 };
 
 type CodexItemLifecycle = 'started' | 'updated' | 'completed';
@@ -694,10 +695,29 @@ function mapSdkStreamEvent(
 }
 
 function toThreadOptions(bootstrap: CodexSdkBootstrap, request: CodexRunRequest): ThreadOptions {
-  return {
+  const executionPermissions = request.executionPermissions;
+  const options: ThreadOptions = {
     model: request.model ?? bootstrap.model,
     workingDirectory: request.workingDirectory,
   };
+
+  if (executionPermissions?.approvalPolicy !== undefined) {
+    options.approvalPolicy = executionPermissions.approvalPolicy;
+  }
+  if (executionPermissions?.sandboxMode !== undefined) {
+    options.sandboxMode = executionPermissions.sandboxMode;
+  }
+  if (executionPermissions?.networkAccessEnabled !== undefined) {
+    options.networkAccessEnabled = executionPermissions.networkAccessEnabled;
+  }
+  if (executionPermissions?.additionalDirectories !== undefined) {
+    options.additionalDirectories = executionPermissions.additionalDirectories;
+  }
+  if (executionPermissions?.webSearchMode !== undefined) {
+    options.webSearchMode = executionPermissions.webSearchMode;
+  }
+
+  return options;
 }
 
 function toTurnOptions(request: CodexRunRequest): TurnOptions | undefined {

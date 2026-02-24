@@ -87,8 +87,10 @@ export function mapNodeFromReactFlow(node: Node): DashboardWorkflowDraftNode {
   delete data.label;
 
   const draftNode = data as DashboardWorkflowDraftNode;
+  const { executionPermissions, ...nodeWithoutExecutionPermissions } = draftNode;
   return {
-    ...draftNode,
+    ...nodeWithoutExecutionPermissions,
+    ...(executionPermissions ? { executionPermissions } : {}),
     nodeKey: draftNode.nodeKey,
     position: { x: Math.round(node.position.x), y: Math.round(node.position.y) },
   };
@@ -261,6 +263,7 @@ export function createDraftNode(args: Readonly<{
     nodeType: args.nodeType,
     provider: defaultProvider(args.nodeType),
     model: defaultModel(args.nodeType),
+    executionPermissions: null,
     maxRetries: 0,
     sequenceIndex: args.nextSequenceIndex,
     position: { x: Math.round(args.position.x), y: Math.round(args.position.y) },

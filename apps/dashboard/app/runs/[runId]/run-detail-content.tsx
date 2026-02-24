@@ -1720,6 +1720,12 @@ function RunAgentStreamCard({
         previewLength={160}
         className="run-agent-stream-event-content"
       />
+      {event.metadata ? (
+        <details>
+          <summary>metadata</summary>
+          <pre>{JSON.stringify(event.metadata, null, 2)}</pre>
+        </details>
+      ) : null}
       {event.usage ? (
         <p className="meta-text">
           {`Usage Δ ${event.usage.deltaTokens ?? 'n/a'} · cumulative ${event.usage.cumulativeTokens ?? 'n/a'}`}

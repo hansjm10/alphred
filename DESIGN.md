@@ -73,7 +73,8 @@ interface AgentProvider {
 ```
 
 Streamed event types: `system`, `assistant`, `result`, `tool_use`, `tool_result`, `usage`.
-Shared `ProviderRunOptions` are intentionally minimal and cross-provider: required `workingDirectory`, plus optional `systemPrompt`, `context`, and `timeout`.
+Shared `ProviderRunOptions` include required `workingDirectory`, optional `systemPrompt`/`context`/`timeout`/`model`, and optional `executionPermissions`.
+`executionPermissions` are validated at boundaries and are currently supported for Codex runtime mapping (`approvalPolicy`, `sandboxMode`, `networkAccessEnabled`, `additionalDirectories`, `webSearchMode`).
 
 Each phase spawns a fresh agent session. Context from prior phases is injected via the prompt, not through conversation history.
 

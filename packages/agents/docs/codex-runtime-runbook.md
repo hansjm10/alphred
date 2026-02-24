@@ -55,6 +55,12 @@ When CLI auth is used, the provider checks login state via the bundled Codex bin
 - `systemPrompt`: optional string; trimmed; empty values ignored.
 - `context`: optional string array; non-string entries are dropped.
 - `timeout`: optional positive number in milliseconds, maximum `2_147_483_647`.
+- `executionPermissions`: optional object for per-run Codex thread controls:
+  - `approvalPolicy`: `never` | `on-request` | `on-failure` | `untrusted`
+  - `sandboxMode`: `read-only` | `workspace-write` | `danger-full-access`
+  - `networkAccessEnabled`: boolean
+  - `additionalDirectories`: non-empty string array
+  - `webSearchMode`: `disabled` | `cached` | `live`
 
 Current behavior notes:
 

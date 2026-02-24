@@ -1,7 +1,15 @@
 'use client';
 
 import { useEffect, useMemo, useState, type ChangeEvent } from 'react';
-import type { GuardCondition, GuardExpression, GuardOperator } from '@alphred/shared';
+import {
+  providerApprovalPolicies,
+  providerSandboxModes,
+  providerWebSearchModes,
+  type GuardCondition,
+  type GuardExpression,
+  type GuardOperator,
+  type ProviderExecutionPermissions,
+} from '@alphred/shared';
 import type { Edge, Node } from '@xyflow/react';
 import type {
   DashboardAgentModelOption,
@@ -14,6 +22,9 @@ import type {
 import { ActionButton, Panel } from '../../../ui/primitives';
 
 const guardOperators: readonly GuardOperator[] = ['==', '!=', '>', '<', '>=', '<='];
+const approvalPolicyOptions = providerApprovalPolicies;
+const sandboxModeOptions = providerSandboxModes;
+const webSearchModeOptions = providerWebSearchModes;
 
 type GuardEditorMode = 'guided' | 'advanced';
 
@@ -163,6 +174,297 @@ function summarizeGuardExpression(expression: GuardExpression | null): string {
   return `${expression.field} ${expression.operator} ${String(expression.value)}`;
 }
 
+function resolveProviderOptionsWithCurrent(
+  providerOptions: DashboardAgentProviderOption[],
+  currentProvider: string | null,
+): DashboardAgentProviderOption[] {
+  const effectiveProviderOptions = providerOptions.length > 0
+    ? providerOptions
+    : [{ provider: 'codex', label: 'Codex', defaultModel: 'gpt-5.3-codex' }];
+  if (!currentProvider) {
+    return effectiveProviderOptions;
+  }
+
+  const providerValues = new Set(effectiveProviderOptions.map((option) => option.provider));
+  if (providerValues.has(currentProvider)) {
+    return effectiveProviderOptions;
+  }
+
+  return [
+    ...effectiveProviderOptions,
+    { provider: currentProvider, label: `${currentProvider} (unsupported)`, defaultModel: null },
+  ];
+}
+
+function compareModelOptions(left: DashboardAgentModelOption, right: DashboardAgentModelOption): number {
+  if (left.sortOrder !== right.sortOrder) {
+    return left.sortOrder - right.sortOrder;
+  }
+
+  return left.model.localeCompare(right.model);
+}
+
+function resolveModelOptionsWithCurrent(
+  modelOptions: DashboardAgentModelOption[],
+  selectedProvider: string | null,
+  currentModel: string | null,
+): DashboardAgentModelOption[] {
+  const availableModelsForProvider = modelOptions
+    .filter((option) => option.provider === selectedProvider)
+    .sort(compareModelOptions);
+  if (!currentModel) {
+    return availableModelsForProvider;
+  }
+
+  const modelValues = new Set(availableModelsForProvider.map((option) => option.model));
+  if (modelValues.has(currentModel)) {
+    return availableModelsForProvider;
+  }
+
+  return [
+    ...availableModelsForProvider,
+    {
+      provider: selectedProvider ?? 'unknown',
+      model: currentModel,
+      label: `${currentModel} (unsupported)`,
+      isDefault: false,
+      sortOrder: Number.MAX_SAFE_INTEGER,
+    },
+  ];
+}
+
+function resolveDefaultModelForProvider(
+  provider: string | null,
+  providerOptionsWithCurrent: DashboardAgentProviderOption[],
+  modelOptions: DashboardAgentModelOption[],
+): string | null {
+  if (!provider) {
+    return null;
+  }
+
+  const providerOption = providerOptionsWithCurrent.find((option) => option.provider === provider);
+  if (providerOption?.defaultModel) {
+    return providerOption.defaultModel;
+  }
+
+  const providerModel = modelOptions.find((option) => option.provider === provider && option.isDefault);
+  if (providerModel) {
+    return providerModel.model;
+  }
+
+  return modelOptions.find((option) => option.provider === provider)?.model ?? null;
+}
+
+function normalizeExecutionPermissions(
+  currentPermissions: ProviderExecutionPermissions | null | undefined,
+  patch: Partial<ProviderExecutionPermissions>,
+): ProviderExecutionPermissions | null {
+  const merged = currentPermissions
+    ? { ...currentPermissions, ...patch }
+    : { ...patch };
+  const next: ProviderExecutionPermissions = {};
+  if (merged.approvalPolicy !== undefined) {
+    next.approvalPolicy = merged.approvalPolicy;
+  }
+  if (merged.sandboxMode !== undefined) {
+    next.sandboxMode = merged.sandboxMode;
+  }
+  if (merged.networkAccessEnabled !== undefined) {
+    next.networkAccessEnabled = merged.networkAccessEnabled;
+  }
+  if (merged.additionalDirectories !== undefined && merged.additionalDirectories.length > 0) {
+    next.additionalDirectories = merged.additionalDirectories;
+  }
+  if (merged.webSearchMode !== undefined) {
+    next.webSearchMode = merged.webSearchMode;
+  }
+
+  return Object.keys(next).length > 0 ? next : null;
+}
+
+function toOptionalSelectValue<T extends string>(value: string): T | undefined {
+  return value === '' ? undefined : (value as T);
+}
+
+function toOptionalString(value: string): string | null {
+  return value.trim().length > 0 ? value : null;
+}
+
+function networkAccessSelectValue(executionPermissions: ProviderExecutionPermissions | null | undefined): string {
+  if (executionPermissions?.networkAccessEnabled === undefined) {
+    return '';
+  }
+
+  return executionPermissions.networkAccessEnabled ? 'enabled' : 'disabled';
+}
+
+function CodexExecutionPermissionFields({
+  executionPermissions,
+  onExecutionPermissionsChange,
+}: Readonly<{
+  executionPermissions: ProviderExecutionPermissions | null | undefined;
+  onExecutionPermissionsChange: (patch: Partial<ProviderExecutionPermissions>) => void;
+}>) {
+  return (
+    <>
+      <label className="workflow-inspector-field">
+        <span>Approval policy</span>
+        <select
+          value={executionPermissions?.approvalPolicy ?? ''}
+          onChange={(event) => {
+            const nextValue = event.target.value;
+            onExecutionPermissionsChange({
+              approvalPolicy: toOptionalSelectValue<(typeof providerApprovalPolicies)[number]>(nextValue),
+            });
+          }}
+        >
+          <option value="">Use runtime default</option>
+          {approvalPolicyOptions.map((option) => (
+            <option key={option} value={option}>{option}</option>
+          ))}
+        </select>
+      </label>
+
+      <label className="workflow-inspector-field">
+        <span>Sandbox mode</span>
+        <select
+          value={executionPermissions?.sandboxMode ?? ''}
+          onChange={(event) => {
+            const nextValue = event.target.value;
+            onExecutionPermissionsChange({
+              sandboxMode: toOptionalSelectValue<(typeof providerSandboxModes)[number]>(nextValue),
+            });
+          }}
+        >
+          <option value="">Use runtime default</option>
+          {sandboxModeOptions.map((option) => (
+            <option key={option} value={option}>{option}</option>
+          ))}
+        </select>
+      </label>
+
+      <label className="workflow-inspector-field">
+        <span>Network access</span>
+        <select
+          value={networkAccessSelectValue(executionPermissions)}
+          onChange={(event) => {
+            const nextValue = event.target.value;
+            if (nextValue === '') {
+              onExecutionPermissionsChange({ networkAccessEnabled: undefined });
+              return;
+            }
+            onExecutionPermissionsChange({ networkAccessEnabled: nextValue === 'enabled' });
+          }}
+        >
+          <option value="">Use runtime default</option>
+          <option value="enabled">enabled</option>
+          <option value="disabled">disabled</option>
+        </select>
+      </label>
+
+      <label className="workflow-inspector-field">
+        <span>Web search mode</span>
+        <select
+          value={executionPermissions?.webSearchMode ?? ''}
+          onChange={(event) => {
+            const nextValue = event.target.value;
+            onExecutionPermissionsChange({
+              webSearchMode: toOptionalSelectValue<(typeof providerWebSearchModes)[number]>(nextValue),
+            });
+          }}
+        >
+          <option value="">Use runtime default</option>
+          {webSearchModeOptions.map((option) => (
+            <option key={option} value={option}>{option}</option>
+          ))}
+        </select>
+      </label>
+
+      <label className="workflow-inspector-field">
+        <span>Additional directories (one path per line)</span>
+        <textarea
+          rows={3}
+          value={(executionPermissions?.additionalDirectories ?? []).join('\n')}
+          onChange={(event) => {
+            const directories = event.target.value
+              .split('\n')
+              .map((item) => item.trim())
+              .filter((item) => item.length > 0);
+            onExecutionPermissionsChange({
+              additionalDirectories: directories.length > 0 ? directories : undefined,
+            });
+          }}
+        />
+      </label>
+    </>
+  );
+}
+
+function AgentNodeFields({
+  data,
+  selectedProvider,
+  providerOptionsWithCurrent,
+  modelOptionsWithCurrent,
+  isCodexProvider,
+  defaultModelForProvider,
+  onProviderChange,
+  onModelChange,
+  onExecutionPermissionsChange,
+}: Readonly<{
+  data: DashboardWorkflowDraftNode;
+  selectedProvider: string | null;
+  providerOptionsWithCurrent: DashboardAgentProviderOption[];
+  modelOptionsWithCurrent: DashboardAgentModelOption[];
+  isCodexProvider: boolean;
+  defaultModelForProvider: (provider: string | null) => string | null;
+  onProviderChange: (provider: string) => void;
+  onModelChange: (model: string | null) => void;
+  onExecutionPermissionsChange: (patch: Partial<ProviderExecutionPermissions>) => void;
+}>) {
+  const hasModelOptions = Boolean(selectedProvider) && modelOptionsWithCurrent.length > 0;
+  return (
+    <>
+      <label className="workflow-inspector-field">
+        <span>Provider</span>
+        <select value={selectedProvider ?? ''} onChange={(event) => onProviderChange(event.target.value)}>
+          {providerOptionsWithCurrent.map((option) => (
+            <option key={option.provider} value={option.provider}>
+              {option.label}
+            </option>
+          ))}
+        </select>
+      </label>
+
+      <label className="workflow-inspector-field">
+        <span>Model</span>
+        <select
+          value={data.model ?? defaultModelForProvider(selectedProvider) ?? ''}
+          onChange={(event) => onModelChange(event.target.value.length > 0 ? event.target.value : null)}
+          disabled={!hasModelOptions}
+        >
+          {hasModelOptions ? null : (
+            <option value="">No models available</option>
+          )}
+          {modelOptionsWithCurrent.map((option) => (
+            <option key={`${option.provider}:${option.model}`} value={option.model}>
+              {option.label}
+            </option>
+          ))}
+        </select>
+      </label>
+
+      {isCodexProvider ? (
+        <CodexExecutionPermissionFields
+          executionPermissions={data.executionPermissions}
+          onExecutionPermissionsChange={onExecutionPermissionsChange}
+        />
+      ) : (
+        <p className="meta-text">Execution permission controls are currently supported for Codex nodes only.</p>
+      )}
+    </>
+  );
+}
+
 export function NodeInspector({
   node,
   providerOptions = [],
@@ -195,61 +497,19 @@ export function NodeInspector({
     handleFieldChange('promptTemplate', { ...data.promptTemplate, content: event.target.value });
   }
 
+  function handleExecutionPermissionsChange(patch: Partial<ProviderExecutionPermissions>): void {
+    handleFieldChange('executionPermissions', normalizeExecutionPermissions(data.executionPermissions, patch));
+  }
+
   const nodeType = data.nodeType;
   const isAgent = nodeType === 'agent';
-  const effectiveProviderOptions = providerOptions.length > 0
-    ? providerOptions
-    : [{ provider: 'codex', label: 'Codex', defaultModel: 'gpt-5.3-codex' }];
-  const providerValues = new Set(effectiveProviderOptions.map(option => option.provider));
-  const providerOptionsWithCurrent = data.provider && !providerValues.has(data.provider)
-    ? [...effectiveProviderOptions, { provider: data.provider, label: `${data.provider} (unsupported)`, defaultModel: null }]
-    : effectiveProviderOptions;
+  const providerOptionsWithCurrent = resolveProviderOptionsWithCurrent(providerOptions, data.provider);
   const selectedProvider = data.provider ?? providerOptionsWithCurrent[0]?.provider ?? null;
-
-  const availableModelsForProvider = modelOptions
-    .filter(option => option.provider === selectedProvider)
-    .sort((left, right) => {
-      if (left.sortOrder !== right.sortOrder) {
-        return left.sortOrder - right.sortOrder;
-      }
-      if (left.model < right.model) {
-        return -1;
-      }
-      if (left.model > right.model) {
-        return 1;
-      }
-      return 0;
-    });
-  const modelValues = new Set(availableModelsForProvider.map(option => option.model));
-  const modelOptionsWithCurrent = data.model && !modelValues.has(data.model)
-    ? [
-        ...availableModelsForProvider,
-        {
-          provider: selectedProvider ?? 'unknown',
-          model: data.model,
-          label: `${data.model} (unsupported)`,
-          isDefault: false,
-          sortOrder: Number.MAX_SAFE_INTEGER,
-        },
-      ]
-    : availableModelsForProvider;
+  const isCodexProvider = selectedProvider === 'codex';
+  const modelOptionsWithCurrent = resolveModelOptionsWithCurrent(modelOptions, selectedProvider, data.model ?? null);
 
   function defaultModelForProvider(provider: string | null): string | null {
-    if (!provider) {
-      return null;
-    }
-
-    const providerOption = providerOptionsWithCurrent.find(option => option.provider === provider);
-    if (providerOption?.defaultModel) {
-      return providerOption.defaultModel;
-    }
-
-    const providerModel = modelOptions.find(option => option.provider === provider && option.isDefault);
-    if (providerModel) {
-      return providerModel.model;
-    }
-
-    return modelOptions.find(option => option.provider === provider)?.model ?? null;
+    return resolveDefaultModelForProvider(provider, providerOptionsWithCurrent, modelOptions);
   }
 
   function handleNodeTypeChange(nextNodeType: DashboardWorkflowDraftNode['nodeType']) {
@@ -261,6 +521,7 @@ export function NodeInspector({
         nodeType: nextNodeType,
         provider: nextProvider,
         model: nextModel,
+        executionPermissions: data.executionPermissions ?? null,
         promptTemplate: data.promptTemplate ?? { content: 'Describe what to do for this workflow phase.', contentType: 'markdown' },
       });
       return;
@@ -271,17 +532,19 @@ export function NodeInspector({
       nodeType: nextNodeType,
       provider: null,
       model: null,
+      executionPermissions: null,
       promptTemplate: null,
     });
   }
 
   function handleProviderChange(nextProvider: string) {
-    const normalizedProvider = nextProvider.trim().length > 0 ? nextProvider : null;
+    const normalizedProvider = toOptionalString(nextProvider);
     const nextModel = defaultModelForProvider(normalizedProvider);
     onChange({
       ...data,
       provider: normalizedProvider,
       model: nextModel,
+      executionPermissions: normalizedProvider === 'codex' ? (data.executionPermissions ?? null) : null,
       promptTemplate: data.promptTemplate ?? { content: 'Describe what to do for this workflow phase.', contentType: 'markdown' },
     });
   }
@@ -310,36 +573,17 @@ export function NodeInspector({
       </label>
 
       {isAgent ? (
-        <>
-          <label className="workflow-inspector-field">
-            <span>Provider</span>
-            <select value={selectedProvider ?? ''} onChange={(event) => handleProviderChange(event.target.value)}>
-              {providerOptionsWithCurrent.map(option => (
-                <option key={option.provider} value={option.provider}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
-          </label>
-
-          <label className="workflow-inspector-field">
-            <span>Model</span>
-            <select
-              value={data.model ?? defaultModelForProvider(selectedProvider) ?? ''}
-              onChange={(event) => handleFieldChange('model', event.target.value.length > 0 ? event.target.value : null)}
-              disabled={!selectedProvider || modelOptionsWithCurrent.length === 0}
-            >
-              {!selectedProvider || modelOptionsWithCurrent.length === 0 ? (
-                <option value="">No models available</option>
-              ) : null}
-              {modelOptionsWithCurrent.map(option => (
-                <option key={`${option.provider}:${option.model}`} value={option.model}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
-          </label>
-        </>
+        <AgentNodeFields
+          data={data}
+          selectedProvider={selectedProvider}
+          providerOptionsWithCurrent={providerOptionsWithCurrent}
+          modelOptionsWithCurrent={modelOptionsWithCurrent}
+          isCodexProvider={isCodexProvider}
+          defaultModelForProvider={defaultModelForProvider}
+          onProviderChange={handleProviderChange}
+          onModelChange={(model) => handleFieldChange('model', model)}
+          onExecutionPermissionsChange={handleExecutionPermissionsChange}
+        />
       ) : (
         <p className="meta-text">Human/tool nodes are supported as draft placeholders; publishing may be blocked by validation.</p>
       )}

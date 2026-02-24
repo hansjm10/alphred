@@ -63,6 +63,7 @@ Claude-specific runtime behavior (`@alphred/agents`):
 - `systemPrompt`: optional string; trimmed; empty values ignored.
 - `context`: optional string array; non-string entries are dropped.
 - `timeout`: optional positive number in milliseconds, maximum `2_147_483_647`.
+- `executionPermissions`: unsupported. When provided, validation fails with `CLAUDE_INVALID_OPTIONS`.
 
 Current behavior notes:
 

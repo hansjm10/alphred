@@ -29,6 +29,12 @@ import {
   type NodeChange,
   type ReactFlowInstance,
 } from '@xyflow/react';
+import {
+  providerApprovalPolicies,
+  providerSandboxModes,
+  providerWebSearchModes,
+  type ProviderExecutionPermissions,
+} from '@alphred/shared';
 import type {
   DashboardAgentModelOption,
   DashboardAgentProviderOption,
@@ -64,6 +70,16 @@ import { EdgeInspector, NodeInspector, WorkflowInspector } from './workflow-edit
 import { WorkflowEditorNodePalette } from './workflow-editor-node-palette';
 
 type InspectorTab = 'node' | 'transition' | 'workflow';
+const executionPermissionKeys = new Set([
+  'approvalPolicy',
+  'sandboxMode',
+  'networkAccessEnabled',
+  'additionalDirectories',
+  'webSearchMode',
+]);
+const executionApprovalPolicies = new Set(providerApprovalPolicies);
+const executionSandboxModes = new Set(providerSandboxModes);
+const executionWebSearchModes = new Set(providerWebSearchModes);
 
 function hasNonSelectionNodeChanges(changes: NodeChange[]): boolean {
   return changes.some(change => change.type !== 'select');
@@ -857,6 +873,47 @@ function isDraftNodePromptTemplate(value: unknown): value is DashboardWorkflowDr
   );
 }
 
+function isDraftNodeExecutionPermissions(value: unknown): value is ProviderExecutionPermissions | null | undefined {
+  if (value === undefined || value === null) {
+    return true;
+  }
+
+  if (!isObjectRecord(value) || Array.isArray(value)) {
+    return false;
+  }
+
+  for (const key of Object.keys(value)) {
+    if (!executionPermissionKeys.has(key)) {
+      return false;
+    }
+  }
+
+  if (value.approvalPolicy !== undefined && !executionApprovalPolicies.has(value.approvalPolicy as typeof providerApprovalPolicies[number])) {
+    return false;
+  }
+
+  if (value.sandboxMode !== undefined && !executionSandboxModes.has(value.sandboxMode as typeof providerSandboxModes[number])) {
+    return false;
+  }
+
+  if (value.networkAccessEnabled !== undefined && typeof value.networkAccessEnabled !== 'boolean') {
+    return false;
+  }
+
+  if (
+    value.additionalDirectories !== undefined &&
+    (!Array.isArray(value.additionalDirectories) || !value.additionalDirectories.every(item => typeof item === 'string'))
+  ) {
+    return false;
+  }
+
+  if (value.webSearchMode !== undefined && !executionWebSearchModes.has(value.webSearchMode as typeof providerWebSearchModes[number])) {
+    return false;
+  }
+
+  return true;
+}
+
 function isDraftNode(value: unknown): value is DashboardWorkflowDraftNode {
   if (!isObjectRecord(value)) {
     return false;
@@ -874,7 +931,8 @@ function isDraftNode(value: unknown): value is DashboardWorkflowDraftNode {
     isFiniteNumber(value.sequenceIndex) &&
     Number.isInteger(value.sequenceIndex) &&
     isDraftNodePosition(value.position) &&
-    isDraftNodePromptTemplate(value.promptTemplate)
+    isDraftNodePromptTemplate(value.promptTemplate) &&
+    isDraftNodeExecutionPermissions((value as { executionPermissions?: unknown }).executionPermissions)
   );
 }
 

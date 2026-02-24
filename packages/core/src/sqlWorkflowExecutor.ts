@@ -19,12 +19,16 @@ import {
 } from '@alphred/db';
 import {
   compareStringsByCodeUnit,
+  providerApprovalPolicies,
+  providerSandboxModes,
+  providerWebSearchModes,
   type AgentProviderName,
   type GuardCondition,
   type GuardExpression,
   type PhaseDefinition,
   type ProviderEvent,
   type ProviderEventType,
+  type ProviderExecutionPermissions,
   type ProviderRunOptions,
   type RoutingDecisionSignal,
 } from '@alphred/shared';
@@ -45,6 +49,7 @@ type RunNodeExecutionRow = {
   nodeType: string;
   provider: string | null;
   model: string | null;
+  executionPermissions: unknown;
   prompt: string | null;
   promptContentType: string | null;
 };
@@ -287,6 +292,16 @@ export type SqlWorkflowExecutor = {
 const artifactContentTypes = new Set(['text', 'markdown', 'json', 'diff']);
 const runTerminalStatuses = new Set<WorkflowRunStatus>(['completed', 'failed', 'cancelled']);
 const guardOperators: ReadonlySet<GuardCondition['operator']> = new Set(['==', '!=', '>', '<', '>=', '<=']);
+const executionPermissionKeys = new Set([
+  'approvalPolicy',
+  'sandboxMode',
+  'networkAccessEnabled',
+  'additionalDirectories',
+  'webSearchMode',
+]);
+const executionApprovalPolicies = new Set(providerApprovalPolicies);
+const executionSandboxModes = new Set(providerSandboxModes);
+const executionWebSearchModes = new Set(providerWebSearchModes);
 const CONTEXT_POLICY_VERSION = 1;
 const MAX_UPSTREAM_ARTIFACTS = 4;
 const MAX_CONTEXT_CHARS_TOTAL = 32_000;
@@ -443,6 +458,184 @@ function compareUpstreamSourceOrder(a: RunNodeExecutionRow, b: RunNodeExecutionR
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function assertSupportedRunNodeExecutionPermissionKeys(value: Record<string, unknown>, nodeKey: string): void {
+  for (const key of Object.keys(value)) {
+    if (executionPermissionKeys.has(key)) {
+      continue;
+    }
+
+    throw new Error(`Run node "${nodeKey}" execution permissions include unsupported field "${key}".`);
+  }
+}
+
+function parseRunNodeExecutionApprovalPolicy(
+  value: Record<string, unknown>,
+  nodeKey: string,
+): (typeof providerApprovalPolicies)[number] | undefined {
+  const approvalPolicy = value.approvalPolicy;
+  if (approvalPolicy === undefined) {
+    return undefined;
+  }
+
+  if (
+    typeof approvalPolicy !== 'string'
+    || !executionApprovalPolicies.has(approvalPolicy as (typeof providerApprovalPolicies)[number])
+  ) {
+    throw new Error(`Run node "${nodeKey}" has invalid execution approval policy.`);
+  }
+
+  return approvalPolicy as (typeof providerApprovalPolicies)[number];
+}
+
+function parseRunNodeExecutionSandboxMode(
+  value: Record<string, unknown>,
+  nodeKey: string,
+): (typeof providerSandboxModes)[number] | undefined {
+  const sandboxMode = value.sandboxMode;
+  if (sandboxMode === undefined) {
+    return undefined;
+  }
+
+  if (
+    typeof sandboxMode !== 'string'
+    || !executionSandboxModes.has(sandboxMode as (typeof providerSandboxModes)[number])
+  ) {
+    throw new Error(`Run node "${nodeKey}" has invalid execution sandbox mode.`);
+  }
+
+  return sandboxMode as (typeof providerSandboxModes)[number];
+}
+
+function parseRunNodeExecutionNetworkAccessEnabled(
+  value: Record<string, unknown>,
+  nodeKey: string,
+): boolean | undefined {
+  const networkAccessEnabled = value.networkAccessEnabled;
+  if (networkAccessEnabled === undefined) {
+    return undefined;
+  }
+
+  if (typeof networkAccessEnabled !== 'boolean') {
+    throw new TypeError(`Run node "${nodeKey}" has invalid execution networkAccessEnabled value.`);
+  }
+
+  return networkAccessEnabled;
+}
+
+function parseRunNodeExecutionAdditionalDirectories(
+  value: Record<string, unknown>,
+  nodeKey: string,
+): string[] | undefined {
+  const additionalDirectories = value.additionalDirectories;
+  if (additionalDirectories === undefined) {
+    return undefined;
+  }
+
+  if (!Array.isArray(additionalDirectories)) {
+    throw new TypeError(`Run node "${nodeKey}" has invalid execution additionalDirectories value.`);
+  }
+
+  const normalizedDirectories = additionalDirectories.map((directory, index) => {
+    if (typeof directory !== 'string' || directory.trim().length === 0) {
+      throw new TypeError(
+        `Run node "${nodeKey}" has invalid execution additionalDirectories entry at index ${index}.`,
+      );
+    }
+
+    return directory.trim();
+  });
+
+  if (normalizedDirectories.length === 0) {
+    throw new Error(`Run node "${nodeKey}" must provide at least one execution additional directory.`);
+  }
+
+  return normalizedDirectories;
+}
+
+function parseRunNodeExecutionWebSearchMode(
+  value: Record<string, unknown>,
+  nodeKey: string,
+): (typeof providerWebSearchModes)[number] | undefined {
+  const webSearchMode = value.webSearchMode;
+  if (webSearchMode === undefined) {
+    return undefined;
+  }
+
+  if (
+    typeof webSearchMode !== 'string'
+    || !executionWebSearchModes.has(webSearchMode as (typeof providerWebSearchModes)[number])
+  ) {
+    throw new Error(`Run node "${nodeKey}" has invalid execution web search mode.`);
+  }
+
+  return webSearchMode as (typeof providerWebSearchModes)[number];
+}
+
+function normalizeRunNodeExecutionPermissions(
+  value: unknown,
+  nodeKey: string,
+): ProviderExecutionPermissions | undefined {
+  if (value === null || value === undefined) {
+    return undefined;
+  }
+
+  if (!isRecord(value)) {
+    throw new TypeError(`Run node "${nodeKey}" has invalid execution permissions payload.`);
+  }
+
+  assertSupportedRunNodeExecutionPermissionKeys(value, nodeKey);
+
+  const normalized: ProviderExecutionPermissions = {};
+  const approvalPolicy = parseRunNodeExecutionApprovalPolicy(value, nodeKey);
+  if (approvalPolicy !== undefined) {
+    normalized.approvalPolicy = approvalPolicy;
+  }
+
+  const sandboxMode = parseRunNodeExecutionSandboxMode(value, nodeKey);
+  if (sandboxMode !== undefined) {
+    normalized.sandboxMode = sandboxMode;
+  }
+
+  const networkAccessEnabled = parseRunNodeExecutionNetworkAccessEnabled(value, nodeKey);
+  if (networkAccessEnabled !== undefined) {
+    normalized.networkAccessEnabled = networkAccessEnabled;
+  }
+
+  const additionalDirectories = parseRunNodeExecutionAdditionalDirectories(value, nodeKey);
+  if (additionalDirectories !== undefined) {
+    normalized.additionalDirectories = additionalDirectories;
+  }
+
+  const webSearchMode = parseRunNodeExecutionWebSearchMode(value, nodeKey);
+  if (webSearchMode !== undefined) {
+    normalized.webSearchMode = webSearchMode;
+  }
+
+  return Object.keys(normalized).length > 0 ? normalized : undefined;
+}
+
+function mergeExecutionPermissions(
+  basePermissions: ProviderExecutionPermissions | undefined,
+  nodePermissions: ProviderExecutionPermissions | undefined,
+): ProviderExecutionPermissions | undefined {
+  if (!basePermissions && !nodePermissions) {
+    return undefined;
+  }
+
+  if (!basePermissions) {
+    return nodePermissions;
+  }
+
+  if (!nodePermissions) {
+    return basePermissions;
+  }
+
+  return {
+    ...basePermissions,
+    ...nodePermissions,
+  };
 }
 
 function readRoutingDecisionAttempt(rawOutput: unknown): number | null {
@@ -1873,6 +2066,7 @@ function loadRunNodeExecutionRows(db: AlphredDatabase, workflowRunId: number): R
       nodeType: treeNodes.nodeType,
       provider: treeNodes.provider,
       model: treeNodes.model,
+      executionPermissions: treeNodes.executionPermissions,
       prompt: promptTemplates.content,
       promptContentType: promptTemplates.contentType,
     })
@@ -1897,6 +2091,7 @@ function loadRunNodeExecutionRows(db: AlphredDatabase, workflowRunId: number): R
     nodeType: row.nodeType,
     provider: row.provider,
     model: row.model,
+    executionPermissions: row.executionPermissions,
     prompt: row.prompt,
     promptContentType: row.promptContentType,
   }));
@@ -2463,7 +2658,21 @@ async function executeNodePhase(
           ...options,
           context: [...(options.context ?? []), ...upstreamContextEntries],
         };
-  const phaseOptions = phase.model ? { ...optionsWithContext, model: phase.model } : optionsWithContext;
+  const nodeExecutionPermissions = normalizeRunNodeExecutionPermissions(node.executionPermissions, node.nodeKey);
+  const mergedExecutionPermissions = mergeExecutionPermissions(
+    optionsWithContext.executionPermissions,
+    nodeExecutionPermissions,
+  );
+  const optionsWithExecutionPermissions =
+    mergedExecutionPermissions === undefined
+      ? optionsWithContext
+      : {
+          ...optionsWithContext,
+          executionPermissions: mergedExecutionPermissions,
+        };
+  const phaseOptions = phase.model
+    ? { ...optionsWithExecutionPermissions, model: phase.model }
+    : optionsWithExecutionPermissions;
   return runPhase(phase, phaseOptions, {
     resolveProvider: dependencies.resolveProvider,
     onEvent,

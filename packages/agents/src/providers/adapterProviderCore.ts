@@ -1,5 +1,12 @@
 import { inspect } from 'node:util';
-import type { ProviderEvent, ProviderRunOptions } from '@alphred/shared';
+import {
+  providerApprovalPolicies,
+  providerSandboxModes,
+  providerWebSearchModes,
+  type ProviderEvent,
+  type ProviderExecutionPermissions,
+  type ProviderRunOptions,
+} from '@alphred/shared';
 import { createProviderEvent } from '../provider.js';
 
 const defaultProviderEventTypeAliases: Readonly<Record<string, ProviderEvent['type']>> = Object.freeze({
@@ -30,6 +37,7 @@ export type AdapterRunRequest = Readonly<{
   systemPrompt?: string;
   model?: string;
   timeout?: number;
+  executionPermissions?: ProviderExecutionPermissions;
 }>;
 
 export type AdapterRawEvent = Readonly<{
@@ -62,7 +70,19 @@ export type AdapterProviderConfig<Code extends string, TError extends Error> = R
   createError: AdapterProviderErrorFactory<Code, TError>;
   isProviderError: (error: unknown) => error is TError;
   eventTypeAliases?: Readonly<Record<string, ProviderEvent['type']>>;
+  supportsExecutionPermissions?: boolean;
 }>;
+
+const executionPermissionKeys = new Set([
+  'approvalPolicy',
+  'sandboxMode',
+  'networkAccessEnabled',
+  'additionalDirectories',
+  'webSearchMode',
+]);
+const executionApprovalPolicies = new Set(providerApprovalPolicies);
+const executionSandboxModes = new Set(providerSandboxModes);
+const executionWebSearchModes = new Set(providerWebSearchModes);
 
 function toNonNegativeNumber(value: unknown): number | undefined {
   if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
@@ -278,6 +298,229 @@ function normalizeModel<Code extends string, TError extends Error>(
   return normalizedModel;
 }
 
+function createExecutionPermissionsValidationError<Code extends string, TError extends Error>(
+  config: AdapterProviderConfig<Code, TError>,
+  executionPermissions: unknown,
+  message: string,
+  details?: Record<string, unknown>,
+): TError {
+  return config.createError(
+    config.codes.invalidOptions,
+    message,
+    details ? { executionPermissions, ...details } : { executionPermissions },
+  );
+}
+
+function toRawExecutionPermissions<Code extends string, TError extends Error>(
+  executionPermissions: ProviderRunOptions['executionPermissions'] | null,
+  config: AdapterProviderConfig<Code, TError>,
+): Record<string, unknown> {
+  if (typeof executionPermissions !== 'object' || Array.isArray(executionPermissions)) {
+    throw createExecutionPermissionsValidationError(
+      config,
+      executionPermissions,
+      `${config.providerDisplayName} provider requires executionPermissions to be an object when provided.`,
+    );
+  }
+
+  return executionPermissions as Record<string, unknown>;
+}
+
+function assertExecutionPermissionKeysAreSupported<Code extends string, TError extends Error>(
+  rawPermissions: Record<string, unknown>,
+  executionPermissions: unknown,
+  config: AdapterProviderConfig<Code, TError>,
+): void {
+  for (const key of Object.keys(rawPermissions)) {
+    if (executionPermissionKeys.has(key)) {
+      continue;
+    }
+
+    throw createExecutionPermissionsValidationError(
+      config,
+      executionPermissions,
+      `${config.providerDisplayName} provider does not recognize executionPermissions.${key}.`,
+    );
+  }
+}
+
+function parseExecutionPermissionApprovalPolicy<Code extends string, TError extends Error>(
+  rawPermissions: Record<string, unknown>,
+  executionPermissions: unknown,
+  config: AdapterProviderConfig<Code, TError>,
+): (typeof providerApprovalPolicies)[number] | undefined {
+  const approvalPolicy = rawPermissions.approvalPolicy;
+  if (approvalPolicy === undefined) {
+    return undefined;
+  }
+
+  if (
+    typeof approvalPolicy !== 'string'
+    || !executionApprovalPolicies.has(approvalPolicy as (typeof providerApprovalPolicies)[number])
+  ) {
+    throw createExecutionPermissionsValidationError(
+      config,
+      executionPermissions,
+      `${config.providerDisplayName} provider requires executionPermissions.approvalPolicy to be a supported value.`,
+    );
+  }
+
+  return approvalPolicy as (typeof providerApprovalPolicies)[number];
+}
+
+function parseExecutionPermissionSandboxMode<Code extends string, TError extends Error>(
+  rawPermissions: Record<string, unknown>,
+  executionPermissions: unknown,
+  config: AdapterProviderConfig<Code, TError>,
+): (typeof providerSandboxModes)[number] | undefined {
+  const sandboxMode = rawPermissions.sandboxMode;
+  if (sandboxMode === undefined) {
+    return undefined;
+  }
+
+  if (
+    typeof sandboxMode !== 'string'
+    || !executionSandboxModes.has(sandboxMode as (typeof providerSandboxModes)[number])
+  ) {
+    throw createExecutionPermissionsValidationError(
+      config,
+      executionPermissions,
+      `${config.providerDisplayName} provider requires executionPermissions.sandboxMode to be a supported value.`,
+    );
+  }
+
+  return sandboxMode as (typeof providerSandboxModes)[number];
+}
+
+function parseExecutionPermissionNetworkAccessEnabled<Code extends string, TError extends Error>(
+  rawPermissions: Record<string, unknown>,
+  executionPermissions: unknown,
+  config: AdapterProviderConfig<Code, TError>,
+): boolean | undefined {
+  const networkAccessEnabled = rawPermissions.networkAccessEnabled;
+  if (networkAccessEnabled === undefined) {
+    return undefined;
+  }
+
+  if (typeof networkAccessEnabled !== 'boolean') {
+    throw createExecutionPermissionsValidationError(
+      config,
+      executionPermissions,
+      `${config.providerDisplayName} provider requires executionPermissions.networkAccessEnabled to be a boolean.`,
+    );
+  }
+
+  return networkAccessEnabled;
+}
+
+function parseExecutionPermissionAdditionalDirectories<Code extends string, TError extends Error>(
+  rawPermissions: Record<string, unknown>,
+  executionPermissions: unknown,
+  config: AdapterProviderConfig<Code, TError>,
+): string[] | undefined {
+  const additionalDirectories = rawPermissions.additionalDirectories;
+  if (additionalDirectories === undefined) {
+    return undefined;
+  }
+
+  if (!Array.isArray(additionalDirectories)) {
+    throw createExecutionPermissionsValidationError(
+      config,
+      executionPermissions,
+      `${config.providerDisplayName} provider requires executionPermissions.additionalDirectories to be an array when provided.`,
+    );
+  }
+
+  return additionalDirectories.map((directory, index) => {
+    if (typeof directory !== 'string' || directory.trim().length === 0) {
+      throw createExecutionPermissionsValidationError(
+        config,
+        executionPermissions,
+        `${config.providerDisplayName} provider requires executionPermissions.additionalDirectories entries to be non-empty strings.`,
+        { index },
+      );
+    }
+
+    return directory.trim();
+  });
+}
+
+function parseExecutionPermissionWebSearchMode<Code extends string, TError extends Error>(
+  rawPermissions: Record<string, unknown>,
+  executionPermissions: unknown,
+  config: AdapterProviderConfig<Code, TError>,
+): (typeof providerWebSearchModes)[number] | undefined {
+  const webSearchMode = rawPermissions.webSearchMode;
+  if (webSearchMode === undefined) {
+    return undefined;
+  }
+
+  if (
+    typeof webSearchMode !== 'string'
+    || !executionWebSearchModes.has(webSearchMode as (typeof providerWebSearchModes)[number])
+  ) {
+    throw createExecutionPermissionsValidationError(
+      config,
+      executionPermissions,
+      `${config.providerDisplayName} provider requires executionPermissions.webSearchMode to be a supported value.`,
+    );
+  }
+
+  return webSearchMode as (typeof providerWebSearchModes)[number];
+}
+
+function normalizeExecutionPermissions<Code extends string, TError extends Error>(
+  executionPermissions: ProviderRunOptions['executionPermissions'] | null,
+  config: AdapterProviderConfig<Code, TError>,
+): ProviderExecutionPermissions | undefined {
+  if (executionPermissions === undefined || executionPermissions === null) {
+    return undefined;
+  }
+
+  const rawPermissions = toRawExecutionPermissions(executionPermissions, config);
+  assertExecutionPermissionKeysAreSupported(rawPermissions, executionPermissions, config);
+
+  const normalized: ProviderExecutionPermissions = {};
+  const approvalPolicy = parseExecutionPermissionApprovalPolicy(rawPermissions, executionPermissions, config);
+  if (approvalPolicy !== undefined) {
+    normalized.approvalPolicy = approvalPolicy;
+  }
+
+  const sandboxMode = parseExecutionPermissionSandboxMode(rawPermissions, executionPermissions, config);
+  if (sandboxMode !== undefined) {
+    normalized.sandboxMode = sandboxMode;
+  }
+
+  const networkAccessEnabled = parseExecutionPermissionNetworkAccessEnabled(rawPermissions, executionPermissions, config);
+  if (networkAccessEnabled !== undefined) {
+    normalized.networkAccessEnabled = networkAccessEnabled;
+  }
+
+  const additionalDirectories = parseExecutionPermissionAdditionalDirectories(rawPermissions, executionPermissions, config);
+  if (additionalDirectories !== undefined && additionalDirectories.length > 0) {
+    normalized.additionalDirectories = additionalDirectories;
+  }
+
+  const webSearchMode = parseExecutionPermissionWebSearchMode(rawPermissions, executionPermissions, config);
+  if (webSearchMode !== undefined) {
+    normalized.webSearchMode = webSearchMode;
+  }
+
+  if (Object.keys(normalized).length === 0) {
+    return undefined;
+  }
+
+  if (config.supportsExecutionPermissions !== true) {
+    throw createExecutionPermissionsValidationError(
+      config,
+      normalized,
+      `${config.providerDisplayName} provider does not support executionPermissions.`,
+    );
+  }
+
+  return normalized;
+}
+
 function buildBridgedPrompt(prompt: string, systemPrompt: string | undefined, context: readonly string[]): string {
   if (!systemPrompt && context.length === 0) {
     return prompt;
@@ -336,6 +579,7 @@ function createRunRequest<Code extends string, TError extends Error>(
   const systemPrompt = normalizeSystemPrompt(validatedOptions.systemPrompt, config);
   const model = normalizeModel(validatedOptions.model, config);
   const context = normalizeContext(validatedOptions.context, config);
+  const executionPermissions = normalizeExecutionPermissions(validatedOptions.executionPermissions ?? null, config);
 
   return {
     prompt,
@@ -345,6 +589,7 @@ function createRunRequest<Code extends string, TError extends Error>(
     systemPrompt,
     model,
     timeout: validatedOptions.timeout,
+    executionPermissions,
   };
 }
 
@@ -394,6 +639,9 @@ export async function* runAdapterProvider<Code extends string, TError extends Er
   };
   if (request.model !== undefined) {
     runStartedMetadata.model = request.model;
+  }
+  if (request.executionPermissions !== undefined) {
+    runStartedMetadata.executionPermissions = request.executionPermissions;
   }
 
   yield createProviderEvent('system', `${config.providerDisplayName} provider run started.`, {
