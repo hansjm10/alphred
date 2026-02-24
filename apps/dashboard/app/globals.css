@@ -921,6 +921,24 @@ output {
   background: color-mix(in srgb, var(--accent-active) 24%, var(--bg-surface));
 }
 
+.run-agent-stream-collapsed {
+  border: 1px dashed color-mix(in srgb, var(--border-default) 75%, transparent);
+  border-radius: var(--radius-sm);
+  padding: 8px;
+}
+
+.run-agent-stream-collapsed__summary {
+  color: var(--text-secondary);
+  cursor: pointer;
+  font: 600 12px/18px var(--font-display);
+  width: fit-content;
+}
+
+.run-agent-stream-collapsed__summary:hover {
+  color: var(--accent-active);
+  text-decoration: underline;
+}
+
 .run-expandable-preview {
   display: grid;
   gap: 4px;
