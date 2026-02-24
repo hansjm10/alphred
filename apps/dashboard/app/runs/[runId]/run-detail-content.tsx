@@ -1800,12 +1800,16 @@ function RunObservabilityCard({ detail }: RunObservabilityCardProps) {
         <p className="meta-text">Artifacts</p>
         {detail.artifacts.length === 0 ? <p>No artifacts captured yet.</p> : null}
         <ul className="page-stack run-observability-list" aria-label="Run artifacts">
-          {artifactPartition.recent.map((artifact) => (
-            <li key={artifact.id}>
-              <p>{`${artifact.artifactType} (${artifact.contentType})`}</p>
-              <ExpandablePreview value={artifact.contentPreview} label="artifact preview" />
-            </li>
-          ))}
+          {artifactPartition.recent.map((artifact) => {
+            const node = detail.nodes.find((candidate) => candidate.id === artifact.runNodeId);
+            const nodeLabel = node ? node.nodeKey : `node-${artifact.runNodeId}`;
+            return (
+              <li key={artifact.id}>
+                <p>{`${nodeLabel} · ${artifact.artifactType} (${artifact.contentType})`}</p>
+                <ExpandablePreview value={artifact.contentPreview} label="artifact preview" />
+              </li>
+            );
+          })}
           {artifactPartition.earlier.length > 0 ? (
             <li>
               <details className="run-collapsible-history">
@@ -1813,12 +1817,16 @@ function RunObservabilityCard({ detail }: RunObservabilityCardProps) {
                   {`Show ${artifactPartition.earlier.length} earlier artifacts`}
                 </summary>
                 <ul className="page-stack run-collapsible-history__list" aria-label="Earlier run artifacts">
-                  {artifactPartition.earlier.map((artifact) => (
-                    <li key={`older-${artifact.id}`}>
-                      <p>{`${artifact.artifactType} (${artifact.contentType})`}</p>
-                      <ExpandablePreview value={artifact.contentPreview} label="artifact preview" />
-                    </li>
-                  ))}
+                  {artifactPartition.earlier.map((artifact) => {
+                    const node = detail.nodes.find((candidate) => candidate.id === artifact.runNodeId);
+                    const nodeLabel = node ? node.nodeKey : `node-${artifact.runNodeId}`;
+                    return (
+                      <li key={`older-${artifact.id}`}>
+                        <p>{`${nodeLabel} · ${artifact.artifactType} (${artifact.contentType})`}</p>
+                        <ExpandablePreview value={artifact.contentPreview} label="artifact preview" />
+                      </li>
+                    );
+                  })}
                 </ul>
               </details>
             </li>
@@ -2097,7 +2105,7 @@ export function RunDetailContent({
     <div className="page-stack">
       <section className="page-heading">
         <h2>{`Run #${detail.run.id}`}</h2>
-        <p>Timeline and node lifecycle reflect persisted run data from dashboard APIs.</p>
+        <p>{`${detail.run.tree.name}${detail.run.repository ? ` · ${detail.run.repository.name}` : ''}`}</p>
       </section>
 
       <div className="page-grid run-detail-priority-grid">
