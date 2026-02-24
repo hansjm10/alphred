@@ -277,6 +277,16 @@ output {
   color: var(--accent-warning);
 }
 
+.status-badge--cancelled {
+  border-color: color-mix(in srgb, var(--text-muted) 55%, var(--border-default));
+  color: var(--text-muted);
+}
+
+.status-badge--skipped {
+  border-color: color-mix(in srgb, var(--accent-info) 55%, var(--border-default));
+  color: var(--accent-info);
+}
+
 .button-link {
   align-items: center;
   border: 1px solid var(--border-default);

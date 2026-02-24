@@ -1,11 +1,13 @@
 import Link from 'next/link';
+import type { DashboardRunSummary } from '../../src/server/dashboard-contracts';
+import { loadDashboardRuns } from './load-dashboard-runs';
 import {
-  RUN_ROUTE_FIXTURES,
   buildRunDetailHref,
-  listRunsForFilter,
   normalizeRunFilter,
   resolveRunFilterHref,
-} from './run-route-fixtures';
+  type RunRouteFilter,
+} from './run-route-utils';
+import { toRunSummaryViewModels, type RunSummaryViewModel } from './run-view-models';
 import { ButtonLink, Card, StatusBadge, Tabs, type TabItem } from '../ui/primitives';
 
 const RUN_FILTER_TABS: readonly TabItem[] = [
@@ -14,16 +16,23 @@ const RUN_FILTER_TABS: readonly TabItem[] = [
   { href: '/runs?status=failed', label: 'Failed' },
 ];
 
+type RunsPageSearchParams = {
+  status?: string | string[];
+};
+
 type RunsPageProps = Readonly<{
-  searchParams?: {
-    status?: string | string[];
-  };
+  searchParams?: RunsPageSearchParams | Promise<RunsPageSearchParams>;
+  runs?: readonly DashboardRunSummary[];
 }>;
 
-export default function RunsPage({ searchParams }: RunsPageProps) {
+export function RunsPageContent({ runs, searchParams }: Readonly<{
+  runs: readonly DashboardRunSummary[];
+  searchParams?: RunsPageSearchParams;
+}>) {
   const activeFilter = normalizeRunFilter(searchParams?.status);
   const activeHref = resolveRunFilterHref(activeFilter);
-  const visibleRuns = listRunsForFilter(activeFilter);
+  const runViewModels = toRunSummaryViewModels(runs);
+  const visibleRuns = filterRuns(runViewModels, activeFilter);
 
   return (
     <div className="page-stack">
@@ -50,8 +59,8 @@ export default function RunsPage({ searchParams }: RunsPageProps) {
             {visibleRuns.map((run) => (
               <li key={run.id}>
                 <div>
-                  <span>{`#${run.id} ${run.workflow}`}</span>
-                  <p className="meta-text">{run.repository}</p>
+                  <span>{`#${run.id} ${run.workflowLabel}`}</span>
+                  <p className="meta-text">{`${run.workflowMetaLabel} · Started ${run.startedAtLabel}`}</p>
                 </div>
                 <div className="action-row">
                   <StatusBadge status={run.status} />
@@ -64,8 +73,28 @@ export default function RunsPage({ searchParams }: RunsPageProps) {
           </ul>
         )}
 
-        <p className="meta-text">{`Total tracked runs: ${RUN_ROUTE_FIXTURES.length}`}</p>
+        <p className="meta-text">{`Total tracked runs: ${runViewModels.length}`}</p>
       </Card>
     </div>
   );
+}
+
+function filterRuns(
+  runs: readonly RunSummaryViewModel[],
+  filter: RunRouteFilter,
+): readonly RunSummaryViewModel[] {
+  if (filter === 'all') {
+    return runs;
+  }
+
+  return runs.filter((run) => run.status === filter);
+}
+
+export default async function RunsPage({ searchParams, runs }: RunsPageProps = {}) {
+  const [resolvedSearchParams, resolvedRuns] = await Promise.all([
+    searchParams,
+    runs ?? loadDashboardRuns(),
+  ]);
+
+  return <RunsPageContent runs={resolvedRuns} searchParams={resolvedSearchParams} />;
 }

@@ -1,66 +1,87 @@
-import { notFound } from 'next/navigation';
-import { buildRunWorktreeHref, findRunByParam, resolveWorktreePath } from '../../run-route-fixtures';
+import { buildRunDetailHref, buildRunWorktreeHref } from '../../run-route-utils';
+import {
+  resolveRunWorktreePath,
+  toRunSummaryViewModel,
+  toRunWorktreeViewModels,
+} from '../../run-view-models';
+import { loadDashboardRunWorktrees } from './load-dashboard-run-worktrees';
 import { ButtonLink, Card, Panel } from '../../../ui/primitives';
+
+type RunWorktreePageSearchParams = {
+  path?: string | string[];
+};
 
 type RunWorktreePageProps = Readonly<{
   params: Promise<{
     runId: string;
   }>;
-  searchParams?: Promise<{
-    path?: string | string[];
-  }>;
+  searchParams?: RunWorktreePageSearchParams | Promise<RunWorktreePageSearchParams>;
 }>;
+
+const WORKTREE_METADATA_NOTICE =
+  'File-level diffs are not available in the current backend contract. This view currently shows persisted worktree metadata only.';
 
 export default async function RunWorktreePage({ params, searchParams }: RunWorktreePageProps) {
   const { runId } = await params;
   const resolvedSearchParams = await searchParams;
-  const run = findRunByParam(runId);
-  if (run === null) {
-    notFound();
-  }
+  const loaded = await loadDashboardRunWorktrees(runId);
+  const run = toRunSummaryViewModel(loaded.run);
+  const worktrees = toRunWorktreeViewModels(loaded.worktrees);
 
-  if (run.worktree.files.length === 0) {
+  if (worktrees.length === 0) {
     return (
       <div className="page-stack">
         <section className="page-heading">
           <h2>{`Run #${run.id} worktree`}</h2>
-          <p>Changed-file explorer scoped to this run.</p>
+          <p>Metadata-first worktree explorer scoped to this run.</p>
         </section>
 
-        <Card title="No changed files" description="This run completed without file changes.">
+        <Card title="No worktree metadata" description="No persisted worktrees were recorded for this run.">
+          <p>{WORKTREE_METADATA_NOTICE}</p>
           <div className="action-row">
-            <ButtonLink href={`/runs/${run.id}`}>Back to Run</ButtonLink>
+            <ButtonLink href={buildRunDetailHref(run.id)}>Back to Run</ButtonLink>
           </div>
         </Card>
       </div>
     );
   }
 
-  const selectedPath = resolveWorktreePath(run, resolvedSearchParams?.path);
-  const fallbackFile = run.worktree.files[0];
-  if (!fallbackFile) {
-    notFound();
-  }
+  const selectedPath = resolveRunWorktreePath(worktrees, resolvedSearchParams?.path);
+  const selectedWorktree = worktrees.find((worktree) => worktree.path === selectedPath) ?? worktrees[0];
 
-  const selectedFile = run.worktree.files.find((file) => file.path === selectedPath) ?? fallbackFile;
+  if (!selectedWorktree) {
+    return (
+      <div className="page-stack">
+        <section className="page-heading">
+          <h2>{`Run #${run.id} worktree`}</h2>
+        </section>
+        <Card title="Worktree metadata unavailable">
+          <p>No selectable worktree metadata was found.</p>
+          <div className="action-row">
+            <ButtonLink href={buildRunDetailHref(run.id)}>Back to Run</ButtonLink>
+          </div>
+        </Card>
+      </div>
+    );
+  }
 
   return (
     <div className="page-stack">
       <section className="page-heading">
         <h2>{`Run #${run.id} worktree`}</h2>
-        <p>{`Branch ${run.worktree.branch} with ${run.worktree.files.length} tracked files.`}</p>
+        <p>{`${run.workflowMetaLabel} with ${worktrees.length} tracked worktree entries.`}</p>
       </section>
 
       <div className="page-grid">
-        <Card title="Changed files" description="Default selection is the first changed file.">
-          <ul className="page-stack" aria-label="Worktree files">
-            {run.worktree.files.map((file) => {
-              const tone = file.path === selectedFile.path ? 'primary' : 'secondary';
+        <Card title="Tracked worktrees" description="Select a recorded worktree path.">
+          <ul className="page-stack" aria-label="Run worktrees">
+            {worktrees.map((worktree) => {
+              const tone = worktree.path === selectedWorktree.path ? 'primary' : 'secondary';
 
               return (
-                <li key={file.path}>
-                  <ButtonLink href={buildRunWorktreeHref(run.id, file.path)} tone={tone}>
-                    {file.changed ? `${file.path} *` : file.path}
+                <li key={worktree.id}>
+                  <ButtonLink href={buildRunWorktreeHref(run.id, worktree.path)} tone={tone}>
+                    {worktree.path}
                   </ButtonLink>
                 </li>
               );
@@ -68,17 +89,36 @@ export default async function RunWorktreePage({ params, searchParams }: RunWorkt
           </ul>
         </Card>
 
-        <Panel title="Preview" description="Diff and content preview for selected file">
-          <p className="meta-text">{selectedFile.path}</p>
-          <p>{selectedFile.preview}</p>
-          <pre className="code-preview" aria-label="File diff preview">
-            {selectedFile.diff}
-          </pre>
+        <Panel title="Worktree metadata" description="Persisted metadata for the selected worktree">
+          <p>{WORKTREE_METADATA_NOTICE}</p>
+          <ul className="entity-list">
+            <li>
+              <span>Path</span>
+              <span className="meta-text">{selectedWorktree.path}</span>
+            </li>
+            <li>
+              <span>Branch</span>
+              <span className="meta-text">{selectedWorktree.branch}</span>
+            </li>
+            <li>
+              <span>Status</span>
+              <span className="meta-text">{selectedWorktree.status}</span>
+            </li>
+            <li>
+              <span>Commit</span>
+              <span className="meta-text">{selectedWorktree.commitHashLabel}</span>
+            </li>
+            <li>
+              <span>Created</span>
+              <span className="meta-text">{selectedWorktree.createdAtLabel}</span>
+            </li>
+            <li>
+              <span>Removed</span>
+              <span className="meta-text">{selectedWorktree.removedAtLabel}</span>
+            </li>
+          </ul>
           <div className="action-row">
-            <ButtonLink href={buildRunWorktreeHref(run.id, selectedFile.path)} tone="primary">
-              View Diff
-            </ButtonLink>
-            <ButtonLink href={`/runs/${run.id}`}>Back to Run</ButtonLink>
+            <ButtonLink href={buildRunDetailHref(run.id)}>Back to Run</ButtonLink>
           </div>
         </Panel>
       </div>

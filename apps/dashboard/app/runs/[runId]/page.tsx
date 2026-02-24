@@ -1,10 +1,10 @@
-import { notFound } from 'next/navigation';
+import { buildRunWorktreeHref } from '../run-route-utils';
 import {
-  buildRunWorktreeHref,
-  findRunByParam,
-  resolveWorktreePath,
-  type RunRouteRecord,
-} from '../run-route-fixtures';
+  resolveRunWorktreePath,
+  toRunDetailViewModel,
+  type RunDetailViewModel,
+} from '../run-view-models';
+import { loadDashboardRunDetail } from './load-dashboard-run-detail';
 import { ActionButton, ButtonLink, Card, Panel, StatusBadge } from '../../ui/primitives';
 
 type RunDetailPageProps = Readonly<{
@@ -13,11 +13,13 @@ type RunDetailPageProps = Readonly<{
   }>;
 }>;
 
-function renderPrimaryAction(run: RunRouteRecord) {
+function renderPrimaryAction(run: RunDetailViewModel) {
   if (run.status === 'completed') {
+    const defaultWorktreePath = resolveRunWorktreePath(run.worktrees, undefined) ?? undefined;
+
     return (
       <ButtonLink
-        href={buildRunWorktreeHref(run.id, resolveWorktreePath(run, undefined) ?? undefined)}
+        href={buildRunWorktreeHref(run.id, defaultWorktreePath)}
         tone="primary"
       >
         Open Worktree
@@ -25,11 +27,12 @@ function renderPrimaryAction(run: RunRouteRecord) {
     );
   }
 
-  const labelByStatus: Record<Exclude<RunRouteRecord['status'], 'completed'>, string> = {
+  const labelByStatus: Record<Exclude<RunDetailViewModel['status'], 'completed'>, string> = {
     pending: 'Pending Start',
     running: 'Pause',
     paused: 'Resume',
     failed: 'Retry Failed Node',
+    cancelled: 'Run Cancelled',
   };
 
   return (
@@ -41,10 +44,8 @@ function renderPrimaryAction(run: RunRouteRecord) {
 
 export default async function RunDetailPage({ params }: RunDetailPageProps) {
   const { runId } = await params;
-  const run = findRunByParam(runId);
-  if (run === null) {
-    notFound();
-  }
+  const detail = await loadDashboardRunDetail(runId);
+  const run = toRunDetailViewModel(detail);
 
   return (
     <div className="page-stack">
@@ -62,11 +63,11 @@ export default async function RunDetailPage({ params }: RunDetailPageProps) {
             </li>
             <li>
               <span>Workflow</span>
-              <span className="meta-text">{run.workflow}</span>
+              <span className="meta-text">{run.workflowLabel}</span>
             </li>
             <li>
-              <span>Repository</span>
-              <span className="meta-text">{run.repository}</span>
+              <span>Tree</span>
+              <span className="meta-text">{run.workflowMetaLabel}</span>
             </li>
             <li>
               <span>Started</span>
@@ -74,7 +75,11 @@ export default async function RunDetailPage({ params }: RunDetailPageProps) {
             </li>
             <li>
               <span>Completed</span>
-              <span className="meta-text">{run.completedAtLabel ?? 'in progress'}</span>
+              <span className="meta-text">{run.completedAtLabel}</span>
+            </li>
+            <li>
+              <span>Created</span>
+              <span className="meta-text">{run.createdAtLabel}</span>
             </li>
           </ul>
         </Card>
@@ -84,49 +89,68 @@ export default async function RunDetailPage({ params }: RunDetailPageProps) {
             {renderPrimaryAction(run)}
             <ButtonLink href="/runs">Back to Runs</ButtonLink>
           </div>
+          <p className="meta-text">{`Node summary: ${run.nodeSummaryLabel}`}</p>
+          <p className="meta-text">{`Worktrees tracked: ${run.worktrees.length}`}</p>
         </Panel>
       </div>
 
       <div className="page-grid">
-        <Card title="Timeline" description="Latest run events">
-          <ol className="page-stack" aria-label="Run timeline">
-            {run.timeline.map((event) => (
-              <li key={`${event.timestamp}-${event.summary}`}>
-                <p className="meta-text">{event.timestamp}</p>
-                <p>{event.summary}</p>
-              </li>
-            ))}
-          </ol>
-        </Card>
+        <Panel title="Node status" description="Node lifecycle snapshot from backend data">
+          {run.nodes.length === 0 ? (
+            <p>No node snapshots are available for this run yet.</p>
+          ) : (
+            <ul className="entity-list">
+              {run.nodes.map((node) => (
+                <li key={node.id}>
+                  <div>
+                    <span>{node.nodeKey}</span>
+                    <p className="meta-text">{`${node.attemptLabel} · Started ${node.startedAtLabel}`}</p>
+                    {node.latestArtifactLabel ? (
+                      <p className="meta-text">{`Latest artifact: ${node.latestArtifactLabel}`}</p>
+                    ) : null}
+                    {node.latestRoutingDecisionLabel ? (
+                      <p className="meta-text">{`Latest routing: ${node.latestRoutingDecisionLabel}`}</p>
+                    ) : null}
+                  </div>
+                  <StatusBadge status={node.status} />
+                </li>
+              ))}
+            </ul>
+          )}
+        </Panel>
 
-        <Panel title="Node status" description="Node lifecycle snapshot">
-          <ul className="entity-list">
-            {run.nodes.map((node) => (
-              <li key={node.nodeKey}>
-                <span>{node.nodeKey}</span>
-                <StatusBadge status={node.status} />
+        <Card title="Artifacts" description="Recent artifact snapshots">
+          {run.artifacts.length === 0 ? (
+            <p>No artifacts recorded for this run.</p>
+          ) : (
+            <ul className="page-stack" aria-label="Run artifacts">
+              {run.artifacts.map((artifact) => (
+                <li key={artifact.id}>
+                  <p>{artifact.artifactLabel}</p>
+                  <p className="meta-text">{`${artifact.runNodeLabel} · ${artifact.createdAtLabel}`}</p>
+                  <p>{artifact.preview}</p>
+                </li>
+              ))}
+            </ul>
+          )}
+        </Card>
+      </div>
+
+      <Card title="Routing decisions" description="Recent routing outcomes">
+        {run.routingDecisions.length === 0 ? (
+          <p>No routing decisions recorded for this run.</p>
+        ) : (
+          <ul className="page-stack" aria-label="Run routing decisions">
+            {run.routingDecisions.map((decision) => (
+              <li key={decision.id}>
+                <p>{decision.decisionLabel}</p>
+                <p className="meta-text">{`${decision.runNodeLabel} · ${decision.createdAtLabel}`}</p>
+                <p>{decision.rationaleLabel}</p>
               </li>
             ))}
           </ul>
-        </Panel>
-      </div>
-
-      <Card title="Artifacts and routing decisions">
-        <p className="meta-text">Artifacts</p>
-        <ul className="page-stack" aria-label="Run artifacts">
-          {run.artifacts.map((artifact) => (
-            <li key={artifact}>{artifact}</li>
-          ))}
-        </ul>
-
-        <p className="meta-text">Routing decisions</p>
-        <ul className="page-stack" aria-label="Run routing decisions">
-          {run.routingDecisions.map((decision) => (
-            <li key={decision}>{decision}</li>
-          ))}
-        </ul>
+        )}
       </Card>
     </div>
   );
 }
-

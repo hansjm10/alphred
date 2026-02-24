@@ -2,7 +2,7 @@ import Link from 'next/link';
 import type { ComponentPropsWithoutRef, ReactNode } from 'react';
 
 type SurfaceTone = 'default' | 'subtle';
-export type StatusVariant = 'pending' | 'running' | 'completed' | 'failed' | 'paused';
+export type StatusVariant = 'pending' | 'running' | 'completed' | 'failed' | 'paused' | 'cancelled' | 'skipped';
 type ButtonTone = 'primary' | 'secondary';
 
 type CardProps = ComponentPropsWithoutRef<'section'> & {
@@ -48,6 +48,8 @@ const STATUS_VARIANTS: Record<StatusVariant, { icon: string; label: string }> = 
   completed: { icon: '*', label: 'Completed' },
   failed: { icon: 'x', label: 'Failed' },
   paused: { icon: '||', label: 'Paused' },
+  cancelled: { icon: '!', label: 'Cancelled' },
+  skipped: { icon: '>>', label: 'Skipped' },
 };
 
 function classNames(...parts: (string | undefined | false)[]): string {

@@ -1,28 +1,29 @@
 import Link from 'next/link';
 import type { ReactNode } from 'react';
-import {
-  RUN_ROUTE_FIXTURES,
-  buildRunDetailHref,
-  type RunRouteRecord,
-} from './runs/run-route-fixtures';
+import type { DashboardRunSummary } from '../src/server/dashboard-contracts';
+import { loadDashboardRuns } from './runs/load-dashboard-runs';
+import { buildRunDetailHref } from './runs/run-route-utils';
+import { isActiveRunStatus, toRunSummaryViewModels } from './runs/run-view-models';
 import { AuthRemediation } from './ui/auth-remediation';
 import type { GitHubAuthGate } from './ui/github-auth';
 import { loadGitHubAuthGate } from './ui/load-github-auth-gate';
 import { ActionButton, ButtonLink, Card, Panel, StatusBadge } from './ui/primitives';
 
 type PageProps = Readonly<{
-  activeRuns?: readonly RunRouteRecord[];
+  activeRuns?: readonly DashboardRunSummary[];
   authGate?: GitHubAuthGate;
 }>;
 
-function listDefaultActiveRuns(): readonly RunRouteRecord[] {
-  return RUN_ROUTE_FIXTURES.filter((run) => run.status === 'running' || run.status === 'paused');
+function listDefaultActiveRuns(runs: readonly DashboardRunSummary[]): readonly DashboardRunSummary[] {
+  return runs.filter((run) => isActiveRunStatus(run.status));
 }
 
 export function OverviewPageContent({ activeRuns, authGate }: Readonly<{
-  activeRuns: readonly RunRouteRecord[];
+  activeRuns: readonly DashboardRunSummary[];
   authGate: GitHubAuthGate;
 }>) {
+  const visibleRuns = toRunSummaryViewModels(activeRuns);
+
   let launchAction: ReactNode;
   if (authGate.canMutate) {
     launchAction = (
@@ -75,7 +76,7 @@ export function OverviewPageContent({ activeRuns, authGate }: Readonly<{
           <p className="meta-text">{`Last checked: ${authGate.checkedAtLabel}`}</p>
 
           <p className="meta-text">Active runs</p>
-          {activeRuns.length === 0 ? (
+          {visibleRuns.length === 0 ? (
             <div className="page-stack">
               <h3>No active runs</h3>
               <p>Connect GitHub, sync a repository, and launch your first run.</p>
@@ -86,9 +87,12 @@ export function OverviewPageContent({ activeRuns, authGate }: Readonly<{
             </div>
           ) : (
             <ul className="entity-list">
-              {activeRuns.map((run) => (
+              {visibleRuns.map((run) => (
                 <li key={run.id}>
-                  <Link href={buildRunDetailHref(run.id)}>{`Run #${run.id} ${run.workflow}`}</Link>
+                  <div>
+                    <Link href={buildRunDetailHref(run.id)}>{`Run #${run.id} ${run.workflowLabel}`}</Link>
+                    <p className="meta-text">{`${run.workflowMetaLabel} · ${run.nodeSummaryLabel}`}</p>
+                  </div>
                   <StatusBadge status={run.status} />
                 </li>
               ))}
@@ -110,12 +114,14 @@ export function OverviewPageContent({ activeRuns, authGate }: Readonly<{
 }
 
 export default async function Page({ activeRuns, authGate }: PageProps = {}) {
-  const visibleActiveRuns = activeRuns ?? listDefaultActiveRuns();
-  const resolvedAuthGate = authGate ?? (await loadGitHubAuthGate());
+  const [resolvedActiveRuns, resolvedAuthGate] = await Promise.all([
+    activeRuns ?? loadDashboardRuns().then((runs) => listDefaultActiveRuns(runs)),
+    authGate ?? loadGitHubAuthGate(),
+  ]);
 
   return (
     <OverviewPageContent
-      activeRuns={visibleActiveRuns}
+      activeRuns={resolvedActiveRuns}
       authGate={resolvedAuthGate}
     />
   );
