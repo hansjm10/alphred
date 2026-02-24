@@ -1501,6 +1501,144 @@ function resolvePayloadStorageSummary(diagnostics: DashboardRunDetail['diagnosti
   return `Payload normalized with ${normalizationActions.join(' and ')}.`;
 }
 
+type RunAgentStreamCardProps = Readonly<{
+  detail: DashboardRunDetail;
+  streamTarget: AgentStreamTarget | null;
+  selectedStreamNode: DashboardRunDetail['nodes'][number] | null;
+  agentStreamLabel: ReturnType<typeof resolveAgentStreamLabel>;
+  streamConnectionState: AgentStreamConnectionState;
+  streamLastUpdatedAtMs: number;
+  hasHydrated: boolean;
+  streamAutoScroll: boolean;
+  streamBufferedEvents: readonly DashboardRunNodeStreamEvent[];
+  streamError: string | null;
+  streamEvents: readonly DashboardRunNodeStreamEvent[];
+  streamEventListRef: { current: HTMLOListElement | null };
+  setStreamTarget: StateSetter<AgentStreamTarget | null>;
+  setStreamAutoScroll: StateSetter<boolean>;
+  setStreamBufferedEvents: StateSetter<DashboardRunNodeStreamEvent[]>;
+  setStreamEvents: StateSetter<DashboardRunNodeStreamEvent[]>;
+}>;
+
+function RunAgentStreamCard({
+  detail,
+  streamTarget,
+  selectedStreamNode,
+  agentStreamLabel,
+  streamConnectionState,
+  streamLastUpdatedAtMs,
+  hasHydrated,
+  streamAutoScroll,
+  streamBufferedEvents,
+  streamError,
+  streamEvents,
+  streamEventListRef,
+  setStreamTarget,
+  setStreamAutoScroll,
+  setStreamBufferedEvents,
+  setStreamEvents,
+}: RunAgentStreamCardProps) {
+  return (
+    <Card title="Agent stream" description="Live provider events for a selected node attempt.">
+      <ul className="entity-list run-node-status-list" aria-label="Agent stream targets">
+        {detail.nodes.length > 0 ? (
+          detail.nodes.map((node) => {
+            const selected = streamTarget?.runNodeId === node.id && streamTarget.attempt === node.attempt;
+            const canOpenStream = node.status === 'running' || node.status === 'completed' || node.status === 'failed';
+
+            return (
+              <li key={`stream-target-${node.id}-${node.attempt}`}>
+                <ActionButton
+                  className={`run-node-filter${selected ? ' run-node-filter--selected' : ''}`}
+                  aria-pressed={selected}
+                  disabled={!canOpenStream}
+                  onClick={() => {
+                    setStreamTarget(toAgentStreamTarget(node));
+                    setStreamAutoScroll(true);
+                    setStreamBufferedEvents([]);
+                  }}
+                >
+                  {`${node.nodeKey} (attempt ${node.attempt})`}
+                </ActionButton>
+                <StatusBadge status={node.status} />
+              </li>
+            );
+          })
+        ) : (
+          <li>
+            <span>No run nodes have been materialized yet.</span>
+          </li>
+        )}
+      </ul>
+
+      {selectedStreamNode ? (
+        <>
+          <output className={`run-realtime-status run-realtime-status--${streamConnectionState}`} aria-live="polite">
+            <span className="run-realtime-status__badge">{agentStreamLabel.badgeLabel}</span>
+            <span className="meta-text">{agentStreamLabel.detail}</span>
+            <span className="meta-text">
+              {`Node ${selectedStreamNode.nodeKey} (attempt ${selectedStreamNode.attempt}) · last update ${formatLastUpdated(streamLastUpdatedAtMs, hasHydrated)}.`}
+            </span>
+          </output>
+
+          <div className="action-row run-agent-stream-controls">
+            <ActionButton
+              onClick={() => {
+                if (streamAutoScroll) {
+                  setStreamAutoScroll(false);
+                  return;
+                }
+
+                setStreamAutoScroll(true);
+                setStreamEvents(previous => mergeAgentStreamEvents(previous, streamBufferedEvents));
+                setStreamBufferedEvents([]);
+              }}
+            >
+              {streamAutoScroll ? 'Pause auto-scroll' : 'Resume auto-scroll'}
+            </ActionButton>
+            {streamBufferedEvents.length > 0 ? (
+              <span className="meta-text">{`${streamBufferedEvents.length} new events buffered.`}</span>
+            ) : null}
+          </div>
+
+          {streamError && (streamConnectionState === 'reconnecting' || streamConnectionState === 'stale') ? (
+            <output className="run-realtime-warning" aria-live="polite">
+              {`Agent stream degraded: ${streamError}`}
+            </output>
+          ) : null}
+
+          <ol ref={streamEventListRef} className="page-stack run-agent-stream-events" aria-label="Agent stream events">
+            {streamEvents.length > 0 ? (
+              streamEvents.map((event) => (
+                <li key={`${event.runNodeId}-${event.attempt}-${event.sequence}`} className="run-agent-stream-event">
+                  <p className="meta-text">{`#${event.sequence} · ${formatStreamTimestamp(event.timestamp)}`}</p>
+                  <p>
+                    <span className={`run-agent-stream-event-type run-agent-stream-event-type--${event.type}`}>
+                      {event.type}
+                    </span>{' '}
+                    {event.contentPreview.length > 0 ? event.contentPreview : '(no content)'}
+                  </p>
+                  {event.usage ? (
+                    <p className="meta-text">
+                      {`Usage Δ ${event.usage.deltaTokens ?? 'n/a'} · cumulative ${event.usage.cumulativeTokens ?? 'n/a'}`}
+                    </p>
+                  ) : null}
+                </li>
+              ))
+            ) : (
+              <li>
+                <p>No streamed events captured yet for this node attempt.</p>
+              </li>
+            )}
+          </ol>
+        </>
+      ) : (
+        <p>Select a running node to open its Agent Stream panel.</p>
+      )}
+    </Card>
+  );
+}
+
 type RunObservabilityCardProps = Readonly<{
   detail: DashboardRunDetail;
 }>;
@@ -1912,103 +2050,24 @@ export function RunDetailContent({
         </Panel>
       </div>
 
-      <Card title="Agent stream" description="Live provider events for a selected node attempt.">
-        <ul className="entity-list run-node-status-list" aria-label="Agent stream targets">
-          {detail.nodes.length > 0 ? (
-            detail.nodes.map((node) => {
-              const selected = streamTarget?.runNodeId === node.id && streamTarget.attempt === node.attempt;
-              const canOpenStream = node.status === 'running' || node.status === 'completed' || node.status === 'failed';
-
-              return (
-                <li key={`stream-target-${node.id}-${node.attempt}`}>
-                  <ActionButton
-                    className={`run-node-filter${selected ? ' run-node-filter--selected' : ''}`}
-                    aria-pressed={selected}
-                    disabled={!canOpenStream}
-                    onClick={() => {
-                      setStreamTarget(toAgentStreamTarget(node));
-                      setStreamAutoScroll(true);
-                      setStreamBufferedEvents([]);
-                    }}
-                  >
-                    {`${node.nodeKey} (attempt ${node.attempt})`}
-                  </ActionButton>
-                  <StatusBadge status={node.status} />
-                </li>
-              );
-            })
-          ) : (
-            <li>
-              <span>No run nodes have been materialized yet.</span>
-            </li>
-          )}
-        </ul>
-
-        {selectedStreamNode ? (
-          <>
-            <output className={`run-realtime-status run-realtime-status--${streamConnectionState}`} aria-live="polite">
-              <span className="run-realtime-status__badge">{agentStreamLabel.badgeLabel}</span>
-              <span className="meta-text">{agentStreamLabel.detail}</span>
-              <span className="meta-text">
-                {`Node ${selectedStreamNode.nodeKey} (attempt ${selectedStreamNode.attempt}) · last update ${formatLastUpdated(streamLastUpdatedAtMs, hasHydrated)}.`}
-              </span>
-            </output>
-
-            <div className="action-row run-agent-stream-controls">
-              <ActionButton
-                onClick={() => {
-                  if (streamAutoScroll) {
-                    setStreamAutoScroll(false);
-                    return;
-                  }
-
-                  setStreamAutoScroll(true);
-                  setStreamEvents(previous => mergeAgentStreamEvents(previous, streamBufferedEvents));
-                  setStreamBufferedEvents([]);
-                }}
-              >
-                {streamAutoScroll ? 'Pause auto-scroll' : 'Resume auto-scroll'}
-              </ActionButton>
-              {streamBufferedEvents.length > 0 ? (
-                <span className="meta-text">{`${streamBufferedEvents.length} new events buffered.`}</span>
-              ) : null}
-            </div>
-
-            {streamError && (streamConnectionState === 'reconnecting' || streamConnectionState === 'stale') ? (
-              <output className="run-realtime-warning" aria-live="polite">
-                {`Agent stream degraded: ${streamError}`}
-              </output>
-            ) : null}
-
-            <ol ref={streamEventListRef} className="page-stack run-agent-stream-events" aria-label="Agent stream events">
-              {streamEvents.length > 0 ? (
-                streamEvents.map((event) => (
-                  <li key={`${event.runNodeId}-${event.attempt}-${event.sequence}`} className="run-agent-stream-event">
-                    <p className="meta-text">{`#${event.sequence} · ${formatStreamTimestamp(event.timestamp)}`}</p>
-                    <p>
-                      <span className={`run-agent-stream-event-type run-agent-stream-event-type--${event.type}`}>
-                        {event.type}
-                      </span>{' '}
-                      {event.contentPreview.length > 0 ? event.contentPreview : '(no content)'}
-                    </p>
-                    {event.usage ? (
-                      <p className="meta-text">
-                        {`Usage Δ ${event.usage.deltaTokens ?? 'n/a'} · cumulative ${event.usage.cumulativeTokens ?? 'n/a'}`}
-                      </p>
-                    ) : null}
-                  </li>
-                ))
-              ) : (
-                <li>
-                  <p>No streamed events captured yet for this node attempt.</p>
-                </li>
-              )}
-            </ol>
-          </>
-        ) : (
-          <p>Select a running node to open its Agent Stream panel.</p>
-        )}
-      </Card>
+      <RunAgentStreamCard
+        detail={detail}
+        streamTarget={streamTarget}
+        selectedStreamNode={selectedStreamNode}
+        agentStreamLabel={agentStreamLabel}
+        streamConnectionState={streamConnectionState}
+        streamLastUpdatedAtMs={streamLastUpdatedAtMs}
+        hasHydrated={hasHydrated}
+        streamAutoScroll={streamAutoScroll}
+        streamBufferedEvents={streamBufferedEvents}
+        streamError={streamError}
+        streamEvents={streamEvents}
+        streamEventListRef={streamEventListRef}
+        setStreamTarget={setStreamTarget}
+        setStreamAutoScroll={setStreamAutoScroll}
+        setStreamBufferedEvents={setStreamBufferedEvents}
+        setStreamEvents={setStreamEvents}
+      />
 
       <RunObservabilityCard detail={detail} />
     </div>
