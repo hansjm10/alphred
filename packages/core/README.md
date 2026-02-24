@@ -66,6 +66,13 @@ Context handoff into downstream provider executions is intentionally bounded and
 Full policy specification:
 - `packages/core/docs/upstream-artifact-handoff-policy-v1.md`
 
+## Persisted Run-Node Diagnostics (Inspection Only)
+
+- Each completed attempt persists one immutable diagnostics snapshot keyed by `(workflow_run_id, run_node_id, attempt)`.
+- Diagnostics include deterministic event indexing/timestamps, usage snapshots (when present), tool-event summaries, timing markers, and structured failure classification.
+- Payloads are bounded with deterministic truncation metadata and redaction for sensitive keys/patterns.
+- Diagnostics are persisted for operator inspection and are not re-injected into provider execution context.
+
 ## Retry and Iteration Limits
 
 - Node retries are enforced from `tree_nodes.max_retries`, using `run_nodes.attempt` as the persisted attempt counter.

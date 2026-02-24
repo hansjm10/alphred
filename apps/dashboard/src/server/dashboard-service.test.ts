@@ -7,6 +7,7 @@ import {
   phaseArtifacts,
   promptTemplates,
   repositories,
+  runNodeDiagnostics,
   routingDecisions,
   runNodes,
   runWorktrees,
@@ -195,6 +196,57 @@ function seedRunData(db: AlphredDatabase): void {
       rationale: 'Quality checks passed.',
       rawOutput: null,
       createdAt: '2026-02-17T20:02:01.000Z',
+    })
+    .run();
+
+  db.insert(runNodeDiagnostics)
+    .values({
+      workflowRunId: runId,
+      runNodeId,
+      attempt: 1,
+      outcome: 'completed',
+      eventCount: 3,
+      retainedEventCount: 3,
+      droppedEventCount: 0,
+      redacted: 0,
+      truncated: 0,
+      payloadChars: 512,
+      diagnostics: {
+        schemaVersion: 1,
+        workflowRunId: runId,
+        runNodeId,
+        nodeKey: 'design',
+        attempt: 1,
+        outcome: 'completed',
+        status: 'completed',
+        provider: 'codex',
+        timing: {
+          queuedAt: '2026-02-17T20:01:00.000Z',
+          startedAt: '2026-02-17T20:01:00.000Z',
+          completedAt: '2026-02-17T20:02:00.000Z',
+          failedAt: null,
+          persistedAt: '2026-02-17T20:02:02.000Z',
+        },
+        summary: {
+          tokensUsed: 42,
+          eventCount: 3,
+          retainedEventCount: 3,
+          droppedEventCount: 0,
+          toolEventCount: 0,
+          redacted: false,
+          truncated: false,
+        },
+        contextHandoff: {},
+        eventTypeCounts: {
+          system: 1,
+          result: 1,
+        },
+        events: [],
+        toolEvents: [],
+        routingDecision: 'approved',
+        error: null,
+      },
+      createdAt: '2026-02-17T20:02:02.000Z',
     })
     .run();
 
@@ -572,6 +624,8 @@ describe('createDashboardService', () => {
     expect(runDetail.nodes).toHaveLength(1);
     expect(runDetail.nodes[0]?.latestArtifact?.artifactType).toBe('report');
     expect(runDetail.nodes[0]?.latestRoutingDecision?.decisionType).toBe('approved');
+    expect(runDetail.nodes[0]?.latestDiagnostics?.outcome).toBe('completed');
+    expect(runDetail.diagnostics).toHaveLength(1);
     expect(runDetail.worktrees).toHaveLength(1);
   });
 

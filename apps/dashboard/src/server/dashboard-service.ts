@@ -14,6 +14,7 @@ import {
   phaseArtifacts,
   promptTemplates,
   repositories as repositoryTable,
+  runNodeDiagnostics,
   routingDecisions,
   runNodes,
   runWorktrees,
@@ -47,19 +48,21 @@ import type {
   DashboardRunDetail,
   DashboardRunLaunchRequest,
   DashboardRunLaunchResult,
+  DashboardRunNodeDiagnosticPayload,
+  DashboardRunNodeDiagnosticsSnapshot,
   DashboardRunNodeSnapshot,
-	  DashboardRunSummary,
-	  DashboardRunWorktreeMetadata,
-	  DashboardCreateWorkflowRequest,
-	  DashboardCreateWorkflowResult,
-	  DashboardDuplicateWorkflowRequest,
-	  DashboardDuplicateWorkflowResult,
-	  DashboardPublishWorkflowDraftRequest,
-	  DashboardSaveWorkflowDraftRequest,
-	  DashboardWorkflowCatalogItem,
-	  DashboardWorkflowDraftTopology,
-	  DashboardWorkflowTreeKeyAvailability,
-	  DashboardWorkflowTreeSnapshot,
+  DashboardRunSummary,
+  DashboardRunWorktreeMetadata,
+  DashboardCreateWorkflowRequest,
+  DashboardCreateWorkflowResult,
+  DashboardDuplicateWorkflowRequest,
+  DashboardDuplicateWorkflowResult,
+  DashboardPublishWorkflowDraftRequest,
+  DashboardSaveWorkflowDraftRequest,
+  DashboardWorkflowCatalogItem,
+  DashboardWorkflowDraftTopology,
+  DashboardWorkflowTreeKeyAvailability,
+  DashboardWorkflowTreeSnapshot,
   DashboardWorkflowValidationIssue,
   DashboardWorkflowValidationResult,
   DashboardWorkflowTreeSummary,
@@ -308,6 +311,7 @@ function selectLatestNodeAttempts(
       completedAt: node.completedAt,
       latestArtifact: null,
       latestRoutingDecision: null,
+      latestDiagnostics: null,
     }));
 }
 
@@ -360,6 +364,80 @@ function createRoutingDecisionSnapshot(
     decisionType: decision.decisionType as DashboardRoutingDecisionSnapshot['decisionType'],
     rationale: decision.rationale,
     createdAt: decision.createdAt,
+  };
+}
+
+function isRecordValue(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function createRunNodeDiagnosticsSnapshot(
+  diagnosticsRow: {
+    id: number;
+    workflowRunId: number;
+    runNodeId: number;
+    attempt: number;
+    outcome: string;
+    eventCount: number;
+    retainedEventCount: number;
+    droppedEventCount: number;
+    redacted: number;
+    truncated: number;
+    payloadChars: number;
+    createdAt: string;
+    diagnostics: unknown;
+  },
+): DashboardRunNodeDiagnosticsSnapshot {
+  const fallbackPayload: DashboardRunNodeDiagnosticPayload = {
+    schemaVersion: 1,
+    workflowRunId: diagnosticsRow.workflowRunId,
+    runNodeId: diagnosticsRow.runNodeId,
+    nodeKey: 'unknown',
+    attempt: diagnosticsRow.attempt,
+    outcome: diagnosticsRow.outcome as DashboardRunNodeDiagnosticPayload['outcome'],
+    status: diagnosticsRow.outcome as DashboardRunNodeDiagnosticPayload['status'],
+    provider: null,
+    timing: {
+      queuedAt: null,
+      startedAt: null,
+      completedAt: null,
+      failedAt: null,
+      persistedAt: diagnosticsRow.createdAt,
+    },
+    summary: {
+      tokensUsed: 0,
+      eventCount: diagnosticsRow.eventCount,
+      retainedEventCount: diagnosticsRow.retainedEventCount,
+      droppedEventCount: diagnosticsRow.droppedEventCount,
+      toolEventCount: 0,
+      redacted: diagnosticsRow.redacted === 1,
+      truncated: diagnosticsRow.truncated === 1,
+    },
+    contextHandoff: {},
+    eventTypeCounts: {},
+    events: [],
+    toolEvents: [],
+    routingDecision: null,
+    error: null,
+  };
+
+  const payload = isRecordValue(diagnosticsRow.diagnostics)
+    ? (diagnosticsRow.diagnostics as DashboardRunNodeDiagnosticPayload)
+    : fallbackPayload;
+
+  return {
+    id: diagnosticsRow.id,
+    runNodeId: diagnosticsRow.runNodeId,
+    attempt: diagnosticsRow.attempt,
+    outcome: diagnosticsRow.outcome as DashboardRunNodeDiagnosticsSnapshot['outcome'],
+    eventCount: diagnosticsRow.eventCount,
+    retainedEventCount: diagnosticsRow.retainedEventCount,
+    droppedEventCount: diagnosticsRow.droppedEventCount,
+    redacted: diagnosticsRow.redacted === 1,
+    truncated: diagnosticsRow.truncated === 1,
+    payloadChars: diagnosticsRow.payloadChars,
+    createdAt: diagnosticsRow.createdAt,
+    diagnostics: payload,
   };
 }
 
@@ -2514,6 +2592,28 @@ export function createDashboardService(options: {
           .limit(RECENT_SNAPSHOT_LIMIT)
           .all();
 
+        const recentDiagnostics = db
+          .select({
+            id: runNodeDiagnostics.id,
+            workflowRunId: runNodeDiagnostics.workflowRunId,
+            runNodeId: runNodeDiagnostics.runNodeId,
+            attempt: runNodeDiagnostics.attempt,
+            outcome: runNodeDiagnostics.outcome,
+            eventCount: runNodeDiagnostics.eventCount,
+            retainedEventCount: runNodeDiagnostics.retainedEventCount,
+            droppedEventCount: runNodeDiagnostics.droppedEventCount,
+            redacted: runNodeDiagnostics.redacted,
+            truncated: runNodeDiagnostics.truncated,
+            payloadChars: runNodeDiagnostics.payloadChars,
+            diagnostics: runNodeDiagnostics.diagnostics,
+            createdAt: runNodeDiagnostics.createdAt,
+          })
+          .from(runNodeDiagnostics)
+          .where(eq(runNodeDiagnostics.workflowRunId, runId))
+          .orderBy(desc(runNodeDiagnostics.createdAt), desc(runNodeDiagnostics.id))
+          .limit(RECENT_SNAPSHOT_LIMIT)
+          .all();
+
         const latestArtifactByRunNodeId = new Map<number, DashboardArtifactSnapshot>();
         for (const artifact of recentArtifacts) {
           if (!latestArtifactByRunNodeId.has(artifact.runNodeId)) {
@@ -2528,10 +2628,19 @@ export function createDashboardService(options: {
           }
         }
 
+        const recentDiagnosticsSnapshots = recentDiagnostics.map(createRunNodeDiagnosticsSnapshot);
+        const latestDiagnosticsByRunNodeId = new Map<number, DashboardRunNodeDiagnosticsSnapshot>();
+        for (const diagnostics of recentDiagnosticsSnapshots) {
+          if (!latestDiagnosticsByRunNodeId.has(diagnostics.runNodeId)) {
+            latestDiagnosticsByRunNodeId.set(diagnostics.runNodeId, diagnostics);
+          }
+        }
+
         const nodes: DashboardRunNodeSnapshot[] = latestNodes.map(node => ({
           ...node,
           latestArtifact: latestArtifactByRunNodeId.get(node.id) ?? null,
           latestRoutingDecision: latestDecisionByRunNodeId.get(node.id) ?? null,
+          latestDiagnostics: latestDiagnosticsByRunNodeId.get(node.id) ?? null,
         }));
 
         const allRunWorktrees = db
@@ -2556,6 +2665,7 @@ export function createDashboardService(options: {
           nodes,
           artifacts: recentArtifacts.map(createArtifactSnapshot),
           routingDecisions: recentDecisions.map(createRoutingDecisionSnapshot),
+          diagnostics: recentDiagnosticsSnapshots,
           worktrees: allRunWorktrees.map(toWorktreeMetadata),
         };
       });

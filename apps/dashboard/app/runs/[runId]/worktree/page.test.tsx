@@ -72,6 +72,7 @@ function createRunDetail(overrides: RunDetailOverrides = {}): DashboardRunDetail
     nodes: overrides.nodes ?? [],
     artifacts: overrides.artifacts ?? [],
     routingDecisions: overrides.routingDecisions ?? [],
+    diagnostics: overrides.diagnostics ?? [],
     worktrees: overrides.worktrees ?? [
       {
         id: 21,

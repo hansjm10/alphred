@@ -184,6 +184,80 @@ export type DashboardRoutingDecisionSnapshot = {
   createdAt: string;
 };
 
+export type DashboardRunNodeDiagnosticEvent = {
+  eventIndex: number;
+  type: 'system' | 'assistant' | 'result' | 'tool_use' | 'tool_result' | 'usage';
+  timestamp: number;
+  contentChars: number;
+  contentPreview: string;
+  metadata: Record<string, unknown> | null;
+  usage: {
+    deltaTokens: number | null;
+    cumulativeTokens: number | null;
+  } | null;
+};
+
+export type DashboardRunNodeDiagnosticToolEvent = {
+  eventIndex: number;
+  type: 'tool_use' | 'tool_result';
+  timestamp: number;
+  toolName: string | null;
+  summary: string;
+};
+
+export type DashboardRunNodeDiagnosticPayload = {
+  schemaVersion: number;
+  workflowRunId: number;
+  runNodeId: number;
+  nodeKey: string;
+  attempt: number;
+  outcome: 'completed' | 'failed';
+  status: 'completed' | 'failed';
+  provider: string | null;
+  timing: {
+    queuedAt: string | null;
+    startedAt: string | null;
+    completedAt: string | null;
+    failedAt: string | null;
+    persistedAt: string;
+  };
+  summary: {
+    tokensUsed: number;
+    eventCount: number;
+    retainedEventCount: number;
+    droppedEventCount: number;
+    toolEventCount: number;
+    redacted: boolean;
+    truncated: boolean;
+  };
+  contextHandoff: Record<string, unknown>;
+  eventTypeCounts: Partial<Record<DashboardRunNodeDiagnosticEvent['type'], number>>;
+  events: DashboardRunNodeDiagnosticEvent[];
+  toolEvents: DashboardRunNodeDiagnosticToolEvent[];
+  routingDecision: 'approved' | 'changes_requested' | 'blocked' | 'retry' | null;
+  error: {
+    name: string;
+    message: string;
+    classification: 'provider_result_missing' | 'timeout' | 'aborted' | 'unknown';
+    stackPreview: string | null;
+  } | null;
+};
+
+export type DashboardRunNodeDiagnosticsSnapshot = {
+  id: number;
+  runNodeId: number;
+  attempt: number;
+  outcome: 'completed' | 'failed';
+  eventCount: number;
+  retainedEventCount: number;
+  droppedEventCount: number;
+  redacted: boolean;
+  truncated: boolean;
+  payloadChars: number;
+  createdAt: string;
+  diagnostics: DashboardRunNodeDiagnosticPayload;
+};
+
 export type DashboardRunNodeSnapshot = {
   id: number;
   treeNodeId: number;
@@ -195,6 +269,7 @@ export type DashboardRunNodeSnapshot = {
   completedAt: string | null;
   latestArtifact: DashboardArtifactSnapshot | null;
   latestRoutingDecision: DashboardRoutingDecisionSnapshot | null;
+  latestDiagnostics: DashboardRunNodeDiagnosticsSnapshot | null;
 };
 
 export type DashboardRunWorktreeMetadata = {
@@ -214,6 +289,7 @@ export type DashboardRunDetail = {
   nodes: DashboardRunNodeSnapshot[];
   artifacts: DashboardArtifactSnapshot[];
   routingDecisions: DashboardRoutingDecisionSnapshot[];
+  diagnostics: DashboardRunNodeDiagnosticsSnapshot[];
   worktrees: DashboardRunWorktreeMetadata[];
 };
 

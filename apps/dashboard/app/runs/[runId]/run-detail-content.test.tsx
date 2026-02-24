@@ -27,6 +27,75 @@ type RunDetailOverrides = Omit<Partial<DashboardRunDetail>, 'run'> & Readonly<{
 }>;
 
 function createRunDetail(overrides: RunDetailOverrides = {}): DashboardRunDetail {
+  const defaultDiagnostics: DashboardRunDetail['diagnostics'][number] = {
+    id: 10,
+    runNodeId: 1,
+    attempt: 1,
+    outcome: 'completed',
+    eventCount: 3,
+    retainedEventCount: 3,
+    droppedEventCount: 0,
+    redacted: false,
+    truncated: false,
+    payloadChars: 512,
+    createdAt: '2026-02-18T00:00:32.000Z',
+    diagnostics: {
+      schemaVersion: 1,
+      workflowRunId: 412,
+      runNodeId: 1,
+      nodeKey: 'design',
+      attempt: 1,
+      outcome: 'completed',
+      status: 'completed',
+      provider: 'codex',
+      timing: {
+        queuedAt: '2026-02-18T00:00:00.000Z',
+        startedAt: '2026-02-18T00:00:10.000Z',
+        completedAt: '2026-02-18T00:00:30.000Z',
+        failedAt: null,
+        persistedAt: '2026-02-18T00:00:32.000Z',
+      },
+      summary: {
+        tokensUsed: 42,
+        eventCount: 3,
+        retainedEventCount: 3,
+        droppedEventCount: 0,
+        toolEventCount: 1,
+        redacted: false,
+        truncated: false,
+      },
+      contextHandoff: {},
+      eventTypeCounts: {
+        system: 1,
+        tool_use: 1,
+        result: 1,
+      },
+      events: [
+        {
+          eventIndex: 0,
+          type: 'system',
+          timestamp: 100,
+          contentChars: 5,
+          contentPreview: 'start',
+          metadata: null,
+          usage: null,
+        },
+      ],
+      toolEvents: [
+        {
+          eventIndex: 1,
+          type: 'tool_use',
+          timestamp: 101,
+          toolName: 'search',
+          summary: 'search()',
+        },
+      ],
+      routingDecision: 'approved',
+      error: null,
+    },
+  };
+  const diagnostics = overrides.diagnostics ?? (overrides.nodes === undefined ? [defaultDiagnostics] : []);
+
   return {
     run: {
       id: 412,
@@ -66,6 +135,7 @@ function createRunDetail(overrides: RunDetailOverrides = {}): DashboardRunDetail
         completedAt: '2026-02-18T00:00:30.000Z',
         latestArtifact: null,
         latestRoutingDecision: null,
+        latestDiagnostics: diagnostics[0] ?? null,
       },
       {
         id: 2,
@@ -78,6 +148,7 @@ function createRunDetail(overrides: RunDetailOverrides = {}): DashboardRunDetail
         completedAt: null,
         latestArtifact: null,
         latestRoutingDecision: null,
+        latestDiagnostics: null,
       },
     ],
     artifacts: overrides.artifacts ?? [
@@ -99,6 +170,7 @@ function createRunDetail(overrides: RunDetailOverrides = {}): DashboardRunDetail
         createdAt: '2026-02-18T00:00:31.000Z',
       },
     ],
+    diagnostics,
     worktrees: overrides.worktrees ?? [
       {
         id: 5,

@@ -368,3 +368,55 @@ export const phaseArtifacts = sqliteTable(
     createdAtIdx: index('phase_artifacts_created_at_idx').on(table.createdAt),
   }),
 );
+
+export const runNodeDiagnostics = sqliteTable(
+  'run_node_diagnostics',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    workflowRunId: integer('workflow_run_id')
+      .notNull()
+      .references(() => workflowRuns.id, { onDelete: 'cascade' }),
+    runNodeId: integer('run_node_id')
+      .notNull()
+      .references(() => runNodes.id, { onDelete: 'cascade' }),
+    attempt: integer('attempt').notNull(),
+    outcome: text('outcome').notNull(),
+    eventCount: integer('event_count').notNull().default(0),
+    retainedEventCount: integer('retained_event_count').notNull().default(0),
+    droppedEventCount: integer('dropped_event_count').notNull().default(0),
+    redacted: integer('redacted').notNull().default(0),
+    truncated: integer('truncated').notNull().default(0),
+    payloadChars: integer('payload_chars').notNull().default(0),
+    diagnostics: text('diagnostics', { mode: 'json' }).notNull(),
+    createdAt: text('created_at').notNull().default(utcNow),
+  },
+  table => ({
+    runNodeBelongsToRunFk: foreignKey({
+      columns: [table.workflowRunId, table.runNodeId],
+      foreignColumns: [runNodes.workflowRunId, runNodes.id],
+      name: 'run_node_diagnostics_run_id_run_node_id_fk',
+    }).onDelete('cascade'),
+    runNodeAttemptUnique: uniqueIndex('run_node_diagnostics_run_id_run_node_attempt_uq').on(
+      table.workflowRunId,
+      table.runNodeId,
+      table.attempt,
+    ),
+    attemptCheck: check('run_node_diagnostics_attempt_ck', sql`${table.attempt} > 0`),
+    outcomeCheck: check('run_node_diagnostics_outcome_ck', sql`${table.outcome} in ('completed', 'failed')`),
+    eventCountCheck: check('run_node_diagnostics_event_count_ck', sql`${table.eventCount} >= 0`),
+    retainedEventCountCheck: check(
+      'run_node_diagnostics_retained_event_count_ck',
+      sql`${table.retainedEventCount} >= 0`,
+    ),
+    droppedEventCountCheck: check(
+      'run_node_diagnostics_dropped_event_count_ck',
+      sql`${table.droppedEventCount} >= 0`,
+    ),
+    payloadCharsCheck: check('run_node_diagnostics_payload_chars_ck', sql`${table.payloadChars} >= 0`),
+    redactedBoolCheck: check('run_node_diagnostics_redacted_bool_ck', sql`${table.redacted} in (0, 1)`),
+    truncatedBoolCheck: check('run_node_diagnostics_truncated_bool_ck', sql`${table.truncated} in (0, 1)`),
+    runCreatedAtIdx: index('run_node_diagnostics_run_id_created_at_idx').on(table.workflowRunId, table.createdAt),
+    runNodeCreatedAtIdx: index('run_node_diagnostics_run_node_id_created_at_idx').on(table.runNodeId, table.createdAt),
+    createdAtIdx: index('run_node_diagnostics_created_at_idx').on(table.createdAt),
+  }),
+);

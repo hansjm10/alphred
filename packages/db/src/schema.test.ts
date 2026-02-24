@@ -7,6 +7,7 @@ import {
   phaseArtifacts,
   promptTemplates,
   repositories,
+  runNodeDiagnostics,
   routingDecisions,
   runWorktrees,
   runNodes,
@@ -887,6 +888,76 @@ describe('database schema hardening', () => {
     ).toThrow('run_nodes status transition is not allowed');
   });
 
+  it('enforces run-node diagnostics attempt identity and bounds', () => {
+    const db = createDatabase(':memory:');
+    migrateDatabase(db);
+    const seed = seedTreeState(db, 'diagnostics');
+
+    const runNode = db
+      .insert(runNodes)
+      .values({
+        workflowRunId: seed.runId,
+        treeNodeId: seed.sourceNodeId,
+        nodeKey: seed.sourceNodeKey,
+        status: 'pending',
+        sequenceIndex: 1,
+      })
+      .returning({ id: runNodes.id })
+      .get();
+
+    db.insert(runNodeDiagnostics)
+      .values({
+        workflowRunId: seed.runId,
+        runNodeId: runNode.id,
+        attempt: 1,
+        outcome: 'completed',
+        eventCount: 3,
+        retainedEventCount: 3,
+        droppedEventCount: 0,
+        redacted: 0,
+        truncated: 0,
+        payloadChars: 128,
+        diagnostics: { nodeKey: seed.sourceNodeKey },
+      })
+      .run();
+
+    expect(() =>
+      db.insert(runNodeDiagnostics)
+        .values({
+          workflowRunId: seed.runId,
+          runNodeId: runNode.id,
+          attempt: 1,
+          outcome: 'completed',
+          eventCount: 1,
+          retainedEventCount: 1,
+          droppedEventCount: 0,
+          redacted: 0,
+          truncated: 0,
+          payloadChars: 16,
+          diagnostics: { duplicate: true },
+        })
+        .run(),
+    ).toThrow();
+
+    expect(() =>
+      db.insert(runNodeDiagnostics)
+        .values({
+          workflowRunId: seed.runId,
+          runNodeId: runNode.id,
+          attempt: 0,
+          outcome: 'completed',
+          eventCount: 1,
+          retainedEventCount: 1,
+          droppedEventCount: 0,
+          redacted: 0,
+          truncated: 0,
+          payloadChars: 16,
+          diagnostics: { invalid: true },
+        })
+        .run(),
+    ).toThrow();
+  });
+
   it('creates required performance indexes for run and artifact hot paths', () => {
     const db = createDatabase(':memory:');
     migrateDatabase(db);
@@ -907,5 +978,9 @@ describe('database schema hardening', () => {
     expect(names.has('repositories_created_at_idx')).toBe(true);
     expect(names.has('phase_artifacts_created_at_idx')).toBe(true);
     expect(names.has('routing_decisions_created_at_idx')).toBe(true);
+    expect(names.has('run_node_diagnostics_run_id_run_node_attempt_uq')).toBe(true);
+    expect(names.has('run_node_diagnostics_run_id_created_at_idx')).toBe(true);
+    expect(names.has('run_node_diagnostics_run_node_id_created_at_idx')).toBe(true);
+    expect(names.has('run_node_diagnostics_created_at_idx')).toBe(true);
   });
 });
