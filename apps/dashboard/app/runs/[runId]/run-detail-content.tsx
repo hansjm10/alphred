@@ -899,6 +899,23 @@ function resolveInitialLastUpdatedAtMs(detail: DashboardRunDetail): number {
   return completedAt?.getTime() ?? startedAt?.getTime() ?? fallbackDate?.getTime() ?? 0;
 }
 
+function resolveInitialStreamLastUpdatedAtMs(detail: DashboardRunDetail): number {
+  const runningNode = detail.nodes.find((node) => node.status === 'running');
+  const fallbackNode = runningNode ?? detail.nodes[0];
+  if (fallbackNode) {
+    const completedAt = parseDateValue(fallbackNode.completedAt);
+    const startedAt = parseDateValue(fallbackNode.startedAt);
+    if (completedAt) {
+      return completedAt.getTime();
+    }
+    if (startedAt) {
+      return startedAt.getTime();
+    }
+  }
+
+  return resolveInitialLastUpdatedAtMs(detail);
+}
+
 function toAgentStreamTarget(node: DashboardRunDetail['nodes'][number]): AgentStreamTarget {
   return {
     runNodeId: node.id,
@@ -1729,7 +1746,9 @@ export function RunDetailContent({
   const [streamNextRetryAtMs, setStreamNextRetryAtMs] = useState<number | null>(null);
   const [streamRetryCountdownSeconds, setStreamRetryCountdownSeconds] = useState<number | null>(null);
   const [streamAutoScroll, setStreamAutoScroll] = useState<boolean>(true);
-  const [streamLastUpdatedAtMs, setStreamLastUpdatedAtMs] = useState<number>(() => Date.now());
+  const [streamLastUpdatedAtMs, setStreamLastUpdatedAtMs] = useState<number>(() =>
+    resolveInitialStreamLastUpdatedAtMs(initialDetail),
+  );
 
   const lastUpdatedAtRef = useRef<number>(lastUpdatedAtMs);
   const streamLastUpdatedAtRef = useRef<number>(streamLastUpdatedAtMs);

@@ -1,7 +1,9 @@
 // @vitest-environment jsdom
 
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { hydrateRoot } from 'react-dom/client';
+import { renderToString } from 'react-dom/server';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type {
   DashboardRepositoryState,
@@ -293,6 +295,75 @@ describe('RunDetailContent realtime updates', () => {
   afterEach(() => {
     vi.useRealTimers();
     vi.unstubAllGlobals();
+  });
+
+  it('does not emit hydration mismatch errors when server and client clocks differ by a second', async () => {
+    vi.useFakeTimers();
+    const detail = createRunDetail({
+      run: {
+        startedAt: '2026-02-24T04:06:05.000Z',
+        createdAt: '2026-02-24T04:06:05.000Z',
+      },
+      nodes: [
+        {
+          id: 2,
+          treeNodeId: 2,
+          nodeKey: 'agent',
+          sequenceIndex: 1,
+          attempt: 1,
+          status: 'running',
+          startedAt: '2026-02-24T04:06:05.000Z',
+          completedAt: null,
+          latestArtifact: null,
+          latestRoutingDecision: null,
+          latestDiagnostics: null,
+        },
+      ],
+    });
+
+    vi.setSystemTime(new Date('2026-02-24T04:06:05.000Z'));
+    const serverMarkup = renderToString(
+      <RunDetailContent
+        initialDetail={detail}
+        repositories={[createRepository()]}
+        enableRealtime={false}
+      />,
+    );
+
+    vi.setSystemTime(new Date('2026-02-24T04:06:06.000Z'));
+    const container = document.createElement('div');
+    container.innerHTML = serverMarkup;
+    document.body.appendChild(container);
+
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    try {
+      await act(async () => {
+        hydrateRoot(
+          container,
+          <RunDetailContent
+            initialDetail={detail}
+            repositories={[createRepository()]}
+            enableRealtime={false}
+          />,
+        );
+      });
+
+      const hydrationErrors = consoleErrorSpy.mock.calls.filter(([firstArg]) => {
+        if (firstArg instanceof Error) {
+          return firstArg.message.includes("Hydration failed because the server rendered text didn't match the client.");
+        }
+
+        return (
+          typeof firstArg === 'string' &&
+          firstArg.includes("Hydration failed because the server rendered text didn't match the client.")
+        );
+      });
+      expect(hydrationErrors).toHaveLength(0);
+    } finally {
+      consoleErrorSpy.mockRestore();
+      container.remove();
+    }
   });
 
   it('refreshes active run detail without a full page reload', async () => {
