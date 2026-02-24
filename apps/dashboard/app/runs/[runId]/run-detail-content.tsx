@@ -694,7 +694,7 @@ const TIMELINE_CATEGORY_LABELS: Record<TimelineCategory, string> = {
   routing: 'Routing',
 };
 
-function TimelineCategoryIcon({ category }: { category: TimelineCategory }) {
+function TimelineCategoryIcon({ category }: Readonly<{ category: TimelineCategory }>) {
   const iconProps = {
     'aria-hidden': true as const,
     focusable: 'false' as const,
