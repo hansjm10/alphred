@@ -2049,6 +2049,9 @@ export function RunDetailContent({
     () => resolveRepositoryContext(detail, repositories),
     [detail, repositories],
   );
+  const pageSubtitle = detail.run.repository
+    ? `${detail.run.tree.name} · ${detail.run.repository.name}`
+    : detail.run.tree.name;
   const primaryAction = useMemo(
     () => resolvePrimaryAction(detail.run, detail.worktrees.length > 0),
     [detail.run, detail.worktrees.length],
@@ -2105,7 +2108,7 @@ export function RunDetailContent({
     <div className="page-stack">
       <section className="page-heading">
         <h2>{`Run #${detail.run.id}`}</h2>
-        <p>{`${detail.run.tree.name}${detail.run.repository ? ` · ${detail.run.repository.name}` : ''}`}</p>
+        <p>{pageSubtitle}</p>
       </section>
 
       <div className="page-grid run-detail-priority-grid">
