@@ -213,6 +213,10 @@ output {
   min-width: 0;
 }
 
+.run-detail-lifecycle-grid {
+  align-items: start;
+}
+
 .surface {
   border: 1px solid var(--border-default);
   border-radius: var(--radius-md);
@@ -785,6 +789,11 @@ output {
   padding: 8px;
 }
 
+.run-agent-stream-event-content {
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+
 .run-agent-stream-event-type {
   border-radius: 999px;
   display: inline-block;
@@ -813,6 +822,30 @@ output {
 
 .run-agent-stream-event-type--result {
   background: color-mix(in srgb, var(--accent-active) 24%, var(--bg-surface));
+}
+
+.run-expandable-preview {
+  display: grid;
+  gap: 4px;
+}
+
+.run-expandable-preview__details {
+  color: var(--text-secondary);
+}
+
+.run-expandable-preview__summary {
+  color: var(--accent-active);
+  cursor: pointer;
+  font: 600 12px/18px var(--font-display);
+  width: fit-content;
+}
+
+.run-expandable-preview__summary:hover {
+  text-decoration: underline;
+}
+
+.run-expandable-preview__details[open] .run-expandable-preview__summary {
+  margin-bottom: 4px;
 }
 
 .meta-text {
