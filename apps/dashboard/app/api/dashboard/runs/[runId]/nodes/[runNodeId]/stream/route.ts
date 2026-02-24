@@ -17,6 +17,9 @@ type RunNodeStreamRouteContext = {
   }>;
 };
 
+type RunNodeStreamSnapshot = Awaited<ReturnType<DashboardService['getRunNodeStreamSnapshot']>>;
+type StreamWriter = (chunk: string) => void;
+
 function parsePositiveInteger(name: string, value: string | null): number {
   const parsed = Number(value);
   if (!Number.isInteger(parsed) || parsed < 1) {
@@ -50,13 +53,78 @@ function resolveResumeSequence(searchParams: URLSearchParams, request: Request):
 }
 
 function encodeSseChunk(event: string, data: unknown, id?: number): string {
-  const lines: string[] = [];
-  if (id !== undefined) {
-    lines.push(`id: ${id}`);
-  }
-  lines.push(`event: ${event}`);
-  lines.push(`data: ${JSON.stringify(data)}`);
+  const lines = [
+    ...(id === undefined ? [] : [`id: ${id}`]),
+    `event: ${event}`,
+    `data: ${JSON.stringify(data)}`,
+  ];
   return `${lines.join('\n')}\n\n`;
+}
+
+function emitStreamState(
+  write: StreamWriter,
+  snapshot: RunNodeStreamSnapshot,
+  lastConnectionState: string | null,
+): string {
+  const connectionState = snapshot.ended ? 'ended' : 'live';
+  if (connectionState !== lastConnectionState) {
+    write(
+      encodeSseChunk('stream_state', {
+        connectionState,
+        nodeStatus: snapshot.nodeStatus,
+        latestSequence: snapshot.latestSequence,
+      }),
+    );
+  }
+
+  return connectionState;
+}
+
+function emitSnapshotEvents(
+  write: StreamWriter,
+  snapshot: RunNodeStreamSnapshot,
+  lastEventSequence: number,
+): { lastEventSequence: number; heartbeatAtMs: number | null } {
+  let nextSequence = lastEventSequence;
+  for (const event of snapshot.events) {
+    write(encodeSseChunk('stream_event', event, event.sequence));
+    nextSequence = event.sequence;
+  }
+
+  return {
+    lastEventSequence: nextSequence,
+    heartbeatAtMs: snapshot.events.length > 0 ? Date.now() : null,
+  };
+}
+
+function resolveSnapshotAction(
+  snapshot: RunNodeStreamSnapshot,
+  lastEventSequence: number,
+): 'end' | 'wait' | 'drain' | 'continue' {
+  const hasUnseenEvents = snapshot.latestSequence > lastEventSequence;
+  if (snapshot.ended && !hasUnseenEvents) {
+    return 'end';
+  }
+
+  if (snapshot.ended && hasUnseenEvents) {
+    return snapshot.events.length === 0 ? 'wait' : 'drain';
+  }
+
+  return 'continue';
+}
+
+function emitStreamEnd(write: StreamWriter, snapshot: RunNodeStreamSnapshot): void {
+  write(
+    encodeSseChunk(
+      'stream_end',
+      {
+        connectionState: 'ended',
+        nodeStatus: snapshot.nodeStatus,
+        latestSequence: snapshot.latestSequence,
+      },
+      snapshot.latestSequence > 0 ? snapshot.latestSequence : undefined,
+    ),
+  );
 }
 
 async function waitForNextPoll(delayMs: number, signal: AbortSignal): Promise<void> {
@@ -80,6 +148,64 @@ async function waitForNextPoll(delayMs: number, signal: AbortSignal): Promise<vo
   });
 }
 
+async function streamRunNodeEvents(params: {
+  request: Request;
+  service: DashboardService;
+  runId: number;
+  runNodeId: number;
+  attempt: number;
+  resumeSequence: number;
+  write: StreamWriter;
+}): Promise<void> {
+  const { request, service, runId, runNodeId, attempt, resumeSequence, write } = params;
+  let lastEventSequence = resumeSequence;
+  let lastHeartbeatMs = Date.now();
+  let lastConnectionState: string | null = null;
+
+  write(': stream_connected\n\n');
+
+  while (!request.signal.aborted) {
+    const snapshot = await service.getRunNodeStreamSnapshot({
+      runId,
+      runNodeId,
+      attempt,
+      lastEventSequence,
+      limit: STREAM_BATCH_LIMIT,
+    });
+
+    lastConnectionState = emitStreamState(write, snapshot, lastConnectionState);
+
+    const emitted = emitSnapshotEvents(write, snapshot, lastEventSequence);
+    lastEventSequence = emitted.lastEventSequence;
+    if (emitted.heartbeatAtMs !== null) {
+      lastHeartbeatMs = emitted.heartbeatAtMs;
+    }
+
+    const snapshotAction = resolveSnapshotAction(snapshot, lastEventSequence);
+    if (snapshotAction === 'end') {
+      emitStreamEnd(write, snapshot);
+      break;
+    }
+
+    if (snapshotAction === 'wait') {
+      await waitForNextPoll(STREAM_POLL_INTERVAL_MS, request.signal);
+      continue;
+    }
+
+    if (snapshotAction === 'drain') {
+      continue;
+    }
+
+    const now = Date.now();
+    if (now - lastHeartbeatMs >= STREAM_HEARTBEAT_INTERVAL_MS) {
+      write(encodeSseChunk('heartbeat', { lastEventSequence }));
+      lastHeartbeatMs = now;
+    }
+
+    await waitForNextPoll(STREAM_POLL_INTERVAL_MS, request.signal);
+  }
+}
+
 function createSseResponse(params: {
   request: Request;
   service: DashboardService;
@@ -89,7 +215,6 @@ function createSseResponse(params: {
   resumeSequence: number;
 }): Response {
   const { request, service, runId, runNodeId, attempt, resumeSequence } = params;
-  let lastEventSequence = resumeSequence;
 
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
@@ -100,69 +225,16 @@ function createSseResponse(params: {
         }
       };
 
-      let lastHeartbeatMs = Date.now();
-      let lastConnectionState: string | null = null;
-
       try {
-        write(': stream_connected\n\n');
-
-        while (!request.signal.aborted) {
-          const snapshot = await service.getRunNodeStreamSnapshot({
-            runId,
-            runNodeId,
-            attempt,
-            lastEventSequence,
-            limit: STREAM_BATCH_LIMIT,
-          });
-
-          const connectionState = snapshot.ended ? 'ended' : 'live';
-          if (connectionState !== lastConnectionState) {
-            write(
-              encodeSseChunk('stream_state', {
-                connectionState,
-                nodeStatus: snapshot.nodeStatus,
-                latestSequence: snapshot.latestSequence,
-              }),
-            );
-            lastConnectionState = connectionState;
-          }
-
-          for (const event of snapshot.events) {
-            write(encodeSseChunk('stream_event', event, event.sequence));
-            lastEventSequence = event.sequence;
-            lastHeartbeatMs = Date.now();
-          }
-
-          const hasUnseenEvents = snapshot.latestSequence > lastEventSequence;
-          if (snapshot.ended && !hasUnseenEvents) {
-            write(
-              encodeSseChunk(
-                'stream_end',
-                {
-                  connectionState: 'ended',
-                  nodeStatus: snapshot.nodeStatus,
-                  latestSequence: snapshot.latestSequence,
-                },
-                snapshot.latestSequence > 0 ? snapshot.latestSequence : undefined,
-              ),
-            );
-            break;
-          }
-
-          if (snapshot.ended && hasUnseenEvents) {
-            if (snapshot.events.length === 0) {
-              await waitForNextPoll(STREAM_POLL_INTERVAL_MS, request.signal);
-            }
-            continue;
-          }
-
-          if (Date.now() - lastHeartbeatMs >= STREAM_HEARTBEAT_INTERVAL_MS) {
-            write(encodeSseChunk('heartbeat', { lastEventSequence }));
-            lastHeartbeatMs = Date.now();
-          }
-
-          await waitForNextPoll(STREAM_POLL_INTERVAL_MS, request.signal);
-        }
+        await streamRunNodeEvents({
+          request,
+          service,
+          runId,
+          runNodeId,
+          attempt,
+          resumeSequence,
+          write,
+        });
       } catch (error) {
         const integrationError = toDashboardIntegrationError(error);
         write(

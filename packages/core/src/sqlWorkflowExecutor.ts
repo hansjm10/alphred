@@ -2407,6 +2407,15 @@ type ClaimedNodeFailure = {
   nextAttempt: number | null;
 };
 
+type ClaimedNodeFailureParams = {
+  currentAttempt: number;
+  currentRunStatus: WorkflowRunStatus;
+  contextManifest: ContextHandoffManifest;
+  failureEvents: ProviderEvent[];
+  failureTokensUsed: number;
+  error: unknown;
+};
+
 type NodeFailureReason = 'post_completion_failure' | 'retry_scheduled' | 'retry_limit_exceeded';
 
 function buildExecutedNodeResult(
@@ -2543,13 +2552,9 @@ function handleClaimedNodeFailure(
   db: AlphredDatabase,
   run: WorkflowRunRow,
   node: RunNodeExecutionRow,
-  currentAttempt: number,
-  currentRunStatus: WorkflowRunStatus,
-  contextManifest: ContextHandoffManifest,
-  failureEvents: ProviderEvent[],
-  failureTokensUsed: number,
-  error: unknown,
+  params: ClaimedNodeFailureParams,
 ): ClaimedNodeFailure {
+  const { currentAttempt, currentRunStatus, contextManifest, failureEvents, failureTokensUsed, error } = params;
   const errorMessage = toErrorMessage(error);
   const persistedNodeStatus = loadRunNodeExecutionRowById(db, run.id, node.runNodeId).status;
   const canRetry = persistedNodeStatus === 'running' && shouldRetryNodeAttempt(currentAttempt, node.maxRetries);
@@ -2700,12 +2705,14 @@ async function executeClaimedRunnableNode(
         db,
         run,
         node,
-        currentAttempt,
-        currentRunStatus,
-        contextAssembly.manifest,
-        failureEvents,
-        failureTokensUsed,
-        error,
+        {
+          currentAttempt,
+          currentRunStatus,
+          contextManifest: contextAssembly.manifest,
+          failureEvents,
+          failureTokensUsed,
+          error,
+        },
       );
       if (failure.nextAttempt !== null) {
         currentAttempt = failure.nextAttempt;
