@@ -1,10 +1,11 @@
 import { createHash } from 'node:crypto';
-import { and, asc, eq, inArray } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray } from 'drizzle-orm';
 import {
   guardDefinitions,
   phaseArtifacts,
   promptTemplates,
   runNodeDiagnostics,
+  runNodeStreamEvents,
   runNodes,
   routingDecisions,
   transitionRunNodeStatus,
@@ -28,7 +29,7 @@ import {
   type RoutingDecisionSignal,
 } from '@alphred/shared';
 import { evaluateGuard } from './guards.js';
-import { runPhase, type PhaseProviderResolver } from './phaseRunner.js';
+import { PhaseRunError, runPhase, type PhaseProviderResolver } from './phaseRunner.js';
 
 type RunNodeExecutionRow = {
   runNodeId: number;
@@ -160,6 +161,10 @@ type AssembledUpstreamContext = {
 
 type DiagnosticUsageSnapshot = {
   deltaTokens: number | null;
+  cumulativeTokens: number | null;
+};
+
+type StreamUsageState = {
   cumulativeTokens: number | null;
 };
 
@@ -1338,6 +1343,7 @@ function summarizeToolEventContent(
 }
 
 function classifyDiagnosticError(error: unknown): DiagnosticErrorDetails['classification'] {
+  const normalizedError = unwrapDiagnosticError(error);
   const message = toErrorMessage(error).toLowerCase();
   if (message.includes('without a result event')) {
     return 'provider_result_missing';
@@ -1347,7 +1353,10 @@ function classifyDiagnosticError(error: unknown): DiagnosticErrorDetails['classi
     return 'timeout';
   }
 
-  if ((error instanceof Error && error.name.toLowerCase().includes('abort')) || message.includes('aborted')) {
+  if (
+    (normalizedError instanceof Error && normalizedError.name.toLowerCase().includes('abort')) ||
+    message.includes('aborted')
+  ) {
     return 'aborted';
   }
 
@@ -1355,11 +1364,12 @@ function classifyDiagnosticError(error: unknown): DiagnosticErrorDetails['classi
 }
 
 function toDiagnosticErrorDetails(error: unknown, state: DiagnosticsRedactionState): DiagnosticErrorDetails {
-  const name = error instanceof Error ? sanitizeDiagnosticsString(error.name, state) : 'Error';
+  const normalizedError = unwrapDiagnosticError(error);
+  const name = normalizedError instanceof Error ? sanitizeDiagnosticsString(normalizedError.name, state) : 'Error';
   const message = sanitizeDiagnosticsString(toErrorMessage(error), state);
   const stackPreview =
-    error instanceof Error && typeof error.stack === 'string'
-      ? truncateHeadTail(sanitizeDiagnosticsString(error.stack, state), MAX_DIAGNOSTIC_ERROR_STACK_CHARS)
+    normalizedError instanceof Error && typeof normalizedError.stack === 'string'
+      ? truncateHeadTail(sanitizeDiagnosticsString(normalizedError.stack, state), MAX_DIAGNOSTIC_ERROR_STACK_CHARS)
       : null;
   if (stackPreview !== null && stackPreview.length >= MAX_DIAGNOSTIC_ERROR_STACK_CHARS) {
     state.truncated = true;
@@ -1439,6 +1449,90 @@ function buildDiagnosticEvents(
     droppedEventCount,
     eventTypeCounts,
   };
+}
+
+function resolveNextRunNodeStreamSequence(
+  db: AlphredDatabase,
+  params: {
+    workflowRunId: number;
+    runNodeId: number;
+    attempt: number;
+  },
+): number {
+  const latestEvent = db
+    .select({
+      sequence: runNodeStreamEvents.sequence,
+    })
+    .from(runNodeStreamEvents)
+    .where(
+      and(
+        eq(runNodeStreamEvents.workflowRunId, params.workflowRunId),
+        eq(runNodeStreamEvents.runNodeId, params.runNodeId),
+        eq(runNodeStreamEvents.attempt, params.attempt),
+      ),
+    )
+    .orderBy(desc(runNodeStreamEvents.sequence), desc(runNodeStreamEvents.id))
+    .limit(1)
+    .get();
+
+  return (latestEvent?.sequence ?? 0) + 1;
+}
+
+function persistRunNodeStreamEvent(
+  db: AlphredDatabase,
+  params: {
+    workflowRunId: number;
+    runNodeId: number;
+    attempt: number;
+    sequence: number;
+    event: ProviderEvent;
+    usageState: StreamUsageState;
+  },
+): void {
+  const state: DiagnosticsRedactionState = {
+    redacted: false,
+    truncated: false,
+  };
+  const normalizedContent = sanitizeDiagnosticsString(params.event.content, state);
+  const contentPreview = truncateHeadTail(normalizedContent, MAX_DIAGNOSTIC_EVENT_CONTENT_CHARS);
+  if (contentPreview.length < normalizedContent.length) {
+    state.truncated = true;
+  }
+
+  const metadata = sanitizeDiagnosticMetadata(params.event.metadata, state);
+  let usageDeltaTokens: number | null = null;
+  let usageCumulativeTokens: number | null = null;
+  const tokenUsage = extractTokenUsageFromEvent(params.event);
+  if (tokenUsage) {
+    if (tokenUsage.mode === 'incremental') {
+      usageDeltaTokens = tokenUsage.tokens;
+      usageCumulativeTokens = (params.usageState.cumulativeTokens ?? 0) + tokenUsage.tokens;
+      params.usageState.cumulativeTokens = usageCumulativeTokens;
+    } else {
+      usageDeltaTokens =
+        params.usageState.cumulativeTokens === null
+          ? null
+          : Math.max(tokenUsage.tokens - params.usageState.cumulativeTokens, 0);
+      usageCumulativeTokens = tokenUsage.tokens;
+      params.usageState.cumulativeTokens = tokenUsage.tokens;
+    }
+  }
+
+  db.insert(runNodeStreamEvents)
+    .values({
+      workflowRunId: params.workflowRunId,
+      runNodeId: params.runNodeId,
+      attempt: params.attempt,
+      sequence: params.sequence,
+      eventType: params.event.type,
+      timestamp: params.event.timestamp,
+      contentChars: params.event.content.length,
+      contentPreview,
+      metadata,
+      usageDeltaTokens,
+      usageCumulativeTokens,
+    })
+    .run();
 }
 
 function buildToolEventSummaries(events: DiagnosticEvent[]): DiagnosticToolEvent[] {
@@ -1604,12 +1698,21 @@ function persistRunNodeAttemptDiagnostics(
     .run();
 }
 
-function toErrorMessage(error: unknown): string {
-  if (error instanceof Error) {
-    return error.message;
+function unwrapDiagnosticError(error: unknown): unknown {
+  if (error instanceof PhaseRunError && error.cause !== undefined) {
+    return error.cause;
   }
 
-  return String(error);
+  return error;
+}
+
+function toErrorMessage(error: unknown): string {
+  const candidate = unwrapDiagnosticError(error);
+  if (candidate instanceof Error) {
+    return candidate.message;
+  }
+
+  return String(candidate);
 }
 
 function isRunNodeClaimPreconditionFailure(error: unknown): boolean {
@@ -2304,6 +2407,15 @@ type ClaimedNodeFailure = {
   nextAttempt: number | null;
 };
 
+type ClaimedNodeFailureParams = {
+  currentAttempt: number;
+  currentRunStatus: WorkflowRunStatus;
+  contextManifest: ContextHandoffManifest;
+  failureEvents: ProviderEvent[];
+  failureTokensUsed: number;
+  error: unknown;
+};
+
 type NodeFailureReason = 'post_completion_failure' | 'retry_scheduled' | 'retry_limit_exceeded';
 
 function buildExecutedNodeResult(
@@ -2341,6 +2453,7 @@ async function executeNodePhase(
   options: ProviderRunOptions,
   upstreamContextEntries: string[],
   dependencies: SqlWorkflowExecutorDependencies,
+  onEvent?: (event: ProviderEvent) => Promise<void>,
 ): Promise<Awaited<ReturnType<typeof runPhase>>> {
   const phase = createExecutionPhase(node);
   const optionsWithContext =
@@ -2353,6 +2466,7 @@ async function executeNodePhase(
   const phaseOptions = phase.model ? { ...optionsWithContext, model: phase.model } : optionsWithContext;
   return runPhase(phase, phaseOptions, {
     resolveProvider: dependencies.resolveProvider,
+    onEvent,
   });
 }
 
@@ -2438,11 +2552,9 @@ function handleClaimedNodeFailure(
   db: AlphredDatabase,
   run: WorkflowRunRow,
   node: RunNodeExecutionRow,
-  currentAttempt: number,
-  currentRunStatus: WorkflowRunStatus,
-  contextManifest: ContextHandoffManifest,
-  error: unknown,
+  params: ClaimedNodeFailureParams,
 ): ClaimedNodeFailure {
+  const { currentAttempt, currentRunStatus, contextManifest, failureEvents, failureTokensUsed, error } = params;
   const errorMessage = toErrorMessage(error);
   const persistedNodeStatus = loadRunNodeExecutionRowById(db, run.id, node.runNodeId).status;
   const canRetry = persistedNodeStatus === 'running' && shouldRetryNodeAttempt(currentAttempt, node.maxRetries);
@@ -2485,8 +2597,8 @@ function handleClaimedNodeFailure(
     status: diagnosticStatus,
     runNodeSnapshot: persistedNode,
     contextManifest,
-    tokensUsed: 0,
-    events: [],
+    tokensUsed: failureTokensUsed,
+    events: failureEvents,
     routingDecision: null,
     error,
   });
@@ -2544,9 +2656,34 @@ async function executeClaimedRunnableNode(
       latestRoutingDecisionsByRunNodeId: latestRoutingDecisionsForContext.latestByRunNodeId,
       latestArtifactsByRunNodeId: latestArtifactsForContext,
     });
+    let nextEventSequence = resolveNextRunNodeStreamSequence(db, {
+      workflowRunId: run.id,
+      runNodeId: node.runNodeId,
+      attempt: currentAttempt,
+    });
+    const streamUsageState: StreamUsageState = {
+      cumulativeTokens: null,
+    };
 
     try {
-      const phaseResult = await executeNodePhase(node, options, contextAssembly.contextEntries, dependencies);
+      const phaseResult = await executeNodePhase(
+        node,
+        options,
+        contextAssembly.contextEntries,
+        dependencies,
+        async (event) => {
+          const sequence = nextEventSequence;
+          nextEventSequence += 1;
+          persistRunNodeStreamEvent(db, {
+            workflowRunId: run.id,
+            runNodeId: node.runNodeId,
+            attempt: currentAttempt,
+            sequence,
+            event,
+            usageState: streamUsageState,
+          });
+        },
+      );
       const success = handleClaimedNodeSuccess(
         db,
         run,
@@ -2562,14 +2699,20 @@ async function executeClaimedRunnableNode(
       currentRunStatus = success.runStatus;
       return buildExecutedNodeResult(run, node, 'completed', currentRunStatus, success.artifactId);
     } catch (error) {
+      const failureEvents = error instanceof PhaseRunError ? error.events : [];
+      const failureTokensUsed = error instanceof PhaseRunError ? error.tokensUsed : 0;
       const failure = handleClaimedNodeFailure(
         db,
         run,
         node,
-        currentAttempt,
-        currentRunStatus,
-        contextAssembly.manifest,
-        error,
+        {
+          currentAttempt,
+          currentRunStatus,
+          contextManifest: contextAssembly.manifest,
+          failureEvents,
+          failureTokensUsed,
+          error,
+        },
       );
       if (failure.nextAttempt !== null) {
         currentAttempt = failure.nextAttempt;

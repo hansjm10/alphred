@@ -588,5 +588,47 @@ export function migrateDatabase(db: AlphredDatabase): void {
     ON run_node_diagnostics(run_node_id, created_at)`);
   tx.run(sql`CREATE INDEX IF NOT EXISTS run_node_diagnostics_created_at_idx
     ON run_node_diagnostics(created_at)`);
+
+  tx.run(sql`CREATE TABLE IF NOT EXISTS run_node_stream_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    workflow_run_id INTEGER NOT NULL REFERENCES workflow_runs(id) ON DELETE CASCADE,
+    run_node_id INTEGER NOT NULL REFERENCES run_nodes(id) ON DELETE CASCADE,
+    attempt INTEGER NOT NULL,
+    sequence INTEGER NOT NULL,
+    event_type TEXT NOT NULL,
+    timestamp INTEGER NOT NULL,
+    content_chars INTEGER NOT NULL DEFAULT 0,
+    content_preview TEXT NOT NULL,
+    metadata TEXT,
+    usage_delta_tokens INTEGER,
+    usage_cumulative_tokens INTEGER,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    CONSTRAINT run_node_stream_events_run_id_run_node_id_fk
+      FOREIGN KEY (workflow_run_id, run_node_id)
+      REFERENCES run_nodes(workflow_run_id, id)
+      ON DELETE CASCADE,
+    CONSTRAINT run_node_stream_events_attempt_ck
+      CHECK (attempt > 0),
+    CONSTRAINT run_node_stream_events_sequence_ck
+      CHECK (sequence > 0),
+    CONSTRAINT run_node_stream_events_event_type_ck
+      CHECK (event_type IN ('system', 'assistant', 'tool_use', 'tool_result', 'usage', 'result')),
+    CONSTRAINT run_node_stream_events_content_chars_ck
+      CHECK (content_chars >= 0),
+    CONSTRAINT run_node_stream_events_usage_delta_tokens_ck
+      CHECK (usage_delta_tokens IS NULL OR usage_delta_tokens >= 0),
+    CONSTRAINT run_node_stream_events_usage_cumulative_tokens_ck
+      CHECK (usage_cumulative_tokens IS NULL OR usage_cumulative_tokens >= 0)
+  )`);
+  tx.run(sql`CREATE UNIQUE INDEX IF NOT EXISTS run_node_stream_events_run_id_run_node_attempt_seq_uq
+    ON run_node_stream_events(workflow_run_id, run_node_id, attempt, sequence)`);
+  tx.run(sql`CREATE INDEX IF NOT EXISTS run_node_stream_events_run_id_attempt_sequence_idx
+    ON run_node_stream_events(workflow_run_id, run_node_id, attempt, sequence)`);
+  tx.run(sql`CREATE INDEX IF NOT EXISTS run_node_stream_events_run_id_created_at_idx
+    ON run_node_stream_events(workflow_run_id, created_at)`);
+  tx.run(sql`CREATE INDEX IF NOT EXISTS run_node_stream_events_run_node_id_created_at_idx
+    ON run_node_stream_events(run_node_id, created_at)`);
+  tx.run(sql`CREATE INDEX IF NOT EXISTS run_node_stream_events_created_at_idx
+    ON run_node_stream_events(created_at)`);
   });
 }

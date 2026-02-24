@@ -8,6 +8,7 @@ import {
   promptTemplates,
   repositories,
   runNodeDiagnostics,
+  runNodeStreamEvents,
   routingDecisions,
   runNodes,
   runWorktrees,
@@ -248,6 +249,39 @@ function seedRunData(db: AlphredDatabase): void {
       },
       createdAt: '2026-02-17T20:02:02.000Z',
     })
+    .run();
+
+  db.insert(runNodeStreamEvents)
+    .values([
+      {
+        workflowRunId: runId,
+        runNodeId,
+        attempt: 1,
+        sequence: 1,
+        eventType: 'system',
+        timestamp: 100,
+        contentChars: 7,
+        contentPreview: 'starting',
+        metadata: { channel: 'provider' },
+        usageDeltaTokens: null,
+        usageCumulativeTokens: null,
+        createdAt: '2026-02-17T20:01:30.000Z',
+      },
+      {
+        workflowRunId: runId,
+        runNodeId,
+        attempt: 1,
+        sequence: 2,
+        eventType: 'result',
+        timestamp: 101,
+        contentChars: 12,
+        contentPreview: 'done output',
+        metadata: null,
+        usageDeltaTokens: null,
+        usageCumulativeTokens: null,
+        createdAt: '2026-02-17T20:02:00.000Z',
+      },
+    ])
     .run();
 
   db.insert(runWorktrees)
@@ -627,6 +661,50 @@ describe('createDashboardService', () => {
     expect(runDetail.nodes[0]?.latestDiagnostics?.outcome).toBe('completed');
     expect(runDetail.diagnostics).toHaveLength(1);
     expect(runDetail.worktrees).toHaveLength(1);
+  });
+
+  it('loads run-node stream snapshots with resume semantics and terminal status', async () => {
+    const { db, dependencies } = createHarness();
+    seedRunData(db);
+
+    const service = createDashboardService({ dependencies });
+    const streamSnapshot = await service.getRunNodeStreamSnapshot({
+      runId: 1,
+      runNodeId: 1,
+      attempt: 1,
+      lastEventSequence: 1,
+    });
+
+    expect(streamSnapshot.workflowRunId).toBe(1);
+    expect(streamSnapshot.runNodeId).toBe(1);
+    expect(streamSnapshot.attempt).toBe(1);
+    expect(streamSnapshot.latestSequence).toBe(2);
+    expect(streamSnapshot.nodeStatus).toBe('completed');
+    expect(streamSnapshot.ended).toBe(true);
+    expect(streamSnapshot.events).toEqual([
+      expect.objectContaining({
+        sequence: 2,
+        type: 'result',
+        contentPreview: 'done output',
+      }),
+    ]);
+  });
+
+  it('rejects stream snapshots for unknown future attempts', async () => {
+    const { db, dependencies } = createHarness();
+    seedRunData(db);
+
+    const service = createDashboardService({ dependencies });
+    await expect(
+      service.getRunNodeStreamSnapshot({
+        runId: 1,
+        runNodeId: 1,
+        attempt: 2,
+      }),
+    ).rejects.toMatchObject({
+      code: 'not_found',
+      status: 404,
+    });
   });
 
   it('returns null run repository context when no run worktree exists', async () => {

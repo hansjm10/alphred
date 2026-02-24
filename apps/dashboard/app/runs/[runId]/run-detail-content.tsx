@@ -1,9 +1,11 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from 'react';
 import type {
   DashboardRepositoryState,
   DashboardRunDetail,
+  DashboardRunNodeStreamEvent,
+  DashboardRunNodeStreamSnapshot,
   DashboardRunSummary,
 } from '../../../src/server/dashboard-contracts';
 import { ActionButton, ButtonLink, Card, Panel, StatusBadge } from '../../ui/primitives';
@@ -23,7 +25,14 @@ type PrimaryActionState = Readonly<{
 }>;
 
 type RealtimeChannelState = 'disabled' | 'live' | 'reconnecting' | 'stale';
+type AgentStreamConnectionState = 'live' | 'reconnecting' | 'stale' | 'ended';
 type DiagnosticErrorClassification = 'provider_result_missing' | 'timeout' | 'aborted' | 'unknown';
+
+type AgentStreamTarget = {
+  runNodeId: number;
+  nodeKey: string;
+  attempt: number;
+};
 
 type RunDetailContentProps = Readonly<{
   initialDetail: DashboardRunDetail;
@@ -92,10 +101,20 @@ const DIAGNOSTIC_ERROR_CLASSIFICATIONS = new Set<DiagnosticErrorClassification>(
   'unknown',
 ]);
 const WORKTREE_STATUSES = new Set<DashboardRunDetail['worktrees'][number]['status']>(['active', 'removed']);
+const STREAM_EVENT_TYPES = new Set<DashboardRunNodeStreamEvent['type']>([
+  'system',
+  'assistant',
+  'result',
+  'tool_use',
+  'tool_result',
+  'usage',
+]);
 
 export const RUN_DETAIL_POLL_INTERVAL_MS = 4_000;
 const RUN_DETAIL_POLL_BACKOFF_MAX_MS = 20_000;
 const RUN_DETAIL_STALE_THRESHOLD_MS = 15_000;
+const AGENT_STREAM_RECONNECT_MAX_MS = 20_000;
+const AGENT_STREAM_STALE_THRESHOLD_MS = 15_000;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
@@ -358,6 +377,78 @@ function hasWorktreeShape(
   );
 }
 
+function hasStreamEventShape(
+  value: unknown,
+  expectedRunId: number,
+  expectedRunNodeId: number,
+  expectedAttempt: number,
+): value is DashboardRunNodeStreamEvent {
+  if (!isRecord(value)) {
+    return false;
+  }
+
+  const usage = value.usage;
+  if (
+    usage !== null &&
+    (!isRecord(usage) ||
+      !(usage.deltaTokens === null || isInteger(usage.deltaTokens)) ||
+      !(usage.cumulativeTokens === null || isInteger(usage.cumulativeTokens)))
+  ) {
+    return false;
+  }
+
+  return (
+    isInteger(value.id) &&
+    isInteger(value.workflowRunId) &&
+    value.workflowRunId === expectedRunId &&
+    isInteger(value.runNodeId) &&
+    value.runNodeId === expectedRunNodeId &&
+    isInteger(value.attempt) &&
+    value.attempt === expectedAttempt &&
+    isInteger(value.sequence) &&
+    value.sequence > 0 &&
+    typeof value.type === 'string' &&
+    STREAM_EVENT_TYPES.has(value.type as DashboardRunNodeStreamEvent['type']) &&
+    isInteger(value.timestamp) &&
+    isInteger(value.contentChars) &&
+    typeof value.contentPreview === 'string' &&
+    (value.metadata === null || isRecord(value.metadata)) &&
+    typeof value.createdAt === 'string'
+  );
+}
+
+function hasRunNodeStreamSnapshotShape(
+  value: unknown,
+  expectedRunId: number,
+  expectedRunNodeId: number,
+  expectedAttempt: number,
+): value is DashboardRunNodeStreamSnapshot {
+  if (!isRecord(value)) {
+    return false;
+  }
+
+  if (
+    !isInteger(value.workflowRunId) ||
+    value.workflowRunId !== expectedRunId ||
+    !isInteger(value.runNodeId) ||
+    value.runNodeId !== expectedRunNodeId ||
+    !isInteger(value.attempt) ||
+    value.attempt !== expectedAttempt ||
+    typeof value.nodeStatus !== 'string' ||
+    !NODE_STATUSES.has(value.nodeStatus as DashboardRunDetail['nodes'][number]['status']) ||
+    !isBoolean(value.ended) ||
+    !isInteger(value.latestSequence) ||
+    value.latestSequence < 0 ||
+    !Array.isArray(value.events)
+  ) {
+    return false;
+  }
+
+  return value.events.every(event =>
+    hasStreamEventShape(event, expectedRunId, expectedRunNodeId, expectedAttempt),
+  );
+}
+
 function hasRunSummaryShape(value: unknown, expectedRunId: number): value is DashboardRunDetail['run'] {
   if (!isRecord(value)) {
     return false;
@@ -442,6 +533,19 @@ function parseRunDetailPayload(payload: unknown, expectedRunId: number): Dashboa
   }
 
   return payload as DashboardRunDetail;
+}
+
+function parseRunNodeStreamSnapshotPayload(
+  payload: unknown,
+  expectedRunId: number,
+  expectedRunNodeId: number,
+  expectedAttempt: number,
+): DashboardRunNodeStreamSnapshot | null {
+  if (!hasRunNodeStreamSnapshotShape(payload, expectedRunId, expectedRunNodeId, expectedAttempt)) {
+    return null;
+  }
+
+  return payload;
 }
 
 function parseDateValue(value: string | null): Date | null {
@@ -530,6 +634,10 @@ function toNodeTerminalSummary(node: DashboardRunDetail['nodes'][number]): strin
     default:
       return `${node.nodeKey} finished with status ${node.status}.`;
   }
+}
+
+function isTerminalNodeStatus(status: DashboardRunDetail['nodes'][number]['status']): boolean {
+  return status === 'completed' || status === 'failed' || status === 'skipped' || status === 'cancelled';
 }
 
 function buildTimeline(detail: DashboardRunDetail): readonly TimelineItem[] {
@@ -740,12 +848,857 @@ function resolveRealtimeLabel(
   };
 }
 
+function resolveAgentStreamLabel(
+  state: AgentStreamConnectionState,
+  retryCountdownSeconds: number | null,
+): { badgeLabel: string; detail: string } {
+  if (state === 'live') {
+    return {
+      badgeLabel: 'Live',
+      detail: 'Agent stream is connected and receiving events in real time.',
+    };
+  }
+
+  if (state === 'reconnecting') {
+    return {
+      badgeLabel: 'Reconnecting',
+      detail: `Agent stream connection interrupted. Retrying in ${retryCountdownSeconds ?? 0}s.`,
+    };
+  }
+
+  if (state === 'stale') {
+    return {
+      badgeLabel: 'Stale',
+      detail: `Agent stream is stale. Reconnect attempt in ${retryCountdownSeconds ?? 0}s.`,
+    };
+  }
+
+  return {
+    badgeLabel: 'Ended',
+    detail: 'Node attempt reached terminal state; stream is closed.',
+  };
+}
+
+function formatStreamTimestamp(value: number): string {
+  if (value >= 1_000_000_000_000) {
+    return new Date(value).toLocaleTimeString(undefined, {
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+    });
+  }
+
+  return `t=${value}`;
+}
+
 function resolveInitialLastUpdatedAtMs(detail: DashboardRunDetail): number {
   const fallbackDate = parseDateValue(detail.run.createdAt);
   const startedAt = parseDateValue(detail.run.startedAt);
   const completedAt = parseDateValue(detail.run.completedAt);
 
   return completedAt?.getTime() ?? startedAt?.getTime() ?? fallbackDate?.getTime() ?? 0;
+}
+
+function toAgentStreamTarget(node: DashboardRunDetail['nodes'][number]): AgentStreamTarget {
+  return {
+    runNodeId: node.id,
+    nodeKey: node.nodeKey,
+    attempt: node.attempt,
+  };
+}
+
+function resolveInitialAgentStreamTarget(detail: DashboardRunDetail): AgentStreamTarget | null {
+  const runningNode = detail.nodes.find(node => node.status === 'running');
+  if (runningNode) {
+    return toAgentStreamTarget(runningNode);
+  }
+
+  const firstNode = detail.nodes[0];
+  return firstNode ? toAgentStreamTarget(firstNode) : null;
+}
+
+function mergeAgentStreamEvents(
+  existingEvents: readonly DashboardRunNodeStreamEvent[],
+  incomingEvents: readonly DashboardRunNodeStreamEvent[],
+): DashboardRunNodeStreamEvent[] {
+  if (incomingEvents.length === 0) {
+    return [...existingEvents];
+  }
+
+  const bySequence = new Map<number, DashboardRunNodeStreamEvent>();
+  for (const event of existingEvents) {
+    bySequence.set(event.sequence, event);
+  }
+  for (const event of incomingEvents) {
+    bySequence.set(event.sequence, event);
+  }
+
+  return [...bySequence.values()].sort((left, right) => left.sequence - right.sequence);
+}
+
+type StateSetter<T> = Dispatch<SetStateAction<T>>;
+
+function syncSelectionStateWithNodes(params: {
+  nodes: DashboardRunDetail['nodes'];
+  highlightedNodeId: number | null;
+  filteredNodeId: number | null;
+  streamTarget: AgentStreamTarget | null;
+  setHighlightedNodeId: StateSetter<number | null>;
+  setFilteredNodeId: StateSetter<number | null>;
+  setStreamTarget: StateSetter<AgentStreamTarget | null>;
+}): void {
+  const {
+    nodes,
+    highlightedNodeId,
+    filteredNodeId,
+    streamTarget,
+    setHighlightedNodeId,
+    setFilteredNodeId,
+    setStreamTarget,
+  } = params;
+
+  if (highlightedNodeId !== null && !nodes.some((node) => node.id === highlightedNodeId)) {
+    setHighlightedNodeId(null);
+  }
+
+  if (filteredNodeId !== null && !nodes.some((node) => node.id === filteredNodeId)) {
+    setFilteredNodeId(null);
+  }
+
+  if (streamTarget === null) {
+    return;
+  }
+
+  const updatedNode = nodes.find((node) => node.id === streamTarget.runNodeId);
+  if (!updatedNode) {
+    setStreamTarget(null);
+    return;
+  }
+
+  if (updatedNode.attempt !== streamTarget.attempt || updatedNode.nodeKey !== streamTarget.nodeKey) {
+    setStreamTarget(toAgentStreamTarget(updatedNode));
+  }
+}
+
+type RunDetailPollingEffectParams = {
+  enableRealtime: boolean;
+  runId: number;
+  runStatus: DashboardRunSummary['status'];
+  pollIntervalMs: number;
+  lastUpdatedAtRef: { current: number };
+  setChannelState: StateSetter<RealtimeChannelState>;
+  setIsRefreshing: StateSetter<boolean>;
+  setNextRetryAtMs: StateSetter<number | null>;
+  setUpdateError: StateSetter<string | null>;
+  setDetail: StateSetter<DashboardRunDetail>;
+  setLastUpdatedAtMs: StateSetter<number>;
+};
+
+function createRunDetailPollingEffect(params: RunDetailPollingEffectParams): () => void {
+  const {
+    enableRealtime,
+    runId,
+    runStatus,
+    pollIntervalMs,
+    lastUpdatedAtRef,
+    setChannelState,
+    setIsRefreshing,
+    setNextRetryAtMs,
+    setUpdateError,
+    setDetail,
+    setLastUpdatedAtMs,
+  } = params;
+
+  if (!enableRealtime || !isActiveRunStatus(runStatus)) {
+    setChannelState('disabled');
+    setIsRefreshing(false);
+    setNextRetryAtMs(null);
+    setUpdateError(null);
+    return () => undefined;
+  }
+
+  let cancelled = false;
+  const abortController = new AbortController();
+  let timeoutId: ReturnType<typeof globalThis.setTimeout> | null = null;
+  let consecutiveFailures = 0;
+
+  const shouldSkipUpdate = (): boolean => cancelled || abortController.signal.aborted;
+  const scheduleNextPoll = (delayMs: number): void => {
+    timeoutId = globalThis.setTimeout(() => {
+      void pollRunDetail();
+    }, delayMs);
+  };
+
+  const fetchLatestRunDetail = async (): Promise<DashboardRunDetail | null> => {
+    const response = await fetch(`/api/dashboard/runs/${runId}`, {
+      method: 'GET',
+      headers: {
+        accept: 'application/json',
+      },
+      signal: abortController.signal,
+    });
+    if (shouldSkipUpdate()) {
+      return null;
+    }
+
+    const payload = (await response.json().catch(() => null)) as unknown;
+    if (shouldSkipUpdate()) {
+      return null;
+    }
+    if (!response.ok) {
+      throw new Error(resolveApiErrorMessage(response.status, payload, 'Unable to refresh run timeline'));
+    }
+
+    const parsedDetail = parseRunDetailPayload(payload, runId);
+    if (parsedDetail === null) {
+      throw new Error('Realtime run detail response was malformed.');
+    }
+
+    return shouldSkipUpdate() ? null : parsedDetail;
+  };
+
+  const applySuccessfulPoll = (parsedDetail: DashboardRunDetail): void => {
+    consecutiveFailures = 0;
+    setDetail(parsedDetail);
+    setUpdateError(null);
+    setIsRefreshing(false);
+    setLastUpdatedAtMs(Date.now());
+    setNextRetryAtMs(null);
+
+    if (!isActiveRunStatus(parsedDetail.run.status)) {
+      setChannelState('disabled');
+      return;
+    }
+
+    setChannelState('live');
+    if (!cancelled) {
+      scheduleNextPoll(pollIntervalMs);
+    }
+  };
+
+  const handlePollFailure = (error: unknown): void => {
+    const isAbortError = error instanceof Error && error.name === 'AbortError';
+    if (shouldSkipUpdate() || isAbortError) {
+      return;
+    }
+
+    consecutiveFailures += 1;
+    const retryDelayMs = Math.min(
+      pollIntervalMs * 2 ** Math.max(0, consecutiveFailures - 1),
+      RUN_DETAIL_POLL_BACKOFF_MAX_MS,
+    );
+    const retryAt = Date.now() + retryDelayMs;
+    const stale = Date.now() - lastUpdatedAtRef.current >= RUN_DETAIL_STALE_THRESHOLD_MS;
+
+    setChannelState(stale ? 'stale' : 'reconnecting');
+    setNextRetryAtMs(retryAt);
+    setIsRefreshing(false);
+    setUpdateError(error instanceof Error ? error.message : 'Unable to refresh run timeline.');
+
+    if (!cancelled) {
+      scheduleNextPoll(retryDelayMs);
+    }
+  };
+
+  const pollRunDetail = async (): Promise<void> => {
+    if (shouldSkipUpdate()) {
+      return;
+    }
+
+    setIsRefreshing(true);
+    try {
+      const parsedDetail = await fetchLatestRunDetail();
+      if (parsedDetail === null) {
+        return;
+      }
+
+      applySuccessfulPoll(parsedDetail);
+    } catch (error) {
+      handlePollFailure(error);
+    }
+  };
+
+  scheduleNextPoll(pollIntervalMs);
+
+  return () => {
+    cancelled = true;
+    abortController.abort();
+    if (timeoutId !== null) {
+      clearTimeout(timeoutId);
+    }
+  };
+}
+
+type AgentStreamLifecycleEffectParams = {
+  runId: number;
+  streamTarget: AgentStreamTarget | null;
+  streamAutoScrollRef: { current: boolean };
+  streamLastSequenceRef: { current: number };
+  streamLastUpdatedAtRef: { current: number };
+  setStreamEvents: StateSetter<DashboardRunNodeStreamEvent[]>;
+  setStreamBufferedEvents: StateSetter<DashboardRunNodeStreamEvent[]>;
+  setStreamConnectionState: StateSetter<AgentStreamConnectionState>;
+  setStreamError: StateSetter<string | null>;
+  setStreamNextRetryAtMs: StateSetter<number | null>;
+  setStreamRetryCountdownSeconds: StateSetter<number | null>;
+  setStreamLastUpdatedAtMs: StateSetter<number>;
+};
+
+function resetAgentStreamState(params: {
+  setStreamConnectionState: StateSetter<AgentStreamConnectionState>;
+  setStreamError: StateSetter<string | null>;
+  setStreamEvents: StateSetter<DashboardRunNodeStreamEvent[]>;
+  setStreamBufferedEvents: StateSetter<DashboardRunNodeStreamEvent[]>;
+  setStreamNextRetryAtMs: StateSetter<number | null>;
+  setStreamRetryCountdownSeconds: StateSetter<number | null>;
+  streamLastSequenceRef: { current: number };
+}): void {
+  const {
+    setStreamConnectionState,
+    setStreamError,
+    setStreamEvents,
+    setStreamBufferedEvents,
+    setStreamNextRetryAtMs,
+    setStreamRetryCountdownSeconds,
+    streamLastSequenceRef,
+  } = params;
+
+  setStreamConnectionState('ended');
+  setStreamError(null);
+  setStreamEvents([]);
+  setStreamBufferedEvents([]);
+  setStreamNextRetryAtMs(null);
+  setStreamRetryCountdownSeconds(null);
+  streamLastSequenceRef.current = 0;
+}
+
+function buildAgentStreamUrl(
+  runId: number,
+  target: AgentStreamTarget,
+  transport: 'snapshot' | 'sse',
+  lastEventSequence: number,
+): string {
+  const searchParams = new URLSearchParams({
+    attempt: String(target.attempt),
+    lastEventSequence: String(lastEventSequence),
+  });
+  if (transport === 'sse') {
+    searchParams.set('transport', 'sse');
+  }
+  return `/api/dashboard/runs/${runId}/nodes/${target.runNodeId}/stream?${searchParams.toString()}`;
+}
+
+async function fetchAgentStreamSnapshot(
+  runId: number,
+  target: AgentStreamTarget,
+  resumeFromSequence: number,
+): Promise<DashboardRunNodeStreamSnapshot> {
+  const response = await fetch(buildAgentStreamUrl(runId, target, 'snapshot', resumeFromSequence), {
+    method: 'GET',
+    headers: {
+      accept: 'application/json',
+    },
+  });
+  const payload = (await response.json().catch(() => null)) as unknown;
+  if (!response.ok) {
+    throw new Error(resolveApiErrorMessage(response.status, payload, 'Unable to load agent stream history'));
+  }
+
+  const parsed = parseRunNodeStreamSnapshotPayload(payload, runId, target.runNodeId, target.attempt);
+  if (parsed === null) {
+    throw new Error('Realtime agent stream response was malformed.');
+  }
+
+  return parsed;
+}
+
+function parseMessageEventPayload(rawEvent: Event): unknown {
+  const messageEvent = rawEvent as MessageEvent<string>;
+  try {
+    return JSON.parse(messageEvent.data);
+  } catch {
+    return null;
+  }
+}
+
+function resolveLatestStreamSequence(
+  events: readonly DashboardRunNodeStreamEvent[],
+  fallback: number,
+): number {
+  return events.at(-1)?.sequence ?? fallback;
+}
+
+function appendIncomingAgentStreamEvents(params: {
+  incomingEvents: readonly DashboardRunNodeStreamEvent[];
+  streamLastSequenceRef: { current: number };
+  streamAutoScrollRef: { current: boolean };
+  setStreamEvents: StateSetter<DashboardRunNodeStreamEvent[]>;
+  setStreamBufferedEvents: StateSetter<DashboardRunNodeStreamEvent[]>;
+  setStreamLastUpdatedAtMs: StateSetter<number>;
+}): void {
+  const {
+    incomingEvents,
+    streamLastSequenceRef,
+    streamAutoScrollRef,
+    setStreamEvents,
+    setStreamBufferedEvents,
+    setStreamLastUpdatedAtMs,
+  } = params;
+  if (incomingEvents.length === 0) {
+    return;
+  }
+
+  const unseen = incomingEvents.filter((event) => event.sequence > streamLastSequenceRef.current);
+  if (unseen.length === 0) {
+    return;
+  }
+
+  const latestUnseenSequence = unseen.at(-1)?.sequence;
+  if (latestUnseenSequence !== undefined) {
+    streamLastSequenceRef.current = latestUnseenSequence;
+  }
+  setStreamLastUpdatedAtMs(Date.now());
+
+  if (streamAutoScrollRef.current) {
+    setStreamEvents((previous) => mergeAgentStreamEvents(previous, unseen));
+    return;
+  }
+
+  setStreamBufferedEvents((previous) => mergeAgentStreamEvents(previous, unseen));
+}
+
+function createAgentStreamLifecycleEffect(params: AgentStreamLifecycleEffectParams): () => void {
+  const {
+    runId,
+    streamTarget,
+    streamAutoScrollRef,
+    streamLastSequenceRef,
+    streamLastUpdatedAtRef,
+    setStreamEvents,
+    setStreamBufferedEvents,
+    setStreamConnectionState,
+    setStreamError,
+    setStreamNextRetryAtMs,
+    setStreamRetryCountdownSeconds,
+    setStreamLastUpdatedAtMs,
+  } = params;
+  if (streamTarget === null) {
+    resetAgentStreamState({
+      setStreamConnectionState,
+      setStreamError,
+      setStreamEvents,
+      setStreamBufferedEvents,
+      setStreamNextRetryAtMs,
+      setStreamRetryCountdownSeconds,
+      streamLastSequenceRef,
+    });
+    return () => undefined;
+  }
+
+  if (typeof EventSource === 'undefined') {
+    setStreamConnectionState('stale');
+    setStreamError('Agent stream is unavailable in this environment.');
+    return () => undefined;
+  }
+
+  const target = streamTarget;
+  let disposed = false;
+  let reconnectTimeoutId: ReturnType<typeof globalThis.setTimeout> | null = null;
+  let source: EventSource | null = null;
+  let reconnectFailures = 0;
+  let latestNodeStatus: DashboardRunDetail['nodes'][number]['status'] = 'running';
+  let streamEnded = false;
+
+  const closeSource = (): void => {
+    if (source !== null) {
+      source.close();
+      source = null;
+    }
+  };
+
+  const clearReconnectTimer = (): void => {
+    if (reconnectTimeoutId !== null) {
+      clearTimeout(reconnectTimeoutId);
+      reconnectTimeoutId = null;
+    }
+  };
+
+  const appendIncomingEvents = (incomingEvents: readonly DashboardRunNodeStreamEvent[]): void => {
+    appendIncomingAgentStreamEvents({
+      incomingEvents,
+      streamLastSequenceRef,
+      streamAutoScrollRef,
+      setStreamEvents,
+      setStreamBufferedEvents,
+      setStreamLastUpdatedAtMs,
+    });
+  };
+
+  const handleReconnect = (): void => {
+    if (disposed) {
+      return;
+    }
+
+    reconnectFailures += 1;
+    const retryDelayMs = Math.min(1_000 * 2 ** Math.max(0, reconnectFailures - 1), AGENT_STREAM_RECONNECT_MAX_MS);
+    const retryAt = Date.now() + retryDelayMs;
+    const stale = Date.now() - streamLastUpdatedAtRef.current >= AGENT_STREAM_STALE_THRESHOLD_MS;
+    setStreamConnectionState(stale ? 'stale' : 'reconnecting');
+    setStreamNextRetryAtMs(retryAt);
+    clearReconnectTimer();
+    reconnectTimeoutId = globalThis.setTimeout(() => {
+      void connectEventSource();
+    }, retryDelayMs);
+  };
+
+  const connectEventSource = async (): Promise<void> => {
+    if (disposed) {
+      return;
+    }
+
+    closeSource();
+    source = new EventSource(buildAgentStreamUrl(runId, target, 'sse', streamLastSequenceRef.current));
+
+    source.onopen = () => {
+      if (disposed) {
+        return;
+      }
+
+      reconnectFailures = 0;
+      setStreamConnectionState('live');
+      setStreamError(null);
+      setStreamNextRetryAtMs(null);
+    };
+
+    source.addEventListener('stream_event', (rawEvent: Event) => {
+      const payload = parseMessageEventPayload(rawEvent);
+      if (!hasStreamEventShape(payload, runId, target.runNodeId, target.attempt)) {
+        setStreamError('Agent stream event payload was malformed.');
+        return;
+      }
+
+      appendIncomingEvents([payload]);
+    });
+
+    source.addEventListener('stream_state', (rawEvent: Event) => {
+      const payload = parseMessageEventPayload(rawEvent);
+      if (!isRecord(payload)) {
+        return;
+      }
+
+      const connectionState = payload.connectionState;
+      if (connectionState === 'live' || connectionState === 'ended') {
+        setStreamConnectionState(connectionState);
+      }
+
+      if (typeof payload.nodeStatus === 'string') {
+        latestNodeStatus = payload.nodeStatus as DashboardRunDetail['nodes'][number]['status'];
+      }
+    });
+
+    source.addEventListener('stream_end', (rawEvent: Event) => {
+      const payload = parseMessageEventPayload(rawEvent);
+      if (isRecord(payload) && typeof payload.nodeStatus === 'string') {
+        latestNodeStatus = payload.nodeStatus as DashboardRunDetail['nodes'][number]['status'];
+      }
+
+      streamEnded = true;
+      setStreamConnectionState('ended');
+      setStreamError(null);
+      setStreamNextRetryAtMs(null);
+      closeSource();
+    });
+
+    source.addEventListener('stream_error', (rawEvent: Event) => {
+      const payload = parseMessageEventPayload(rawEvent);
+      if (isRecord(payload) && typeof payload.message === 'string') {
+        setStreamError(payload.message);
+        return;
+      }
+
+      setStreamError('Agent stream channel reported an error.');
+    });
+
+    source.onerror = () => {
+      closeSource();
+      if (disposed || streamEnded) {
+        return;
+      }
+      setStreamError(`Agent stream connection dropped for ${target.nodeKey} (attempt ${target.attempt}).`);
+      handleReconnect();
+    };
+  };
+
+  const initializeStream = async (): Promise<void> => {
+    try {
+      setStreamConnectionState('reconnecting');
+      setStreamError(null);
+      setStreamEvents([]);
+      setStreamBufferedEvents([]);
+      setStreamNextRetryAtMs(null);
+      setStreamRetryCountdownSeconds(null);
+      setStreamLastUpdatedAtMs(Date.now());
+      streamLastSequenceRef.current = 0;
+
+      let snapshot = await fetchAgentStreamSnapshot(runId, target, 0);
+      let mergedEvents = mergeAgentStreamEvents([], snapshot.events);
+      let resumeSequence = resolveLatestStreamSequence(mergedEvents, 0);
+      while (snapshot.latestSequence > resumeSequence && snapshot.events.length > 0 && !disposed) {
+        snapshot = await fetchAgentStreamSnapshot(runId, target, resumeSequence);
+        mergedEvents = mergeAgentStreamEvents(mergedEvents, snapshot.events);
+        resumeSequence = resolveLatestStreamSequence(mergedEvents, resumeSequence);
+      }
+
+      if (disposed) {
+        return;
+      }
+
+      latestNodeStatus = snapshot.nodeStatus;
+      streamLastSequenceRef.current = resumeSequence;
+      setStreamEvents(mergedEvents);
+      setStreamLastUpdatedAtMs(Date.now());
+
+      if (snapshot.ended || isTerminalNodeStatus(latestNodeStatus)) {
+        streamEnded = true;
+        setStreamConnectionState('ended');
+        setStreamError(null);
+        return;
+      }
+
+      await connectEventSource();
+    } catch (error) {
+      if (disposed) {
+        return;
+      }
+
+      setStreamError(error instanceof Error ? error.message : 'Unable to initialize agent stream.');
+      handleReconnect();
+    }
+  };
+
+  void initializeStream();
+
+  return () => {
+    disposed = true;
+    clearReconnectTimer();
+    closeSource();
+  };
+}
+
+function resolvePayloadStorageSummary(diagnostics: DashboardRunDetail['diagnostics'][number]): string {
+  if (!diagnostics.truncated && !diagnostics.redacted) {
+    return 'Payload stored without truncation.';
+  }
+
+  const normalizationActions: string[] = [];
+  if (diagnostics.redacted) {
+    normalizationActions.push('redaction');
+  }
+  if (diagnostics.truncated) {
+    normalizationActions.push('truncation');
+  }
+
+  return `Payload normalized with ${normalizationActions.join(' and ')}.`;
+}
+
+type RunAgentStreamCardProps = Readonly<{
+  detail: DashboardRunDetail;
+  streamTarget: AgentStreamTarget | null;
+  selectedStreamNode: DashboardRunDetail['nodes'][number] | null;
+  agentStreamLabel: ReturnType<typeof resolveAgentStreamLabel>;
+  streamConnectionState: AgentStreamConnectionState;
+  streamLastUpdatedAtMs: number;
+  hasHydrated: boolean;
+  streamAutoScroll: boolean;
+  streamBufferedEvents: readonly DashboardRunNodeStreamEvent[];
+  streamError: string | null;
+  streamEvents: readonly DashboardRunNodeStreamEvent[];
+  streamEventListRef: { current: HTMLOListElement | null };
+  setStreamTarget: StateSetter<AgentStreamTarget | null>;
+  setStreamAutoScroll: StateSetter<boolean>;
+  setStreamBufferedEvents: StateSetter<DashboardRunNodeStreamEvent[]>;
+  setStreamEvents: StateSetter<DashboardRunNodeStreamEvent[]>;
+}>;
+
+function RunAgentStreamCard({
+  detail,
+  streamTarget,
+  selectedStreamNode,
+  agentStreamLabel,
+  streamConnectionState,
+  streamLastUpdatedAtMs,
+  hasHydrated,
+  streamAutoScroll,
+  streamBufferedEvents,
+  streamError,
+  streamEvents,
+  streamEventListRef,
+  setStreamTarget,
+  setStreamAutoScroll,
+  setStreamBufferedEvents,
+  setStreamEvents,
+}: RunAgentStreamCardProps) {
+  return (
+    <Card title="Agent stream" description="Live provider events for a selected node attempt.">
+      <ul className="entity-list run-node-status-list" aria-label="Agent stream targets">
+        {detail.nodes.length > 0 ? (
+          detail.nodes.map((node) => {
+            const selected = streamTarget?.runNodeId === node.id && streamTarget.attempt === node.attempt;
+            const canOpenStream = node.status === 'running' || node.status === 'completed' || node.status === 'failed';
+
+            return (
+              <li key={`stream-target-${node.id}-${node.attempt}`}>
+                <ActionButton
+                  className={`run-node-filter${selected ? ' run-node-filter--selected' : ''}`}
+                  aria-pressed={selected}
+                  disabled={!canOpenStream}
+                  onClick={() => {
+                    setStreamTarget(toAgentStreamTarget(node));
+                    setStreamAutoScroll(true);
+                    setStreamBufferedEvents([]);
+                  }}
+                >
+                  {`${node.nodeKey} (attempt ${node.attempt})`}
+                </ActionButton>
+                <StatusBadge status={node.status} />
+              </li>
+            );
+          })
+        ) : (
+          <li>
+            <span>No run nodes have been materialized yet.</span>
+          </li>
+        )}
+      </ul>
+
+      {selectedStreamNode ? (
+        <>
+          <output className={`run-realtime-status run-realtime-status--${streamConnectionState}`} aria-live="polite">
+            <span className="run-realtime-status__badge">{agentStreamLabel.badgeLabel}</span>
+            <span className="meta-text">{agentStreamLabel.detail}</span>
+            <span className="meta-text">
+              {`Node ${selectedStreamNode.nodeKey} (attempt ${selectedStreamNode.attempt}) · last update ${formatLastUpdated(streamLastUpdatedAtMs, hasHydrated)}.`}
+            </span>
+          </output>
+
+          <div className="action-row run-agent-stream-controls">
+            <ActionButton
+              onClick={() => {
+                if (streamAutoScroll) {
+                  setStreamAutoScroll(false);
+                  return;
+                }
+
+                setStreamAutoScroll(true);
+                setStreamEvents(previous => mergeAgentStreamEvents(previous, streamBufferedEvents));
+                setStreamBufferedEvents([]);
+              }}
+            >
+              {streamAutoScroll ? 'Pause auto-scroll' : 'Resume auto-scroll'}
+            </ActionButton>
+            {streamBufferedEvents.length > 0 ? (
+              <span className="meta-text">{`${streamBufferedEvents.length} new events buffered.`}</span>
+            ) : null}
+          </div>
+
+          {streamError && (streamConnectionState === 'reconnecting' || streamConnectionState === 'stale') ? (
+            <output className="run-realtime-warning" aria-live="polite">
+              {`Agent stream degraded: ${streamError}`}
+            </output>
+          ) : null}
+
+          <ol ref={streamEventListRef} className="page-stack run-agent-stream-events" aria-label="Agent stream events">
+            {streamEvents.length > 0 ? (
+              streamEvents.map((event) => (
+                <li key={`${event.runNodeId}-${event.attempt}-${event.sequence}`} className="run-agent-stream-event">
+                  <p className="meta-text">{`#${event.sequence} · ${formatStreamTimestamp(event.timestamp)}`}</p>
+                  <p>
+                    <span className={`run-agent-stream-event-type run-agent-stream-event-type--${event.type}`}>
+                      {event.type}
+                    </span>{' '}
+                    {event.contentPreview.length > 0 ? event.contentPreview : '(no content)'}
+                  </p>
+                  {event.usage ? (
+                    <p className="meta-text">
+                      {`Usage Δ ${event.usage.deltaTokens ?? 'n/a'} · cumulative ${event.usage.cumulativeTokens ?? 'n/a'}`}
+                    </p>
+                  ) : null}
+                </li>
+              ))
+            ) : (
+              <li>
+                <p>No streamed events captured yet for this node attempt.</p>
+              </li>
+            )}
+          </ol>
+        </>
+      ) : (
+        <p>Select a running node to open its Agent Stream panel.</p>
+      )}
+    </Card>
+  );
+}
+
+type RunObservabilityCardProps = Readonly<{
+  detail: DashboardRunDetail;
+}>;
+
+function RunObservabilityCard({ detail }: RunObservabilityCardProps) {
+  return (
+    <Card title="Artifacts, diagnostics, and routing decisions" description="Recent snapshots for operator triage.">
+      <p className="meta-text">Artifacts</p>
+      {detail.artifacts.length === 0 ? <p>No artifacts captured yet.</p> : null}
+      <ul className="page-stack" aria-label="Run artifacts">
+        {detail.artifacts.map((artifact) => (
+          <li key={artifact.id}>
+            <p>{`${artifact.artifactType} (${artifact.contentType})`}</p>
+            <p className="meta-text">{truncatePreview(artifact.contentPreview)}</p>
+          </li>
+        ))}
+      </ul>
+
+      <p className="meta-text">Node diagnostics</p>
+      {detail.diagnostics.length === 0 ? <p>No node diagnostics captured yet.</p> : null}
+      <ul className="page-stack" aria-label="Run node diagnostics">
+        {detail.diagnostics.map((diagnostics) => {
+          const node = detail.nodes.find((candidate) => candidate.id === diagnostics.runNodeId);
+          const nodeLabel = node ? `${node.nodeKey} (attempt ${diagnostics.attempt})` : `Node #${diagnostics.runNodeId}`;
+          const payloadStorageSummary = resolvePayloadStorageSummary(diagnostics);
+
+          return (
+            <li key={diagnostics.id}>
+              <p>{`${nodeLabel}: ${diagnostics.outcome}`}</p>
+              <p className="meta-text">
+                {`Events ${diagnostics.retainedEventCount}/${diagnostics.eventCount}; tools ${diagnostics.diagnostics.summary.toolEventCount}; tokens ${diagnostics.diagnostics.summary.tokensUsed}.`}
+              </p>
+              <p className="meta-text">{payloadStorageSummary}</p>
+              {diagnostics.diagnostics.error ? (
+                <p className="meta-text">
+                  {`Failure: ${diagnostics.diagnostics.error.classification} (${truncatePreview(diagnostics.diagnostics.error.message)}).`}
+                </p>
+              ) : null}
+              {diagnostics.diagnostics.toolEvents.length > 0 ? (
+                <p className="meta-text">
+                  {`Tool activity: ${truncatePreview(diagnostics.diagnostics.toolEvents.map(event => event.summary).join('; '))}`}
+                </p>
+              ) : null}
+            </li>
+          );
+        })}
+      </ul>
+
+      <p className="meta-text">Routing decisions</p>
+      {detail.routingDecisions.length === 0 ? <p>No routing decisions captured yet.</p> : null}
+      <ul className="page-stack" aria-label="Run routing decisions">
+        {detail.routingDecisions.map((decision) => (
+          <li key={decision.id}>
+            <p>{decision.decisionType}</p>
+            <p className="meta-text">{decision.rationale ?? 'No rationale provided.'}</p>
+          </li>
+        ))}
+      </ul>
+    </Card>
+  );
 }
 
 export function RunDetailContent({
@@ -766,8 +1719,23 @@ export function RunDetailContent({
   const [nextRetryAtMs, setNextRetryAtMs] = useState<number | null>(null);
   const [retryCountdownSeconds, setRetryCountdownSeconds] = useState<number | null>(null);
   const [hasHydrated, setHasHydrated] = useState<boolean>(false);
+  const [streamTarget, setStreamTarget] = useState<AgentStreamTarget | null>(() =>
+    resolveInitialAgentStreamTarget(initialDetail),
+  );
+  const [streamEvents, setStreamEvents] = useState<DashboardRunNodeStreamEvent[]>([]);
+  const [streamBufferedEvents, setStreamBufferedEvents] = useState<DashboardRunNodeStreamEvent[]>([]);
+  const [streamConnectionState, setStreamConnectionState] = useState<AgentStreamConnectionState>('ended');
+  const [streamError, setStreamError] = useState<string | null>(null);
+  const [streamNextRetryAtMs, setStreamNextRetryAtMs] = useState<number | null>(null);
+  const [streamRetryCountdownSeconds, setStreamRetryCountdownSeconds] = useState<number | null>(null);
+  const [streamAutoScroll, setStreamAutoScroll] = useState<boolean>(true);
+  const [streamLastUpdatedAtMs, setStreamLastUpdatedAtMs] = useState<number>(() => Date.now());
 
   const lastUpdatedAtRef = useRef<number>(lastUpdatedAtMs);
+  const streamLastUpdatedAtRef = useRef<number>(streamLastUpdatedAtMs);
+  const streamLastSequenceRef = useRef<number>(0);
+  const streamEventListRef = useRef<HTMLOListElement | null>(null);
+  const streamAutoScrollRef = useRef<boolean>(streamAutoScroll);
 
   useEffect(() => {
     setHasHydrated(true);
@@ -781,6 +1749,16 @@ export function RunDetailContent({
     setRetryCountdownSeconds(null);
     setLastUpdatedAtMs(Date.now());
     setChannelState(enableRealtime && isActiveRunStatus(initialDetail.run.status) ? 'live' : 'disabled');
+    setStreamTarget(resolveInitialAgentStreamTarget(initialDetail));
+    setStreamEvents([]);
+    setStreamBufferedEvents([]);
+    setStreamConnectionState('ended');
+    setStreamError(null);
+    setStreamNextRetryAtMs(null);
+    setStreamRetryCountdownSeconds(null);
+    setStreamAutoScroll(true);
+    setStreamLastUpdatedAtMs(Date.now());
+    streamLastSequenceRef.current = 0;
   }, [enableRealtime, initialDetail]);
 
   useEffect(() => {
@@ -788,135 +1766,74 @@ export function RunDetailContent({
   }, [lastUpdatedAtMs]);
 
   useEffect(() => {
-    if (highlightedNodeId !== null && !detail.nodes.some((node) => node.id === highlightedNodeId)) {
-      setHighlightedNodeId(null);
-    }
-
-    if (filteredNodeId !== null && !detail.nodes.some((node) => node.id === filteredNodeId)) {
-      setFilteredNodeId(null);
-    }
-  }, [detail.nodes, filteredNodeId, highlightedNodeId]);
+    streamLastUpdatedAtRef.current = streamLastUpdatedAtMs;
+  }, [streamLastUpdatedAtMs]);
 
   useEffect(() => {
-    if (!enableRealtime || !isActiveRunStatus(detail.run.status)) {
-      setChannelState('disabled');
-      setIsRefreshing(false);
-      setNextRetryAtMs(null);
-      setUpdateError(null);
+    streamAutoScrollRef.current = streamAutoScroll;
+  }, [streamAutoScroll]);
+
+  useEffect(() => {
+    syncSelectionStateWithNodes({
+      nodes: detail.nodes,
+      highlightedNodeId,
+      filteredNodeId,
+      streamTarget,
+      setHighlightedNodeId,
+      setFilteredNodeId,
+      setStreamTarget,
+    });
+  }, [detail.nodes, filteredNodeId, highlightedNodeId, streamTarget]);
+
+  useEffect(() => {
+    return createRunDetailPollingEffect({
+      enableRealtime,
+      runId: detail.run.id,
+      runStatus: detail.run.status,
+      pollIntervalMs,
+      lastUpdatedAtRef,
+      setChannelState,
+      setIsRefreshing,
+      setNextRetryAtMs,
+      setUpdateError,
+      setDetail,
+      setLastUpdatedAtMs,
+    });
+  }, [detail.run.id, detail.run.status, enableRealtime, pollIntervalMs]);
+
+  useEffect(() => {
+    return createAgentStreamLifecycleEffect({
+      runId: detail.run.id,
+      streamTarget,
+      streamAutoScrollRef,
+      streamLastSequenceRef,
+      streamLastUpdatedAtRef,
+      setStreamEvents,
+      setStreamBufferedEvents,
+      setStreamConnectionState,
+      setStreamError,
+      setStreamNextRetryAtMs,
+      setStreamRetryCountdownSeconds,
+      setStreamLastUpdatedAtMs,
+    });
+  }, [detail.run.id, streamTarget]);
+
+  useEffect(() => {
+    if (!streamAutoScroll || streamBufferedEvents.length === 0) {
       return;
     }
 
-    let cancelled = false;
-    const abortController = new AbortController();
-    let timeoutId: ReturnType<typeof globalThis.setTimeout> | null = null;
-    let consecutiveFailures = 0;
-    const shouldSkipUpdate = (): boolean => cancelled || abortController.signal.aborted;
+    setStreamEvents(previous => mergeAgentStreamEvents(previous, streamBufferedEvents));
+    setStreamBufferedEvents([]);
+  }, [streamAutoScroll, streamBufferedEvents]);
 
-    const scheduleNextPoll = (delayMs: number): void => {
-      timeoutId = globalThis.setTimeout(() => {
-        void pollRunDetail();
-      }, delayMs);
-    };
+  useEffect(() => {
+    if (!streamAutoScroll || streamEventListRef.current === null) {
+      return;
+    }
 
-    const fetchLatestRunDetail = async (): Promise<DashboardRunDetail | null> => {
-      const response = await fetch(`/api/dashboard/runs/${detail.run.id}`, {
-        method: 'GET',
-        headers: {
-          accept: 'application/json',
-        },
-        signal: abortController.signal,
-      });
-      if (shouldSkipUpdate()) {
-        return null;
-      }
-
-      const payload = (await response.json().catch(() => null)) as unknown;
-      if (shouldSkipUpdate()) {
-        return null;
-      }
-      if (!response.ok) {
-        throw new Error(resolveApiErrorMessage(response.status, payload, 'Unable to refresh run timeline'));
-      }
-
-      const parsedDetail = parseRunDetailPayload(payload, detail.run.id);
-      if (parsedDetail === null) {
-        throw new Error('Realtime run detail response was malformed.');
-      }
-
-      return shouldSkipUpdate() ? null : parsedDetail;
-    };
-
-    const applySuccessfulPoll = (parsedDetail: DashboardRunDetail): void => {
-      consecutiveFailures = 0;
-      setDetail(parsedDetail);
-      setUpdateError(null);
-      setIsRefreshing(false);
-      setLastUpdatedAtMs(Date.now());
-      setNextRetryAtMs(null);
-
-      if (!isActiveRunStatus(parsedDetail.run.status)) {
-        setChannelState('disabled');
-        return;
-      }
-
-      setChannelState('live');
-      if (!cancelled) {
-        scheduleNextPoll(pollIntervalMs);
-      }
-    };
-
-    const handlePollFailure = (error: unknown): void => {
-      const isAbortError = error instanceof Error && error.name === 'AbortError';
-      if (shouldSkipUpdate() || isAbortError) {
-        return;
-      }
-
-      consecutiveFailures += 1;
-      const retryDelayMs = Math.min(
-        pollIntervalMs * 2 ** Math.max(0, consecutiveFailures - 1),
-        RUN_DETAIL_POLL_BACKOFF_MAX_MS,
-      );
-      const retryAt = Date.now() + retryDelayMs;
-      const stale = Date.now() - lastUpdatedAtRef.current >= RUN_DETAIL_STALE_THRESHOLD_MS;
-
-      setChannelState(stale ? 'stale' : 'reconnecting');
-      setNextRetryAtMs(retryAt);
-      setIsRefreshing(false);
-      setUpdateError(error instanceof Error ? error.message : 'Unable to refresh run timeline.');
-
-      if (!cancelled) {
-        scheduleNextPoll(retryDelayMs);
-      }
-    };
-
-    const pollRunDetail = async (): Promise<void> => {
-      if (shouldSkipUpdate()) {
-        return;
-      }
-
-      setIsRefreshing(true);
-      try {
-        const parsedDetail = await fetchLatestRunDetail();
-        if (parsedDetail === null) {
-          return;
-        }
-
-        applySuccessfulPoll(parsedDetail);
-      } catch (error) {
-        handlePollFailure(error);
-      }
-    };
-
-    scheduleNextPoll(pollIntervalMs);
-
-    return () => {
-      cancelled = true;
-      abortController.abort();
-      if (timeoutId !== null) {
-        clearTimeout(timeoutId);
-      }
-    };
-  }, [detail.run.id, detail.run.status, enableRealtime, pollIntervalMs]);
+    streamEventListRef.current.scrollTop = streamEventListRef.current.scrollHeight;
+  }, [streamAutoScroll, streamEvents]);
 
   useEffect(() => {
     if (nextRetryAtMs === null) {
@@ -936,6 +1853,25 @@ export function RunDetailContent({
       clearInterval(intervalId);
     };
   }, [nextRetryAtMs]);
+
+  useEffect(() => {
+    if (streamNextRetryAtMs === null) {
+      setStreamRetryCountdownSeconds(null);
+      return;
+    }
+
+    const updateCountdown = (): void => {
+      const remainingSeconds = Math.max(0, Math.ceil((streamNextRetryAtMs - Date.now()) / 1000));
+      setStreamRetryCountdownSeconds(remainingSeconds);
+    };
+
+    updateCountdown();
+    const intervalId = globalThis.setInterval(updateCountdown, 250);
+
+    return () => {
+      clearInterval(intervalId);
+    };
+  }, [streamNextRetryAtMs]);
 
   const timeline = useMemo(() => buildTimeline(detail), [detail]);
   const repositoryContext = useMemo(
@@ -958,6 +1894,11 @@ export function RunDetailContent({
     [filteredNodeId, timeline],
   );
   const realtimeLabel = resolveRealtimeLabel(channelState, pollIntervalMs, retryCountdownSeconds);
+  const agentStreamLabel = resolveAgentStreamLabel(streamConnectionState, streamRetryCountdownSeconds);
+  const selectedStreamNode = useMemo(
+    () => (streamTarget ? detail.nodes.find(node => node.id === streamTarget.runNodeId) ?? null : null),
+    [detail.nodes, streamTarget],
+  );
   const toggleNodeFilter = (nodeId: number): void => {
     const nextNodeId = filteredNodeId === nodeId ? null : nodeId;
     setFilteredNodeId(nextNodeId);
@@ -1109,71 +2050,26 @@ export function RunDetailContent({
         </Panel>
       </div>
 
-      <Card title="Artifacts, diagnostics, and routing decisions" description="Recent snapshots for operator triage.">
-        <p className="meta-text">Artifacts</p>
-        {detail.artifacts.length === 0 ? <p>No artifacts captured yet.</p> : null}
-        <ul className="page-stack" aria-label="Run artifacts">
-          {detail.artifacts.map((artifact) => (
-            <li key={artifact.id}>
-              <p>{`${artifact.artifactType} (${artifact.contentType})`}</p>
-              <p className="meta-text">{truncatePreview(artifact.contentPreview)}</p>
-            </li>
-          ))}
-        </ul>
+      <RunAgentStreamCard
+        detail={detail}
+        streamTarget={streamTarget}
+        selectedStreamNode={selectedStreamNode}
+        agentStreamLabel={agentStreamLabel}
+        streamConnectionState={streamConnectionState}
+        streamLastUpdatedAtMs={streamLastUpdatedAtMs}
+        hasHydrated={hasHydrated}
+        streamAutoScroll={streamAutoScroll}
+        streamBufferedEvents={streamBufferedEvents}
+        streamError={streamError}
+        streamEvents={streamEvents}
+        streamEventListRef={streamEventListRef}
+        setStreamTarget={setStreamTarget}
+        setStreamAutoScroll={setStreamAutoScroll}
+        setStreamBufferedEvents={setStreamBufferedEvents}
+        setStreamEvents={setStreamEvents}
+      />
 
-        <p className="meta-text">Node diagnostics</p>
-        {detail.diagnostics.length === 0 ? <p>No node diagnostics captured yet.</p> : null}
-        <ul className="page-stack" aria-label="Run node diagnostics">
-          {detail.diagnostics.map((diagnostics) => {
-            const node = detail.nodes.find((candidate) => candidate.id === diagnostics.runNodeId);
-            const nodeLabel = node ? `${node.nodeKey} (attempt ${diagnostics.attempt})` : `Node #${diagnostics.runNodeId}`;
-            let payloadStorageSummary = 'Payload stored without truncation.';
-
-            if (diagnostics.truncated || diagnostics.redacted) {
-              const normalizationActions: string[] = [];
-              if (diagnostics.redacted) {
-                normalizationActions.push('redaction');
-              }
-              if (diagnostics.truncated) {
-                normalizationActions.push('truncation');
-              }
-
-              payloadStorageSummary = `Payload normalized with ${normalizationActions.join(' and ')}.`;
-            }
-
-            return (
-              <li key={diagnostics.id}>
-                <p>{`${nodeLabel}: ${diagnostics.outcome}`}</p>
-                <p className="meta-text">
-                  {`Events ${diagnostics.retainedEventCount}/${diagnostics.eventCount}; tools ${diagnostics.diagnostics.summary.toolEventCount}; tokens ${diagnostics.diagnostics.summary.tokensUsed}.`}
-                </p>
-                <p className="meta-text">{payloadStorageSummary}</p>
-                {diagnostics.diagnostics.error ? (
-                  <p className="meta-text">
-                    {`Failure: ${diagnostics.diagnostics.error.classification} (${truncatePreview(diagnostics.diagnostics.error.message)}).`}
-                  </p>
-                ) : null}
-                {diagnostics.diagnostics.toolEvents.length > 0 ? (
-                  <p className="meta-text">
-                    {`Tool activity: ${truncatePreview(diagnostics.diagnostics.toolEvents.map(event => event.summary).join('; '))}`}
-                  </p>
-                ) : null}
-              </li>
-            );
-          })}
-        </ul>
-
-        <p className="meta-text">Routing decisions</p>
-        {detail.routingDecisions.length === 0 ? <p>No routing decisions captured yet.</p> : null}
-        <ul className="page-stack" aria-label="Run routing decisions">
-          {detail.routingDecisions.map((decision) => (
-            <li key={decision.id}>
-              <p>{decision.decisionType}</p>
-              <p className="meta-text">{decision.rationale ?? 'No rationale provided.'}</p>
-            </li>
-          ))}
-        </ul>
-      </Card>
+      <RunObservabilityCard detail={detail} />
     </div>
   );
 }

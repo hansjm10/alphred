@@ -8,6 +8,7 @@ import {
   promptTemplates,
   repositories,
   runNodeDiagnostics,
+  runNodeStreamEvents,
   routingDecisions,
   runWorktrees,
   runNodes,
@@ -958,6 +959,94 @@ describe('database schema hardening', () => {
     ).toThrow();
   });
 
+  it('enforces run-node stream event attempt and sequence identity and bounds', () => {
+    const db = createDatabase(':memory:');
+    migrateDatabase(db);
+    const seed = seedTreeState(db, 'stream-events');
+
+    const runNode = db
+      .insert(runNodes)
+      .values({
+        workflowRunId: seed.runId,
+        treeNodeId: seed.sourceNodeId,
+        nodeKey: seed.sourceNodeKey,
+        status: 'pending',
+        sequenceIndex: 1,
+      })
+      .returning({ id: runNodes.id })
+      .get();
+
+    db.insert(runNodeStreamEvents)
+      .values({
+        workflowRunId: seed.runId,
+        runNodeId: runNode.id,
+        attempt: 1,
+        sequence: 1,
+        eventType: 'system',
+        timestamp: 100,
+        contentChars: 5,
+        contentPreview: 'start',
+        metadata: { key: 'value' },
+        usageDeltaTokens: null,
+        usageCumulativeTokens: null,
+      })
+      .run();
+
+    expect(() =>
+      db.insert(runNodeStreamEvents)
+        .values({
+          workflowRunId: seed.runId,
+          runNodeId: runNode.id,
+          attempt: 1,
+          sequence: 1,
+          eventType: 'assistant',
+          timestamp: 101,
+          contentChars: 4,
+          contentPreview: 'dup',
+          metadata: null,
+          usageDeltaTokens: null,
+          usageCumulativeTokens: null,
+        })
+        .run(),
+    ).toThrow();
+
+    expect(() =>
+      db.insert(runNodeStreamEvents)
+        .values({
+          workflowRunId: seed.runId,
+          runNodeId: runNode.id,
+          attempt: 0,
+          sequence: 2,
+          eventType: 'assistant',
+          timestamp: 102,
+          contentChars: 3,
+          contentPreview: 'bad',
+          metadata: null,
+          usageDeltaTokens: null,
+          usageCumulativeTokens: null,
+        })
+        .run(),
+    ).toThrow();
+
+    expect(() =>
+      db.insert(runNodeStreamEvents)
+        .values({
+          workflowRunId: seed.runId,
+          runNodeId: runNode.id,
+          attempt: 1,
+          sequence: 2,
+          eventType: 'usage',
+          timestamp: 103,
+          contentChars: 0,
+          contentPreview: '',
+          metadata: { tokens: 10 },
+          usageDeltaTokens: -1,
+          usageCumulativeTokens: 10,
+        })
+        .run(),
+    ).toThrow();
+  });
+
   it('creates required performance indexes for run and artifact hot paths', () => {
     const db = createDatabase(':memory:');
     migrateDatabase(db);
@@ -982,5 +1071,10 @@ describe('database schema hardening', () => {
     expect(names.has('run_node_diagnostics_run_id_created_at_idx')).toBe(true);
     expect(names.has('run_node_diagnostics_run_node_id_created_at_idx')).toBe(true);
     expect(names.has('run_node_diagnostics_created_at_idx')).toBe(true);
+    expect(names.has('run_node_stream_events_run_id_run_node_attempt_seq_uq')).toBe(true);
+    expect(names.has('run_node_stream_events_run_id_attempt_sequence_idx')).toBe(true);
+    expect(names.has('run_node_stream_events_run_id_created_at_idx')).toBe(true);
+    expect(names.has('run_node_stream_events_run_node_id_created_at_idx')).toBe(true);
+    expect(names.has('run_node_stream_events_created_at_idx')).toBe(true);
   });
 });

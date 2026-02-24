@@ -1,7 +1,7 @@
 import type { AgentProviderName, PhaseDefinition, ProviderEvent, ProviderRunOptions } from '@alphred/shared';
 import { describe, expect, it, vi } from 'vitest';
 import type { PhaseProvider } from './phaseRunner.js';
-import { runPhase } from './phaseRunner.js';
+import { PhaseRunError, runPhase } from './phaseRunner.js';
 
 const defaultOptions: ProviderRunOptions = {
   workingDirectory: '/tmp/alphred-worktree',
@@ -61,6 +61,24 @@ describe('runPhase', () => {
       events: emittedEvents,
       tokensUsed: 13,
     });
+  });
+
+  it('forwards streamed events to the optional onEvent callback in emission order', async () => {
+    const phase = createAgentPhase();
+    const emittedEvents: ProviderEvent[] = [
+      { type: 'system', content: 'provider started', timestamp: 100 },
+      { type: 'assistant', content: 'intermediate text', timestamp: 101 },
+      { type: 'result', content: 'final report', timestamp: 102 },
+    ];
+    const onEvent = vi.fn();
+
+    await runPhase(phase, defaultOptions, {
+      resolveProvider: () => createProvider(emittedEvents),
+      onEvent,
+    });
+
+    expect(onEvent).toHaveBeenCalledTimes(3);
+    expect(onEvent.mock.calls.map(call => call[0])).toEqual(emittedEvents);
   });
 
   it('resolves the configured claude provider and preserves emitted events', async () => {
@@ -364,6 +382,43 @@ describe('runPhase', () => {
         resolveProvider: () => createProvider(emittedEvents),
       }),
     ).rejects.toThrow('Agent phase "draft" completed without a result event.');
+
+    await expect(
+      runPhase(phase, defaultOptions, {
+        resolveProvider: () => createProvider(emittedEvents),
+      }),
+    ).rejects.toMatchObject({
+      name: 'PhaseRunError',
+      events: emittedEvents,
+      tokensUsed: 8,
+    } satisfies Partial<PhaseRunError>);
+  });
+
+  it('wraps provider runtime failures in PhaseRunError and preserves partial event history', async () => {
+    const phase = createAgentPhase();
+    const providerError = new Error('transport disconnected');
+    const emittedBeforeFailure: ProviderEvent[] = [
+      { type: 'system', content: 'started', timestamp: 100 },
+      { type: 'usage', content: '', timestamp: 101, metadata: { tokens: 11 } },
+    ];
+
+    await expect(
+      runPhase(phase, defaultOptions, {
+        resolveProvider: () => ({
+          async *run(): AsyncIterable<ProviderEvent> {
+            yield emittedBeforeFailure[0];
+            yield emittedBeforeFailure[1];
+            throw providerError;
+          },
+        }),
+      }),
+    ).rejects.toMatchObject({
+      name: 'PhaseRunError',
+      message: 'Agent phase "draft" execution failed.',
+      events: emittedBeforeFailure,
+      tokensUsed: 11,
+      cause: providerError,
+    } satisfies Partial<PhaseRunError>);
   });
 
   it('skips provider resolution for non-agent phases', async () => {
