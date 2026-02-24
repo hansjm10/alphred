@@ -11,11 +11,14 @@ import type {
 import { ActionButton, ButtonLink, Card, Panel, StatusBadge } from '../../ui/primitives';
 import { isActiveRunStatus } from '../run-summary-utils';
 
+type TimelineCategory = 'lifecycle' | 'node' | 'artifact' | 'diagnostics' | 'routing';
+
 type TimelineItem = Readonly<{
   key: string;
   timestamp: Date;
   summary: string;
   relatedNodeId: number | null;
+  category: TimelineCategory;
 }>;
 
 type PrimaryActionState = Readonly<{
@@ -683,6 +686,43 @@ function partitionByRecency<T>(
   };
 }
 
+const TIMELINE_CATEGORY_LABELS: Record<TimelineCategory, string> = {
+  lifecycle: 'Lifecycle',
+  node: 'Node',
+  artifact: 'Artifact',
+  diagnostics: 'Diagnostics',
+  routing: 'Routing',
+};
+
+function TimelineCategoryIcon({ category }: { category: TimelineCategory }) {
+  const iconProps = {
+    'aria-hidden': true as const,
+    focusable: 'false' as const,
+    className: 'timeline-category-icon',
+    width: 10,
+    height: 10,
+    viewBox: '0 0 10 10',
+    fill: 'none',
+    stroke: 'currentColor',
+    strokeWidth: 1.5,
+    strokeLinecap: 'round' as const,
+    strokeLinejoin: 'round' as const,
+  };
+
+  switch (category) {
+    case 'lifecycle':
+      return <svg {...iconProps}><circle cx="5" cy="5" r="3.5" /></svg>;
+    case 'node':
+      return <svg {...iconProps}><path d="M2 5h6M6 3l2 2-2 2" /></svg>;
+    case 'artifact':
+      return <svg {...iconProps}><rect x="2" y="1.5" width="6" height="7" rx="1" /></svg>;
+    case 'diagnostics':
+      return <svg {...iconProps}><path d="M5 1.5L8.5 8H1.5z" /></svg>;
+    case 'routing':
+      return <svg {...iconProps}><path d="M5 1l3.5 4L5 9 1.5 5z" /></svg>;
+  }
+}
+
 function buildTimeline(detail: DashboardRunDetail): readonly TimelineItem[] {
   const fallbackDate = parseDateValue(detail.run.createdAt) ?? new Date(0);
   const events: TimelineItem[] = [];
@@ -694,6 +734,7 @@ function buildTimeline(detail: DashboardRunDetail): readonly TimelineItem[] {
       timestamp: startedAt,
       summary: 'Run started.',
       relatedNodeId: null,
+      category: 'lifecycle',
     });
   }
 
@@ -704,6 +745,7 @@ function buildTimeline(detail: DashboardRunDetail): readonly TimelineItem[] {
       timestamp: completedAt,
       summary: `Run reached terminal state (${detail.run.status}).`,
       relatedNodeId: null,
+      category: 'lifecycle',
     });
   }
 
@@ -715,6 +757,7 @@ function buildTimeline(detail: DashboardRunDetail): readonly TimelineItem[] {
         timestamp: nodeStartedAt,
         summary: `${node.nodeKey} started (attempt ${node.attempt}).`,
         relatedNodeId: node.id,
+        category: 'node',
       });
     }
 
@@ -725,6 +768,7 @@ function buildTimeline(detail: DashboardRunDetail): readonly TimelineItem[] {
         timestamp: nodeCompletedAt,
         summary: toNodeTerminalSummary(node),
         relatedNodeId: node.id,
+        category: 'node',
       });
     }
   }
@@ -736,6 +780,7 @@ function buildTimeline(detail: DashboardRunDetail): readonly TimelineItem[] {
       timestamp: createdAt,
       summary: `Artifact captured (${artifact.artifactType}/${artifact.contentType}).`,
       relatedNodeId: artifact.runNodeId,
+      category: 'artifact',
     });
   }
 
@@ -746,6 +791,7 @@ function buildTimeline(detail: DashboardRunDetail): readonly TimelineItem[] {
       timestamp: createdAt,
       summary: `Routing decision: ${decision.decisionType}.`,
       relatedNodeId: decision.runNodeId,
+      category: 'routing',
     });
   }
 
@@ -756,6 +802,7 @@ function buildTimeline(detail: DashboardRunDetail): readonly TimelineItem[] {
       timestamp: createdAt,
       summary: `Diagnostics persisted (attempt ${diagnostics.attempt}, ${diagnostics.outcome}).`,
       relatedNodeId: diagnostics.runNodeId,
+      category: 'diagnostics',
     });
   }
 
@@ -1795,7 +1842,7 @@ function RunObservabilityCard({ detail }: RunObservabilityCardProps) {
   };
 
   return (
-    <Card title="Artifacts, diagnostics, and routing decisions" description="Recent snapshots for operator triage.">
+    <Card title="Observability">
       <section className="run-observability-section">
         <p className="meta-text">Artifacts</p>
         {detail.artifacts.length === 0 ? <p>No artifacts captured yet.</p> : null}
@@ -2091,13 +2138,19 @@ export function RunDetailContent({
       <li key={event.key}>
         <button
           type="button"
-          className={`run-timeline-event${highlighted ? ' run-timeline-event--selected' : ''}`}
+          className={`run-timeline-event run-timeline-event--${event.category}${highlighted ? ' run-timeline-event--selected' : ''}`}
           aria-pressed={highlighted}
           onClick={() => {
             setHighlightedNodeId(event.relatedNodeId);
           }}
         >
-          <p className="meta-text">{formatTimelineTime(event.timestamp, hasHydrated)}</p>
+          <span className="run-timeline-event__header">
+            <span className={`timeline-category-indicator timeline-category-indicator--${event.category}`}>
+              <TimelineCategoryIcon category={event.category} />
+              <span>{TIMELINE_CATEGORY_LABELS[event.category]}</span>
+            </span>
+            <span className="meta-text">{formatTimelineTime(event.timestamp, hasHydrated)}</span>
+          </span>
           <p>{event.summary}</p>
         </button>
       </li>
