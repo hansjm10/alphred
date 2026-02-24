@@ -1194,6 +1194,143 @@ describe('RunDetailContent realtime updates', () => {
     expect(disclosure).toHaveTextContent(/design \(attempt 1\)/i);
   });
 
+  it('shows "no target selected" in collapsed stream for terminal runs without nodes', () => {
+    render(
+      <RunDetailContent
+        initialDetail={createRunDetail({
+          run: {
+            status: 'completed',
+            completedAt: '2026-02-18T00:05:00.000Z',
+          },
+          nodes: [],
+          artifacts: [],
+          routingDecisions: [],
+          diagnostics: [],
+        })}
+        repositories={[createRepository()]}
+        enableRealtime={false}
+      />,
+    );
+
+    const disclosure = screen.getByText(/Stream ended/i);
+    expect(disclosure).toHaveTextContent(/no target selected/i);
+    expect(disclosure).toHaveTextContent(/no events captured/i);
+  });
+
+  it('shows singular "event" label in collapsed stream for terminal runs with one stream event', async () => {
+    vi.stubGlobal('EventSource', MockEventSource as unknown as typeof EventSource);
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/nodes/1/stream')) {
+        return createJsonResponse({
+          workflowRunId: 412,
+          runNodeId: 1,
+          attempt: 1,
+          nodeStatus: 'completed',
+          ended: true,
+          latestSequence: 1,
+          events: [
+            createStreamEvent({ runNodeId: 1, sequence: 1, contentPreview: 'sole event' }),
+          ],
+        });
+      }
+      return createJsonResponse(createRunDetail({
+        run: { status: 'completed', completedAt: '2026-02-18T00:05:00.000Z' },
+      }));
+    });
+
+    render(
+      <RunDetailContent
+        initialDetail={createRunDetail({
+          run: {
+            status: 'completed',
+            completedAt: '2026-02-18T00:05:00.000Z',
+          },
+          nodes: [
+            {
+              id: 1,
+              treeNodeId: 1,
+              nodeKey: 'design',
+              sequenceIndex: 0,
+              attempt: 1,
+              status: 'completed',
+              startedAt: '2026-02-18T00:00:10.000Z',
+              completedAt: '2026-02-18T00:00:30.000Z',
+              latestArtifact: null,
+              latestRoutingDecision: null,
+              latestDiagnostics: null,
+            },
+          ],
+        })}
+        repositories={[createRepository()]}
+        enableRealtime={false}
+      />,
+    );
+
+    await waitFor(() => {
+      const disclosure = screen.getByText(/Stream ended/i);
+      expect(disclosure).toHaveTextContent(/1 event captured/i);
+      expect(disclosure).not.toHaveTextContent(/1 events captured/i);
+    });
+  });
+
+  it('shows plural "events" label in collapsed stream for terminal runs with multiple stream events', async () => {
+    vi.stubGlobal('EventSource', MockEventSource as unknown as typeof EventSource);
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/nodes/1/stream')) {
+        return createJsonResponse({
+          workflowRunId: 412,
+          runNodeId: 1,
+          attempt: 1,
+          nodeStatus: 'completed',
+          ended: true,
+          latestSequence: 2,
+          events: [
+            createStreamEvent({ runNodeId: 1, sequence: 1, contentPreview: 'first event' }),
+            createStreamEvent({ runNodeId: 1, sequence: 2, contentPreview: 'second event' }),
+          ],
+        });
+      }
+      return createJsonResponse(createRunDetail({
+        run: { status: 'completed', completedAt: '2026-02-18T00:05:00.000Z' },
+      }));
+    });
+
+    render(
+      <RunDetailContent
+        initialDetail={createRunDetail({
+          run: {
+            status: 'completed',
+            completedAt: '2026-02-18T00:05:00.000Z',
+          },
+          nodes: [
+            {
+              id: 1,
+              treeNodeId: 1,
+              nodeKey: 'design',
+              sequenceIndex: 0,
+              attempt: 1,
+              status: 'completed',
+              startedAt: '2026-02-18T00:00:10.000Z',
+              completedAt: '2026-02-18T00:00:30.000Z',
+              latestArtifact: null,
+              latestRoutingDecision: null,
+              latestDiagnostics: null,
+            },
+          ],
+        })}
+        repositories={[createRepository()]}
+        enableRealtime={false}
+      />,
+    );
+
+    await waitFor(() => {
+      const disclosure = screen.getByText(/Stream ended/i);
+      expect(disclosure).toHaveTextContent(/2 events captured/i);
+    });
+  });
+
   it('does not collapse agent stream for active runs', () => {
     render(
       <RunDetailContent
