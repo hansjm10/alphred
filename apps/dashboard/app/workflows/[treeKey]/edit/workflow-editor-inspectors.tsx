@@ -442,9 +442,9 @@ function AgentNodeFields({
           onChange={(event) => onModelChange(event.target.value.length > 0 ? event.target.value : null)}
           disabled={!hasModelOptions}
         >
-          {!hasModelOptions ? (
+          {hasModelOptions ? null : (
             <option value="">No models available</option>
-          ) : null}
+          )}
           {modelOptionsWithCurrent.map((option) => (
             <option key={`${option.provider}:${option.model}`} value={option.model}>
               {option.label}
