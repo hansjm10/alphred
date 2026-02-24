@@ -5,7 +5,7 @@ const validRunTransitions: Record<RunStatus, RunStatus[]> = {
   running: ['completed', 'failed', 'cancelled', 'paused'],
   paused: ['running', 'cancelled'],
   completed: [],
-  failed: [],
+  failed: ['running'],
   cancelled: [],
 };
 

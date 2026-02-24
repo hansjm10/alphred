@@ -416,7 +416,7 @@ export function migrateDatabase(db: AlphredDatabase): void {
         OR
         (OLD.status = 'completed' AND NEW.status = 'pending')
         OR
-        (OLD.status = 'failed' AND NEW.status = 'running')
+        (OLD.status = 'failed' AND NEW.status IN ('running', 'pending'))
         OR
         (OLD.status = 'skipped' AND NEW.status = 'pending')
       )

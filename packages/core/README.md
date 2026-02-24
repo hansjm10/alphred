@@ -2,6 +2,17 @@
 
 Provider-agnostic workflow runtime behavior.
 
+## Runtime Lifecycle Controls
+
+The SQL workflow executor exposes explicit run lifecycle controls:
+
+- `pauseRun`: only valid from `running`; blocks additional node claims while allowing the current in-flight node attempt to finish.
+- `resumeRun`: only valid from `paused`; returns the run to `running`.
+- `cancelRun`: valid from `pending`, `running`, or `paused`; terminalizes the run as `cancelled`.
+- `retryRun`: only valid from `failed`; requeues latest failed run-node attempts as `pending` with incremented `attempt`, and transitions the run back to `running` without resetting unrelated successful nodes.
+
+Invalid control transitions throw typed `WorkflowRunControlError` values so API/CLI layers can map lifecycle failures deterministically.
+
 ## SQL Workflow Executor Routing Contract
 
 The SQL workflow executor reads routing intent from structured provider result metadata and resolves outgoing edges deterministically.

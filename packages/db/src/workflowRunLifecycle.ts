@@ -11,7 +11,7 @@ const allowedTransitions: Readonly<Record<WorkflowRunStatus, readonly WorkflowRu
   running: ['completed', 'failed', 'cancelled', 'paused'],
   paused: ['running', 'cancelled'],
   completed: [],
-  failed: [],
+  failed: ['running'],
   cancelled: [],
 };
 

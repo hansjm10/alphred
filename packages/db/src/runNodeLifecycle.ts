@@ -12,7 +12,7 @@ const allowedTransitions: Readonly<Record<RunNodeStatus, readonly RunNodeStatus[
   // Attempt increment semantics for completed-node requeue are enforced by
   // executor-owned helpers, not this generic transition guard.
   completed: ['pending'],
-  failed: ['running'],
+  failed: ['running', 'pending'],
   skipped: ['pending'],
   cancelled: [],
 };

@@ -291,6 +291,32 @@ describe('database schema hardening', () => {
       .returning({ id: runNodes.id })
       .get();
 
+    const failedTreeNode = db
+      .insert(treeNodes)
+      .values({
+        workflowTreeId: seed.treeId,
+        nodeKey: `${seed.targetNodeKey}_retry`,
+        nodeType: 'agent',
+        provider: 'codex',
+        promptTemplateId: seed.promptTemplateId,
+        maxRetries: 1,
+        sequenceIndex: 3,
+      })
+      .returning({ id: treeNodes.id, nodeKey: treeNodes.nodeKey })
+      .get();
+
+    const failedNode = db
+      .insert(runNodes)
+      .values({
+        workflowRunId: seed.runId,
+        treeNodeId: failedTreeNode.id,
+        nodeKey: failedTreeNode.nodeKey,
+        status: 'pending',
+        sequenceIndex: 3,
+      })
+      .returning({ id: runNodes.id })
+      .get();
+
     db.run(sql`DROP TRIGGER IF EXISTS run_nodes_status_transition_update_ck`);
     db.run(sql`CREATE TRIGGER run_nodes_status_transition_update_ck
       BEFORE UPDATE OF status ON run_nodes
@@ -324,6 +350,16 @@ describe('database schema hardening', () => {
       .set({ status: 'skipped', completedAt: '2026-01-01T00:01:30.000Z' })
       .where(eq(runNodes.id, skippedNode.id))
       .run();
+    db
+      .update(runNodes)
+      .set({ status: 'running', startedAt: '2026-01-01T00:02:00.000Z' })
+      .where(eq(runNodes.id, failedNode.id))
+      .run();
+    db
+      .update(runNodes)
+      .set({ status: 'failed', completedAt: '2026-01-01T00:03:00.000Z' })
+      .where(eq(runNodes.id, failedNode.id))
+      .run();
 
     expect(() =>
       db
@@ -338,6 +374,14 @@ describe('database schema hardening', () => {
         .update(runNodes)
         .set({ status: 'pending', startedAt: null, completedAt: null })
         .where(eq(runNodes.id, skippedNode.id))
+        .run(),
+    ).toThrow('run_nodes status transition is not allowed');
+
+    expect(() =>
+      db
+        .update(runNodes)
+        .set({ status: 'pending', startedAt: null, completedAt: null })
+        .where(eq(runNodes.id, failedNode.id))
         .run(),
     ).toThrow('run_nodes status transition is not allowed');
 
@@ -356,6 +400,14 @@ describe('database schema hardening', () => {
         .update(runNodes)
         .set({ status: 'pending', startedAt: null, completedAt: null })
         .where(eq(runNodes.id, skippedNode.id))
+        .run(),
+    ).not.toThrow();
+
+    expect(() =>
+      db
+        .update(runNodes)
+        .set({ status: 'pending', startedAt: null, completedAt: null })
+        .where(eq(runNodes.id, failedNode.id))
         .run(),
     ).not.toThrow();
   });

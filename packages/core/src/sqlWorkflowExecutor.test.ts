@@ -6133,4 +6133,313 @@ describe('createSqlWorkflowExecutor', () => {
     });
     expect(onRunTerminal).not.toHaveBeenCalled();
   });
+
+  it('returns typed control errors for invalid lifecycle transitions', async () => {
+    const { db, runId } = seedSingleAgentRun();
+    const executor = createSqlWorkflowExecutor(db, {
+      resolveProvider: () => createProvider([]),
+    });
+
+    await expect(
+      executor.pauseRun({
+        workflowRunId: runId,
+      }),
+    ).rejects.toMatchObject({
+      name: 'WorkflowRunControlError',
+      code: 'WORKFLOW_RUN_CONTROL_INVALID_TRANSITION',
+      action: 'pause',
+      workflowRunId: runId,
+      runStatus: 'pending',
+    });
+  });
+
+  it('preserves in-flight node completion when paused and blocks additional node claims', async () => {
+    const { db, runId, sourceRunNodeId, targetRunNodeId } = seedLinearAutoRun();
+    let invocationCount = 0;
+
+    const executor = createSqlWorkflowExecutor(db, {
+      resolveProvider: () => ({
+        async *run(): AsyncIterable<ProviderEvent> {
+          invocationCount += 1;
+          if (invocationCount === 1) {
+            await executor.pauseRun({
+              workflowRunId: runId,
+            });
+          }
+
+          yield {
+            type: 'result',
+            content: `report-${invocationCount}`,
+            timestamp: invocationCount,
+          };
+        },
+      }),
+    });
+
+    const result = await executor.executeRun({
+      workflowRunId: runId,
+      options: {
+        workingDirectory: '/tmp/alphred-worktree',
+      },
+    });
+
+    expect(result.finalStep).toEqual({
+      outcome: 'blocked',
+      workflowRunId: runId,
+      runStatus: 'paused',
+    });
+    expect(invocationCount).toBe(1);
+
+    const persistedRun = db
+      .select({
+        status: workflowRuns.status,
+      })
+      .from(workflowRuns)
+      .where(eq(workflowRuns.id, runId))
+      .get();
+    expect(persistedRun?.status).toBe('paused');
+
+    const persistedNodes = db
+      .select({
+        id: runNodes.id,
+        status: runNodes.status,
+      })
+      .from(runNodes)
+      .where(eq(runNodes.workflowRunId, runId))
+      .all();
+
+    expect(persistedNodes).toEqual(
+      expect.arrayContaining([
+        { id: sourceRunNodeId, status: 'completed' },
+        { id: targetRunNodeId, status: 'pending' },
+      ]),
+    );
+  });
+
+  it('keeps run cancelled when cancel control is requested during in-flight execution', async () => {
+    const { db, runId, sourceRunNodeId, targetRunNodeId } = seedLinearAutoRun();
+    let invocationCount = 0;
+
+    const executor = createSqlWorkflowExecutor(db, {
+      resolveProvider: () => ({
+        async *run(): AsyncIterable<ProviderEvent> {
+          invocationCount += 1;
+          if (invocationCount === 1) {
+            await executor.cancelRun({
+              workflowRunId: runId,
+            });
+          }
+
+          yield {
+            type: 'result',
+            content: `report-${invocationCount}`,
+            timestamp: invocationCount,
+          };
+        },
+      }),
+    });
+
+    const result = await executor.executeRun({
+      workflowRunId: runId,
+      options: {
+        workingDirectory: '/tmp/alphred-worktree',
+      },
+    });
+
+    expect(result.finalStep).toEqual({
+      outcome: 'run_terminal',
+      workflowRunId: runId,
+      runStatus: 'cancelled',
+    });
+    expect(invocationCount).toBe(1);
+
+    const persistedRun = db
+      .select({
+        status: workflowRuns.status,
+      })
+      .from(workflowRuns)
+      .where(eq(workflowRuns.id, runId))
+      .get();
+    expect(persistedRun?.status).toBe('cancelled');
+
+    const persistedNodes = db
+      .select({
+        id: runNodes.id,
+        status: runNodes.status,
+      })
+      .from(runNodes)
+      .where(eq(runNodes.workflowRunId, runId))
+      .all();
+
+    expect(persistedNodes).toEqual(
+      expect.arrayContaining([
+        { id: sourceRunNodeId, status: 'completed' },
+        { id: targetRunNodeId, status: 'pending' },
+      ]),
+    );
+  });
+
+  it('requeues only failed latest attempts on retry control and keeps successful nodes intact', async () => {
+    const { db, runId, firstRunNodeId, secondRunNodeId } = seedTwoRootAgentRun();
+    transitionWorkflowRunStatus(db, {
+      workflowRunId: runId,
+      expectedFrom: 'pending',
+      to: 'running',
+      occurredAt: '2026-01-01T00:00:00.000Z',
+    });
+    transitionRunNodeStatus(db, {
+      runNodeId: firstRunNodeId,
+      expectedFrom: 'pending',
+      to: 'running',
+      occurredAt: '2026-01-01T00:01:00.000Z',
+    });
+    transitionRunNodeStatus(db, {
+      runNodeId: firstRunNodeId,
+      expectedFrom: 'running',
+      to: 'completed',
+      occurredAt: '2026-01-01T00:02:00.000Z',
+    });
+    transitionRunNodeStatus(db, {
+      runNodeId: secondRunNodeId,
+      expectedFrom: 'pending',
+      to: 'running',
+      occurredAt: '2026-01-01T00:03:00.000Z',
+    });
+    transitionRunNodeStatus(db, {
+      runNodeId: secondRunNodeId,
+      expectedFrom: 'running',
+      to: 'failed',
+      occurredAt: '2026-01-01T00:04:00.000Z',
+    });
+    transitionWorkflowRunStatus(db, {
+      workflowRunId: runId,
+      expectedFrom: 'running',
+      to: 'failed',
+      occurredAt: '2026-01-01T00:04:30.000Z',
+    });
+
+    const executor = createSqlWorkflowExecutor(db, {
+      resolveProvider: () => createProvider([]),
+    });
+
+    const retryResult = await executor.retryRun({
+      workflowRunId: runId,
+    });
+
+    expect(retryResult).toEqual({
+      action: 'retry',
+      outcome: 'applied',
+      workflowRunId: runId,
+      previousRunStatus: 'failed',
+      runStatus: 'running',
+      retriedRunNodeIds: [secondRunNodeId],
+    });
+
+    const persistedRun = db
+      .select({
+        status: workflowRuns.status,
+      })
+      .from(workflowRuns)
+      .where(eq(workflowRuns.id, runId))
+      .get();
+    expect(persistedRun?.status).toBe('running');
+
+    const persistedNodes = db
+      .select({
+        id: runNodes.id,
+        status: runNodes.status,
+        attempt: runNodes.attempt,
+        startedAt: runNodes.startedAt,
+        completedAt: runNodes.completedAt,
+      })
+      .from(runNodes)
+      .where(eq(runNodes.workflowRunId, runId))
+      .all();
+
+    expect(persistedNodes).toEqual(
+      expect.arrayContaining([
+        {
+          id: firstRunNodeId,
+          status: 'completed',
+          attempt: 1,
+          startedAt: '2026-01-01T00:01:00.000Z',
+          completedAt: '2026-01-01T00:02:00.000Z',
+        },
+        {
+          id: secondRunNodeId,
+          status: 'pending',
+          attempt: 2,
+          startedAt: null,
+          completedAt: null,
+        },
+      ]),
+    );
+  });
+
+  it('treats repeated retry control requests deterministically under near-concurrent calls', async () => {
+    const { db, runId, secondRunNodeId } = seedTwoRootAgentRun();
+    transitionWorkflowRunStatus(db, {
+      workflowRunId: runId,
+      expectedFrom: 'pending',
+      to: 'running',
+      occurredAt: '2026-01-01T00:00:00.000Z',
+    });
+
+    const firstPending = db
+      .select({ id: runNodes.id })
+      .from(runNodes)
+      .where(eq(runNodes.workflowRunId, runId))
+      .orderBy(asc(runNodes.sequenceIndex))
+      .all();
+
+    for (const [index, node] of firstPending.entries()) {
+      transitionRunNodeStatus(db, {
+        runNodeId: node.id,
+        expectedFrom: 'pending',
+        to: 'running',
+        occurredAt: `2026-01-01T00:0${index + 1}:00.000Z`,
+      });
+      transitionRunNodeStatus(db, {
+        runNodeId: node.id,
+        expectedFrom: 'running',
+        to: node.id === secondRunNodeId ? 'failed' : 'completed',
+        occurredAt: `2026-01-01T00:1${index + 1}:00.000Z`,
+      });
+    }
+
+    transitionWorkflowRunStatus(db, {
+      workflowRunId: runId,
+      expectedFrom: 'running',
+      to: 'failed',
+      occurredAt: '2026-01-01T00:20:00.000Z',
+    });
+
+    const executor = createSqlWorkflowExecutor(db, {
+      resolveProvider: () => createProvider([]),
+    });
+
+    const [firstRetry, secondRetry] = await Promise.all([
+      executor.retryRun({ workflowRunId: runId }),
+      executor.retryRun({ workflowRunId: runId }),
+    ]);
+
+    expect(firstRetry).toEqual(
+      expect.objectContaining({
+        action: 'retry',
+        outcome: 'applied',
+        workflowRunId: runId,
+        previousRunStatus: 'failed',
+        runStatus: 'running',
+        retriedRunNodeIds: [secondRunNodeId],
+      }),
+    );
+    expect(secondRetry).toEqual({
+      action: 'retry',
+      outcome: 'noop',
+      workflowRunId: runId,
+      previousRunStatus: 'running',
+      runStatus: 'running',
+      retriedRunNodeIds: [],
+    });
+  });
 });

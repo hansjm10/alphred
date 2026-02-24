@@ -41,9 +41,9 @@ describe('workflow-run lifecycle guard', () => {
     expect(() => assertValidWorkflowRunTransition('running', 'paused')).not.toThrow();
     expect(() => assertValidWorkflowRunTransition('paused', 'running')).not.toThrow();
     expect(() => assertValidWorkflowRunTransition('paused', 'cancelled')).not.toThrow();
+    expect(() => assertValidWorkflowRunTransition('failed', 'running')).not.toThrow();
     expect(() => assertValidWorkflowRunTransition('pending', 'failed')).toThrow();
     expect(() => assertValidWorkflowRunTransition('completed', 'running')).toThrow();
-    expect(() => assertValidWorkflowRunTransition('failed', 'running')).toThrow();
     expect(() => assertValidWorkflowRunTransition('cancelled', 'running')).toThrow();
   });
 
@@ -179,6 +179,50 @@ describe('workflow-run lifecycle guard', () => {
     expect(persisted.status).toBe('failed');
     expect(persisted.startedAt).toBe('2026-01-01T00:00:00.000Z');
     expect(persisted.completedAt).toBe('2026-01-01T00:02:00.000Z');
+  });
+
+  it('clears terminal completion timestamp when retrying failed runs', () => {
+    const { db, workflowRunId } = seedPendingWorkflowRun();
+
+    transitionWorkflowRunStatus(db, {
+      workflowRunId,
+      expectedFrom: 'pending',
+      to: 'running',
+      occurredAt: '2026-01-01T00:00:00.000Z',
+    });
+
+    transitionWorkflowRunStatus(db, {
+      workflowRunId,
+      expectedFrom: 'running',
+      to: 'failed',
+      occurredAt: '2026-01-01T00:02:00.000Z',
+    });
+
+    transitionWorkflowRunStatus(db, {
+      workflowRunId,
+      expectedFrom: 'failed',
+      to: 'running',
+      occurredAt: '2026-01-01T00:03:00.000Z',
+    });
+
+    const persisted = db
+      .select({
+        status: workflowRuns.status,
+        startedAt: workflowRuns.startedAt,
+        completedAt: workflowRuns.completedAt,
+      })
+      .from(workflowRuns)
+      .where(eq(workflowRuns.id, workflowRunId))
+      .get();
+
+    expect(persisted).toBeDefined();
+    if (!persisted) {
+      throw new Error('Expected workflow run row after retry transition.');
+    }
+
+    expect(persisted.status).toBe('running');
+    expect(persisted.startedAt).toBe('2026-01-01T00:00:00.000Z');
+    expect(persisted.completedAt).toBeNull();
   });
 
   it('persists terminal cancelled transitions from pending with completion timestamp', () => {
