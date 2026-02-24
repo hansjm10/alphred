@@ -1212,7 +1212,7 @@ async function fetchAgentStreamSnapshot(
   return parsed;
 }
 
-function parseMessageEventPayload(rawEvent: Event): unknown | null {
+function parseMessageEventPayload(rawEvent: Event): unknown {
   const messageEvent = rawEvent as MessageEvent<string>;
   try {
     return JSON.parse(messageEvent.data);
@@ -1483,6 +1483,84 @@ function createAgentStreamLifecycleEffect(params: AgentStreamLifecycleEffectPara
     clearReconnectTimer();
     closeSource();
   };
+}
+
+function resolvePayloadStorageSummary(diagnostics: DashboardRunDetail['diagnostics'][number]): string {
+  if (!diagnostics.truncated && !diagnostics.redacted) {
+    return 'Payload stored without truncation.';
+  }
+
+  const normalizationActions: string[] = [];
+  if (diagnostics.redacted) {
+    normalizationActions.push('redaction');
+  }
+  if (diagnostics.truncated) {
+    normalizationActions.push('truncation');
+  }
+
+  return `Payload normalized with ${normalizationActions.join(' and ')}.`;
+}
+
+type RunObservabilityCardProps = Readonly<{
+  detail: DashboardRunDetail;
+}>;
+
+function RunObservabilityCard({ detail }: RunObservabilityCardProps) {
+  return (
+    <Card title="Artifacts, diagnostics, and routing decisions" description="Recent snapshots for operator triage.">
+      <p className="meta-text">Artifacts</p>
+      {detail.artifacts.length === 0 ? <p>No artifacts captured yet.</p> : null}
+      <ul className="page-stack" aria-label="Run artifacts">
+        {detail.artifacts.map((artifact) => (
+          <li key={artifact.id}>
+            <p>{`${artifact.artifactType} (${artifact.contentType})`}</p>
+            <p className="meta-text">{truncatePreview(artifact.contentPreview)}</p>
+          </li>
+        ))}
+      </ul>
+
+      <p className="meta-text">Node diagnostics</p>
+      {detail.diagnostics.length === 0 ? <p>No node diagnostics captured yet.</p> : null}
+      <ul className="page-stack" aria-label="Run node diagnostics">
+        {detail.diagnostics.map((diagnostics) => {
+          const node = detail.nodes.find((candidate) => candidate.id === diagnostics.runNodeId);
+          const nodeLabel = node ? `${node.nodeKey} (attempt ${diagnostics.attempt})` : `Node #${diagnostics.runNodeId}`;
+          const payloadStorageSummary = resolvePayloadStorageSummary(diagnostics);
+
+          return (
+            <li key={diagnostics.id}>
+              <p>{`${nodeLabel}: ${diagnostics.outcome}`}</p>
+              <p className="meta-text">
+                {`Events ${diagnostics.retainedEventCount}/${diagnostics.eventCount}; tools ${diagnostics.diagnostics.summary.toolEventCount}; tokens ${diagnostics.diagnostics.summary.tokensUsed}.`}
+              </p>
+              <p className="meta-text">{payloadStorageSummary}</p>
+              {diagnostics.diagnostics.error ? (
+                <p className="meta-text">
+                  {`Failure: ${diagnostics.diagnostics.error.classification} (${truncatePreview(diagnostics.diagnostics.error.message)}).`}
+                </p>
+              ) : null}
+              {diagnostics.diagnostics.toolEvents.length > 0 ? (
+                <p className="meta-text">
+                  {`Tool activity: ${truncatePreview(diagnostics.diagnostics.toolEvents.map(event => event.summary).join('; '))}`}
+                </p>
+              ) : null}
+            </li>
+          );
+        })}
+      </ul>
+
+      <p className="meta-text">Routing decisions</p>
+      {detail.routingDecisions.length === 0 ? <p>No routing decisions captured yet.</p> : null}
+      <ul className="page-stack" aria-label="Run routing decisions">
+        {detail.routingDecisions.map((decision) => (
+          <li key={decision.id}>
+            <p>{decision.decisionType}</p>
+            <p className="meta-text">{decision.rationale ?? 'No rationale provided.'}</p>
+          </li>
+        ))}
+      </ul>
+    </Card>
+  );
 }
 
 export function RunDetailContent({
@@ -1932,71 +2010,7 @@ export function RunDetailContent({
         )}
       </Card>
 
-      <Card title="Artifacts, diagnostics, and routing decisions" description="Recent snapshots for operator triage.">
-        <p className="meta-text">Artifacts</p>
-        {detail.artifacts.length === 0 ? <p>No artifacts captured yet.</p> : null}
-        <ul className="page-stack" aria-label="Run artifacts">
-          {detail.artifacts.map((artifact) => (
-            <li key={artifact.id}>
-              <p>{`${artifact.artifactType} (${artifact.contentType})`}</p>
-              <p className="meta-text">{truncatePreview(artifact.contentPreview)}</p>
-            </li>
-          ))}
-        </ul>
-
-        <p className="meta-text">Node diagnostics</p>
-        {detail.diagnostics.length === 0 ? <p>No node diagnostics captured yet.</p> : null}
-        <ul className="page-stack" aria-label="Run node diagnostics">
-          {detail.diagnostics.map((diagnostics) => {
-            const node = detail.nodes.find((candidate) => candidate.id === diagnostics.runNodeId);
-            const nodeLabel = node ? `${node.nodeKey} (attempt ${diagnostics.attempt})` : `Node #${diagnostics.runNodeId}`;
-            let payloadStorageSummary = 'Payload stored without truncation.';
-
-            if (diagnostics.truncated || diagnostics.redacted) {
-              const normalizationActions: string[] = [];
-              if (diagnostics.redacted) {
-                normalizationActions.push('redaction');
-              }
-              if (diagnostics.truncated) {
-                normalizationActions.push('truncation');
-              }
-
-              payloadStorageSummary = `Payload normalized with ${normalizationActions.join(' and ')}.`;
-            }
-
-            return (
-              <li key={diagnostics.id}>
-                <p>{`${nodeLabel}: ${diagnostics.outcome}`}</p>
-                <p className="meta-text">
-                  {`Events ${diagnostics.retainedEventCount}/${diagnostics.eventCount}; tools ${diagnostics.diagnostics.summary.toolEventCount}; tokens ${diagnostics.diagnostics.summary.tokensUsed}.`}
-                </p>
-                <p className="meta-text">{payloadStorageSummary}</p>
-                {diagnostics.diagnostics.error ? (
-                  <p className="meta-text">
-                    {`Failure: ${diagnostics.diagnostics.error.classification} (${truncatePreview(diagnostics.diagnostics.error.message)}).`}
-                  </p>
-                ) : null}
-                {diagnostics.diagnostics.toolEvents.length > 0 ? (
-                  <p className="meta-text">
-                    {`Tool activity: ${truncatePreview(diagnostics.diagnostics.toolEvents.map(event => event.summary).join('; '))}`}
-                  </p>
-                ) : null}
-              </li>
-            );
-          })}
-        </ul>
-
-        <p className="meta-text">Routing decisions</p>
-        {detail.routingDecisions.length === 0 ? <p>No routing decisions captured yet.</p> : null}
-        <ul className="page-stack" aria-label="Run routing decisions">
-          {detail.routingDecisions.map((decision) => (
-            <li key={decision.id}>
-              <p>{decision.decisionType}</p>
-              <p className="meta-text">{decision.rationale ?? 'No rationale provided.'}</p>
-            </li>
-          ))}
-        </ul>
-      </Card>
+      <RunObservabilityCard detail={detail} />
     </div>
   );
 }
