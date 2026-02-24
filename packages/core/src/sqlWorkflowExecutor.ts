@@ -1222,6 +1222,21 @@ function sanitizeDiagnosticsString(value: string, state: DiagnosticsRedactionSta
   return value;
 }
 
+function stringifyRedactedFallback(value: unknown): string {
+  switch (typeof value) {
+    case 'function':
+      return `[Function: ${value.name || 'anonymous'}]`;
+    case 'symbol':
+      return value.description ? `Symbol(${value.description})` : 'Symbol()';
+    case 'bigint':
+      return `${value.toString()}n`;
+    case 'undefined':
+      return 'undefined';
+    default:
+      return JSON.stringify(value);
+  }
+}
+
 function redactDiagnosticsValue(
   value: unknown,
   state: DiagnosticsRedactionState,
@@ -1263,23 +1278,7 @@ function redactDiagnosticsValue(
     return output;
   }
 
-  if (typeof value === 'function') {
-    return `[Function: ${value.name || 'anonymous'}]`;
-  }
-
-  if (typeof value === 'symbol') {
-    return value.description ? `Symbol(${value.description})` : 'Symbol()';
-  }
-
-  if (typeof value === 'bigint') {
-    return `${value.toString()}n`;
-  }
-
-  if (value === undefined) {
-    return 'undefined';
-  }
-
-  return JSON.stringify(value);
+  return stringifyRedactedFallback(value);
 }
 
 function sanitizeDiagnosticMetadata(
