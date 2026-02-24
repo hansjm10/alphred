@@ -1776,9 +1776,14 @@ function RunAgentStreamCard({
     const streamTargetLabel = selectedStreamNode
       ? `${selectedStreamNode.nodeKey} (attempt ${selectedStreamNode.attempt})`
       : 'no target selected';
-    const eventSuffix = streamEvents.length === 1 ? '' : 's';
-    const eventCountLabel = streamEvents.length > 0
-      ? `${streamEvents.length} event${eventSuffix} captured`
+    const capturedEventCount = (
+      streamBufferedEvents.length === 0
+        ? streamEvents
+        : mergeAgentStreamEvents(streamEvents, streamBufferedEvents)
+    ).length;
+    const eventSuffix = capturedEventCount === 1 ? '' : 's';
+    const eventCountLabel = capturedEventCount > 0
+      ? `${capturedEventCount} event${eventSuffix} captured`
       : 'no events captured';
 
     return (
@@ -2135,18 +2140,25 @@ export function RunDetailContent({
       const node = detail.nodes.find(n => n.id === nextNodeId);
       if (node) {
         const canOpenStream = node.status === 'running' || node.status === 'completed' || node.status === 'failed';
-        if (canOpenStream) {
-          const nextStreamTarget = toAgentStreamTarget(node);
-          const streamTargetChanged =
-            streamTarget === null ||
-            streamTarget.runNodeId !== nextStreamTarget.runNodeId ||
-            streamTarget.attempt !== nextStreamTarget.attempt ||
-            streamTarget.nodeKey !== nextStreamTarget.nodeKey;
-          if (streamTargetChanged) {
-            setStreamTarget(nextStreamTarget);
+        if (!canOpenStream) {
+          if (streamTarget !== null) {
+            setStreamTarget(null);
             setStreamAutoScroll(true);
             setStreamBufferedEvents([]);
           }
+          return;
+        }
+
+        const nextStreamTarget = toAgentStreamTarget(node);
+        const streamTargetChanged =
+          streamTarget === null ||
+          streamTarget.runNodeId !== nextStreamTarget.runNodeId ||
+          streamTarget.attempt !== nextStreamTarget.attempt ||
+          streamTarget.nodeKey !== nextStreamTarget.nodeKey;
+        if (streamTargetChanged) {
+          setStreamTarget(nextStreamTarget);
+          setStreamAutoScroll(true);
+          setStreamBufferedEvents([]);
         }
       }
     }
