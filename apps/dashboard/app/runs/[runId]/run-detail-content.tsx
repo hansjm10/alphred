@@ -34,6 +34,14 @@ type AgentStreamTarget = {
   attempt: number;
 };
 
+type ExpandablePreviewProps = Readonly<{
+  value: string;
+  label: string;
+  previewLength?: number;
+  className?: string;
+  emptyLabel?: string;
+}>;
+
 type RunDetailContentProps = Readonly<{
   initialDetail: DashboardRunDetail;
   repositories: readonly DashboardRepositoryState[];
@@ -807,13 +815,45 @@ function resolvePrimaryAction(
   };
 }
 
-function truncatePreview(value: string): string {
+function truncatePreview(value: string, previewLength = 140): string {
   const normalized = value.trim();
-  if (normalized.length <= 140) {
+  if (normalized.length <= previewLength) {
     return normalized;
   }
 
-  return `${normalized.slice(0, 137)}...`;
+  return `${normalized.slice(0, Math.max(0, previewLength - 3))}...`;
+}
+
+function hasTruncatedPreview(value: string, previewLength = 140): boolean {
+  return value.trim().length > previewLength;
+}
+
+function ExpandablePreview({
+  value,
+  label,
+  previewLength = 140,
+  className = 'meta-text',
+  emptyLabel = '(no content)',
+}: ExpandablePreviewProps) {
+  const normalized = value.trim();
+  if (normalized.length === 0) {
+    return <p className={className}>{emptyLabel}</p>;
+  }
+
+  const preview = truncatePreview(normalized, previewLength);
+  if (!hasTruncatedPreview(normalized, previewLength)) {
+    return <p className={className}>{preview}</p>;
+  }
+
+  return (
+    <div className="run-expandable-preview">
+      <p className={className}>{preview}</p>
+      <details className="run-expandable-preview__details">
+        <summary className="run-expandable-preview__summary">{`Show full ${label}`}</summary>
+        <p className={className}>{normalized}</p>
+      </details>
+    </div>
+  );
 }
 
 function resolveRealtimeLabel(
@@ -1630,11 +1670,14 @@ function RunAgentStreamCard({
                 <li key={`${event.runNodeId}-${event.attempt}-${event.sequence}`} className="run-agent-stream-event">
                   <p className="meta-text">{`#${event.sequence} · ${formatStreamTimestamp(event.timestamp)}`}</p>
                   <p>
-                    <span className={`run-agent-stream-event-type run-agent-stream-event-type--${event.type}`}>
-                      {event.type}
-                    </span>{' '}
-                    {event.contentPreview.length > 0 ? event.contentPreview : '(no content)'}
+                    <span className={`run-agent-stream-event-type run-agent-stream-event-type--${event.type}`}>{event.type}</span>
                   </p>
+                  <ExpandablePreview
+                    value={event.contentPreview}
+                    label="event payload"
+                    previewLength={220}
+                    className="run-agent-stream-event-content"
+                  />
                   {event.usage ? (
                     <p className="meta-text">
                       {`Usage Δ ${event.usage.deltaTokens ?? 'n/a'} · cumulative ${event.usage.cumulativeTokens ?? 'n/a'}`}
@@ -1669,7 +1712,7 @@ function RunObservabilityCard({ detail }: RunObservabilityCardProps) {
         {detail.artifacts.map((artifact) => (
           <li key={artifact.id}>
             <p>{`${artifact.artifactType} (${artifact.contentType})`}</p>
-            <p className="meta-text">{truncatePreview(artifact.contentPreview)}</p>
+            <ExpandablePreview value={artifact.contentPreview} label="artifact preview" />
           </li>
         ))}
       </ul>
@@ -1690,14 +1733,16 @@ function RunObservabilityCard({ detail }: RunObservabilityCardProps) {
               </p>
               <p className="meta-text">{payloadStorageSummary}</p>
               {diagnostics.diagnostics.error ? (
-                <p className="meta-text">
-                  {`Failure: ${diagnostics.diagnostics.error.classification} (${truncatePreview(diagnostics.diagnostics.error.message)}).`}
-                </p>
+                <ExpandablePreview
+                  value={`Failure: ${diagnostics.diagnostics.error.classification} (${diagnostics.diagnostics.error.message}).`}
+                  label="failure diagnostics"
+                />
               ) : null}
               {diagnostics.diagnostics.toolEvents.length > 0 ? (
-                <p className="meta-text">
-                  {`Tool activity: ${truncatePreview(diagnostics.diagnostics.toolEvents.map(event => event.summary).join('; '))}`}
-                </p>
+                <ExpandablePreview
+                  value={`Tool activity: ${diagnostics.diagnostics.toolEvents.map(event => event.summary).join('; ')}`}
+                  label="tool activity"
+                />
               ) : null}
             </li>
           );
@@ -1993,7 +2038,7 @@ export function RunDetailContent({
         </Panel>
       </div>
 
-      <div className="page-grid">
+      <div className="page-grid run-detail-lifecycle-grid">
         <Card title="Timeline" description="Latest run events">
           {selectedNode ? (
             <div className="run-timeline-filter">

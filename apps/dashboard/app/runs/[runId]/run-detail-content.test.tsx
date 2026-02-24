@@ -928,4 +928,100 @@ describe('RunDetailContent realtime updates', () => {
     expect(screen.getByText(/Filtered to design \(attempt 1\)\./i)).toBeInTheDocument();
     expect(designFilterButton).toHaveAttribute('aria-pressed', 'true');
   });
+
+  it('uses a non-stretch lifecycle grid for timeline and node status panels', () => {
+    render(
+      <RunDetailContent
+        initialDetail={createRunDetail()}
+        repositories={[createRepository()]}
+        enableRealtime={false}
+      />,
+    );
+
+    const timelineHeading = screen.getByRole('heading', { level: 3, name: 'Timeline' });
+    const lifecycleGrid = timelineHeading.closest('.page-grid');
+
+    expect(lifecycleGrid).not.toBeNull();
+    expect(lifecycleGrid).toHaveClass('run-detail-lifecycle-grid');
+  });
+
+  it('adds an expand affordance for long artifact previews', async () => {
+    const user = userEvent.setup();
+    const longArtifact = `Artifact summary ${'x'.repeat(280)}`;
+
+    render(
+      <RunDetailContent
+        initialDetail={createRunDetail({
+          artifacts: [
+            {
+              id: 1,
+              runNodeId: 1,
+              artifactType: 'report',
+              contentType: 'markdown',
+              contentPreview: longArtifact,
+              createdAt: '2026-02-18T00:00:25.000Z',
+            },
+          ],
+        })}
+        repositories={[createRepository()]}
+        enableRealtime={false}
+      />,
+    );
+
+    const toggle = screen.getByText('Show full artifact preview');
+    const details = toggle.closest('details');
+
+    expect(details).not.toHaveAttribute('open');
+    await user.click(toggle);
+    expect(details).toHaveAttribute('open');
+    expect(details).toHaveTextContent(longArtifact);
+  });
+
+  it('adds an expand affordance for long stream event payloads', async () => {
+    vi.stubGlobal('EventSource', MockEventSource as unknown as typeof EventSource);
+    const user = userEvent.setup();
+    const longStreamPayload = `stream payload ${'payload '.repeat(60)}`;
+
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/nodes/2/stream')) {
+        return createJsonResponse({
+          workflowRunId: 412,
+          runNodeId: 2,
+          attempt: 1,
+          nodeStatus: 'completed',
+          ended: true,
+          latestSequence: 1,
+          events: [
+            createStreamEvent({
+              sequence: 1,
+              contentPreview: longStreamPayload,
+            }),
+          ],
+        });
+      }
+
+      return createJsonResponse(createRunDetail());
+    });
+
+    render(
+      <RunDetailContent
+        initialDetail={createRunDetail()}
+        repositories={[createRepository()]}
+        enableRealtime={false}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText('Show full event payload')).toBeInTheDocument();
+    });
+
+    const toggle = screen.getByText('Show full event payload');
+    const details = toggle.closest('details');
+    expect(details).not.toHaveAttribute('open');
+
+    await user.click(toggle);
+    expect(details).toHaveAttribute('open');
+    expect(details).toHaveTextContent(longStreamPayload.trim());
+  });
 });
