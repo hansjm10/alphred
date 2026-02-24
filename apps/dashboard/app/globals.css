@@ -809,6 +809,51 @@ output {
   border-color: color-mix(in srgb, var(--accent-active) 45%, var(--border-default));
 }
 
+.run-timeline-event__header {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+  justify-content: space-between;
+}
+
+.timeline-category-indicator {
+  align-items: center;
+  border-radius: var(--radius-pill);
+  display: inline-flex;
+  font: 600 11px/16px var(--font-display);
+  gap: 4px;
+  padding: 1px 8px 1px 5px;
+}
+
+.timeline-category-icon {
+  flex-shrink: 0;
+}
+
+.timeline-category-indicator--lifecycle {
+  background: color-mix(in srgb, var(--accent-active) 12%, var(--bg-surface));
+  color: var(--accent-active);
+}
+
+.timeline-category-indicator--node {
+  background: color-mix(in srgb, var(--accent-success) 12%, var(--bg-surface));
+  color: var(--accent-success);
+}
+
+.timeline-category-indicator--artifact {
+  background: color-mix(in srgb, var(--accent-info) 12%, var(--bg-surface));
+  color: var(--accent-info);
+}
+
+.timeline-category-indicator--diagnostics {
+  background: color-mix(in srgb, var(--accent-warning) 12%, var(--bg-surface));
+  color: var(--accent-warning);
+}
+
+.timeline-category-indicator--routing {
+  background: color-mix(in srgb, var(--text-secondary) 12%, var(--bg-surface));
+  color: var(--text-secondary);
+}
+
 .run-node-status-list li {
   align-items: center;
 }
