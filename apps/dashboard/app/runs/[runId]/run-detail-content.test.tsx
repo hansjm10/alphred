@@ -658,6 +658,188 @@ describe('RunDetailContent realtime updates', () => {
     });
   });
 
+  it('does not restart stream when selecting the active node in the status panel', async () => {
+    vi.stubGlobal('EventSource', MockEventSource as unknown as typeof EventSource);
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/nodes/2/stream')) {
+        return createJsonResponse({
+          workflowRunId: 412,
+          runNodeId: 2,
+          attempt: 1,
+          nodeStatus: 'running',
+          ended: false,
+          latestSequence: 1,
+          events: [
+            createStreamEvent({
+              sequence: 1,
+              contentPreview: 'seeded event',
+            }),
+          ],
+        });
+      }
+
+      return createJsonResponse(createRunDetail());
+    });
+
+    const user = userEvent.setup();
+
+    render(
+      <RunDetailContent
+        initialDetail={createRunDetail()}
+        repositories={[createRepository()]}
+        enableRealtime={false}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        expect.stringContaining('/api/dashboard/runs/412/nodes/2/stream?attempt=1&lastEventSequence=0'),
+        expect.objectContaining({ method: 'GET' }),
+      );
+    });
+
+    await waitFor(() => {
+      expect(MockEventSource.instances).toHaveLength(1);
+    });
+
+    const source = MockEventSource.instances[0]!;
+    source.emitOpen();
+
+    await user.click(screen.getByRole('button', { name: 'Pause auto-scroll' }));
+    source.emit('stream_event', createStreamEvent({ sequence: 2, contentPreview: 'buffered update' }));
+
+    await waitFor(() => {
+      expect(screen.getByText('1 new events buffered.')).toBeInTheDocument();
+    });
+    expect(screen.queryByText('buffered update')).toBeNull();
+
+    const nodeStatusPanel = screen.getByRole('heading', { level: 3, name: 'Node status' }).closest('aside');
+    expect(nodeStatusPanel).not.toBeNull();
+    const streamCallsBeforeClick = fetchMock.mock.calls.filter(([input]) => String(input).includes('/nodes/2/stream')).length;
+    const streamConnectionsBeforeClick = MockEventSource.instances.length;
+    await user.click(within(nodeStatusPanel!).getByRole('button', { name: 'implement (attempt 1)' }));
+
+    expect(screen.getByText('1 new events buffered.')).toBeInTheDocument();
+    expect(screen.queryByText('buffered update')).toBeNull();
+    expect(MockEventSource.instances).toHaveLength(streamConnectionsBeforeClick);
+
+    const streamCallsAfterClick = fetchMock.mock.calls.filter(([input]) => String(input).includes('/nodes/2/stream')).length;
+    expect(streamCallsAfterClick).toBe(streamCallsBeforeClick);
+  });
+
+  it('clears agent stream target when selecting a non-streamable node in the status panel', async () => {
+    vi.stubGlobal('EventSource', MockEventSource as unknown as typeof EventSource);
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/nodes/1/stream')) {
+        return createJsonResponse({
+          workflowRunId: 412,
+          runNodeId: 1,
+          attempt: 1,
+          nodeStatus: 'completed',
+          ended: true,
+          latestSequence: 0,
+          events: [],
+        });
+      }
+      if (url.includes('/nodes/2/stream')) {
+        return createJsonResponse({
+          workflowRunId: 412,
+          runNodeId: 2,
+          attempt: 1,
+          nodeStatus: 'running',
+          ended: false,
+          latestSequence: 0,
+          events: [],
+        });
+      }
+
+      return createJsonResponse(createRunDetail());
+    });
+
+    const user = userEvent.setup();
+
+    render(
+      <RunDetailContent
+        initialDetail={createRunDetail({
+          run: {
+            nodeSummary: {
+              pending: 1,
+              running: 1,
+              completed: 1,
+              failed: 0,
+              skipped: 0,
+              cancelled: 0,
+            },
+          },
+          nodes: [
+            {
+              id: 1,
+              treeNodeId: 1,
+              nodeKey: 'design',
+              sequenceIndex: 0,
+              attempt: 1,
+              status: 'completed',
+              startedAt: '2026-02-18T00:00:10.000Z',
+              completedAt: '2026-02-18T00:00:30.000Z',
+              latestArtifact: null,
+              latestRoutingDecision: null,
+              latestDiagnostics: null,
+            },
+            {
+              id: 2,
+              treeNodeId: 2,
+              nodeKey: 'implement',
+              sequenceIndex: 1,
+              attempt: 1,
+              status: 'running',
+              startedAt: '2026-02-18T00:00:35.000Z',
+              completedAt: null,
+              latestArtifact: null,
+              latestRoutingDecision: null,
+              latestDiagnostics: null,
+            },
+            {
+              id: 3,
+              treeNodeId: 3,
+              nodeKey: 'review',
+              sequenceIndex: 2,
+              attempt: 1,
+              status: 'pending',
+              startedAt: null,
+              completedAt: null,
+              latestArtifact: null,
+              latestRoutingDecision: null,
+              latestDiagnostics: null,
+            },
+          ],
+        })}
+        repositories={[createRepository()]}
+        enableRealtime={false}
+      />,
+    );
+
+    const nodeStatusPanel = screen.getByRole('heading', { level: 3, name: 'Node status' }).closest('aside');
+    expect(nodeStatusPanel).not.toBeNull();
+
+    await user.click(within(nodeStatusPanel!).getByRole('button', { name: 'design (attempt 1)' }));
+
+    await waitFor(() => {
+      expect(screen.getByText(/Node design \(attempt 1\)/i)).toBeInTheDocument();
+    });
+
+    await user.click(within(nodeStatusPanel!).getByRole('button', { name: 'review (attempt 1)' }));
+
+    await waitFor(() => {
+      expect(screen.getByText('Select a node from Node Status to open its agent stream.')).toBeInTheDocument();
+    });
+    expect(screen.queryByText(/Node design \(attempt 1\)/i)).toBeNull();
+
+    const pendingNodeStreamCalls = fetchMock.mock.calls.filter(([input]) => String(input).includes('/nodes/3/stream'));
+    expect(pendingNodeStreamCalls).toHaveLength(0);
+  });
+
   it('paginates ended stream snapshots until persisted history is fully loaded', async () => {
     vi.stubGlobal('EventSource', MockEventSource as unknown as typeof EventSource);
     fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
@@ -1155,5 +1337,360 @@ describe('RunDetailContent realtime updates', () => {
     ).toBeInTheDocument();
     expect(within(diagnosticItems[0] as HTMLElement).getByText(/attempt 4\): completed/i)).toBeInTheDocument();
     expect(within(diagnosticItems[1] as HTMLElement).getByText(/attempt 3\): completed/i)).toBeInTheDocument();
+  });
+
+  it('collapses agent stream behind disclosure for terminal runs', () => {
+    render(
+      <RunDetailContent
+        initialDetail={createRunDetail({
+          run: {
+            status: 'completed',
+            completedAt: '2026-02-18T00:05:00.000Z',
+          },
+          nodes: [
+            {
+              id: 1,
+              treeNodeId: 1,
+              nodeKey: 'design',
+              sequenceIndex: 0,
+              attempt: 1,
+              status: 'completed',
+              startedAt: '2026-02-18T00:00:10.000Z',
+              completedAt: '2026-02-18T00:00:30.000Z',
+              latestArtifact: null,
+              latestRoutingDecision: null,
+              latestDiagnostics: null,
+            },
+          ],
+        })}
+        repositories={[createRepository()]}
+        enableRealtime={false}
+      />,
+    );
+
+    const disclosure = screen.getByText(/Stream ended/i);
+    const details = disclosure.closest('details');
+
+    expect(details).not.toBeNull();
+    expect(details).not.toHaveAttribute('open');
+    expect(disclosure).toHaveTextContent(/design \(attempt 1\)/i);
+  });
+
+  it('shows "no target selected" in collapsed stream for terminal runs without nodes', () => {
+    render(
+      <RunDetailContent
+        initialDetail={createRunDetail({
+          run: {
+            status: 'completed',
+            completedAt: '2026-02-18T00:05:00.000Z',
+          },
+          nodes: [],
+          artifacts: [],
+          routingDecisions: [],
+          diagnostics: [],
+        })}
+        repositories={[createRepository()]}
+        enableRealtime={false}
+      />,
+    );
+
+    const disclosure = screen.getByText(/Stream ended/i);
+    expect(disclosure).toHaveTextContent(/no target selected/i);
+    expect(disclosure).toHaveTextContent(/no events captured/i);
+  });
+
+  it('shows singular "event" label in collapsed stream for terminal runs with one stream event', async () => {
+    vi.stubGlobal('EventSource', MockEventSource as unknown as typeof EventSource);
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/nodes/1/stream')) {
+        return createJsonResponse({
+          workflowRunId: 412,
+          runNodeId: 1,
+          attempt: 1,
+          nodeStatus: 'completed',
+          ended: true,
+          latestSequence: 1,
+          events: [
+            createStreamEvent({ runNodeId: 1, sequence: 1, contentPreview: 'sole event' }),
+          ],
+        });
+      }
+      return createJsonResponse(createRunDetail({
+        run: { status: 'completed', completedAt: '2026-02-18T00:05:00.000Z' },
+      }));
+    });
+
+    render(
+      <RunDetailContent
+        initialDetail={createRunDetail({
+          run: {
+            status: 'completed',
+            completedAt: '2026-02-18T00:05:00.000Z',
+          },
+          nodes: [
+            {
+              id: 1,
+              treeNodeId: 1,
+              nodeKey: 'design',
+              sequenceIndex: 0,
+              attempt: 1,
+              status: 'completed',
+              startedAt: '2026-02-18T00:00:10.000Z',
+              completedAt: '2026-02-18T00:00:30.000Z',
+              latestArtifact: null,
+              latestRoutingDecision: null,
+              latestDiagnostics: null,
+            },
+          ],
+        })}
+        repositories={[createRepository()]}
+        enableRealtime={false}
+      />,
+    );
+
+    await waitFor(() => {
+      const disclosure = screen.getByText(/Stream ended/i);
+      expect(disclosure).toHaveTextContent(/1 event captured/i);
+      expect(disclosure).not.toHaveTextContent(/1 events captured/i);
+    });
+  });
+
+  it('shows plural "events" label in collapsed stream for terminal runs with multiple stream events', async () => {
+    vi.stubGlobal('EventSource', MockEventSource as unknown as typeof EventSource);
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/nodes/1/stream')) {
+        return createJsonResponse({
+          workflowRunId: 412,
+          runNodeId: 1,
+          attempt: 1,
+          nodeStatus: 'completed',
+          ended: true,
+          latestSequence: 2,
+          events: [
+            createStreamEvent({ runNodeId: 1, sequence: 1, contentPreview: 'first event' }),
+            createStreamEvent({ runNodeId: 1, sequence: 2, contentPreview: 'second event' }),
+          ],
+        });
+      }
+      return createJsonResponse(createRunDetail({
+        run: { status: 'completed', completedAt: '2026-02-18T00:05:00.000Z' },
+      }));
+    });
+
+    render(
+      <RunDetailContent
+        initialDetail={createRunDetail({
+          run: {
+            status: 'completed',
+            completedAt: '2026-02-18T00:05:00.000Z',
+          },
+          nodes: [
+            {
+              id: 1,
+              treeNodeId: 1,
+              nodeKey: 'design',
+              sequenceIndex: 0,
+              attempt: 1,
+              status: 'completed',
+              startedAt: '2026-02-18T00:00:10.000Z',
+              completedAt: '2026-02-18T00:00:30.000Z',
+              latestArtifact: null,
+              latestRoutingDecision: null,
+              latestDiagnostics: null,
+            },
+          ],
+        })}
+        repositories={[createRepository()]}
+        enableRealtime={false}
+      />,
+    );
+
+    await waitFor(() => {
+      const disclosure = screen.getByText(/Stream ended/i);
+      expect(disclosure).toHaveTextContent(/2 events captured/i);
+    });
+  });
+
+  it('counts buffered events in terminal collapsed stream summary', async () => {
+    vi.stubGlobal('EventSource', MockEventSource as unknown as typeof EventSource);
+    let allowTerminalTransition = false;
+
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/nodes/2/stream')) {
+        return createJsonResponse({
+          workflowRunId: 412,
+          runNodeId: 2,
+          attempt: 1,
+          nodeStatus: 'running',
+          ended: false,
+          latestSequence: 1,
+          events: [
+            createStreamEvent({
+              sequence: 1,
+              contentPreview: 'seeded event',
+            }),
+          ],
+        });
+      }
+
+      if (url === '/api/dashboard/runs/412') {
+        if (!allowTerminalTransition) {
+          return createJsonResponse(createRunDetail());
+        }
+
+        return createJsonResponse(createRunDetail({
+          run: {
+            status: 'completed',
+            completedAt: '2026-02-18T00:05:00.000Z',
+          },
+          nodes: [
+            {
+              id: 1,
+              treeNodeId: 1,
+              nodeKey: 'design',
+              sequenceIndex: 0,
+              attempt: 1,
+              status: 'completed',
+              startedAt: '2026-02-18T00:00:10.000Z',
+              completedAt: '2026-02-18T00:00:30.000Z',
+              latestArtifact: null,
+              latestRoutingDecision: null,
+              latestDiagnostics: null,
+            },
+            {
+              id: 2,
+              treeNodeId: 2,
+              nodeKey: 'implement',
+              sequenceIndex: 1,
+              attempt: 1,
+              status: 'completed',
+              startedAt: '2026-02-18T00:00:35.000Z',
+              completedAt: '2026-02-18T00:01:10.000Z',
+              latestArtifact: null,
+              latestRoutingDecision: null,
+              latestDiagnostics: null,
+            },
+          ],
+        }));
+      }
+
+      return createJsonResponse(createRunDetail());
+    });
+
+    const user = userEvent.setup();
+
+    render(
+      <RunDetailContent
+        initialDetail={createRunDetail()}
+        repositories={[createRepository()]}
+        pollIntervalMs={30}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(MockEventSource.instances).toHaveLength(1);
+    });
+
+    const source = MockEventSource.instances[0]!;
+    source.emitOpen();
+
+    await waitFor(() => {
+      expect(screen.getByText('seeded event')).toBeInTheDocument();
+    });
+
+    await user.click(screen.getByRole('button', { name: 'Pause auto-scroll' }));
+    source.emit('stream_event', createStreamEvent({ sequence: 2, contentPreview: 'buffered update' }));
+
+    await waitFor(() => {
+      expect(screen.getByText('1 new events buffered.')).toBeInTheDocument();
+    });
+    expect(screen.queryByText('buffered update')).toBeNull();
+
+    allowTerminalTransition = true;
+
+    await waitFor(() => {
+      const disclosure = screen.getByText(/Stream ended/i);
+      expect(disclosure).toHaveTextContent(/2 events captured/i);
+    });
+  });
+
+  it('does not collapse agent stream for active runs', () => {
+    render(
+      <RunDetailContent
+        initialDetail={createRunDetail()}
+        repositories={[createRepository()]}
+        enableRealtime={false}
+      />,
+    );
+
+    expect(screen.queryByText(/Stream ended/i)).toBeNull();
+    expect(screen.getByRole('heading', { level: 3, name: 'Agent stream' })).toBeInTheDocument();
+  });
+
+  it('renders a single node list in the Node Status panel without duplicating in agent stream', () => {
+    render(
+      <RunDetailContent
+        initialDetail={createRunDetail()}
+        repositories={[createRepository()]}
+        enableRealtime={false}
+      />,
+    );
+
+    const nodeStatusPanel = screen.getByRole('heading', { level: 3, name: 'Node status' }).closest('aside');
+    expect(nodeStatusPanel).not.toBeNull();
+    expect(within(nodeStatusPanel!).getByRole('button', { name: 'design (attempt 1)' })).toBeInTheDocument();
+
+    expect(screen.queryByRole('list', { name: 'Agent stream targets' })).toBeNull();
+  });
+
+  it('selects agent stream target when clicking a node in the status panel', async () => {
+    vi.stubGlobal('EventSource', MockEventSource as unknown as typeof EventSource);
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/nodes/1/stream')) {
+        return createJsonResponse({
+          workflowRunId: 412,
+          runNodeId: 1,
+          attempt: 1,
+          nodeStatus: 'completed',
+          ended: true,
+          latestSequence: 0,
+          events: [],
+        });
+      }
+      if (url.includes('/nodes/2/stream')) {
+        return createJsonResponse({
+          workflowRunId: 412,
+          runNodeId: 2,
+          attempt: 1,
+          nodeStatus: 'running',
+          ended: false,
+          latestSequence: 0,
+          events: [],
+        });
+      }
+
+      return createJsonResponse(createRunDetail());
+    });
+
+    const user = userEvent.setup();
+
+    render(
+      <RunDetailContent
+        initialDetail={createRunDetail()}
+        repositories={[createRepository()]}
+        enableRealtime={false}
+      />,
+    );
+
+    const designButton = screen.getByRole('button', { name: 'design (attempt 1)' });
+    await user.click(designButton);
+
+    await waitFor(() => {
+      expect(screen.getByText(/Node design \(attempt 1\)/i)).toBeInTheDocument();
+    });
   });
 });
