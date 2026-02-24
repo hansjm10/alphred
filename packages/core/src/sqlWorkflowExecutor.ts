@@ -299,7 +299,7 @@ const MAX_REDACTION_ARRAY_LENGTH = 24;
 const sensitiveMetadataKeyPattern =
   /(token|secret|password|authorization|auth|api[_-]?key|session|cookie|credential)/i;
 const sensitiveStringPattern =
-  /(gh[pousr]_[A-Za-z0-9_]{8,}|github_pat_[A-Za-z0-9_]{12,}|sk-[A-Za-z0-9]{10,}|Bearer\s+[A-Za-z0-9\-._~+/]+=*)/i;
+  /(gh[pousr]_\w{8,}|github_pat_\w{12,}|sk-[A-Z0-9]{10,}|Bearer\s+[-._~+/A-Z0-9]+=*)/i;
 
 function toRunNodeStatus(value: string): RunNodeStatus {
   return value as RunNodeStatus;
@@ -1263,7 +1263,23 @@ function redactDiagnosticsValue(
     return output;
   }
 
-  return String(value);
+  if (typeof value === 'function') {
+    return `[Function: ${value.name || 'anonymous'}]`;
+  }
+
+  if (typeof value === 'symbol') {
+    return value.description ? `Symbol(${value.description})` : 'Symbol()';
+  }
+
+  if (typeof value === 'bigint') {
+    return `${value.toString()}n`;
+  }
+
+  if (value === undefined) {
+    return 'undefined';
+  }
+
+  return JSON.stringify(value);
 }
 
 function sanitizeDiagnosticMetadata(
@@ -1457,7 +1473,7 @@ function buildDiagnosticsPayload(params: {
   tokensUsed: number;
   events: ProviderEvent[];
   routingDecision: RouteDecisionSignal | null;
-  error: unknown | null;
+  error: unknown;
 }): {
   payload: RunNodeDiagnosticsPayload;
   payloadChars: number;
@@ -1514,7 +1530,7 @@ function buildDiagnosticsPayload(params: {
   let payload = buildPayload();
   let payloadChars = JSON.stringify(payload).length;
   while (payloadChars > MAX_DIAGNOSTIC_PAYLOAD_CHARS && retainedEvents.length > 0) {
-    retainedEvents = retainedEvents.slice(0, retainedEvents.length - 1);
+    retainedEvents = retainedEvents.slice(0, -1);
     droppedEventCount += 1;
     toolEvents = buildToolEventSummaries(retainedEvents);
     redactionState.truncated = true;
@@ -1564,7 +1580,7 @@ function persistRunNodeAttemptDiagnostics(
     tokensUsed: number;
     events: ProviderEvent[];
     routingDecision: RouteDecisionSignal | null;
-    error: unknown | null;
+    error: unknown;
   },
 ): void {
   const diagnostics = buildDiagnosticsPayload(params);

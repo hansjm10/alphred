@@ -1127,6 +1127,19 @@ export function RunDetailContent({
           {detail.diagnostics.map((diagnostics) => {
             const node = detail.nodes.find((candidate) => candidate.id === diagnostics.runNodeId);
             const nodeLabel = node ? `${node.nodeKey} (attempt ${diagnostics.attempt})` : `Node #${diagnostics.runNodeId}`;
+            let payloadStorageSummary = 'Payload stored without truncation.';
+
+            if (diagnostics.truncated || diagnostics.redacted) {
+              const normalizationActions: string[] = [];
+              if (diagnostics.redacted) {
+                normalizationActions.push('redaction');
+              }
+              if (diagnostics.truncated) {
+                normalizationActions.push('truncation');
+              }
+
+              payloadStorageSummary = `Payload normalized with ${normalizationActions.join(' and ')}.`;
+            }
 
             return (
               <li key={diagnostics.id}>
@@ -1134,11 +1147,7 @@ export function RunDetailContent({
                 <p className="meta-text">
                   {`Events ${diagnostics.retainedEventCount}/${diagnostics.eventCount}; tools ${diagnostics.diagnostics.summary.toolEventCount}; tokens ${diagnostics.diagnostics.summary.tokensUsed}.`}
                 </p>
-                <p className="meta-text">
-                  {diagnostics.truncated || diagnostics.redacted
-                    ? `Payload normalized${diagnostics.redacted ? ' with redaction' : ''}${diagnostics.truncated ? ' and truncation' : ''}.`
-                    : 'Payload stored without truncation.'}
-                </p>
+                <p className="meta-text">{payloadStorageSummary}</p>
                 {diagnostics.diagnostics.error ? (
                   <p className="meta-text">
                     {`Failure: ${diagnostics.diagnostics.error.classification} (${truncatePreview(diagnostics.diagnostics.error.message)}).`}
