@@ -4916,6 +4916,158 @@ describe('createSqlWorkflowExecutor', () => {
     });
   });
 
+  it('prefers node-level network access execution permissions over run options', async () => {
+    const { db, runId, runNodeId } = seedSingleAgentRun();
+    const runNode = db
+      .select({ treeNodeId: runNodes.treeNodeId })
+      .from(runNodes)
+      .where(eq(runNodes.id, runNodeId))
+      .get();
+    if (!runNode) {
+      throw new Error(`Expected run node id=${runNodeId} to exist.`);
+    }
+
+    db.update(treeNodes)
+      .set({
+        executionPermissions: {
+          networkAccessEnabled: true,
+        },
+      })
+      .where(eq(treeNodes.id, runNode.treeNodeId))
+      .run();
+
+    let capturedOptions: ProviderRunOptions | undefined;
+    const executor = createSqlWorkflowExecutor(db, {
+      resolveProvider: () => ({
+        async *run(_prompt: string, options: ProviderRunOptions): AsyncIterable<ProviderEvent> {
+          capturedOptions = options;
+          yield { type: 'result', content: 'ok', timestamp: 1 };
+        },
+      }),
+    });
+
+    await executor.executeNextRunnableNode({
+      workflowRunId: runId,
+      options: {
+        workingDirectory: '/tmp/alphred-worktree',
+        executionPermissions: {
+          networkAccessEnabled: false,
+        },
+      },
+    });
+
+    expect(capturedOptions?.executionPermissions).toEqual({
+      networkAccessEnabled: true,
+    });
+  });
+
+  it.each([
+    {
+      name: 'payload is not an object',
+      payload: ['workspace-write'],
+      message: 'Run node "design" has invalid execution permissions payload.',
+    },
+    {
+      name: 'payload contains unsupported fields',
+      payload: { unsupported: true },
+      message: 'Run node "design" execution permissions include unsupported field "unsupported".',
+    },
+    {
+      name: 'approvalPolicy is invalid',
+      payload: { approvalPolicy: 'sometimes' },
+      message: 'Run node "design" has invalid execution approval policy.',
+    },
+    {
+      name: 'sandboxMode is invalid',
+      payload: { sandboxMode: 'sometimes' },
+      message: 'Run node "design" has invalid execution sandbox mode.',
+    },
+    {
+      name: 'networkAccessEnabled is not boolean',
+      payload: { networkAccessEnabled: 'true' },
+      message: 'Run node "design" has invalid execution networkAccessEnabled value.',
+    },
+    {
+      name: 'additionalDirectories is not an array',
+      payload: { additionalDirectories: '/tmp/cache' },
+      message: 'Run node "design" has invalid execution additionalDirectories value.',
+    },
+    {
+      name: 'additionalDirectories contains empty paths',
+      payload: { additionalDirectories: ['/tmp/cache', '   '] },
+      message: 'Run node "design" has invalid execution additionalDirectories entry at index 1.',
+    },
+    {
+      name: 'additionalDirectories is empty',
+      payload: { additionalDirectories: [] },
+      message: 'Run node "design" must provide at least one execution additional directory.',
+    },
+    {
+      name: 'webSearchMode is invalid',
+      payload: { webSearchMode: 'sometimes' },
+      message: 'Run node "design" has invalid execution web search mode.',
+    },
+  ])('fails when node execution permissions are malformed: $name', async ({ payload, message }) => {
+    const { db, runId, runNodeId } = seedSingleAgentRun();
+    const runNode = db
+      .select({ treeNodeId: runNodes.treeNodeId })
+      .from(runNodes)
+      .where(eq(runNodes.id, runNodeId))
+      .get();
+    if (!runNode) {
+      throw new Error(`Expected run node id=${runNodeId} to exist.`);
+    }
+
+    db.update(treeNodes)
+      .set({
+        executionPermissions: payload as unknown as Record<string, unknown>,
+      })
+      .where(eq(treeNodes.id, runNode.treeNodeId))
+      .run();
+
+    const executor = createSqlWorkflowExecutor(db, {
+      resolveProvider: () =>
+        createProvider([
+          { type: 'result', content: 'ok', timestamp: 1 },
+        ]),
+    });
+
+    const step = await executor.executeNextRunnableNode({
+      workflowRunId: runId,
+      options: {
+        workingDirectory: '/tmp/alphred-worktree',
+      },
+    });
+
+    expect(step).toEqual({
+      outcome: 'executed',
+      workflowRunId: runId,
+      runNodeId,
+      nodeKey: 'design',
+      runNodeStatus: 'failed',
+      runStatus: 'failed',
+      artifactId: expect.any(Number),
+    });
+
+    const artifacts = db
+      .select({
+        artifactType: phaseArtifacts.artifactType,
+        content: phaseArtifacts.content,
+      })
+      .from(phaseArtifacts)
+      .where(eq(phaseArtifacts.runNodeId, runNodeId))
+      .all();
+
+    expect(artifacts).toEqual(
+      expect.arrayContaining([
+        {
+          artifactType: 'log',
+          content: expect.stringContaining(message),
+        },
+      ]),
+    );
+  });
+
   it('injects deterministic direct-predecessor report envelopes for linear downstream execution', async () => {
     const { db, runId } = seedBrainstormPickResearchRun();
     const capturedContexts: (string[] | undefined)[] = [];

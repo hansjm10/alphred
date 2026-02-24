@@ -332,6 +332,24 @@ describe('codex provider', () => {
     expect(capturedRequest?.bridgedPrompt).toContain('User prompt:\nImplement adapter v1.');
   });
 
+  it('omits empty executionPermissions objects from codex runner requests', async () => {
+    let capturedRequest: CodexRunRequest | undefined;
+    const provider = createProvider(async function* (request: CodexRunRequest): AsyncIterable<CodexRawEvent> {
+      capturedRequest = request;
+      yield { type: 'result', content: 'ok' };
+    });
+
+    const options: ProviderRunOptions = {
+      workingDirectory: '/work/alphred',
+      executionPermissions: {},
+    };
+
+    const events = await collectEvents(provider, 'Implement adapter v1.', options);
+
+    expect(events.map((event) => event.type)).toEqual(['system', 'result']);
+    expect(capturedRequest?.executionPermissions).toBeUndefined();
+  });
+
   it('maps the default codex sdk stream into ordered provider events', async () => {
     const capture: CapturedSdkInvocation = {};
     const provider = new CodexProvider(
@@ -1062,8 +1080,13 @@ describe('codex provider', () => {
       { workingDirectory: '/tmp/alphred-codex-test', timeout: 3_000_000_000 },
       { workingDirectory: '/tmp/alphred-codex-test', timeout: Number.MAX_SAFE_INTEGER },
       { workingDirectory: '/tmp/alphred-codex-test', executionPermissions: 'invalid' },
+      { workingDirectory: '/tmp/alphred-codex-test', executionPermissions: { unsupported: true } },
+      { workingDirectory: '/tmp/alphred-codex-test', executionPermissions: { approvalPolicy: 'sometimes' } },
       { workingDirectory: '/tmp/alphred-codex-test', executionPermissions: { sandboxMode: 'nope' } },
+      { workingDirectory: '/tmp/alphred-codex-test', executionPermissions: { networkAccessEnabled: 'true' } },
+      { workingDirectory: '/tmp/alphred-codex-test', executionPermissions: { additionalDirectories: '/tmp/cache' } },
       { workingDirectory: '/tmp/alphred-codex-test', executionPermissions: { additionalDirectories: [''] } },
+      { workingDirectory: '/tmp/alphred-codex-test', executionPermissions: { webSearchMode: 'sometimes' } },
     ];
 
     for (const options of invalidOptionalOptions) {

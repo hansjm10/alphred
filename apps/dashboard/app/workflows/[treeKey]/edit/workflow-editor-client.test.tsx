@@ -2003,6 +2003,68 @@ describe('WorkflowEditorPageContent', () => {
     expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument();
   });
 
+  it.each([
+    { name: 'executionPermissions is not an object', executionPermissions: ['workspace-write'] },
+    { name: 'executionPermissions contains unsupported keys', executionPermissions: { unexpected: true } },
+    { name: 'executionPermissions.approvalPolicy is invalid', executionPermissions: { approvalPolicy: 'sometimes' } },
+    { name: 'executionPermissions.sandboxMode is invalid', executionPermissions: { sandboxMode: 'sometimes' } },
+    { name: 'executionPermissions.networkAccessEnabled is not boolean', executionPermissions: { networkAccessEnabled: 'true' } },
+    { name: 'executionPermissions.additionalDirectories is not an array', executionPermissions: { additionalDirectories: '/tmp/cache' } },
+    { name: 'executionPermissions.webSearchMode is invalid', executionPermissions: { webSearchMode: 'sometimes' } },
+  ])('shows a generic bootstrap error when $name', async ({ executionPermissions }) => {
+    vi.useRealTimers();
+    const malformedDraft = createInitialDraft({
+      nodes: [
+        {
+          ...createAgentNode(),
+          executionPermissions: executionPermissions as unknown as DashboardWorkflowDraftNode['executionPermissions'],
+        },
+      ],
+    });
+    const fetchMock = vi.fn(async () => createJsonResponse({ draft: malformedDraft }, { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(
+      <WorkflowEditorPageContent
+        initialDraft={createInitialDraft()}
+        bootstrapDraftOnMount
+      />,
+    );
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Preparing draft failed.');
+    expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument();
+  });
+
+  it('accepts bootstrap drafts with valid executionPermissions fields', async () => {
+    vi.useRealTimers();
+    const bootstrappedDraft = createInitialDraft({
+      name: 'Validated Permissions Draft',
+      nodes: [
+        createAgentNode({
+          executionPermissions: {
+            approvalPolicy: 'on-request',
+            sandboxMode: 'workspace-write',
+            networkAccessEnabled: true,
+            additionalDirectories: ['/tmp/cache'],
+            webSearchMode: 'cached',
+          },
+        }),
+      ],
+    });
+    const fetchMock = vi.fn(async () => createJsonResponse({ draft: bootstrappedDraft }, { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(
+      <WorkflowEditorPageContent
+        initialDraft={createInitialDraft()}
+        bootstrapDraftOnMount
+      />,
+    );
+
+    expect(await screen.findByRole('heading', { name: 'Validated Permissions Draft' })).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
   it('shows bootstrap network errors from thrown exceptions', async () => {
     vi.useRealTimers();
     const fetchMock = vi.fn(async () => {

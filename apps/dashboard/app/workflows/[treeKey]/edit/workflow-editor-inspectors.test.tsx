@@ -224,6 +224,11 @@ describe('NodeInspector', () => {
       executionPermissions: { networkAccessEnabled: true },
     }));
 
+    fireEvent.change(screen.getByLabelText('Network access'), { target: { value: '' } });
+    expect(onChange).toHaveBeenLastCalledWith(expect.objectContaining({
+      executionPermissions: null,
+    }));
+
     fireEvent.change(screen.getByLabelText('Web search mode'), { target: { value: 'cached' } });
     expect(onChange).toHaveBeenLastCalledWith(expect.objectContaining({
       executionPermissions: { webSearchMode: 'cached' },
