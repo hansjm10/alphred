@@ -396,6 +396,45 @@ describe('PUT /api/dashboard/workflows/[treeKey]/draft', () => {
     expect(saveWorkflowDraftMock).not.toHaveBeenCalled();
   });
 
+  it('returns 400 when node executionPermissions payload is invalid', async () => {
+    const request = new Request('http://localhost/api/dashboard/workflows/demo-tree/draft?version=1', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        draftRevision: 1,
+        name: 'Demo Tree',
+        nodes: [
+          {
+            nodeKey: 'design',
+            displayName: 'Design',
+            nodeType: 'agent',
+            provider: 'codex',
+            maxRetries: 0,
+            sequenceIndex: 10,
+            position: null,
+            promptTemplate: { content: 'Draft prompt', contentType: 'markdown' },
+            executionPermissions: { sandboxMode: 'invalid-mode' },
+          },
+        ],
+        edges: [],
+      }),
+    });
+
+    const response = await PUT(request, { params: Promise.resolve({ treeKey: 'demo-tree' }) });
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      error: {
+        code: 'invalid_request',
+        message: 'Draft node at index 0 has invalid executionPermissions.sandboxMode.',
+        details: {
+          field: 'nodes[0].executionPermissions.sandboxMode',
+        },
+      },
+    });
+    expect(saveWorkflowDraftMock).not.toHaveBeenCalled();
+  });
+
   it('returns 400 when an edge payload is invalid', async () => {
     const request = new Request('http://localhost/api/dashboard/workflows/demo-tree/draft?version=1', {
       method: 'PUT',
@@ -532,6 +571,13 @@ describe('PUT /api/dashboard/workflows/[treeKey]/draft', () => {
             sequenceIndex: 10,
             position: { x: 10, y: 20 },
             promptTemplate: { content: 'Draft prompt', contentType: 'markdown' },
+            executionPermissions: {
+              approvalPolicy: 'on-request',
+              sandboxMode: 'workspace-write',
+              networkAccessEnabled: true,
+              additionalDirectories: ['/tmp/scratch'],
+              webSearchMode: 'cached',
+            },
           },
         ],
         edges: [
@@ -563,6 +609,19 @@ describe('PUT /api/dashboard/workflows/[treeKey]/draft', () => {
       },
     });
     expect(saveWorkflowDraftMock).toHaveBeenCalledTimes(1);
+    expect(saveWorkflowDraftMock).toHaveBeenCalledWith('demo-tree', 1, expect.objectContaining({
+      nodes: [
+        expect.objectContaining({
+          executionPermissions: {
+            approvalPolicy: 'on-request',
+            sandboxMode: 'workspace-write',
+            networkAccessEnabled: true,
+            additionalDirectories: ['/tmp/scratch'],
+            webSearchMode: 'cached',
+          },
+        }),
+      ],
+    }));
   });
 
   it('defaults missing guardExpression fields to null when saving drafts', async () => {

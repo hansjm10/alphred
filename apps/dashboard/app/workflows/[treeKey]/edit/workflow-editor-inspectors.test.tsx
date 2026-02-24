@@ -204,6 +204,27 @@ describe('NodeInspector', () => {
     expect(onChange).toHaveBeenLastCalledWith(expect.objectContaining({ provider: 'openai', model: 'gpt-4.2-mini' }));
   });
 
+  it('edits codex execution permissions fields', () => {
+    const onChange = vi.fn();
+
+    render(<NodeInspector node={createNode(createDraftNode())} onChange={onChange} />);
+
+    fireEvent.change(screen.getByLabelText('Approval policy'), { target: { value: 'on-request' } });
+    expect(onChange).toHaveBeenLastCalledWith(expect.objectContaining({
+      executionPermissions: { approvalPolicy: 'on-request' },
+    }));
+
+    fireEvent.change(screen.getByLabelText('Sandbox mode'), { target: { value: 'workspace-write' } });
+    expect(onChange).toHaveBeenLastCalledWith(expect.objectContaining({
+      executionPermissions: { sandboxMode: 'workspace-write' },
+    }));
+
+    fireEvent.change(screen.getByLabelText('Network access'), { target: { value: 'enabled' } });
+    expect(onChange).toHaveBeenLastCalledWith(expect.objectContaining({
+      executionPermissions: { networkAccessEnabled: true },
+    }));
+  });
+
   it('disables model selection when no models exist for the selected provider', () => {
     const providerOptions: DashboardAgentProviderOption[] = [
       { provider: 'codex', label: 'Codex', defaultModel: null },
@@ -236,6 +257,39 @@ describe('NodeInspector', () => {
 
     expect(onAddConnectedNode).toHaveBeenCalledTimes(1);
     expect(onAddConnectedNode).toHaveBeenCalledWith('implement');
+  });
+
+  it('clears execution permissions when switching provider away from codex', () => {
+    const onChange = vi.fn();
+    const providerOptions: DashboardAgentProviderOption[] = [
+      { provider: 'codex', label: 'Codex', defaultModel: 'gpt-5.3-codex' },
+      { provider: 'claude', label: 'Claude', defaultModel: 'claude-3-7-sonnet-latest' },
+    ];
+    const modelOptions: DashboardAgentModelOption[] = [
+      { provider: 'codex', model: 'gpt-5.3-codex', label: 'GPT-5.3', isDefault: true, sortOrder: 10 },
+      { provider: 'claude', model: 'claude-3-7-sonnet-latest', label: 'Claude Sonnet', isDefault: true, sortOrder: 10 },
+    ];
+
+    render(
+      <NodeInspector
+        node={createNode(createDraftNode({
+          executionPermissions: {
+            approvalPolicy: 'on-request',
+            sandboxMode: 'workspace-write',
+          },
+        }))}
+        providerOptions={providerOptions}
+        modelOptions={modelOptions}
+        onChange={onChange}
+      />,
+    );
+
+    fireEvent.change(screen.getByLabelText('Provider'), { target: { value: 'claude' } });
+
+    expect(onChange).toHaveBeenLastCalledWith(expect.objectContaining({
+      provider: 'claude',
+      executionPermissions: null,
+    }));
   });
 });
 

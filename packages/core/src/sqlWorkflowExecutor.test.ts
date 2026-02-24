@@ -4863,6 +4863,59 @@ describe('createSqlWorkflowExecutor', () => {
     });
   });
 
+  it('merges node execution permissions into provider run options', async () => {
+    const { db, runId, runNodeId } = seedSingleAgentRun();
+    const runNode = db
+      .select({ treeNodeId: runNodes.treeNodeId })
+      .from(runNodes)
+      .where(eq(runNodes.id, runNodeId))
+      .get();
+    if (!runNode) {
+      throw new Error(`Expected run node id=${runNodeId} to exist.`);
+    }
+
+    db.update(treeNodes)
+      .set({
+        executionPermissions: {
+          approvalPolicy: 'on-request',
+          sandboxMode: 'workspace-write',
+          additionalDirectories: ['/tmp/extra-tools'],
+          webSearchMode: 'cached',
+        },
+      })
+      .where(eq(treeNodes.id, runNode.treeNodeId))
+      .run();
+
+    let capturedOptions: ProviderRunOptions | undefined;
+    const executor = createSqlWorkflowExecutor(db, {
+      resolveProvider: () => ({
+        async *run(_prompt: string, options: ProviderRunOptions): AsyncIterable<ProviderEvent> {
+          capturedOptions = options;
+          yield { type: 'result', content: 'ok', timestamp: 1 };
+        },
+      }),
+    });
+
+    await executor.executeNextRunnableNode({
+      workflowRunId: runId,
+      options: {
+        workingDirectory: '/tmp/alphred-worktree',
+        executionPermissions: {
+          approvalPolicy: 'never',
+          networkAccessEnabled: false,
+        },
+      },
+    });
+
+    expect(capturedOptions?.executionPermissions).toEqual({
+      approvalPolicy: 'on-request',
+      sandboxMode: 'workspace-write',
+      networkAccessEnabled: false,
+      additionalDirectories: ['/tmp/extra-tools'],
+      webSearchMode: 'cached',
+    });
+  });
+
   it('injects deterministic direct-predecessor report envelopes for linear downstream execution', async () => {
     const { db, runId } = seedBrainstormPickResearchRun();
     const capturedContexts: (string[] | undefined)[] = [];

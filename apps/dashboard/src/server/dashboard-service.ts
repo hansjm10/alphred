@@ -33,7 +33,15 @@ import {
   resolveSandboxDir,
   type ScmProviderConfig,
 } from '@alphred/git';
-import type { AuthStatus, GuardExpression, RepositoryConfig } from '@alphred/shared';
+import {
+  providerApprovalPolicies,
+  providerSandboxModes,
+  providerWebSearchModes,
+  type AuthStatus,
+  type GuardExpression,
+  type ProviderExecutionPermissions,
+  type RepositoryConfig,
+} from '@alphred/shared';
 import type {
   DashboardArtifactSnapshot,
   DashboardCreateRepositoryRequest,
@@ -918,6 +926,9 @@ export function createDashboardService(options: {
 
   const workflowNodeTypes = new Set(['agent', 'human', 'tool']);
   const guardOperators = new Set(['==', '!=', '>', '<', '>=', '<=']);
+  const executionApprovalPolicies = new Set(providerApprovalPolicies);
+  const executionSandboxModes = new Set(providerSandboxModes);
+  const executionWebSearchModes = new Set(providerWebSearchModes);
 
   function isRecord(value: unknown): value is Record<string, unknown> {
     return value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -949,6 +960,44 @@ export function createDashboardService(options: {
     }
 
     return ['string', 'number', 'boolean'].includes(typeof value.value);
+  }
+
+  function normalizeExecutionPermissions(
+    value: ProviderExecutionPermissions | null | undefined,
+  ): ProviderExecutionPermissions | null {
+    if (!value || !isRecord(value)) {
+      return null;
+    }
+
+    const normalized: ProviderExecutionPermissions = {};
+
+    if (typeof value.approvalPolicy === 'string' && executionApprovalPolicies.has(value.approvalPolicy)) {
+      normalized.approvalPolicy = value.approvalPolicy;
+    }
+
+    if (typeof value.sandboxMode === 'string' && executionSandboxModes.has(value.sandboxMode)) {
+      normalized.sandboxMode = value.sandboxMode;
+    }
+
+    if (typeof value.networkAccessEnabled === 'boolean') {
+      normalized.networkAccessEnabled = value.networkAccessEnabled;
+    }
+
+    if (Array.isArray(value.additionalDirectories)) {
+      const normalizedDirectories = value.additionalDirectories
+        .filter((item): item is string => typeof item === 'string')
+        .map(item => item.trim())
+        .filter(item => item.length > 0);
+      if (normalizedDirectories.length > 0) {
+        normalized.additionalDirectories = normalizedDirectories;
+      }
+    }
+
+    if (typeof value.webSearchMode === 'string' && executionWebSearchModes.has(value.webSearchMode)) {
+      normalized.webSearchMode = value.webSearchMode;
+    }
+
+    return Object.keys(normalized).length > 0 ? normalized : null;
   }
 
   function normalizeWorkflowTreeKey(rawValue: unknown): string {
@@ -1063,6 +1112,7 @@ export function createDashboardService(options: {
         nodeKey: node.nodeKey.trim(),
         provider: node.provider?.trim() ? node.provider.trim() : null,
         model: node.model?.trim() ? node.model.trim() : null,
+        executionPermissions: node.executionPermissions ?? null,
       })),
       edges: topology.edges.map(edge => ({
         ...edge,
@@ -1116,6 +1166,14 @@ export function createDashboardService(options: {
         errors.push({ code: 'node_name_missing', message: `Node "${trimmedKey}" must have a display name.` });
       }
 
+      const executionPermissions = node.executionPermissions ?? null;
+      if (node.nodeType !== 'agent' && executionPermissions !== null) {
+        errors.push({
+          code: 'execution_permissions_non_agent',
+          message: `Node "${trimmedKey}" cannot set execution permissions because only agent nodes are executable.`,
+        });
+      }
+
       if (mode === 'publish' && node.nodeType !== 'agent') {
         errors.push({
           code: 'unsupported_node_type',
@@ -1156,7 +1214,59 @@ export function createDashboardService(options: {
             });
           }
 
+          if (executionPermissions !== null && provider !== 'codex') {
+            errors.push({
+              code: 'execution_permissions_provider_unsupported',
+              message: `Agent node "${trimmedKey}" cannot set execution permissions for provider ${JSON.stringify(provider)}.`,
+            });
+          }
         }
+
+        if (executionPermissions !== null) {
+          if (executionPermissions.approvalPolicy !== undefined && !executionApprovalPolicies.has(executionPermissions.approvalPolicy)) {
+            errors.push({
+              code: 'execution_permissions_approval_policy_invalid',
+              message: `Agent node "${trimmedKey}" has unsupported execution approvalPolicy ${JSON.stringify(executionPermissions.approvalPolicy)}.`,
+            });
+          }
+
+          if (executionPermissions.sandboxMode !== undefined && !executionSandboxModes.has(executionPermissions.sandboxMode)) {
+            errors.push({
+              code: 'execution_permissions_sandbox_mode_invalid',
+              message: `Agent node "${trimmedKey}" has unsupported execution sandboxMode ${JSON.stringify(executionPermissions.sandboxMode)}.`,
+            });
+          }
+
+          if (
+            executionPermissions.networkAccessEnabled !== undefined &&
+            typeof executionPermissions.networkAccessEnabled !== 'boolean'
+          ) {
+            errors.push({
+              code: 'execution_permissions_network_access_invalid',
+              message: `Agent node "${trimmedKey}" must set execution networkAccessEnabled as a boolean.`,
+            });
+          }
+
+          if (executionPermissions.additionalDirectories !== undefined) {
+            if (
+              !Array.isArray(executionPermissions.additionalDirectories) ||
+              executionPermissions.additionalDirectories.some(item => typeof item !== 'string' || item.trim().length === 0)
+            ) {
+              errors.push({
+                code: 'execution_permissions_additional_directories_invalid',
+                message: `Agent node "${trimmedKey}" must set execution additionalDirectories as non-empty strings.`,
+              });
+            }
+          }
+
+          if (executionPermissions.webSearchMode !== undefined && !executionWebSearchModes.has(executionPermissions.webSearchMode)) {
+            errors.push({
+              code: 'execution_permissions_web_search_mode_invalid',
+              message: `Agent node "${trimmedKey}" has unsupported execution webSearchMode ${JSON.stringify(executionPermissions.webSearchMode)}.`,
+            });
+          }
+        }
+
         if (!node.promptTemplate || node.promptTemplate.content.trim().length === 0) {
           errors.push({ code: 'agent_prompt_missing', message: `Agent node "${trimmedKey}" must have a prompt.` });
         }
@@ -1280,6 +1390,7 @@ export function createDashboardService(options: {
         nodeType: treeNodes.nodeType,
         provider: treeNodes.provider,
         model: treeNodes.model,
+        executionPermissions: treeNodes.executionPermissions,
         maxRetries: treeNodes.maxRetries,
         sequenceIndex: treeNodes.sequenceIndex,
         positionX: treeNodes.positionX,
@@ -1292,29 +1403,39 @@ export function createDashboardService(options: {
       .where(eq(treeNodes.workflowTreeId, treeId))
       .orderBy(asc(treeNodes.sequenceIndex), asc(treeNodes.nodeKey), asc(treeNodes.id))
       .all()
-      .map((row) => ({
-        nodeKey: row.nodeKey,
-        displayName: row.displayName ?? row.nodeKey,
-        nodeType: row.nodeType as 'agent' | 'human' | 'tool',
-        provider: row.provider,
-        model:
+      .map((row) => {
+        const executionPermissions =
           row.nodeType === 'agent'
-            ? (row.model ?? resolveDefaultModelForProvider(row.provider, catalog))
-            : null,
-        maxRetries: row.maxRetries,
-        sequenceIndex: row.sequenceIndex,
-        position:
-          row.positionX === null || row.positionY === null
-            ? null
-            : { x: row.positionX, y: row.positionY },
-        promptTemplate:
-          row.promptContent === null || row.promptContentType === null
-            ? null
-            : {
-                content: row.promptContent,
-                contentType: (row.promptContentType as 'text' | 'markdown') ?? 'markdown',
-              },
-      }));
+            ? normalizeExecutionPermissions(
+              row.executionPermissions as ProviderExecutionPermissions | null | undefined,
+            )
+            : null;
+
+        return {
+          nodeKey: row.nodeKey,
+          displayName: row.displayName ?? row.nodeKey,
+          nodeType: row.nodeType as 'agent' | 'human' | 'tool',
+          provider: row.provider,
+          model:
+            row.nodeType === 'agent'
+              ? (row.model ?? resolveDefaultModelForProvider(row.provider, catalog))
+              : null,
+          ...(executionPermissions === null ? {} : { executionPermissions }),
+          maxRetries: row.maxRetries,
+          sequenceIndex: row.sequenceIndex,
+          position:
+            row.positionX === null || row.positionY === null
+              ? null
+              : { x: row.positionX, y: row.positionY },
+          promptTemplate:
+            row.promptContent === null || row.promptContentType === null
+              ? null
+              : {
+                  content: row.promptContent,
+                  contentType: (row.promptContentType as 'text' | 'markdown') ?? 'markdown',
+                },
+        };
+      });
 
     const nodeKeyById = new Map<number, string>(
       db
@@ -1639,14 +1760,15 @@ export function createDashboardService(options: {
                   workflowTreeId: tree.id,
                   nodeKey: spec.nodeKey,
                   displayName: spec.displayName,
-                  nodeType: 'agent',
-                  provider: 'codex',
-                  model: defaultCodexModel,
-                  promptTemplateId: promptTemplateIdByNodeKey.get(spec.nodeKey) ?? null,
-                  maxRetries: 0,
-                  sequenceIndex: spec.sequenceIndex,
-                  positionX: spec.position.x,
-                  positionY: spec.position.y,
+                nodeType: 'agent',
+                provider: 'codex',
+                model: defaultCodexModel,
+                executionPermissions: null,
+                promptTemplateId: promptTemplateIdByNodeKey.get(spec.nodeKey) ?? null,
+                maxRetries: 0,
+                sequenceIndex: spec.sequenceIndex,
+                positionX: spec.position.x,
+                positionY: spec.position.y,
                 })
                 .returning({ id: treeNodes.id })
                 .get();
@@ -1815,6 +1937,7 @@ export function createDashboardService(options: {
 	                nodeType: node.nodeType,
 	                provider: node.provider,
                   model: node.model,
+                  executionPermissions: normalizeExecutionPermissions(node.executionPermissions),
 	                promptTemplateId: promptTemplateIdByNodeKey.get(node.nodeKey) ?? null,
 	                maxRetries: node.maxRetries,
 	                sequenceIndex: node.sequenceIndex,
@@ -1976,6 +2099,7 @@ export function createDashboardService(options: {
                 nodeType: treeNodes.nodeType,
                 provider: treeNodes.provider,
                 model: treeNodes.model,
+                executionPermissions: treeNodes.executionPermissions,
                 maxRetries: treeNodes.maxRetries,
                 sequenceIndex: treeNodes.sequenceIndex,
                 positionX: treeNodes.positionX,
@@ -2040,6 +2164,9 @@ export function createDashboardService(options: {
                     node.nodeType === 'agent'
                       ? (node.model ?? resolveDefaultModelForProvider(node.provider, catalog))
                       : null,
+                  executionPermissions: normalizeExecutionPermissions(
+                    node.executionPermissions as ProviderExecutionPermissions | null | undefined,
+                  ),
                   promptTemplateId:
                     node.promptTemplateId === null ? null : (promptTemplateCloneById.get(node.promptTemplateId) ?? null),
                   maxRetries: node.maxRetries,
@@ -2333,6 +2460,7 @@ export function createDashboardService(options: {
                 nodeType: node.nodeType,
                 provider: node.provider,
                 model: nodeModel,
+                executionPermissions: normalizeExecutionPermissions(node.executionPermissions),
                 promptTemplateId: promptTemplateIdByNodeKey.get(node.nodeKey) ?? null,
                 maxRetries: node.maxRetries,
                 sequenceIndex: node.sequenceIndex,

@@ -115,6 +115,23 @@ export const routingDecisionSignals = ['approved', 'changes_requested', 'blocked
 export type RoutingDecisionSignal = (typeof routingDecisionSignals)[number];
 export type RoutingDecisionType = RoutingDecisionSignal | 'no_route';
 
+export const providerApprovalPolicies = ['never', 'on-request', 'on-failure', 'untrusted'] as const;
+export type ProviderApprovalPolicy = (typeof providerApprovalPolicies)[number];
+
+export const providerSandboxModes = ['read-only', 'workspace-write', 'danger-full-access'] as const;
+export type ProviderSandboxMode = (typeof providerSandboxModes)[number];
+
+export const providerWebSearchModes = ['disabled', 'cached', 'live'] as const;
+export type ProviderWebSearchMode = (typeof providerWebSearchModes)[number];
+
+export type ProviderExecutionPermissions = {
+  approvalPolicy?: ProviderApprovalPolicy;
+  sandboxMode?: ProviderSandboxMode;
+  networkAccessEnabled?: boolean;
+  additionalDirectories?: string[];
+  webSearchMode?: ProviderWebSearchMode;
+};
+
 // Agent provider event types
 export type ProviderEventType = 'system' | 'assistant' | 'result' | 'tool_use' | 'tool_result' | 'usage';
 
@@ -133,6 +150,7 @@ export type ProviderRunOptions = {
   timeout?: number;
   context?: string[];
   model?: string;
+  executionPermissions?: ProviderExecutionPermissions;
 };
 
 /**

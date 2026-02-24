@@ -1352,6 +1352,107 @@ describe('createDashboardService', () => {
     });
   });
 
+  it('rejects execution permissions for non-codex providers', async () => {
+    const { db, dependencies } = createHarness();
+    migrateDatabase(db);
+
+    const service = createDashboardService({ dependencies });
+
+    await service.createWorkflowDraft({
+      template: 'blank',
+      name: 'Execution Permissions Tree',
+      treeKey: 'execution-permissions-tree',
+    });
+
+    await expect(
+      service.saveWorkflowDraft('execution-permissions-tree', 1, {
+        draftRevision: 1,
+        name: 'Execution Permissions Tree',
+        nodes: [
+          {
+            nodeKey: 'agent-node',
+            displayName: 'Agent Node',
+            nodeType: 'agent',
+            provider: 'claude',
+            model: 'claude-3-7-sonnet-latest',
+            executionPermissions: {
+              sandboxMode: 'workspace-write',
+            },
+            maxRetries: 0,
+            sequenceIndex: 10,
+            position: null,
+            promptTemplate: { content: 'Agent prompt', contentType: 'markdown' },
+          },
+        ],
+        edges: [],
+      }),
+    ).rejects.toMatchObject({
+      code: 'invalid_request',
+      status: 400,
+      details: expect.objectContaining({
+        errors: expect.arrayContaining([expect.objectContaining({ code: 'execution_permissions_provider_unsupported' })]),
+      }),
+    });
+  });
+
+  it('persists execution permissions across save, publish, and draft bootstrap', async () => {
+    const { db, dependencies } = createHarness();
+    migrateDatabase(db);
+
+    const service = createDashboardService({ dependencies });
+
+    await service.createWorkflowDraft({
+      template: 'blank',
+      name: 'Execution Persist Tree',
+      treeKey: 'execution-persist-tree',
+    });
+
+    const savedDraft = await service.saveWorkflowDraft('execution-persist-tree', 1, {
+      draftRevision: 1,
+      name: 'Execution Persist Tree',
+      nodes: [
+        {
+          nodeKey: 'agent-node',
+          displayName: 'Agent Node',
+          nodeType: 'agent',
+          provider: 'codex',
+          model: 'gpt-5.3-codex',
+          executionPermissions: {
+            approvalPolicy: 'on-request',
+            sandboxMode: 'workspace-write',
+            networkAccessEnabled: true,
+            additionalDirectories: ['  /tmp/extra-a  ', '/tmp/extra-b'],
+            webSearchMode: 'cached',
+          },
+          maxRetries: 0,
+          sequenceIndex: 10,
+          position: null,
+          promptTemplate: { content: 'Agent prompt', contentType: 'markdown' },
+        },
+      ],
+      edges: [],
+    });
+
+    expect(savedDraft.nodes[0]?.executionPermissions).toEqual({
+      approvalPolicy: 'on-request',
+      sandboxMode: 'workspace-write',
+      networkAccessEnabled: true,
+      additionalDirectories: ['/tmp/extra-a', '/tmp/extra-b'],
+      webSearchMode: 'cached',
+    });
+
+    await service.publishWorkflowDraft('execution-persist-tree', 1, {});
+    const bootstrappedDraft = await service.getOrCreateWorkflowDraft('execution-persist-tree');
+
+    expect(bootstrappedDraft.nodes[0]?.executionPermissions).toEqual({
+      approvalPolicy: 'on-request',
+      sandboxMode: 'workspace-write',
+      networkAccessEnabled: true,
+      additionalDirectories: ['/tmp/extra-a', '/tmp/extra-b'],
+      webSearchMode: 'cached',
+    });
+  });
+
   it('rejects saving drafts with negative transition priorities', async () => {
     const { db, dependencies } = createHarness();
     migrateDatabase(db);

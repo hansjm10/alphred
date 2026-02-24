@@ -167,6 +167,7 @@ describe('database schema hardening', () => {
     expect(columnNames).toContain('position_x');
     expect(columnNames).toContain('position_y');
     expect(columnNames).toContain('model');
+    expect(columnNames).toContain('execution_permissions');
   });
 
   it('adds repositories.branch_template when migrating a legacy repositories table', () => {

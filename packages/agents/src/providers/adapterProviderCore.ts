@@ -1,5 +1,12 @@
 import { inspect } from 'node:util';
-import type { ProviderEvent, ProviderRunOptions } from '@alphred/shared';
+import {
+  providerApprovalPolicies,
+  providerSandboxModes,
+  providerWebSearchModes,
+  type ProviderEvent,
+  type ProviderExecutionPermissions,
+  type ProviderRunOptions,
+} from '@alphred/shared';
 import { createProviderEvent } from '../provider.js';
 
 const defaultProviderEventTypeAliases: Readonly<Record<string, ProviderEvent['type']>> = Object.freeze({
@@ -30,6 +37,7 @@ export type AdapterRunRequest = Readonly<{
   systemPrompt?: string;
   model?: string;
   timeout?: number;
+  executionPermissions?: ProviderExecutionPermissions;
 }>;
 
 export type AdapterRawEvent = Readonly<{
@@ -62,7 +70,19 @@ export type AdapterProviderConfig<Code extends string, TError extends Error> = R
   createError: AdapterProviderErrorFactory<Code, TError>;
   isProviderError: (error: unknown) => error is TError;
   eventTypeAliases?: Readonly<Record<string, ProviderEvent['type']>>;
+  supportsExecutionPermissions?: boolean;
 }>;
+
+const executionPermissionKeys = new Set([
+  'approvalPolicy',
+  'sandboxMode',
+  'networkAccessEnabled',
+  'additionalDirectories',
+  'webSearchMode',
+]);
+const executionApprovalPolicies = new Set(providerApprovalPolicies);
+const executionSandboxModes = new Set(providerSandboxModes);
+const executionWebSearchModes = new Set(providerWebSearchModes);
 
 function toNonNegativeNumber(value: unknown): number | undefined {
   if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
@@ -278,6 +298,132 @@ function normalizeModel<Code extends string, TError extends Error>(
   return normalizedModel;
 }
 
+function normalizeExecutionPermissions<Code extends string, TError extends Error>(
+  executionPermissions: ProviderRunOptions['executionPermissions'] | null,
+  config: AdapterProviderConfig<Code, TError>,
+): ProviderExecutionPermissions | undefined {
+  if (executionPermissions === undefined || executionPermissions === null) {
+    return undefined;
+  }
+
+  if (typeof executionPermissions !== 'object' || Array.isArray(executionPermissions)) {
+    throw config.createError(
+      config.codes.invalidOptions,
+      `${config.providerDisplayName} provider requires executionPermissions to be an object when provided.`,
+      { executionPermissions },
+    );
+  }
+
+  const rawPermissions = executionPermissions as Record<string, unknown>;
+  for (const key of Object.keys(rawPermissions)) {
+    if (!executionPermissionKeys.has(key)) {
+      throw config.createError(
+        config.codes.invalidOptions,
+        `${config.providerDisplayName} provider does not recognize executionPermissions.${key}.`,
+        { executionPermissions },
+      );
+    }
+  }
+
+  const normalized: ProviderExecutionPermissions = {};
+
+  if ('approvalPolicy' in rawPermissions && rawPermissions.approvalPolicy !== undefined) {
+    const approvalPolicy = rawPermissions.approvalPolicy;
+    if (
+      typeof approvalPolicy !== 'string'
+      || !executionApprovalPolicies.has(approvalPolicy as (typeof providerApprovalPolicies)[number])
+    ) {
+      throw config.createError(
+        config.codes.invalidOptions,
+        `${config.providerDisplayName} provider requires executionPermissions.approvalPolicy to be a supported value.`,
+        { executionPermissions },
+      );
+    }
+    normalized.approvalPolicy = approvalPolicy as (typeof providerApprovalPolicies)[number];
+  }
+
+  if ('sandboxMode' in rawPermissions && rawPermissions.sandboxMode !== undefined) {
+    const sandboxMode = rawPermissions.sandboxMode;
+    if (
+      typeof sandboxMode !== 'string'
+      || !executionSandboxModes.has(sandboxMode as (typeof providerSandboxModes)[number])
+    ) {
+      throw config.createError(
+        config.codes.invalidOptions,
+        `${config.providerDisplayName} provider requires executionPermissions.sandboxMode to be a supported value.`,
+        { executionPermissions },
+      );
+    }
+    normalized.sandboxMode = sandboxMode as (typeof providerSandboxModes)[number];
+  }
+
+  if ('networkAccessEnabled' in rawPermissions && rawPermissions.networkAccessEnabled !== undefined) {
+    if (typeof rawPermissions.networkAccessEnabled !== 'boolean') {
+      throw config.createError(
+        config.codes.invalidOptions,
+        `${config.providerDisplayName} provider requires executionPermissions.networkAccessEnabled to be a boolean.`,
+        { executionPermissions },
+      );
+    }
+    normalized.networkAccessEnabled = rawPermissions.networkAccessEnabled;
+  }
+
+  if ('additionalDirectories' in rawPermissions && rawPermissions.additionalDirectories !== undefined) {
+    if (!Array.isArray(rawPermissions.additionalDirectories)) {
+      throw config.createError(
+        config.codes.invalidOptions,
+        `${config.providerDisplayName} provider requires executionPermissions.additionalDirectories to be an array when provided.`,
+        { executionPermissions },
+      );
+    }
+
+    const normalizedDirectories = rawPermissions.additionalDirectories.map((directory, index) => {
+      if (typeof directory !== 'string' || directory.trim().length === 0) {
+        throw config.createError(
+          config.codes.invalidOptions,
+          `${config.providerDisplayName} provider requires executionPermissions.additionalDirectories entries to be non-empty strings.`,
+          { executionPermissions, index },
+        );
+      }
+
+      return directory.trim();
+    });
+
+    if (normalizedDirectories.length > 0) {
+      normalized.additionalDirectories = normalizedDirectories;
+    }
+  }
+
+  if ('webSearchMode' in rawPermissions && rawPermissions.webSearchMode !== undefined) {
+    const webSearchMode = rawPermissions.webSearchMode;
+    if (
+      typeof webSearchMode !== 'string'
+      || !executionWebSearchModes.has(webSearchMode as (typeof providerWebSearchModes)[number])
+    ) {
+      throw config.createError(
+        config.codes.invalidOptions,
+        `${config.providerDisplayName} provider requires executionPermissions.webSearchMode to be a supported value.`,
+        { executionPermissions },
+      );
+    }
+    normalized.webSearchMode = webSearchMode as (typeof providerWebSearchModes)[number];
+  }
+
+  if (Object.keys(normalized).length === 0) {
+    return undefined;
+  }
+
+  if (config.supportsExecutionPermissions !== true) {
+    throw config.createError(
+      config.codes.invalidOptions,
+      `${config.providerDisplayName} provider does not support executionPermissions.`,
+      { executionPermissions: normalized },
+    );
+  }
+
+  return normalized;
+}
+
 function buildBridgedPrompt(prompt: string, systemPrompt: string | undefined, context: readonly string[]): string {
   if (!systemPrompt && context.length === 0) {
     return prompt;
@@ -336,6 +482,7 @@ function createRunRequest<Code extends string, TError extends Error>(
   const systemPrompt = normalizeSystemPrompt(validatedOptions.systemPrompt, config);
   const model = normalizeModel(validatedOptions.model, config);
   const context = normalizeContext(validatedOptions.context, config);
+  const executionPermissions = normalizeExecutionPermissions(validatedOptions.executionPermissions ?? null, config);
 
   return {
     prompt,
@@ -345,6 +492,7 @@ function createRunRequest<Code extends string, TError extends Error>(
     systemPrompt,
     model,
     timeout: validatedOptions.timeout,
+    executionPermissions,
   };
 }
 
@@ -394,6 +542,9 @@ export async function* runAdapterProvider<Code extends string, TError extends Er
   };
   if (request.model !== undefined) {
     runStartedMetadata.model = request.model;
+  }
+  if (request.executionPermissions !== undefined) {
+    runStartedMetadata.executionPermissions = request.executionPermissions;
   }
 
   yield createProviderEvent('system', `${config.providerDisplayName} provider run started.`, {

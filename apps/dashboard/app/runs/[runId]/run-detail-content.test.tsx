@@ -620,7 +620,10 @@ describe('RunDetailContent realtime updates', () => {
       timestamp: 101,
       contentChars: 9,
       contentPreview: 'phase two',
-      metadata: null,
+      metadata: {
+        approvalPolicy: 'on-request',
+        sandboxMode: 'workspace-write',
+      },
       usage: null,
       createdAt: '2026-02-18T00:00:41.000Z',
     });
@@ -628,6 +631,8 @@ describe('RunDetailContent realtime updates', () => {
     await waitFor(() => {
       expect(screen.getByText('phase two')).toBeInTheDocument();
     });
+    await user.click(screen.getByText('metadata'));
+    expect(screen.getByText(/workspace-write/)).toBeInTheDocument();
 
     await user.click(screen.getByRole('button', { name: 'Pause auto-scroll' }));
 

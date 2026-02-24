@@ -303,6 +303,13 @@ describe('codex provider', () => {
       systemPrompt: 'Be concise and deterministic.',
       context: ['issue=13', 'provider=codex'],
       timeout: 30_000,
+      executionPermissions: {
+        approvalPolicy: 'on-request',
+        sandboxMode: 'workspace-write',
+        networkAccessEnabled: true,
+        additionalDirectories: ['/tmp/scratch'],
+        webSearchMode: 'cached',
+      },
     };
 
     const events = await collectEvents(provider, 'Implement adapter v1.', options);
@@ -313,6 +320,13 @@ describe('codex provider', () => {
     expect(capturedRequest?.systemPrompt).toBe('Be concise and deterministic.');
     expect(capturedRequest?.context).toEqual(['issue=13', 'provider=codex']);
     expect(capturedRequest?.timeout).toBe(30_000);
+    expect(capturedRequest?.executionPermissions).toEqual({
+      approvalPolicy: 'on-request',
+      sandboxMode: 'workspace-write',
+      networkAccessEnabled: true,
+      additionalDirectories: ['/tmp/scratch'],
+      webSearchMode: 'cached',
+    });
     expect(capturedRequest?.bridgedPrompt).toContain('System prompt:\nBe concise and deterministic.');
     expect(capturedRequest?.bridgedPrompt).toContain('Context:\n[1] issue=13\n[2] provider=codex');
     expect(capturedRequest?.bridgedPrompt).toContain('User prompt:\nImplement adapter v1.');
@@ -389,6 +403,54 @@ describe('codex provider', () => {
     expect(capture.input).toBe('Implement adapter v2.');
     expect(capture.turnOptions).toMatchObject({
       signal: expect.any(AbortSignal),
+    });
+  });
+
+  it('maps execution permissions into codex thread options', async () => {
+    const capture: CapturedSdkInvocation = {};
+    const provider = new CodexProvider(
+      undefined,
+      () => createStreamingBootstrap([
+        { type: 'thread.started', thread_id: 'thread-permissions' },
+        { type: 'turn.started' },
+        {
+          type: 'item.completed',
+          item: {
+            id: 'msg-1',
+            type: 'agent_message',
+            text: 'done',
+          },
+        },
+        {
+          type: 'turn.completed',
+          usage: {
+            input_tokens: 2,
+            cached_input_tokens: 0,
+            output_tokens: 1,
+          },
+        },
+      ], capture),
+    );
+
+    await collectEvents(provider, 'Run with permissions.', {
+      workingDirectory: '/work/alphred',
+      executionPermissions: {
+        approvalPolicy: 'on-failure',
+        sandboxMode: 'danger-full-access',
+        networkAccessEnabled: true,
+        additionalDirectories: ['/tmp/a', '/tmp/b'],
+        webSearchMode: 'live',
+      },
+    });
+
+    expect(capture.threadOptions).toEqual({
+      model: 'gpt-5-codex',
+      workingDirectory: '/work/alphred',
+      approvalPolicy: 'on-failure',
+      sandboxMode: 'danger-full-access',
+      networkAccessEnabled: true,
+      additionalDirectories: ['/tmp/a', '/tmp/b'],
+      webSearchMode: 'live',
     });
   });
 
@@ -999,6 +1061,9 @@ describe('codex provider', () => {
       { workingDirectory: '/tmp/alphred-codex-test', systemPrompt: { text: 'be concise' } },
       { workingDirectory: '/tmp/alphred-codex-test', timeout: 3_000_000_000 },
       { workingDirectory: '/tmp/alphred-codex-test', timeout: Number.MAX_SAFE_INTEGER },
+      { workingDirectory: '/tmp/alphred-codex-test', executionPermissions: 'invalid' },
+      { workingDirectory: '/tmp/alphred-codex-test', executionPermissions: { sandboxMode: 'nope' } },
+      { workingDirectory: '/tmp/alphred-codex-test', executionPermissions: { additionalDirectories: [''] } },
     ];
 
     for (const options of invalidOptionalOptions) {

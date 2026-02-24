@@ -1,4 +1,4 @@
-import type { GuardExpression } from '@alphred/shared';
+import type { GuardExpression, ProviderExecutionPermissions } from '@alphred/shared';
 
 export type DashboardNodeStatus = 'pending' | 'running' | 'completed' | 'failed' | 'skipped' | 'cancelled';
 
@@ -77,6 +77,7 @@ export type DashboardWorkflowDraftNode = {
   nodeType: 'agent' | 'human' | 'tool';
   provider: string | null;
   model?: string | null;
+  executionPermissions?: ProviderExecutionPermissions | null;
   maxRetries: number;
   sequenceIndex: number;
   position: { x: number; y: number } | null;

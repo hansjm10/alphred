@@ -1,5 +1,11 @@
 import { NextResponse } from 'next/server';
-import type { GuardExpression } from '@alphred/shared';
+import {
+  providerApprovalPolicies,
+  providerSandboxModes,
+  providerWebSearchModes,
+  type GuardExpression,
+  type ProviderExecutionPermissions,
+} from '@alphred/shared';
 import { toErrorResponse } from '../../../../../../src/server/dashboard-http';
 import type {
   DashboardSaveWorkflowDraftRequest,
@@ -17,6 +23,16 @@ type RouteContext = {
 };
 
 const guardOperators = new Set(['==', '!=', '>', '<', '>=', '<=']);
+const executionPermissionKeys = new Set([
+  'approvalPolicy',
+  'sandboxMode',
+  'networkAccessEnabled',
+  'additionalDirectories',
+  'webSearchMode',
+]);
+const approvalPolicyValues = new Set(providerApprovalPolicies);
+const sandboxModeValues = new Set(providerSandboxModes);
+const webSearchModeValues = new Set(providerWebSearchModes);
 
 function isGuardExpression(value: unknown): value is GuardExpression {
   if (!isRecord(value)) {
@@ -108,6 +124,122 @@ function parseDraftNodePromptTemplate(
   });
 }
 
+function parseDraftNodeExecutionPermissions(value: unknown, index: number): ProviderExecutionPermissions | null {
+  if (value === undefined || value === null) {
+    return null;
+  }
+
+  if (!isRecord(value)) {
+    throw new DashboardIntegrationError(
+      'invalid_request',
+      `Draft node at index ${index} has invalid executionPermissions.`,
+      {
+        status: 400,
+        details: { field: `nodes[${index}].executionPermissions` },
+      },
+    );
+  }
+
+  for (const key of Object.keys(value)) {
+    if (!executionPermissionKeys.has(key)) {
+      throw new DashboardIntegrationError(
+        'invalid_request',
+        `Draft node at index ${index} has unsupported executionPermissions field "${key}".`,
+        {
+          status: 400,
+          details: { field: `nodes[${index}].executionPermissions.${key}` },
+        },
+      );
+    }
+  }
+
+  const parsed: ProviderExecutionPermissions = {};
+
+  if ('approvalPolicy' in value && value.approvalPolicy !== undefined) {
+    const approvalPolicy = value.approvalPolicy;
+    if (
+      typeof approvalPolicy !== 'string'
+      || !approvalPolicyValues.has(approvalPolicy as (typeof providerApprovalPolicies)[number])
+    ) {
+      throw new DashboardIntegrationError(
+        'invalid_request',
+        `Draft node at index ${index} has invalid executionPermissions.approvalPolicy.`,
+        {
+          status: 400,
+          details: { field: `nodes[${index}].executionPermissions.approvalPolicy` },
+        },
+      );
+    }
+    parsed.approvalPolicy = approvalPolicy as (typeof providerApprovalPolicies)[number];
+  }
+
+  if ('sandboxMode' in value && value.sandboxMode !== undefined) {
+    const sandboxMode = value.sandboxMode;
+    if (
+      typeof sandboxMode !== 'string'
+      || !sandboxModeValues.has(sandboxMode as (typeof providerSandboxModes)[number])
+    ) {
+      throw new DashboardIntegrationError(
+        'invalid_request',
+        `Draft node at index ${index} has invalid executionPermissions.sandboxMode.`,
+        {
+          status: 400,
+          details: { field: `nodes[${index}].executionPermissions.sandboxMode` },
+        },
+      );
+    }
+    parsed.sandboxMode = sandboxMode as (typeof providerSandboxModes)[number];
+  }
+
+  if ('networkAccessEnabled' in value && value.networkAccessEnabled !== undefined) {
+    if (typeof value.networkAccessEnabled !== 'boolean') {
+      throw new DashboardIntegrationError(
+        'invalid_request',
+        `Draft node at index ${index} has invalid executionPermissions.networkAccessEnabled.`,
+        {
+          status: 400,
+          details: { field: `nodes[${index}].executionPermissions.networkAccessEnabled` },
+        },
+      );
+    }
+    parsed.networkAccessEnabled = value.networkAccessEnabled;
+  }
+
+  if ('additionalDirectories' in value && value.additionalDirectories !== undefined) {
+    if (!Array.isArray(value.additionalDirectories) || value.additionalDirectories.some(item => typeof item !== 'string')) {
+      throw new DashboardIntegrationError(
+        'invalid_request',
+        `Draft node at index ${index} has invalid executionPermissions.additionalDirectories.`,
+        {
+          status: 400,
+          details: { field: `nodes[${index}].executionPermissions.additionalDirectories` },
+        },
+      );
+    }
+    parsed.additionalDirectories = [...value.additionalDirectories];
+  }
+
+  if ('webSearchMode' in value && value.webSearchMode !== undefined) {
+    const webSearchMode = value.webSearchMode;
+    if (
+      typeof webSearchMode !== 'string'
+      || !webSearchModeValues.has(webSearchMode as (typeof providerWebSearchModes)[number])
+    ) {
+      throw new DashboardIntegrationError(
+        'invalid_request',
+        `Draft node at index ${index} has invalid executionPermissions.webSearchMode.`,
+        {
+          status: 400,
+          details: { field: `nodes[${index}].executionPermissions.webSearchMode` },
+        },
+      );
+    }
+    parsed.webSearchMode = webSearchMode as (typeof providerWebSearchModes)[number];
+  }
+
+  return Object.keys(parsed).length > 0 ? parsed : null;
+}
+
 function parseDraftNode(raw: unknown, index: number): DashboardWorkflowDraftNode {
   if (!isRecord(raw)) {
     throw new DashboardIntegrationError('invalid_request', `Draft node at index ${index} must be an object.`, {
@@ -142,6 +274,7 @@ function parseDraftNode(raw: unknown, index: number): DashboardWorkflowDraftNode
 
   const position = parseDraftNodePosition(raw.position, index);
   const promptTemplate = parseDraftNodePromptTemplate(raw.promptTemplate, index);
+  const executionPermissions = parseDraftNodeExecutionPermissions(raw.executionPermissions, index);
 
   if (typeof raw.nodeKey !== 'string' || typeof raw.displayName !== 'string') {
     throw new DashboardIntegrationError('invalid_request', `Draft node at index ${index} must have nodeKey and displayName strings.`, {
@@ -170,6 +303,7 @@ function parseDraftNode(raw: unknown, index: number): DashboardWorkflowDraftNode
     nodeType,
     provider,
     model,
+    ...(executionPermissions === null ? {} : { executionPermissions }),
     maxRetries: raw.maxRetries,
     sequenceIndex: raw.sequenceIndex,
     position,

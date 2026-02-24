@@ -304,6 +304,7 @@ describe('claude provider', () => {
       { workingDirectory: '/tmp/alphred-claude-test', systemPrompt: { text: 'be concise' } },
       { workingDirectory: '/tmp/alphred-claude-test', timeout: 3_000_000_000 },
       { workingDirectory: '/tmp/alphred-claude-test', timeout: Number.MAX_SAFE_INTEGER },
+      { workingDirectory: '/tmp/alphred-claude-test', executionPermissions: 'invalid' },
     ];
 
     for (const options of invalidOptionalOptions) {
@@ -311,6 +312,22 @@ describe('claude provider', () => {
         code: 'CLAUDE_INVALID_OPTIONS',
       });
     }
+  });
+
+  it('rejects execution permissions because claude does not support them', async () => {
+    const provider = createProvider(createRunner([{ type: 'result', content: '' }]));
+
+    await expect(
+      collectEvents(provider, 'prompt', {
+        workingDirectory: '/tmp/alphred-claude-test',
+        executionPermissions: {
+          approvalPolicy: 'on-request',
+          sandboxMode: 'workspace-write',
+        },
+      }),
+    ).rejects.toMatchObject({
+      code: 'CLAUDE_INVALID_OPTIONS',
+    });
   });
 
   it('throws a typed error when claude emits unsupported event types', async () => {

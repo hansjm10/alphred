@@ -1,7 +1,15 @@
 'use client';
 
 import { useEffect, useMemo, useState, type ChangeEvent } from 'react';
-import type { GuardCondition, GuardExpression, GuardOperator } from '@alphred/shared';
+import {
+  providerApprovalPolicies,
+  providerSandboxModes,
+  providerWebSearchModes,
+  type GuardCondition,
+  type GuardExpression,
+  type GuardOperator,
+  type ProviderExecutionPermissions,
+} from '@alphred/shared';
 import type { Edge, Node } from '@xyflow/react';
 import type {
   DashboardAgentModelOption,
@@ -14,6 +22,9 @@ import type {
 import { ActionButton, Panel } from '../../../ui/primitives';
 
 const guardOperators: readonly GuardOperator[] = ['==', '!=', '>', '<', '>=', '<='];
+const approvalPolicyOptions = providerApprovalPolicies;
+const sandboxModeOptions = providerSandboxModes;
+const webSearchModeOptions = providerWebSearchModes;
 
 type GuardEditorMode = 'guided' | 'advanced';
 
@@ -195,6 +206,33 @@ export function NodeInspector({
     handleFieldChange('promptTemplate', { ...data.promptTemplate, content: event.target.value });
   }
 
+  function handleExecutionPermissionsChange(patch: Partial<ProviderExecutionPermissions>): void {
+    const currentPermissions = data.executionPermissions ?? null;
+    const merged: ProviderExecutionPermissions = {
+      ...(currentPermissions ?? {}),
+      ...patch,
+    };
+
+    const next: ProviderExecutionPermissions = {};
+    if (merged.approvalPolicy !== undefined) {
+      next.approvalPolicy = merged.approvalPolicy;
+    }
+    if (merged.sandboxMode !== undefined) {
+      next.sandboxMode = merged.sandboxMode;
+    }
+    if (merged.networkAccessEnabled !== undefined) {
+      next.networkAccessEnabled = merged.networkAccessEnabled;
+    }
+    if (merged.additionalDirectories !== undefined && merged.additionalDirectories.length > 0) {
+      next.additionalDirectories = merged.additionalDirectories;
+    }
+    if (merged.webSearchMode !== undefined) {
+      next.webSearchMode = merged.webSearchMode;
+    }
+
+    handleFieldChange('executionPermissions', Object.keys(next).length > 0 ? next : null);
+  }
+
   const nodeType = data.nodeType;
   const isAgent = nodeType === 'agent';
   const effectiveProviderOptions = providerOptions.length > 0
@@ -205,6 +243,7 @@ export function NodeInspector({
     ? [...effectiveProviderOptions, { provider: data.provider, label: `${data.provider} (unsupported)`, defaultModel: null }]
     : effectiveProviderOptions;
   const selectedProvider = data.provider ?? providerOptionsWithCurrent[0]?.provider ?? null;
+  const isCodexProvider = selectedProvider === 'codex';
 
   const availableModelsForProvider = modelOptions
     .filter(option => option.provider === selectedProvider)
@@ -261,6 +300,7 @@ export function NodeInspector({
         nodeType: nextNodeType,
         provider: nextProvider,
         model: nextModel,
+        executionPermissions: data.executionPermissions ?? null,
         promptTemplate: data.promptTemplate ?? { content: 'Describe what to do for this workflow phase.', contentType: 'markdown' },
       });
       return;
@@ -271,6 +311,7 @@ export function NodeInspector({
       nodeType: nextNodeType,
       provider: null,
       model: null,
+      executionPermissions: null,
       promptTemplate: null,
     });
   }
@@ -282,6 +323,7 @@ export function NodeInspector({
       ...data,
       provider: normalizedProvider,
       model: nextModel,
+      executionPermissions: normalizedProvider === 'codex' ? (data.executionPermissions ?? null) : null,
       promptTemplate: data.promptTemplate ?? { content: 'Describe what to do for this workflow phase.', contentType: 'markdown' },
     });
   }
@@ -339,6 +381,112 @@ export function NodeInspector({
               ))}
             </select>
           </label>
+
+          {isCodexProvider ? (
+            <>
+              <label className="workflow-inspector-field">
+                <span>Approval policy</span>
+                <select
+                  value={data.executionPermissions?.approvalPolicy ?? ''}
+                  onChange={(event) => {
+                    const nextValue = event.target.value;
+                    handleExecutionPermissionsChange({
+                      approvalPolicy: nextValue === ''
+                        ? undefined
+                        : (nextValue as (typeof providerApprovalPolicies)[number]),
+                    });
+                  }}
+                >
+                  <option value="">Use runtime default</option>
+                  {approvalPolicyOptions.map(option => (
+                    <option key={option} value={option}>{option}</option>
+                  ))}
+                </select>
+              </label>
+
+              <label className="workflow-inspector-field">
+                <span>Sandbox mode</span>
+                <select
+                  value={data.executionPermissions?.sandboxMode ?? ''}
+                  onChange={(event) => {
+                    const nextValue = event.target.value;
+                    handleExecutionPermissionsChange({
+                      sandboxMode: nextValue === ''
+                        ? undefined
+                        : (nextValue as (typeof providerSandboxModes)[number]),
+                    });
+                  }}
+                >
+                  <option value="">Use runtime default</option>
+                  {sandboxModeOptions.map(option => (
+                    <option key={option} value={option}>{option}</option>
+                  ))}
+                </select>
+              </label>
+
+              <label className="workflow-inspector-field">
+                <span>Network access</span>
+                <select
+                  value={
+                    data.executionPermissions?.networkAccessEnabled === undefined
+                      ? ''
+                      : (data.executionPermissions.networkAccessEnabled ? 'enabled' : 'disabled')
+                  }
+                  onChange={(event) => {
+                    const nextValue = event.target.value;
+                    if (nextValue === '') {
+                      handleExecutionPermissionsChange({ networkAccessEnabled: undefined });
+                      return;
+                    }
+                    handleExecutionPermissionsChange({ networkAccessEnabled: nextValue === 'enabled' });
+                  }}
+                >
+                  <option value="">Use runtime default</option>
+                  <option value="enabled">enabled</option>
+                  <option value="disabled">disabled</option>
+                </select>
+              </label>
+
+              <label className="workflow-inspector-field">
+                <span>Web search mode</span>
+                <select
+                  value={data.executionPermissions?.webSearchMode ?? ''}
+                  onChange={(event) => {
+                    const nextValue = event.target.value;
+                    handleExecutionPermissionsChange({
+                      webSearchMode: nextValue === ''
+                        ? undefined
+                        : (nextValue as (typeof providerWebSearchModes)[number]),
+                    });
+                  }}
+                >
+                  <option value="">Use runtime default</option>
+                  {webSearchModeOptions.map(option => (
+                    <option key={option} value={option}>{option}</option>
+                  ))}
+                </select>
+              </label>
+
+              <label className="workflow-inspector-field">
+                <span>Additional directories (one path per line)</span>
+                <textarea
+                  rows={3}
+                  value={(data.executionPermissions?.additionalDirectories ?? []).join('\n')}
+                  onChange={(event) => {
+                    const directories = event.target.value
+                      .split('\n')
+                      .map(item => item.trim())
+                      .filter(item => item.length > 0);
+                    handleExecutionPermissionsChange({
+                      additionalDirectories: directories.length > 0 ? directories : undefined,
+                    });
+                  }}
+                />
+              </label>
+            </>
+          ) : (
+            <p className="meta-text">Execution permission controls are currently supported for Codex nodes only.</p>
+          )}
         </>
       ) : (
         <p className="meta-text">Human/tool nodes are supported as draft placeholders; publishing may be blocked by validation.</p>
