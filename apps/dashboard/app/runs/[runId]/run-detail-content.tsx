@@ -65,6 +65,39 @@ type RunDetailContentProps = Readonly<{
   enableRealtime?: boolean;
   pollIntervalMs?: number;
 }>;
+const RUN_DETAIL_SECTION_LINKS = [
+  {
+    id: 'run-section-focus',
+    label: 'Focus',
+  },
+  {
+    id: 'run-section-timeline',
+    label: 'Timeline',
+  },
+  {
+    id: 'run-section-stream',
+    label: 'Stream',
+  },
+  {
+    id: 'run-section-observability',
+    label: 'Observability',
+  },
+] as const;
+type RunDetailSectionId = (typeof RUN_DETAIL_SECTION_LINKS)[number]['id'];
+const RUN_DETAIL_DEFAULT_SECTION_ID: RunDetailSectionId = RUN_DETAIL_SECTION_LINKS[0].id;
+
+function isRunDetailSectionId(value: string): value is RunDetailSectionId {
+  return RUN_DETAIL_SECTION_LINKS.some(section => section.id === value);
+}
+
+function resolveRunDetailSectionIdFromHash(hash: string): RunDetailSectionId | null {
+  const normalizedHash = hash.startsWith('#') ? hash.slice(1) : hash;
+  if (normalizedHash.length === 0) {
+    return null;
+  }
+
+  return isRunDetailSectionId(normalizedHash) ? normalizedHash : null;
+}
 
 type ErrorEnvelope = {
   error?: {
@@ -2742,6 +2775,38 @@ function RunDetailLifecycleGrid({
   );
 }
 
+type RunDetailSectionNavProps = Readonly<{
+  activeSectionId: RunDetailSectionId;
+  onSelectSection: (sectionId: RunDetailSectionId) => void;
+}>;
+
+function RunDetailSectionNav({ activeSectionId, onSelectSection }: RunDetailSectionNavProps) {
+  return (
+    <nav className="run-section-nav" aria-label="Run detail sections">
+      <ul className="run-section-nav__list">
+        {RUN_DETAIL_SECTION_LINKS.map((section) => {
+          const active = section.id === activeSectionId;
+
+          return (
+            <li key={section.id}>
+              <a
+                href={`#${section.id}`}
+                className={`run-section-nav__link${active ? ' run-section-nav__link--active' : ''}`}
+                aria-current={active ? 'location' : undefined}
+                onClick={() => {
+                  onSelectSection(section.id);
+                }}
+              >
+                {section.label}
+              </a>
+            </li>
+          );
+        })}
+      </ul>
+    </nav>
+  );
+}
+
 export function RunDetailContent({
   initialDetail,
   repositories,
@@ -2775,6 +2840,7 @@ export function RunDetailContent({
   );
   const [pendingControlAction, setPendingControlAction] = useState<DashboardRunControlAction | null>(null);
   const [actionFeedback, setActionFeedback] = useState<ActionFeedbackState>(null);
+  const [activeSectionId, setActiveSectionId] = useState<RunDetailSectionId>(RUN_DETAIL_DEFAULT_SECTION_ID);
 
   const lastUpdatedAtRef = useRef<number>(lastUpdatedAtMs);
   const streamLastUpdatedAtRef = useRef<number>(streamLastUpdatedAtMs);
@@ -2906,6 +2972,94 @@ export function RunDetailContent({
     });
   }, [detail.run.status]);
 
+  useEffect(() => {
+    const syncFromHash = (): void => {
+      const sectionFromHash = resolveRunDetailSectionIdFromHash(globalThis.location.hash);
+      if (sectionFromHash === null) {
+        return;
+      }
+
+      setActiveSectionId(sectionFromHash);
+    };
+
+    syncFromHash();
+    globalThis.addEventListener('hashchange', syncFromHash);
+    return () => {
+      globalThis.removeEventListener('hashchange', syncFromHash);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (typeof globalThis.IntersectionObserver === 'undefined') {
+      return () => undefined;
+    }
+
+    const sectionElements = RUN_DETAIL_SECTION_LINKS.map((section) => document.getElementById(section.id)).filter(
+      (section): section is HTMLElement => section !== null,
+    );
+    if (sectionElements.length === 0) {
+      return () => undefined;
+    }
+
+    const visibleSectionRatios = new Map<RunDetailSectionId, number>();
+    const resolveSectionFromVisibility = (): RunDetailSectionId => {
+      const hashSection = resolveRunDetailSectionIdFromHash(globalThis.location.hash);
+      let resolvedSectionId = hashSection ?? RUN_DETAIL_DEFAULT_SECTION_ID;
+      let highestRatio = -1;
+
+      for (const section of RUN_DETAIL_SECTION_LINKS) {
+        const ratio = visibleSectionRatios.get(section.id);
+        if (ratio === undefined) {
+          continue;
+        }
+
+        if (ratio > highestRatio) {
+          highestRatio = ratio;
+          resolvedSectionId = section.id;
+        }
+      }
+
+      return resolvedSectionId;
+    };
+
+    const observer = new globalThis.IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          const targetId = entry.target.id;
+          if (!isRunDetailSectionId(targetId)) {
+            continue;
+          }
+
+          if (entry.isIntersecting) {
+            visibleSectionRatios.set(targetId, entry.intersectionRatio);
+          } else {
+            visibleSectionRatios.delete(targetId);
+          }
+        }
+
+        const nextSectionId = resolveSectionFromVisibility();
+        setActiveSectionId(currentSectionId => (currentSectionId === nextSectionId ? currentSectionId : nextSectionId));
+      },
+      {
+        rootMargin: '-24% 0px -56% 0px',
+        threshold: [0, 0.2, 0.4, 0.6, 0.8, 1],
+      },
+    );
+
+    for (const sectionElement of sectionElements) {
+      observer.observe(sectionElement);
+    }
+
+    setActiveSectionId(currentSectionId => {
+      const nextSectionId = resolveSectionFromVisibility();
+      return currentSectionId === nextSectionId ? currentSectionId : nextSectionId;
+    });
+
+    return () => {
+      observer.disconnect();
+    };
+  }, [detail.run.id]);
+
   const timeline = useMemo(() => buildTimeline(detail), [detail]);
   const repositoryContext = useMemo(
     () => resolveRepositoryContext(detail, repositories),
@@ -2998,81 +3152,91 @@ export function RunDetailContent({
         <p>{pageSubtitle}</p>
       </section>
 
-      <div className="page-grid run-detail-priority-grid">
-        <RunOperatorFocusCard
+      <RunDetailSectionNav activeSectionId={activeSectionId} onSelectSection={setActiveSectionId} />
+
+      <section id="run-section-focus" className="run-section-anchor" aria-label="Focus">
+        <div className="page-grid run-detail-priority-grid">
+          <RunOperatorFocusCard
+            detail={detail}
+            latestTimelineEvent={latestTimelineEvent}
+            hasHydrated={hasHydrated}
+            primaryAction={primaryAction}
+            secondaryAction={secondaryAction}
+            pendingControlAction={pendingControlAction}
+            actionHint={actionHint}
+            actionHintTone={actionHintTone}
+            channelState={channelState}
+            realtimeLabel={realtimeLabel}
+            lastUpdatedAtMs={lastUpdatedAtMs}
+            isRefreshing={isRefreshing}
+            updateError={updateError}
+            onRunControlAction={handleRunControlAction}
+          />
+
+          <Panel title="Run summary" description="Workflow context and timestamps." className="run-detail-summary-panel">
+            <ul className="entity-list run-detail-summary-list">
+              <li>
+                <span>Workflow</span>
+                <span className="meta-text">{`${detail.run.tree.name} (${detail.run.tree.treeKey})`}</span>
+              </li>
+              <li>
+                <span>Repository context</span>
+                <span className="meta-text">{repositoryContext}</span>
+              </li>
+              <li>
+                <span>Worktrees</span>
+                <span className="meta-text">{detail.worktrees.length}</span>
+              </li>
+              <li>
+                <span>Started</span>
+                <span className="meta-text">{formatDateTime(detail.run.startedAt, 'Not started', hasHydrated)}</span>
+              </li>
+              <li>
+                <span>Completed</span>
+                <span className="meta-text">{formatDateTime(detail.run.completedAt, 'In progress', hasHydrated)}</span>
+              </li>
+            </ul>
+          </Panel>
+        </div>
+      </section>
+
+      <section id="run-section-timeline" className="run-section-anchor" aria-label="Timeline">
+        <RunDetailLifecycleGrid
           detail={detail}
-          latestTimelineEvent={latestTimelineEvent}
+          selectedNode={selectedNode}
+          filteredNodeId={filteredNodeId}
+          highlightedNodeId={highlightedNodeId}
           hasHydrated={hasHydrated}
-          primaryAction={primaryAction}
-          secondaryAction={secondaryAction}
-          pendingControlAction={pendingControlAction}
-          actionHint={actionHint}
-          actionHintTone={actionHintTone}
-          channelState={channelState}
-          realtimeLabel={realtimeLabel}
-          lastUpdatedAtMs={lastUpdatedAtMs}
-          isRefreshing={isRefreshing}
-          updateError={updateError}
-          onRunControlAction={handleRunControlAction}
+          visibleTimeline={visibleTimeline}
+          visibleTimelinePartition={visibleTimelinePartition}
+          onSelectTimelineNode={setHighlightedNodeId}
+          onClearNodeFilter={clearNodeFilter}
+          onToggleNodeFilter={toggleNodeFilter}
         />
+      </section>
 
-        <Panel title="Run summary" description="Workflow context and timestamps." className="run-detail-summary-panel">
-          <ul className="entity-list run-detail-summary-list">
-            <li>
-              <span>Workflow</span>
-              <span className="meta-text">{`${detail.run.tree.name} (${detail.run.tree.treeKey})`}</span>
-            </li>
-            <li>
-              <span>Repository context</span>
-              <span className="meta-text">{repositoryContext}</span>
-            </li>
-            <li>
-              <span>Worktrees</span>
-              <span className="meta-text">{detail.worktrees.length}</span>
-            </li>
-            <li>
-              <span>Started</span>
-              <span className="meta-text">{formatDateTime(detail.run.startedAt, 'Not started', hasHydrated)}</span>
-            </li>
-            <li>
-              <span>Completed</span>
-              <span className="meta-text">{formatDateTime(detail.run.completedAt, 'In progress', hasHydrated)}</span>
-            </li>
-          </ul>
-        </Panel>
-      </div>
+      <section id="run-section-stream" className="run-section-anchor" aria-label="Stream">
+        <RunAgentStreamCard
+          isTerminalRun={!isActiveRunStatus(detail.run.status)}
+          selectedStreamNode={selectedStreamNode}
+          agentStreamLabel={agentStreamLabel}
+          streamConnectionState={streamConnectionState}
+          streamLastUpdatedAtMs={streamLastUpdatedAtMs}
+          hasHydrated={hasHydrated}
+          streamAutoScroll={streamAutoScroll}
+          streamBufferedEvents={streamBufferedEvents}
+          streamError={streamError}
+          streamEvents={streamEvents}
+          streamEventListRef={streamEventListRef}
+          setStreamAutoScroll={setStreamAutoScroll}
+          setStreamBufferedEvents={setStreamBufferedEvents}
+          setStreamEvents={setStreamEvents}
+        />
+      </section>
 
-      <RunDetailLifecycleGrid
-        detail={detail}
-        selectedNode={selectedNode}
-        filteredNodeId={filteredNodeId}
-        highlightedNodeId={highlightedNodeId}
-        hasHydrated={hasHydrated}
-        visibleTimeline={visibleTimeline}
-        visibleTimelinePartition={visibleTimelinePartition}
-        onSelectTimelineNode={setHighlightedNodeId}
-        onClearNodeFilter={clearNodeFilter}
-        onToggleNodeFilter={toggleNodeFilter}
-      />
-
-      <RunAgentStreamCard
-        isTerminalRun={!isActiveRunStatus(detail.run.status)}
-        selectedStreamNode={selectedStreamNode}
-        agentStreamLabel={agentStreamLabel}
-        streamConnectionState={streamConnectionState}
-        streamLastUpdatedAtMs={streamLastUpdatedAtMs}
-        hasHydrated={hasHydrated}
-        streamAutoScroll={streamAutoScroll}
-        streamBufferedEvents={streamBufferedEvents}
-        streamError={streamError}
-        streamEvents={streamEvents}
-        streamEventListRef={streamEventListRef}
-        setStreamAutoScroll={setStreamAutoScroll}
-        setStreamBufferedEvents={setStreamBufferedEvents}
-        setStreamEvents={setStreamEvents}
-      />
-
-      <RunObservabilityCard detail={detail} />
+      <section id="run-section-observability" className="run-section-anchor" aria-label="Observability">
+        <RunObservabilityCard detail={detail} />
+      </section>
     </div>
   );
 }

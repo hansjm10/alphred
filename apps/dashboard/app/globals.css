@@ -47,6 +47,18 @@ body {
   min-height: 100vh;
 }
 
+@media (prefers-reduced-motion: no-preference) {
+  html {
+    scroll-behavior: smooth;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+}
+
 a {
   color: inherit;
 }
@@ -349,6 +361,7 @@ output {
 .button-link:focus-visible,
 .shell-nav-link:focus-visible,
 .tabs__link:focus-visible,
+.run-section-nav__link:focus-visible,
 .run-timeline-event:focus-visible {
   outline: 2px solid var(--accent-active);
   outline-offset: 2px;
@@ -698,6 +711,55 @@ output {
 
 .run-detail-priority-grid {
   align-items: start;
+}
+
+.run-section-nav {
+  background: color-mix(in srgb, var(--bg-surface) 92%, var(--bg-subtle));
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-sm);
+  overflow-x: auto;
+  padding: 6px;
+  position: sticky;
+  top: 92px;
+  z-index: 4;
+}
+
+.run-section-nav__list {
+  display: flex;
+  gap: var(--space-1);
+  list-style: none;
+  min-width: max-content;
+}
+
+.run-section-nav__link {
+  align-items: center;
+  border: 1px solid transparent;
+  border-radius: var(--radius-pill);
+  color: var(--text-secondary);
+  display: inline-flex;
+  font: 600 13px/20px var(--font-display);
+  min-height: 34px;
+  padding: 6px 12px;
+  text-decoration: none;
+  transition: background-color var(--motion-fast), border-color var(--motion-fast), color var(--motion-fast);
+  white-space: nowrap;
+}
+
+.run-section-nav__link:hover {
+  background: color-mix(in srgb, var(--accent-active) 8%, var(--bg-surface));
+  border-color: color-mix(in srgb, var(--accent-active) 32%, var(--border-default));
+  color: var(--text-primary);
+}
+
+.run-section-nav__link--active {
+  background: color-mix(in srgb, var(--accent-active) 14%, var(--bg-surface));
+  border-color: color-mix(in srgb, var(--accent-active) 45%, var(--border-default));
+  color: var(--accent-active);
+}
+
+.run-section-anchor {
+  scroll-margin-top: 168px;
 }
 
 .run-operator-focus-list {
@@ -1879,6 +1941,14 @@ output {
 
   .run-detail-priority-grid {
     gap: var(--space-2);
+  }
+
+  .run-section-nav {
+    top: 132px;
+  }
+
+  .run-section-anchor {
+    scroll-margin-top: 212px;
   }
 
   .run-detail-primary-actions {

@@ -143,3 +143,51 @@ test('retries a failed run from run detail and preserves prior attempt telemetry
     ) ?? false;
   expect(retainedAttemptOneDiagnostics).toBe(true);
 });
+
+test('supports section jump navigation across desktop and mobile while preserving skip-link behavior', async ({ page }) => {
+  const fixtures = await seedLifecycleFixtures(page);
+
+  await openRunDetail(page, fixtures.runningRunId);
+
+  const sectionNav = page.getByRole('navigation', { name: 'Run detail sections' });
+  await expect(sectionNav).toBeVisible();
+
+  const expectedSections = [
+    { label: 'Focus', id: 'run-section-focus' },
+    { label: 'Timeline', id: 'run-section-timeline' },
+    { label: 'Stream', id: 'run-section-stream' },
+    { label: 'Observability', id: 'run-section-observability' },
+  ] as const;
+
+  for (const section of expectedSections) {
+    await expect(sectionNav.getByRole('link', { name: section.label })).toHaveAttribute('href', `#${section.id}`);
+    await expect(page.locator(`#${section.id}`)).toBeVisible();
+  }
+
+  await sectionNav.getByRole('link', { name: 'Observability' }).click();
+  await expect(page).toHaveURL(new RegExp(`/runs/${fixtures.runningRunId}#run-section-observability$`));
+  await expect(sectionNav.getByRole('link', { name: 'Observability' })).toHaveAttribute('aria-current', 'location');
+  await expect(page.locator('#run-section-observability').getByRole('heading', { name: 'Observability' })).toBeVisible();
+
+  await page.setViewportSize({ width: 375, height: 812 });
+  await openRunDetail(page, fixtures.runningRunId);
+
+  const mobileSectionNav = page.getByRole('navigation', { name: 'Run detail sections' });
+  await expect(mobileSectionNav).toBeVisible();
+  const navMetrics = await mobileSectionNav.evaluate((element) => ({
+    scrollWidth: element.scrollWidth,
+    clientWidth: element.clientWidth,
+  }));
+  expect(navMetrics.scrollWidth).toBeGreaterThanOrEqual(navMetrics.clientWidth);
+
+  await mobileSectionNav.getByRole('link', { name: 'Stream' }).click();
+  await expect(page).toHaveURL(new RegExp(`/runs/${fixtures.runningRunId}#run-section-stream$`));
+  await expect(mobileSectionNav.getByRole('link', { name: 'Stream' })).toHaveAttribute('aria-current', 'location');
+  await expect(page.locator('#run-section-stream').getByRole('heading', { name: 'Agent stream' })).toBeVisible();
+
+  await page.goto(`/runs/${fixtures.runningRunId}`);
+  const skipLink = page.getByRole('link', { name: 'Skip to main content' });
+  await skipLink.focus();
+  await page.keyboard.press('Enter');
+  await expect(page).toHaveURL(new RegExp(`/runs/${fixtures.runningRunId}#main-content$`));
+});
