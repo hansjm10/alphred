@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from 'vitest';
 const mockState = vi.hoisted(() => ({
   injectClaimConflict: false,
   injectUnexpectedClaimError: false,
+  injectPauseBeforeClaim: false,
 }));
 
 vi.mock('@alphred/db', async () => {
@@ -16,6 +17,20 @@ vi.mock('@alphred/db', async () => {
       db: Parameters<typeof actual.transitionRunNodeStatus>[0],
       params: Parameters<typeof actual.transitionRunNodeStatus>[1],
     ) => {
+      if (
+        mockState.injectPauseBeforeClaim &&
+        params.expectedFrom === 'pending' &&
+        params.to === 'running' &&
+        params.workflowRunId !== undefined
+      ) {
+        mockState.injectPauseBeforeClaim = false;
+        actual.transitionWorkflowRunStatus(db, {
+          workflowRunId: params.workflowRunId,
+          expectedFrom: 'running',
+          to: 'paused',
+        });
+      }
+
       if (mockState.injectClaimConflict && params.expectedFrom === 'pending' && params.to === 'running') {
         throw new Error(
           `Run-node transition precondition failed for id=${params.runNodeId}; expected status "${params.expectedFrom}".`,
@@ -157,6 +172,66 @@ describe('createSqlWorkflowExecutor claim conflicts', () => {
     }
 
     expect(persistedRun.status).toBe('running');
+  });
+
+  it('returns blocked when run is paused immediately before claim transition executes', async () => {
+    const { db, runId, treeNodeId } = seedSingleAgentRun();
+    const executor = createSqlWorkflowExecutor(db, {
+      resolveProvider: () =>
+        createProvider([
+          { type: 'system', content: 'start', timestamp: 100 },
+          { type: 'result', content: 'Design report body', timestamp: 102 },
+        ]),
+    });
+
+    mockState.injectPauseBeforeClaim = true;
+    let result: Awaited<ReturnType<typeof executor.executeNextRunnableNode>>;
+    try {
+      result = await executor.executeNextRunnableNode({
+        workflowRunId: runId,
+        options: {
+          workingDirectory: '/tmp/alphred-worktree',
+        },
+      });
+    } finally {
+      mockState.injectPauseBeforeClaim = false;
+    }
+
+    expect(result).toEqual({
+      outcome: 'blocked',
+      workflowRunId: runId,
+      runStatus: 'paused',
+    });
+
+    const persistedRunNode = db
+      .select({
+        status: runNodes.status,
+      })
+      .from(runNodes)
+      .where(and(eq(runNodes.workflowRunId, runId), eq(runNodes.treeNodeId, treeNodeId)))
+      .get();
+
+    expect(persistedRunNode).toBeDefined();
+    if (!persistedRunNode) {
+      throw new Error('Expected persisted run-node row.');
+    }
+
+    expect(persistedRunNode.status).toBe('pending');
+
+    const persistedRun = db
+      .select({
+        status: workflowRuns.status,
+      })
+      .from(workflowRuns)
+      .where(eq(workflowRuns.id, runId))
+      .get();
+
+    expect(persistedRun).toBeDefined();
+    if (!persistedRun) {
+      throw new Error('Expected persisted workflow run row.');
+    }
+
+    expect(persistedRun.status).toBe('paused');
   });
 
   it('rethrows unexpected claim errors', async () => {

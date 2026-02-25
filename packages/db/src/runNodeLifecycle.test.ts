@@ -10,6 +10,7 @@ import {
   workflowTrees,
 } from './schema.js';
 import { assertValidRunNodeTransition, transitionRunNodeStatus } from './runNodeLifecycle.js';
+import { transitionWorkflowRunStatus } from './workflowRunLifecycle.js';
 
 function seedPendingRunNode() {
   const db = createDatabase(':memory:');
@@ -70,7 +71,7 @@ function seedPendingRunNode() {
     .returning({ id: runNodes.id })
     .get();
 
-  return { db, runNodeId: runNode.id };
+  return { db, runId: run.id, runNodeId: runNode.id };
 }
 
 describe('run-node lifecycle guard', () => {
@@ -262,6 +263,54 @@ describe('run-node lifecycle guard', () => {
         runNodeId,
         expectedFrom: 'pending',
         to: 'skipped',
+      }),
+    ).toThrow('Run-node transition precondition failed');
+  });
+
+  it('supports run-status preconditions for guarded claim transitions', () => {
+    const { db, runId, runNodeId } = seedPendingRunNode();
+
+    transitionRunNodeStatus(db, {
+      runNodeId,
+      expectedFrom: 'pending',
+      to: 'running',
+      workflowRunId: runId,
+      requiredRunStatuses: ['pending', 'running'],
+      occurredAt: '2026-01-01T00:00:00.000Z',
+    });
+
+    const persisted = db
+      .select({
+        status: runNodes.status,
+      })
+      .from(runNodes)
+      .where(eq(runNodes.id, runNodeId))
+      .get();
+    expect(persisted?.status).toBe('running');
+  });
+
+  it('rejects guarded claim transitions when run status no longer matches required statuses', () => {
+    const { db, runId, runNodeId } = seedPendingRunNode();
+    transitionWorkflowRunStatus(db, {
+      workflowRunId: runId,
+      expectedFrom: 'pending',
+      to: 'running',
+      occurredAt: '2026-01-01T00:00:00.000Z',
+    });
+    transitionWorkflowRunStatus(db, {
+      workflowRunId: runId,
+      expectedFrom: 'running',
+      to: 'paused',
+      occurredAt: '2026-01-01T00:01:00.000Z',
+    });
+
+    expect(() =>
+      transitionRunNodeStatus(db, {
+        runNodeId,
+        expectedFrom: 'pending',
+        to: 'running',
+        workflowRunId: runId,
+        requiredRunStatuses: ['pending', 'running'],
       }),
     ).toThrow('Run-node transition precondition failed');
   });

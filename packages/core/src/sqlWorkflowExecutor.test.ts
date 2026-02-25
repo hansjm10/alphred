@@ -6102,6 +6102,50 @@ describe('createSqlWorkflowExecutor', () => {
     });
   });
 
+  it('does not invoke onRunTerminal twice when cancelRun terminalizes during an in-flight step', async () => {
+    const { db, runId } = seedSingleAgentRun();
+    const onRunTerminal = vi.fn(async () => undefined);
+    let invocationCount = 0;
+
+    const executor = createSqlWorkflowExecutor(db, {
+      resolveProvider: () => ({
+        async *run(): AsyncIterable<ProviderEvent> {
+          invocationCount += 1;
+          if (invocationCount === 1) {
+            await executor.cancelRun({
+              workflowRunId: runId,
+            });
+          }
+
+          yield {
+            type: 'result',
+            content: `report-${invocationCount}`,
+            timestamp: invocationCount,
+          };
+        },
+      }),
+      onRunTerminal,
+    });
+
+    const result = await executor.executeRun({
+      workflowRunId: runId,
+      options: {
+        workingDirectory: '/tmp/alphred-worktree',
+      },
+    });
+
+    expect(result.finalStep).toEqual({
+      outcome: 'run_terminal',
+      workflowRunId: runId,
+      runStatus: 'cancelled',
+    });
+    expect(onRunTerminal).toHaveBeenCalledTimes(1);
+    expect(onRunTerminal).toHaveBeenCalledWith({
+      workflowRunId: runId,
+      runStatus: 'cancelled',
+    });
+  });
+
   it('does not invoke onRunTerminal for blocked non-terminal outcomes', async () => {
     const { db, runId, runNodeId } = seedSingleAgentRun();
     transitionWorkflowRunStatus(db, {

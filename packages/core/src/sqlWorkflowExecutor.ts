@@ -343,6 +343,7 @@ export type SqlWorkflowExecutor = {
 
 const artifactContentTypes = new Set(['text', 'markdown', 'json', 'diff']);
 const runTerminalStatuses = new Set<WorkflowRunStatus>(['completed', 'failed', 'cancelled']);
+const runClaimableStatuses: readonly WorkflowRunStatus[] = ['pending', 'running'];
 const guardOperators: ReadonlySet<GuardCondition['operator']> = new Set(['==', '!=', '>', '<', '>=', '<=']);
 const executionPermissionKeys = new Set([
   'approvalPolicy',
@@ -2175,6 +2176,17 @@ async function notifyRunTerminalTransition(
   });
 }
 
+function resolveExecutionTerminalNotificationPreviousStatus(
+  previousRunStatus: WorkflowRunStatus,
+  nextRunStatus: WorkflowRunStatus,
+): WorkflowRunStatus {
+  if (nextRunStatus === 'cancelled') {
+    return nextRunStatus;
+  }
+
+  return previousRunStatus;
+}
+
 function resolveRunStatusFromNodes(latestNodeAttempts: RunNodeExecutionRow[]): WorkflowRunStatus {
   if (latestNodeAttempts.some(node => node.status === 'failed')) {
     return 'failed';
@@ -2544,11 +2556,43 @@ function transitionCompletedRunNodeToPendingAttempt(
     runNodeId: number;
     currentAttempt: number;
     nextAttempt: number;
+    workflowRunId?: number;
+    requiredRunStatuses?: readonly WorkflowRunStatus[];
   },
 ): void {
   // Requeue completed nodes through this helper so status reset and attempt
   // increment remain coupled in one atomic update.
   const occurredAt = new Date().toISOString();
+  const whereClauses = [
+    eq(runNodes.id, params.runNodeId),
+    eq(runNodes.status, 'completed'),
+    eq(runNodes.attempt, params.currentAttempt),
+  ];
+  if (params.workflowRunId !== undefined) {
+    whereClauses.push(eq(runNodes.workflowRunId, params.workflowRunId));
+  }
+
+  if (params.requiredRunStatuses !== undefined) {
+    if (params.workflowRunId === undefined) {
+      throw new Error('workflowRunId must be provided when requiredRunStatuses is set.');
+    }
+
+    whereClauses.push(
+      inArray(
+        runNodes.workflowRunId,
+        db
+          .select({ id: workflowRuns.id })
+          .from(workflowRuns)
+          .where(
+            and(
+              eq(workflowRuns.id, params.workflowRunId),
+              inArray(workflowRuns.status, [...params.requiredRunStatuses]),
+            ),
+          ),
+      ),
+    );
+  }
+
   const updated = db
     .update(runNodes)
     .set({
@@ -2558,13 +2602,7 @@ function transitionCompletedRunNodeToPendingAttempt(
       completedAt: null,
       updatedAt: occurredAt,
     })
-    .where(
-      and(
-        eq(runNodes.id, params.runNodeId),
-        eq(runNodes.status, 'completed'),
-        eq(runNodes.attempt, params.currentAttempt),
-      ),
-    )
+    .where(and(...whereClauses))
     .run();
 
   if (updated.changes !== 1) {
@@ -2761,17 +2799,23 @@ function claimRunnableNode(
         runNodeId: node.runNodeId,
         expectedFrom: 'pending',
         to: 'running',
+        workflowRunId: run.id,
+        requiredRunStatuses: runClaimableStatuses,
       });
     } else if (node.status === 'completed') {
       transitionCompletedRunNodeToPendingAttempt(db, {
         runNodeId: node.runNodeId,
         currentAttempt: node.attempt,
         nextAttempt: node.attempt + 1,
+        workflowRunId: run.id,
+        requiredRunStatuses: runClaimableStatuses,
       });
       transitionRunNodeStatus(db, {
         runNodeId: node.runNodeId,
         expectedFrom: 'pending',
         to: 'running',
+        workflowRunId: run.id,
+        requiredRunStatuses: runClaimableStatuses,
       });
     } else {
       throw new Error(
@@ -3401,7 +3445,10 @@ export function createSqlWorkflowExecutor(
         };
         await notifyRunTerminalTransition(dependencies, {
           workflowRunId: currentRun.id,
-          previousRunStatus: initialRun.status,
+          previousRunStatus: resolveExecutionTerminalNotificationPreviousStatus(
+            initialRun.status,
+            runTerminalResult.runStatus,
+          ),
           nextRunStatus: runTerminalResult.runStatus,
         });
         return runTerminalResult;
@@ -3425,7 +3472,10 @@ export function createSqlWorkflowExecutor(
         );
         await notifyRunTerminalTransition(dependencies, {
           workflowRunId: currentRun.id,
-          previousRunStatus: currentRun.status,
+          previousRunStatus: resolveExecutionTerminalNotificationPreviousStatus(
+            currentRun.status,
+            result.runStatus,
+          ),
           nextRunStatus: result.runStatus,
         });
         return result;
@@ -3448,7 +3498,10 @@ export function createSqlWorkflowExecutor(
         };
         await notifyRunTerminalTransition(dependencies, {
           workflowRunId: currentRun.id,
-          previousRunStatus: currentRun.status,
+          previousRunStatus: resolveExecutionTerminalNotificationPreviousStatus(
+            currentRun.status,
+            runTerminalResult.runStatus,
+          ),
           nextRunStatus: runTerminalResult.runStatus,
         });
         return runTerminalResult;
@@ -3458,7 +3511,10 @@ export function createSqlWorkflowExecutor(
       if (claimResult) {
         await notifyRunTerminalTransition(dependencies, {
           workflowRunId: currentRun.id,
-          previousRunStatus: currentRun.status,
+          previousRunStatus: resolveExecutionTerminalNotificationPreviousStatus(
+            currentRun.status,
+            claimResult.runStatus,
+          ),
           nextRunStatus: claimResult.runStatus,
         });
         return claimResult;
@@ -3476,7 +3532,10 @@ export function createSqlWorkflowExecutor(
       );
       await notifyRunTerminalTransition(dependencies, {
         workflowRunId: currentRun.id,
-        previousRunStatus: currentRun.status,
+        previousRunStatus: resolveExecutionTerminalNotificationPreviousStatus(
+          currentRun.status,
+          result.runStatus,
+        ),
         nextRunStatus: result.runStatus,
       });
       return result;
