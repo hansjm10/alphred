@@ -1285,6 +1285,264 @@ function syncSelectionStateWithNodes(params: {
   }
 }
 
+function isStreamSupportedNodeStatus(status: DashboardRunDetail['nodes'][number]['status']): boolean {
+  return status === 'running' || status === 'completed' || status === 'failed';
+}
+
+function isSameStreamTarget(
+  currentTarget: AgentStreamTarget | null,
+  nextTarget: AgentStreamTarget,
+): boolean {
+  return (
+    currentTarget !== null &&
+    currentTarget.runNodeId === nextTarget.runNodeId &&
+    currentTarget.attempt === nextTarget.attempt &&
+    currentTarget.nodeKey === nextTarget.nodeKey
+  );
+}
+
+function syncStreamSelectionForNode(params: {
+  node: DashboardRunDetail['nodes'][number];
+  streamTarget: AgentStreamTarget | null;
+  setStreamTarget: StateSetter<AgentStreamTarget | null>;
+  setStreamAutoScroll: StateSetter<boolean>;
+  setStreamBufferedEvents: StateSetter<DashboardRunNodeStreamEvent[]>;
+}): void {
+  const { node, streamTarget, setStreamTarget, setStreamAutoScroll, setStreamBufferedEvents } = params;
+  if (!isStreamSupportedNodeStatus(node.status)) {
+    if (streamTarget !== null) {
+      setStreamTarget(null);
+      setStreamAutoScroll(true);
+      setStreamBufferedEvents([]);
+    }
+    return;
+  }
+
+  const nextStreamTarget = toAgentStreamTarget(node);
+  if (isSameStreamTarget(streamTarget, nextStreamTarget)) {
+    return;
+  }
+
+  setStreamTarget(nextStreamTarget);
+  setStreamAutoScroll(true);
+  setStreamBufferedEvents([]);
+}
+
+function toggleNodeFilterState(params: {
+  nodeId: number;
+  filteredNodeId: number | null;
+  nodes: DashboardRunDetail['nodes'];
+  streamTarget: AgentStreamTarget | null;
+  setFilteredNodeId: StateSetter<number | null>;
+  setHighlightedNodeId: StateSetter<number | null>;
+  setStreamTarget: StateSetter<AgentStreamTarget | null>;
+  setStreamAutoScroll: StateSetter<boolean>;
+  setStreamBufferedEvents: StateSetter<DashboardRunNodeStreamEvent[]>;
+}): void {
+  const {
+    nodeId,
+    filteredNodeId,
+    nodes,
+    streamTarget,
+    setFilteredNodeId,
+    setHighlightedNodeId,
+    setStreamTarget,
+    setStreamAutoScroll,
+    setStreamBufferedEvents,
+  } = params;
+  const nextNodeId = filteredNodeId === nodeId ? null : nodeId;
+  setFilteredNodeId(nextNodeId);
+  setHighlightedNodeId(nextNodeId);
+
+  if (nextNodeId === null) {
+    return;
+  }
+
+  const selectedNode = nodes.find(node => node.id === nextNodeId);
+  if (!selectedNode) {
+    return;
+  }
+
+  syncStreamSelectionForNode({
+    node: selectedNode,
+    streamTarget,
+    setStreamTarget,
+    setStreamAutoScroll,
+    setStreamBufferedEvents,
+  });
+}
+
+function applyRunControlRefreshSuccess(params: {
+  refreshedDetail: DashboardRunDetail;
+  successMessage: string;
+  enableRealtime: boolean;
+  setDetail: StateSetter<DashboardRunDetail>;
+  setUpdateError: StateSetter<string | null>;
+  setIsRefreshing: StateSetter<boolean>;
+  setLastUpdatedAtMs: StateSetter<number>;
+  setNextRetryAtMs: StateSetter<number | null>;
+  setChannelState: StateSetter<RealtimeChannelState>;
+  setActionFeedback: StateSetter<ActionFeedbackState>;
+}): void {
+  const {
+    refreshedDetail,
+    successMessage,
+    enableRealtime,
+    setDetail,
+    setUpdateError,
+    setIsRefreshing,
+    setLastUpdatedAtMs,
+    setNextRetryAtMs,
+    setChannelState,
+    setActionFeedback,
+  } = params;
+  setDetail(refreshedDetail);
+  setUpdateError(null);
+  setIsRefreshing(false);
+  setLastUpdatedAtMs(Date.now());
+  setNextRetryAtMs(null);
+  setChannelState(enableRealtime && isActiveRunStatus(refreshedDetail.run.status) ? 'live' : 'disabled');
+  setActionFeedback({
+    tone: 'success',
+    message: successMessage,
+    runStatus: refreshedDetail.run.status,
+  });
+}
+
+function applyRunControlRefreshFailure(params: {
+  controlResult: DashboardRunControlResult;
+  successMessage: string;
+  refreshMessage: string;
+  enableRealtime: boolean;
+  setDetail: StateSetter<DashboardRunDetail>;
+  setUpdateError: StateSetter<string | null>;
+  setIsRefreshing: StateSetter<boolean>;
+  setLastUpdatedAtMs: StateSetter<number>;
+  setNextRetryAtMs: StateSetter<number | null>;
+  setChannelState: StateSetter<RealtimeChannelState>;
+  setActionFeedback: StateSetter<ActionFeedbackState>;
+}): void {
+  const {
+    controlResult,
+    successMessage,
+    refreshMessage,
+    enableRealtime,
+    setDetail,
+    setUpdateError,
+    setIsRefreshing,
+    setLastUpdatedAtMs,
+    setNextRetryAtMs,
+    setChannelState,
+    setActionFeedback,
+  } = params;
+  const fallbackRunStatus = controlResult.runStatus;
+  setDetail(currentDetail => ({
+    ...currentDetail,
+    run: {
+      ...currentDetail.run,
+      status: fallbackRunStatus,
+    },
+  }));
+  setUpdateError(refreshMessage);
+  setIsRefreshing(false);
+  setLastUpdatedAtMs(Date.now());
+  setNextRetryAtMs(null);
+  setChannelState(enableRealtime && isActiveRunStatus(fallbackRunStatus) ? 'reconnecting' : 'disabled');
+  setActionFeedback({
+    tone: 'error',
+    message: `${successMessage} Unable to refresh run timeline: ${refreshMessage}`,
+    runStatus: fallbackRunStatus,
+  });
+}
+
+type ExecuteRunControlActionParams = {
+  action: DashboardRunControlAction;
+  runId: number;
+  runStatus: DashboardRunSummary['status'];
+  enableRealtime: boolean;
+  setDetail: StateSetter<DashboardRunDetail>;
+  setUpdateError: StateSetter<string | null>;
+  setIsRefreshing: StateSetter<boolean>;
+  setLastUpdatedAtMs: StateSetter<number>;
+  setNextRetryAtMs: StateSetter<number | null>;
+  setChannelState: StateSetter<RealtimeChannelState>;
+  setActionFeedback: StateSetter<ActionFeedbackState>;
+};
+
+async function executeRunControlAction(params: ExecuteRunControlActionParams): Promise<void> {
+  const {
+    action,
+    runId,
+    runStatus,
+    enableRealtime,
+    setDetail,
+    setUpdateError,
+    setIsRefreshing,
+    setLastUpdatedAtMs,
+    setNextRetryAtMs,
+    setChannelState,
+    setActionFeedback,
+  } = params;
+
+  try {
+    const response = await fetch(`/api/dashboard/runs/${runId}/actions/${action}`, {
+      method: 'POST',
+      headers: {
+        accept: 'application/json',
+      },
+    });
+    const payload = (await response.json().catch(() => null)) as unknown;
+    if (!response.ok) {
+      throw new Error(resolveApiErrorMessage(response.status, payload, resolveRunControlErrorPrefix(action)));
+    }
+
+    const controlResult = parseRunControlPayload(payload, runId);
+    if (controlResult === null) {
+      throw new Error('Run action response was malformed.');
+    }
+
+    const successMessage = resolveRunControlSuccessMessage(controlResult);
+
+    try {
+      const refreshedDetail = await fetchRunDetailSnapshot(runId);
+      applyRunControlRefreshSuccess({
+        refreshedDetail,
+        successMessage,
+        enableRealtime,
+        setDetail,
+        setUpdateError,
+        setIsRefreshing,
+        setLastUpdatedAtMs,
+        setNextRetryAtMs,
+        setChannelState,
+        setActionFeedback,
+      });
+    } catch (refreshError) {
+      const refreshMessage = refreshError instanceof Error ? refreshError.message : 'Unable to refresh run timeline.';
+      applyRunControlRefreshFailure({
+        controlResult,
+        successMessage,
+        refreshMessage,
+        enableRealtime,
+        setDetail,
+        setUpdateError,
+        setIsRefreshing,
+        setLastUpdatedAtMs,
+        setNextRetryAtMs,
+        setChannelState,
+        setActionFeedback,
+      });
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : resolveRunControlErrorPrefix(action);
+    setActionFeedback({
+      tone: 'error',
+      message,
+      runStatus,
+    });
+  }
+}
+
 type RunDetailPollingEffectParams = {
   enableRealtime: boolean;
   runId: number;
@@ -2304,36 +2562,17 @@ export function RunDetailContent({
   const actionHintTone = actionFeedback?.tone ?? 'info';
 
   const toggleNodeFilter = (nodeId: number): void => {
-    const nextNodeId = filteredNodeId === nodeId ? null : nodeId;
-    setFilteredNodeId(nextNodeId);
-    setHighlightedNodeId(nextNodeId);
-
-    if (nextNodeId !== null) {
-      const node = detail.nodes.find(n => n.id === nextNodeId);
-      if (node) {
-        const canOpenStream = node.status === 'running' || node.status === 'completed' || node.status === 'failed';
-        if (!canOpenStream) {
-          if (streamTarget !== null) {
-            setStreamTarget(null);
-            setStreamAutoScroll(true);
-            setStreamBufferedEvents([]);
-          }
-          return;
-        }
-
-        const nextStreamTarget = toAgentStreamTarget(node);
-        const streamTargetChanged =
-          streamTarget === null ||
-          streamTarget.runNodeId !== nextStreamTarget.runNodeId ||
-          streamTarget.attempt !== nextStreamTarget.attempt ||
-          streamTarget.nodeKey !== nextStreamTarget.nodeKey;
-        if (streamTargetChanged) {
-          setStreamTarget(nextStreamTarget);
-          setStreamAutoScroll(true);
-          setStreamBufferedEvents([]);
-        }
-      }
-    }
+    toggleNodeFilterState({
+      nodeId,
+      filteredNodeId,
+      nodes: detail.nodes,
+      streamTarget,
+      setFilteredNodeId,
+      setHighlightedNodeId,
+      setStreamTarget,
+      setStreamAutoScroll,
+      setStreamBufferedEvents,
+    });
   };
 
   const handleRunControlAction = async (action: DashboardRunControlAction): Promise<void> => {
@@ -2347,70 +2586,20 @@ export function RunDetailContent({
       message: `Applying ${toActionVerb(action)} action...`,
       runStatus: null,
     });
-
-    try {
-      const response = await fetch(`/api/dashboard/runs/${detail.run.id}/actions/${action}`, {
-        method: 'POST',
-        headers: {
-          accept: 'application/json',
-        },
-      });
-      const payload = (await response.json().catch(() => null)) as unknown;
-      if (!response.ok) {
-        throw new Error(resolveApiErrorMessage(response.status, payload, resolveRunControlErrorPrefix(action)));
-      }
-
-      const controlResult = parseRunControlPayload(payload, detail.run.id);
-      if (controlResult === null) {
-        throw new Error('Run action response was malformed.');
-      }
-
-      const successMessage = resolveRunControlSuccessMessage(controlResult);
-
-      try {
-        const refreshedDetail = await fetchRunDetailSnapshot(detail.run.id);
-        setDetail(refreshedDetail);
-        setUpdateError(null);
-        setIsRefreshing(false);
-        setLastUpdatedAtMs(Date.now());
-        setNextRetryAtMs(null);
-        setChannelState(enableRealtime && isActiveRunStatus(refreshedDetail.run.status) ? 'live' : 'disabled');
-        setActionFeedback({
-          tone: 'success',
-          message: successMessage,
-          runStatus: refreshedDetail.run.status,
-        });
-      } catch (refreshError) {
-        const refreshMessage = refreshError instanceof Error ? refreshError.message : 'Unable to refresh run timeline.';
-        const fallbackRunStatus = controlResult.runStatus;
-        setDetail(currentDetail => ({
-          ...currentDetail,
-          run: {
-            ...currentDetail.run,
-            status: fallbackRunStatus,
-          },
-        }));
-        setUpdateError(refreshMessage);
-        setIsRefreshing(false);
-        setLastUpdatedAtMs(Date.now());
-        setNextRetryAtMs(null);
-        setChannelState(enableRealtime && isActiveRunStatus(fallbackRunStatus) ? 'reconnecting' : 'disabled');
-        setActionFeedback({
-          tone: 'error',
-          message: `${successMessage} Unable to refresh run timeline: ${refreshMessage}`,
-          runStatus: fallbackRunStatus,
-        });
-      }
-    } catch (error) {
-      const message = error instanceof Error ? error.message : resolveRunControlErrorPrefix(action);
-      setActionFeedback({
-        tone: 'error',
-        message,
-        runStatus: detail.run.status,
-      });
-    } finally {
-      setPendingControlAction(null);
-    }
+    await executeRunControlAction({
+      action,
+      runId: detail.run.id,
+      runStatus: detail.run.status,
+      enableRealtime,
+      setDetail,
+      setUpdateError,
+      setIsRefreshing,
+      setLastUpdatedAtMs,
+      setNextRetryAtMs,
+      setChannelState,
+      setActionFeedback,
+    });
+    setPendingControlAction(null);
   };
 
   const renderTimelineEvent = (event: TimelineItem) => {
