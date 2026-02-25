@@ -279,6 +279,54 @@ export type ExecuteWorkflowRunResult = {
   finalStep: Exclude<ExecuteNextRunnableNodeResult, { outcome: 'executed' }>;
 };
 
+export type WorkflowRunControlAction = 'cancel' | 'pause' | 'resume' | 'retry';
+
+export type WorkflowRunControlErrorCode =
+  | 'WORKFLOW_RUN_CONTROL_INVALID_TRANSITION'
+  | 'WORKFLOW_RUN_CONTROL_CONCURRENT_CONFLICT'
+  | 'WORKFLOW_RUN_CONTROL_RETRY_TARGETS_NOT_FOUND';
+
+export class WorkflowRunControlError extends Error {
+  readonly code: WorkflowRunControlErrorCode;
+  readonly action: WorkflowRunControlAction;
+  readonly workflowRunId: number;
+  readonly runStatus: WorkflowRunStatus;
+
+  constructor(
+    code: WorkflowRunControlErrorCode,
+    message: string,
+    options: {
+      action: WorkflowRunControlAction;
+      workflowRunId: number;
+      runStatus: WorkflowRunStatus;
+      cause?: unknown;
+    },
+  ) {
+    super(message);
+    this.name = 'WorkflowRunControlError';
+    this.code = code;
+    this.action = options.action;
+    this.workflowRunId = options.workflowRunId;
+    this.runStatus = options.runStatus;
+    if (options.cause !== undefined) {
+      (this as Error & { cause?: unknown }).cause = options.cause;
+    }
+  }
+}
+
+export type WorkflowRunControlParams = {
+  workflowRunId: number;
+};
+
+export type WorkflowRunControlResult = {
+  action: WorkflowRunControlAction;
+  outcome: 'applied' | 'noop';
+  workflowRunId: number;
+  previousRunStatus: WorkflowRunStatus;
+  runStatus: WorkflowRunStatus;
+  retriedRunNodeIds: number[];
+};
+
 export type SqlWorkflowExecutorDependencies = {
   resolveProvider: PhaseProviderResolver;
   onRunTerminal?: (params: { workflowRunId: number; runStatus: TerminalWorkflowRunStatus }) => Promise<void> | void;
@@ -287,10 +335,15 @@ export type SqlWorkflowExecutorDependencies = {
 export type SqlWorkflowExecutor = {
   executeNextRunnableNode(params: ExecuteNextRunnableNodeParams): Promise<ExecuteNextRunnableNodeResult>;
   executeRun(params: ExecuteWorkflowRunParams): Promise<ExecuteWorkflowRunResult>;
+  cancelRun(params: WorkflowRunControlParams): Promise<WorkflowRunControlResult>;
+  pauseRun(params: WorkflowRunControlParams): Promise<WorkflowRunControlResult>;
+  resumeRun(params: WorkflowRunControlParams): Promise<WorkflowRunControlResult>;
+  retryRun(params: WorkflowRunControlParams): Promise<WorkflowRunControlResult>;
 };
 
 const artifactContentTypes = new Set(['text', 'markdown', 'json', 'diff']);
 const runTerminalStatuses = new Set<WorkflowRunStatus>(['completed', 'failed', 'cancelled']);
+const runClaimableStatuses: readonly WorkflowRunStatus[] = ['pending', 'running'];
 const guardOperators: ReadonlySet<GuardCondition['operator']> = new Set(['==', '!=', '>', '<', '>=', '<=']);
 const executionPermissionKeys = new Set([
   'approvalPolicy',
@@ -315,6 +368,7 @@ const MAX_DIAGNOSTIC_METADATA_CHARS = 2_000;
 const MAX_DIAGNOSTIC_ERROR_STACK_CHARS = 1_600;
 const MAX_REDACTION_DEPTH = 6;
 const MAX_REDACTION_ARRAY_LENGTH = 24;
+const MAX_CONTROL_PRECONDITION_RETRIES = 5;
 
 const sensitiveMetadataKeyPattern =
   /(token|secret|password|authorization|auth|api[_-]?key|session|cookie|credential)/i;
@@ -1916,6 +1970,97 @@ function isRunNodeClaimPreconditionFailure(error: unknown): boolean {
   );
 }
 
+function isWorkflowRunTransitionPreconditionFailure(error: unknown): boolean {
+  return error instanceof Error && error.message.startsWith('Workflow-run transition precondition failed');
+}
+
+function isRunNodeRetryQueuePreconditionFailure(error: unknown): boolean {
+  return error instanceof Error && error.message.startsWith('Run-node retry requeue precondition failed');
+}
+
+function isRetryControlPreconditionFailure(error: unknown): boolean {
+  return error instanceof Error && error.message.startsWith('Workflow-run retry control precondition failed');
+}
+
+function createWorkflowRunControlResult(
+  params: {
+    action: WorkflowRunControlAction;
+    outcome: 'applied' | 'noop';
+    workflowRunId: number;
+    previousRunStatus: WorkflowRunStatus;
+    runStatus: WorkflowRunStatus;
+    retriedRunNodeIds?: number[];
+  },
+): WorkflowRunControlResult {
+  return {
+    action: params.action,
+    outcome: params.outcome,
+    workflowRunId: params.workflowRunId,
+    previousRunStatus: params.previousRunStatus,
+    runStatus: params.runStatus,
+    retriedRunNodeIds: params.retriedRunNodeIds ?? [],
+  };
+}
+
+function createInvalidControlTransitionError(
+  params: {
+    action: WorkflowRunControlAction;
+    workflowRunId: number;
+    runStatus: WorkflowRunStatus;
+    message: string;
+  },
+): WorkflowRunControlError {
+  return new WorkflowRunControlError(
+    'WORKFLOW_RUN_CONTROL_INVALID_TRANSITION',
+    params.message,
+    {
+      action: params.action,
+      workflowRunId: params.workflowRunId,
+      runStatus: params.runStatus,
+    },
+  );
+}
+
+function createConcurrentControlConflictError(
+  params: {
+    action: WorkflowRunControlAction;
+    workflowRunId: number;
+    runStatus: WorkflowRunStatus;
+    message: string;
+    cause?: unknown;
+  },
+): WorkflowRunControlError {
+  return new WorkflowRunControlError(
+    'WORKFLOW_RUN_CONTROL_CONCURRENT_CONFLICT',
+    params.message,
+    {
+      action: params.action,
+      workflowRunId: params.workflowRunId,
+      runStatus: params.runStatus,
+      cause: params.cause,
+    },
+  );
+}
+
+function createRetryTargetsNotFoundError(
+  params: {
+    action: 'retry';
+    workflowRunId: number;
+    runStatus: WorkflowRunStatus;
+    message: string;
+  },
+): WorkflowRunControlError {
+  return new WorkflowRunControlError(
+    'WORKFLOW_RUN_CONTROL_RETRY_TARGETS_NOT_FOUND',
+    params.message,
+    {
+      action: params.action,
+      workflowRunId: params.workflowRunId,
+      runStatus: params.runStatus,
+    },
+  );
+}
+
 function transitionRunTo(
   db: AlphredDatabase,
   runId: number,
@@ -1967,6 +2112,40 @@ function transitionRunTo(
   return to;
 }
 
+function transitionRunToCurrentForExecutor(
+  db: AlphredDatabase,
+  runId: number,
+  desiredStatus: WorkflowRunStatus,
+): WorkflowRunStatus {
+  for (let attempt = 0; attempt < MAX_CONTROL_PRECONDITION_RETRIES; attempt += 1) {
+    const currentStatus = loadWorkflowRunRow(db, runId).status;
+    if (currentStatus === desiredStatus) {
+      return currentStatus;
+    }
+
+    if (isTerminalWorkflowRunStatus(currentStatus)) {
+      return currentStatus;
+    }
+
+    // Preserve externally requested pause while executor computes running state
+    // from node topology between node boundaries.
+    if (currentStatus === 'paused' && desiredStatus === 'running') {
+      return currentStatus;
+    }
+
+    try {
+      return transitionRunTo(db, runId, currentStatus, desiredStatus);
+    } catch (error) {
+      if (isWorkflowRunTransitionPreconditionFailure(error)) {
+        continue;
+      }
+      throw error;
+    }
+  }
+
+  return loadWorkflowRunRow(db, runId).status;
+}
+
 function isTerminalWorkflowRunStatus(status: WorkflowRunStatus): status is TerminalWorkflowRunStatus {
   return runTerminalStatuses.has(status);
 }
@@ -1995,6 +2174,17 @@ async function notifyRunTerminalTransition(
     workflowRunId: params.workflowRunId,
     runStatus: params.nextRunStatus,
   });
+}
+
+function resolveExecutionTerminalNotificationPreviousStatus(
+  previousRunStatus: WorkflowRunStatus,
+  nextRunStatus: WorkflowRunStatus,
+): WorkflowRunStatus {
+  if (nextRunStatus === 'cancelled') {
+    return nextRunStatus;
+  }
+
+  return previousRunStatus;
 }
 
 function resolveRunStatusFromNodes(latestNodeAttempts: RunNodeExecutionRow[]): WorkflowRunStatus {
@@ -2324,16 +2514,16 @@ function transitionFailedRunNodeToRetryAttempt(
   }
 }
 
-function transitionCompletedRunNodeToPendingAttempt(
-  db: AlphredDatabase,
+function transitionFailedRunNodeToPendingAttempt(
+  db: Pick<AlphredDatabase, 'update'>,
   params: {
     runNodeId: number;
     currentAttempt: number;
     nextAttempt: number;
   },
 ): void {
-  // Requeue completed nodes through this helper so status reset and attempt
-  // increment remain coupled in one atomic update.
+  // Operator-triggered retry requeues failed nodes without eagerly claiming
+  // execution so normal scheduling can resume deterministically.
   const occurredAt = new Date().toISOString();
   const updated = db
     .update(runNodes)
@@ -2347,10 +2537,72 @@ function transitionCompletedRunNodeToPendingAttempt(
     .where(
       and(
         eq(runNodes.id, params.runNodeId),
-        eq(runNodes.status, 'completed'),
+        eq(runNodes.status, 'failed'),
         eq(runNodes.attempt, params.currentAttempt),
       ),
     )
+    .run();
+
+  if (updated.changes !== 1) {
+    throw new Error(
+      `Run-node retry requeue precondition failed for id=${params.runNodeId}; expected status "failed" and attempt=${params.currentAttempt}.`,
+    );
+  }
+}
+
+function transitionCompletedRunNodeToPendingAttempt(
+  db: AlphredDatabase,
+  params: {
+    runNodeId: number;
+    currentAttempt: number;
+    nextAttempt: number;
+    workflowRunId?: number;
+    requiredRunStatuses?: readonly WorkflowRunStatus[];
+  },
+): void {
+  // Requeue completed nodes through this helper so status reset and attempt
+  // increment remain coupled in one atomic update.
+  const occurredAt = new Date().toISOString();
+  const whereClauses = [
+    eq(runNodes.id, params.runNodeId),
+    eq(runNodes.status, 'completed'),
+    eq(runNodes.attempt, params.currentAttempt),
+  ];
+  if (params.workflowRunId !== undefined) {
+    whereClauses.push(eq(runNodes.workflowRunId, params.workflowRunId));
+  }
+
+  if (params.requiredRunStatuses !== undefined) {
+    if (params.workflowRunId === undefined) {
+      throw new Error('workflowRunId must be provided when requiredRunStatuses is set.');
+    }
+
+    whereClauses.push(
+      inArray(
+        runNodes.workflowRunId,
+        db
+          .select({ id: workflowRuns.id })
+          .from(workflowRuns)
+          .where(
+            and(
+              eq(workflowRuns.id, params.workflowRunId),
+              inArray(workflowRuns.status, [...params.requiredRunStatuses]),
+            ),
+          ),
+      ),
+    );
+  }
+
+  const updated = db
+    .update(runNodes)
+    .set({
+      status: 'pending',
+      attempt: params.nextAttempt,
+      startedAt: null,
+      completedAt: null,
+      updatedAt: occurredAt,
+    })
+    .where(and(...whereClauses))
     .run();
 
   if (updated.changes !== 1) {
@@ -2482,7 +2734,7 @@ function failRunOnIterationLimit(
     });
   }
 
-  return transitionRunTo(db, run.id, run.status, 'failed');
+  return transitionRunToCurrentForExecutor(db, run.id, 'failed');
 }
 
 function resolveNoRunnableOutcome(
@@ -2497,7 +2749,7 @@ function resolveNoRunnableOutcome(
   const hasTerminalFailure = latestNodeAttempts.some(node => node.status === 'failed');
 
   if (hasNoRouteDecision || hasUnresolvedDecision) {
-    const runStatus = transitionRunTo(db, run.id, run.status, 'failed');
+    const runStatus = transitionRunToCurrentForExecutor(db, run.id, 'failed');
     return {
       outcome: 'blocked',
       workflowRunId: run.id,
@@ -2507,7 +2759,7 @@ function resolveNoRunnableOutcome(
 
   if (!hasPending && !hasRunning) {
     const resolvedRunStatus = hasTerminalFailure ? 'failed' : 'completed';
-    const runStatus = transitionRunTo(db, run.id, run.status, resolvedRunStatus);
+    const runStatus = transitionRunToCurrentForExecutor(db, run.id, resolvedRunStatus);
     return {
       outcome: 'no_runnable',
       workflowRunId: run.id,
@@ -2516,7 +2768,7 @@ function resolveNoRunnableOutcome(
   }
 
   if (hasTerminalFailure) {
-    const runStatus = transitionRunTo(db, run.id, run.status, 'failed');
+    const runStatus = transitionRunToCurrentForExecutor(db, run.id, 'failed');
     return {
       outcome: 'blocked',
       workflowRunId: run.id,
@@ -2524,7 +2776,7 @@ function resolveNoRunnableOutcome(
     };
   }
 
-  const runStatus = run.status === 'pending' ? transitionRunTo(db, run.id, run.status, 'running') : run.status;
+  const runStatus = transitionRunToCurrentForExecutor(db, run.id, 'running');
   return {
     outcome: 'blocked',
     workflowRunId: run.id,
@@ -2533,11 +2785,7 @@ function resolveNoRunnableOutcome(
 }
 
 function ensureRunIsRunning(db: AlphredDatabase, run: WorkflowRunRow): WorkflowRunStatus {
-  if (run.status === 'pending') {
-    return transitionRunTo(db, run.id, run.status, 'running');
-  }
-
-  return run.status;
+  return transitionRunToCurrentForExecutor(db, run.id, 'running');
 }
 
 function claimRunnableNode(
@@ -2551,17 +2799,23 @@ function claimRunnableNode(
         runNodeId: node.runNodeId,
         expectedFrom: 'pending',
         to: 'running',
+        workflowRunId: run.id,
+        requiredRunStatuses: runClaimableStatuses,
       });
     } else if (node.status === 'completed') {
       transitionCompletedRunNodeToPendingAttempt(db, {
         runNodeId: node.runNodeId,
         currentAttempt: node.attempt,
         nextAttempt: node.attempt + 1,
+        workflowRunId: run.id,
+        requiredRunStatuses: runClaimableStatuses,
       });
       transitionRunNodeStatus(db, {
         runNodeId: node.runNodeId,
         expectedFrom: 'pending',
         to: 'running',
+        workflowRunId: run.id,
+        requiredRunStatuses: runClaimableStatuses,
       });
     } else {
       throw new Error(
@@ -2590,7 +2844,6 @@ type ClaimedNodeSuccess = {
 
 type ClaimedNodeSuccessParams = {
   currentAttempt: number;
-  currentRunStatus: WorkflowRunStatus;
   contextManifest: ContextHandoffManifest;
   phaseResult: Awaited<ReturnType<typeof runPhase>>;
 };
@@ -2600,11 +2853,11 @@ type ClaimedNodeFailure = {
   runStatus: WorkflowRunStatus;
   runNodeStatus: 'completed' | 'failed';
   nextAttempt: number | null;
+  nextStepOutcome: Extract<ExecuteNextRunnableNodeResult, { outcome: 'blocked' | 'run_terminal' }>['outcome'] | null;
 };
 
 type ClaimedNodeFailureParams = {
   currentAttempt: number;
-  currentRunStatus: WorkflowRunStatus;
   contextManifest: ContextHandoffManifest;
   failureEvents: ProviderEvent[];
   failureTokensUsed: number;
@@ -2686,7 +2939,7 @@ function handleClaimedNodeSuccess(
   edgeRows: EdgeRow[],
   params: ClaimedNodeSuccessParams,
 ): ClaimedNodeSuccess {
-  const { currentAttempt, currentRunStatus, contextManifest, phaseResult } = params;
+  const { currentAttempt, contextManifest, phaseResult } = params;
 
   const artifactId = persistSuccessArtifact(db, {
     workflowRunId: run.id,
@@ -2736,9 +2989,9 @@ function handleClaimedNodeSuccess(
     error: null,
   });
 
-  let runStatus = currentRunStatus;
+  let runStatus: WorkflowRunStatus;
   if (routingOutcome.decisionType === 'no_route') {
-    runStatus = transitionRunTo(db, run.id, runStatus, 'failed');
+    runStatus = transitionRunToCurrentForExecutor(db, run.id, 'failed');
   } else {
     reactivateSelectedTargetNode(db, {
       workflowRunId: run.id,
@@ -2748,7 +3001,7 @@ function handleClaimedNodeSuccess(
     markUnreachablePendingNodesAsSkipped(db, run.id, edgeRows);
     const latestAfterSuccess = getLatestRunNodeAttempts(loadRunNodeExecutionRows(db, run.id));
     const targetRunStatus = resolveRunStatusFromNodes(latestAfterSuccess);
-    runStatus = transitionRunTo(db, run.id, runStatus, targetRunStatus);
+    runStatus = transitionRunToCurrentForExecutor(db, run.id, targetRunStatus);
   }
 
   return {
@@ -2763,10 +3016,14 @@ function handleClaimedNodeFailure(
   node: RunNodeExecutionRow,
   params: ClaimedNodeFailureParams,
 ): ClaimedNodeFailure {
-  const { currentAttempt, currentRunStatus, contextManifest, failureEvents, failureTokensUsed, error } = params;
+  const { currentAttempt, contextManifest, failureEvents, failureTokensUsed, error } = params;
   const errorMessage = toErrorMessage(error);
   const persistedNodeStatus = loadRunNodeExecutionRowById(db, run.id, node.runNodeId).status;
-  const canRetry = persistedNodeStatus === 'running' && shouldRetryNodeAttempt(currentAttempt, node.maxRetries);
+  const latestRunStatus = loadWorkflowRunRow(db, run.id).status;
+  const retryEligible = persistedNodeStatus === 'running' && shouldRetryNodeAttempt(currentAttempt, node.maxRetries);
+  const canRetryImmediately = retryEligible && latestRunStatus === 'running';
+  const shouldDeferRetry = retryEligible && latestRunStatus === 'paused';
+  const canRetry = canRetryImmediately || shouldDeferRetry;
   const retriesRemaining = Math.max(node.maxRetries - currentAttempt, 0);
   const failureReason = resolveFailureReason(persistedNodeStatus, canRetry);
 
@@ -2814,20 +3071,46 @@ function handleClaimedNodeFailure(
 
   if (canRetry) {
     const nextAttempt = currentAttempt + 1;
-    transitionFailedRunNodeToRetryAttempt(db, {
+    if (canRetryImmediately) {
+      transitionFailedRunNodeToRetryAttempt(db, {
+        runNodeId: node.runNodeId,
+        currentAttempt,
+        nextAttempt,
+      });
+      return {
+        artifactId,
+        runStatus: latestRunStatus,
+        runNodeStatus: 'failed',
+        nextAttempt,
+        nextStepOutcome: null,
+      };
+    }
+
+    transitionFailedRunNodeToPendingAttempt(db, {
       runNodeId: node.runNodeId,
       currentAttempt,
       nextAttempt,
     });
     return {
       artifactId,
-      runStatus: currentRunStatus,
+      runStatus: latestRunStatus,
       runNodeStatus: 'failed',
-      nextAttempt,
+      nextAttempt: null,
+      nextStepOutcome: 'blocked',
     };
   }
 
-  const runStatus = transitionRunTo(db, run.id, currentRunStatus, 'failed');
+  if (retryEligible && isTerminalWorkflowRunStatus(latestRunStatus)) {
+    return {
+      artifactId,
+      runStatus: latestRunStatus,
+      runNodeStatus: 'failed',
+      nextAttempt: null,
+      nextStepOutcome: 'run_terminal',
+    };
+  }
+
+  const runStatus = transitionRunToCurrentForExecutor(db, run.id, 'failed');
   let runNodeStatus: 'completed' | 'failed' = 'failed';
   if (persistedNode.status === 'completed') {
     runNodeStatus = 'completed';
@@ -2838,6 +3121,7 @@ function handleClaimedNodeFailure(
     runStatus,
     runNodeStatus,
     nextAttempt: null,
+    nextStepOutcome: null,
   };
 }
 
@@ -2900,7 +3184,6 @@ async function executeClaimedRunnableNode(
         edgeRows,
         {
           currentAttempt,
-          currentRunStatus,
           contextManifest: contextAssembly.manifest,
           phaseResult,
         },
@@ -2916,7 +3199,6 @@ async function executeClaimedRunnableNode(
         node,
         {
           currentAttempt,
-          currentRunStatus,
           contextManifest: contextAssembly.manifest,
           failureEvents,
           failureTokensUsed,
@@ -2928,10 +3210,202 @@ async function executeClaimedRunnableNode(
         continue;
       }
 
+      if (failure.nextStepOutcome !== null) {
+        return {
+          outcome: failure.nextStepOutcome,
+          workflowRunId: run.id,
+          runStatus: failure.runStatus,
+        };
+      }
+
       currentRunStatus = failure.runStatus;
       return buildExecutedNodeResult(run, node, failure.runNodeStatus, currentRunStatus, failure.artifactId);
     }
   }
+}
+
+function applyWorkflowRunStatusControl(
+  db: AlphredDatabase,
+  params: {
+    action: Extract<WorkflowRunControlAction, 'cancel' | 'pause' | 'resume'>;
+    workflowRunId: number;
+    targetStatus: WorkflowRunStatus;
+    allowedFrom: ReadonlySet<WorkflowRunStatus>;
+    noopStatuses: ReadonlySet<WorkflowRunStatus>;
+    invalidTransitionMessage: (status: WorkflowRunStatus) => string;
+  },
+): WorkflowRunControlResult {
+  let lastObservedStatus: WorkflowRunStatus | null = null;
+
+  for (let attempt = 0; attempt < MAX_CONTROL_PRECONDITION_RETRIES; attempt += 1) {
+    const run = loadWorkflowRunRow(db, params.workflowRunId);
+    lastObservedStatus = run.status;
+
+    if (params.noopStatuses.has(run.status)) {
+      return createWorkflowRunControlResult({
+        action: params.action,
+        outcome: 'noop',
+        workflowRunId: run.id,
+        previousRunStatus: run.status,
+        runStatus: run.status,
+      });
+    }
+
+    if (!params.allowedFrom.has(run.status)) {
+      throw createInvalidControlTransitionError({
+        action: params.action,
+        workflowRunId: run.id,
+        runStatus: run.status,
+        message: params.invalidTransitionMessage(run.status),
+      });
+    }
+
+    try {
+      let nextStatus: WorkflowRunStatus;
+      if (params.action === 'cancel' && (run.status === 'pending' || run.status === 'paused')) {
+        transitionWorkflowRunStatus(db, {
+          workflowRunId: run.id,
+          expectedFrom: run.status,
+          to: 'cancelled',
+        });
+        nextStatus = 'cancelled';
+      } else {
+        nextStatus = transitionRunTo(db, run.id, run.status, params.targetStatus);
+      }
+      return createWorkflowRunControlResult({
+        action: params.action,
+        outcome: 'applied',
+        workflowRunId: run.id,
+        previousRunStatus: run.status,
+        runStatus: nextStatus,
+      });
+    } catch (error) {
+      if (isWorkflowRunTransitionPreconditionFailure(error)) {
+        continue;
+      }
+      throw error;
+    }
+  }
+
+  const fallbackStatus = lastObservedStatus ?? loadWorkflowRunRow(db, params.workflowRunId).status;
+  throw createConcurrentControlConflictError({
+    action: params.action,
+    workflowRunId: params.workflowRunId,
+    runStatus: fallbackStatus,
+    message: `Failed to apply ${params.action} control for workflow run id=${params.workflowRunId} after retrying precondition conflicts.`,
+  });
+}
+
+function applyWorkflowRunRetryControl(
+  db: AlphredDatabase,
+  params: WorkflowRunControlParams,
+): WorkflowRunControlResult {
+  let lastObservedStatus: WorkflowRunStatus | null = null;
+
+  for (let attempt = 0; attempt < MAX_CONTROL_PRECONDITION_RETRIES; attempt += 1) {
+    const run = loadWorkflowRunRow(db, params.workflowRunId);
+    lastObservedStatus = run.status;
+
+    if (run.status === 'running') {
+      return createWorkflowRunControlResult({
+        action: 'retry',
+        outcome: 'noop',
+        workflowRunId: run.id,
+        previousRunStatus: run.status,
+        runStatus: run.status,
+      });
+    }
+
+    if (run.status !== 'failed') {
+      throw createInvalidControlTransitionError({
+        action: 'retry',
+        workflowRunId: run.id,
+        runStatus: run.status,
+        message: `Cannot retry workflow run id=${run.id} from status "${run.status}". Expected status "failed".`,
+      });
+    }
+
+    const retryTargets = getLatestRunNodeAttempts(loadRunNodeExecutionRows(db, run.id))
+      .filter(node => node.status === 'failed')
+      .sort(compareNodeOrder);
+    if (retryTargets.length === 0) {
+      throw createRetryTargetsNotFoundError({
+        action: 'retry',
+        workflowRunId: run.id,
+        runStatus: run.status,
+        message: `Workflow run id=${run.id} is failed but has no failed run nodes to retry.`,
+      });
+    }
+
+    try {
+      const retriedRunNodeIds = db.transaction(tx => {
+        const txRun = tx
+          .select({
+            status: workflowRuns.status,
+          })
+          .from(workflowRuns)
+          .where(eq(workflowRuns.id, run.id))
+          .get();
+        if (txRun?.status !== 'failed') {
+          throw new Error(
+            `Workflow-run retry control precondition failed for id=${run.id}; expected status "failed".`,
+          );
+        }
+
+        const occurredAt = new Date().toISOString();
+        const retriedIds: number[] = [];
+        for (const retryTarget of retryTargets) {
+          transitionFailedRunNodeToPendingAttempt(tx, {
+            runNodeId: retryTarget.runNodeId,
+            currentAttempt: retryTarget.attempt,
+            nextAttempt: retryTarget.attempt + 1,
+          });
+          retriedIds.push(retryTarget.runNodeId);
+        }
+
+        const updatedRun = tx
+          .update(workflowRuns)
+          .set({
+            status: 'running',
+            updatedAt: occurredAt,
+            completedAt: null,
+          })
+          .where(and(eq(workflowRuns.id, run.id), eq(workflowRuns.status, 'failed')))
+          .run();
+        if (updatedRun.changes !== 1) {
+          throw new Error(`Workflow-run transition precondition failed for id=${run.id}; expected status "failed".`);
+        }
+
+        return retriedIds;
+      });
+
+      return createWorkflowRunControlResult({
+        action: 'retry',
+        outcome: 'applied',
+        workflowRunId: run.id,
+        previousRunStatus: 'failed',
+        runStatus: 'running',
+        retriedRunNodeIds,
+      });
+    } catch (error) {
+      if (
+        isWorkflowRunTransitionPreconditionFailure(error)
+        || isRunNodeRetryQueuePreconditionFailure(error)
+        || isRetryControlPreconditionFailure(error)
+      ) {
+        continue;
+      }
+      throw error;
+    }
+  }
+
+  const fallbackStatus = lastObservedStatus ?? loadWorkflowRunRow(db, params.workflowRunId).status;
+  throw createConcurrentControlConflictError({
+    action: 'retry',
+    workflowRunId: params.workflowRunId,
+    runStatus: fallbackStatus,
+    message: `Failed to apply retry control for workflow run id=${params.workflowRunId} after retrying precondition conflicts.`,
+  });
 }
 
 export function createSqlWorkflowExecutor(
@@ -2940,19 +3414,19 @@ export function createSqlWorkflowExecutor(
 ): SqlWorkflowExecutor {
   return {
     async executeNextRunnableNode(params: ExecuteNextRunnableNodeParams): Promise<ExecuteNextRunnableNodeResult> {
-      const run = loadWorkflowRunRow(db, params.workflowRunId);
-      if (runTerminalStatuses.has(run.status)) {
+      const initialRun = loadWorkflowRunRow(db, params.workflowRunId);
+      if (runTerminalStatuses.has(initialRun.status)) {
         return {
           outcome: 'run_terminal',
-          workflowRunId: run.id,
-          runStatus: run.status,
+          workflowRunId: initialRun.id,
+          runStatus: initialRun.status,
         };
       }
 
-      const runNodeRows = loadRunNodeExecutionRows(db, run.id);
-      const edgeRows = loadEdgeRows(db, run.workflowTreeId);
-      const routingDecisionSelection = loadLatestRoutingDecisionsByRunNodeId(db, run.id);
-      const latestArtifactsByRunNodeId = loadLatestArtifactsByRunNodeId(db, run.id);
+      const runNodeRows = loadRunNodeExecutionRows(db, initialRun.id);
+      const edgeRows = loadEdgeRows(db, initialRun.workflowTreeId);
+      const routingDecisionSelection = loadLatestRoutingDecisionsByRunNodeId(db, initialRun.id);
+      const latestArtifactsByRunNodeId = loadLatestArtifactsByRunNodeId(db, initialRun.id);
       const { nextRunnableNode, latestNodeAttempts, hasNoRouteDecision, hasUnresolvedDecision } = selectNextRunnableNode(
         runNodeRows,
         edgeRows,
@@ -2960,31 +3434,106 @@ export function createSqlWorkflowExecutor(
         latestArtifactsByRunNodeId,
       );
 
-      if (!nextRunnableNode) {
-        const result = resolveNoRunnableOutcome(db, run, latestNodeAttempts, hasNoRouteDecision, hasUnresolvedDecision);
+      const currentRun = loadWorkflowRunRow(db, initialRun.id);
+      if (runTerminalStatuses.has(currentRun.status)) {
+        const runTerminalResult: ExecuteNextRunnableNodeResult = {
+          outcome: 'run_terminal',
+          workflowRunId: currentRun.id,
+          runStatus: currentRun.status,
+        };
         await notifyRunTerminalTransition(dependencies, {
-          workflowRunId: run.id,
-          previousRunStatus: run.status,
+          workflowRunId: currentRun.id,
+          previousRunStatus: resolveExecutionTerminalNotificationPreviousStatus(
+            initialRun.status,
+            runTerminalResult.runStatus,
+          ),
+          nextRunStatus: runTerminalResult.runStatus,
+        });
+        return runTerminalResult;
+      }
+
+      if (nextRunnableNode && currentRun.status === 'paused') {
+        return {
+          outcome: 'blocked',
+          workflowRunId: currentRun.id,
+          runStatus: currentRun.status,
+        };
+      }
+
+      if (!nextRunnableNode) {
+        const result = resolveNoRunnableOutcome(
+          db,
+          currentRun,
+          latestNodeAttempts,
+          hasNoRouteDecision,
+          hasUnresolvedDecision,
+        );
+        await notifyRunTerminalTransition(dependencies, {
+          workflowRunId: currentRun.id,
+          previousRunStatus: resolveExecutionTerminalNotificationPreviousStatus(
+            currentRun.status,
+            result.runStatus,
+          ),
           nextRunStatus: result.runStatus,
         });
         return result;
       }
 
-      const runStatus = ensureRunIsRunning(db, run);
-      const claimResult = claimRunnableNode(db, run, nextRunnableNode);
+      const runStatus = ensureRunIsRunning(db, currentRun);
+      if (runStatus === 'paused') {
+        return {
+          outcome: 'blocked',
+          workflowRunId: currentRun.id,
+          runStatus,
+        };
+      }
+
+      if (runTerminalStatuses.has(runStatus)) {
+        const runTerminalResult: ExecuteNextRunnableNodeResult = {
+          outcome: 'run_terminal',
+          workflowRunId: currentRun.id,
+          runStatus,
+        };
+        await notifyRunTerminalTransition(dependencies, {
+          workflowRunId: currentRun.id,
+          previousRunStatus: resolveExecutionTerminalNotificationPreviousStatus(
+            currentRun.status,
+            runTerminalResult.runStatus,
+          ),
+          nextRunStatus: runTerminalResult.runStatus,
+        });
+        return runTerminalResult;
+      }
+
+      const claimResult = claimRunnableNode(db, currentRun, nextRunnableNode);
       if (claimResult) {
         await notifyRunTerminalTransition(dependencies, {
-          workflowRunId: run.id,
-          previousRunStatus: run.status,
+          workflowRunId: currentRun.id,
+          previousRunStatus: resolveExecutionTerminalNotificationPreviousStatus(
+            currentRun.status,
+            claimResult.runStatus,
+          ),
           nextRunStatus: claimResult.runStatus,
         });
         return claimResult;
       }
-      const claimedNode = loadRunNodeExecutionRowById(db, run.id, nextRunnableNode.runNodeId);
-      const result = await executeClaimedRunnableNode(db, dependencies, run, claimedNode, edgeRows, params.options, runStatus);
+
+      const claimedNode = loadRunNodeExecutionRowById(db, currentRun.id, nextRunnableNode.runNodeId);
+      const result = await executeClaimedRunnableNode(
+        db,
+        dependencies,
+        currentRun,
+        claimedNode,
+        edgeRows,
+        params.options,
+        runStatus,
+      );
       await notifyRunTerminalTransition(dependencies, {
-        workflowRunId: run.id,
-        previousRunStatus: run.status,
+        workflowRunId: currentRun.id,
+        previousRunStatus: resolveExecutionTerminalNotificationPreviousStatus(
+          currentRun.status,
+          result.runStatus,
+        ),
         nextRunStatus: result.runStatus,
       });
       return result;
@@ -3040,6 +3589,52 @@ export function createSqlWorkflowExecutor(
           runStatus,
         },
       };
+    },
+
+    async cancelRun(params: WorkflowRunControlParams): Promise<WorkflowRunControlResult> {
+      const result = applyWorkflowRunStatusControl(db, {
+        action: 'cancel',
+        workflowRunId: params.workflowRunId,
+        targetStatus: 'cancelled',
+        allowedFrom: new Set(['pending', 'running', 'paused']),
+        noopStatuses: new Set(['cancelled']),
+        invalidTransitionMessage: status =>
+          `Cannot cancel workflow run id=${params.workflowRunId} from status "${status}". Expected pending, running, or paused.`,
+      });
+      await notifyRunTerminalTransition(dependencies, {
+        workflowRunId: result.workflowRunId,
+        previousRunStatus: result.previousRunStatus,
+        nextRunStatus: result.runStatus,
+      });
+      return result;
+    },
+
+    async pauseRun(params: WorkflowRunControlParams): Promise<WorkflowRunControlResult> {
+      return applyWorkflowRunStatusControl(db, {
+        action: 'pause',
+        workflowRunId: params.workflowRunId,
+        targetStatus: 'paused',
+        allowedFrom: new Set(['running']),
+        noopStatuses: new Set(['paused']),
+        invalidTransitionMessage: status =>
+          `Cannot pause workflow run id=${params.workflowRunId} from status "${status}". Expected status "running".`,
+      });
+    },
+
+    async resumeRun(params: WorkflowRunControlParams): Promise<WorkflowRunControlResult> {
+      return applyWorkflowRunStatusControl(db, {
+        action: 'resume',
+        workflowRunId: params.workflowRunId,
+        targetStatus: 'running',
+        allowedFrom: new Set(['paused']),
+        noopStatuses: new Set(['running']),
+        invalidTransitionMessage: status =>
+          `Cannot resume workflow run id=${params.workflowRunId} from status "${status}". Expected status "paused".`,
+      });
+    },
+
+    async retryRun(params: WorkflowRunControlParams): Promise<WorkflowRunControlResult> {
+      return applyWorkflowRunRetryControl(db, params);
     },
   };
 }

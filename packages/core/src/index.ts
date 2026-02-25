@@ -18,4 +18,9 @@ export {
   type ExecuteNextRunnableNodeResult,
   type ExecuteWorkflowRunParams,
   type ExecuteWorkflowRunResult,
+  type WorkflowRunControlAction,
+  type WorkflowRunControlErrorCode,
+  WorkflowRunControlError,
+  type WorkflowRunControlParams,
+  type WorkflowRunControlResult,
 } from './sqlWorkflowExecutor.js';

@@ -10,6 +10,7 @@ import {
   workflowTrees,
 } from './schema.js';
 import { assertValidRunNodeTransition, transitionRunNodeStatus } from './runNodeLifecycle.js';
+import { transitionWorkflowRunStatus } from './workflowRunLifecycle.js';
 
 function seedPendingRunNode() {
   const db = createDatabase(':memory:');
@@ -70,7 +71,7 @@ function seedPendingRunNode() {
     .returning({ id: runNodes.id })
     .get();
 
-  return { db, runNodeId: runNode.id };
+  return { db, runId: run.id, runNodeId: runNode.id };
 }
 
 describe('run-node lifecycle guard', () => {
@@ -79,6 +80,7 @@ describe('run-node lifecycle guard', () => {
     expect(() => assertValidRunNodeTransition('running', 'completed')).not.toThrow();
     expect(() => assertValidRunNodeTransition('completed', 'pending')).not.toThrow();
     expect(() => assertValidRunNodeTransition('failed', 'running')).not.toThrow();
+    expect(() => assertValidRunNodeTransition('failed', 'pending')).not.toThrow();
     expect(() => assertValidRunNodeTransition('skipped', 'pending')).not.toThrow();
     expect(() => assertValidRunNodeTransition('completed', 'running')).toThrow();
     expect(() => assertValidRunNodeTransition('pending', 'completed')).toThrow();
@@ -167,15 +169,55 @@ describe('run-node lifecycle guard', () => {
     transitionRunNodeStatus(db, {
       runNodeId,
       expectedFrom: 'running',
-      to: 'completed',
+      to: 'failed',
+      occurredAt: '2026-01-01T00:02:30.000Z',
+    });
+
+    transitionRunNodeStatus(db, {
+      runNodeId,
+      expectedFrom: 'failed',
+      to: 'pending',
       occurredAt: '2026-01-01T00:03:00.000Z',
+    });
+
+    persisted = db
+      .select({
+        status: runNodes.status,
+        startedAt: runNodes.startedAt,
+        completedAt: runNodes.completedAt,
+      })
+      .from(runNodes)
+      .where(eq(runNodes.id, runNodeId))
+      .get();
+
+    expect(persisted).toBeDefined();
+    if (!persisted) {
+      throw new Error('Expected run-node row to exist after failed->pending retry-queue transition');
+    }
+
+    expect(persisted.status).toBe('pending');
+    expect(persisted.startedAt).toBeNull();
+    expect(persisted.completedAt).toBeNull();
+
+    transitionRunNodeStatus(db, {
+      runNodeId,
+      expectedFrom: 'pending',
+      to: 'running',
+      occurredAt: '2026-01-01T00:03:30.000Z',
+    });
+
+    transitionRunNodeStatus(db, {
+      runNodeId,
+      expectedFrom: 'running',
+      to: 'completed',
+      occurredAt: '2026-01-01T00:04:00.000Z',
     });
 
     transitionRunNodeStatus(db, {
       runNodeId,
       expectedFrom: 'completed',
       to: 'pending',
-      occurredAt: '2026-01-01T00:04:00.000Z',
+      occurredAt: '2026-01-01T00:05:00.000Z',
     });
 
     persisted = db
@@ -221,6 +263,67 @@ describe('run-node lifecycle guard', () => {
         runNodeId,
         expectedFrom: 'pending',
         to: 'skipped',
+      }),
+    ).toThrow('Run-node transition precondition failed');
+  });
+
+  it('supports run-status preconditions for guarded claim transitions', () => {
+    const { db, runId, runNodeId } = seedPendingRunNode();
+
+    transitionRunNodeStatus(db, {
+      runNodeId,
+      expectedFrom: 'pending',
+      to: 'running',
+      workflowRunId: runId,
+      requiredRunStatuses: ['pending', 'running'],
+      occurredAt: '2026-01-01T00:00:00.000Z',
+    });
+
+    const persisted = db
+      .select({
+        status: runNodes.status,
+      })
+      .from(runNodes)
+      .where(eq(runNodes.id, runNodeId))
+      .get();
+    expect(persisted?.status).toBe('running');
+  });
+
+  it('requires workflowRunId when required run statuses are provided', () => {
+    const { db, runNodeId } = seedPendingRunNode();
+
+    expect(() =>
+      transitionRunNodeStatus(db, {
+        runNodeId,
+        expectedFrom: 'pending',
+        to: 'running',
+        requiredRunStatuses: ['pending', 'running'],
+      }),
+    ).toThrow('workflowRunId must be provided when requiredRunStatuses is set.');
+  });
+
+  it('rejects guarded claim transitions when run status no longer matches required statuses', () => {
+    const { db, runId, runNodeId } = seedPendingRunNode();
+    transitionWorkflowRunStatus(db, {
+      workflowRunId: runId,
+      expectedFrom: 'pending',
+      to: 'running',
+      occurredAt: '2026-01-01T00:00:00.000Z',
+    });
+    transitionWorkflowRunStatus(db, {
+      workflowRunId: runId,
+      expectedFrom: 'running',
+      to: 'paused',
+      occurredAt: '2026-01-01T00:01:00.000Z',
+    });
+
+    expect(() =>
+      transitionRunNodeStatus(db, {
+        runNodeId,
+        expectedFrom: 'pending',
+        to: 'running',
+        workflowRunId: runId,
+        requiredRunStatuses: ['pending', 'running'],
       }),
     ).toThrow('Run-node transition precondition failed');
   });

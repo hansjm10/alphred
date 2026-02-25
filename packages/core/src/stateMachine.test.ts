@@ -26,6 +26,10 @@ describe('stateMachine', () => {
       expect(canTransitionRun('paused', 'running')).toBe(true);
     });
 
+    it('should allow failed -> running (retry)', () => {
+      expect(canTransitionRun('failed', 'running')).toBe(true);
+    });
+
     it('should not allow completed -> running', () => {
       expect(canTransitionRun('completed', 'running')).toBe(false);
     });
@@ -64,7 +68,7 @@ describe('stateMachine', () => {
   describe('terminal states', () => {
     it('should identify terminal run states', () => {
       expect(isRunTerminal('completed')).toBe(true);
-      expect(isRunTerminal('failed')).toBe(true);
+      expect(isRunTerminal('failed')).toBe(false);
       expect(isRunTerminal('cancelled')).toBe(true);
       expect(isRunTerminal('running')).toBe(false);
     });
