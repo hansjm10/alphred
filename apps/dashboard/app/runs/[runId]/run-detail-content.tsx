@@ -2465,6 +2465,283 @@ function RunObservabilityCard({ detail }: RunObservabilityCardProps) {
   );
 }
 
+function triggerRunControlAction(params: {
+  action: DashboardRunControlAction | null;
+  onRunControlAction: (action: DashboardRunControlAction) => Promise<void>;
+}): void {
+  const { action, onRunControlAction } = params;
+  if (action === null) {
+    return;
+  }
+
+  void onRunControlAction(action);
+}
+
+function resolveActionButtonLabel(params: {
+  action: OperatorActionState;
+  pendingControlAction: DashboardRunControlAction | null;
+}): string {
+  const { action, pendingControlAction } = params;
+  if (action.controlAction !== null && pendingControlAction === action.controlAction) {
+    return `${action.label}...`;
+  }
+
+  return action.label;
+}
+
+type RunOperatorFocusCardProps = Readonly<{
+  detail: DashboardRunDetail;
+  latestTimelineEvent: TimelineItem | null;
+  hasHydrated: boolean;
+  primaryAction: OperatorActionState;
+  secondaryAction: OperatorActionState | null;
+  pendingControlAction: DashboardRunControlAction | null;
+  actionHint: string | null;
+  actionHintTone: 'info' | 'success' | 'error';
+  channelState: RealtimeChannelState;
+  realtimeLabel: ReturnType<typeof resolveRealtimeLabel>;
+  lastUpdatedAtMs: number;
+  isRefreshing: boolean;
+  updateError: string | null;
+  onRunControlAction: (action: DashboardRunControlAction) => Promise<void>;
+}>;
+
+function RunOperatorFocusCard({
+  detail,
+  latestTimelineEvent,
+  hasHydrated,
+  primaryAction,
+  secondaryAction,
+  pendingControlAction,
+  actionHint,
+  actionHintTone,
+  channelState,
+  realtimeLabel,
+  lastUpdatedAtMs,
+  isRefreshing,
+  updateError,
+  onRunControlAction,
+}: RunOperatorFocusCardProps) {
+  return (
+    <Card
+      title="Operator focus"
+      description="Current run status, latest event, and next likely operator action."
+      className="run-operator-focus"
+    >
+      <ul className="entity-list run-operator-focus-list">
+        <li>
+          <span>Current status</span>
+          <StatusBadge status={detail.run.status} />
+        </li>
+        <li>
+          <span>Latest event</span>
+          {latestTimelineEvent ? (
+            <div className="run-operator-focus-list__value">
+              <p>{latestTimelineEvent.summary}</p>
+              <p className="meta-text">{formatTimelineTime(latestTimelineEvent.timestamp, hasHydrated)}</p>
+            </div>
+          ) : (
+            <span className="meta-text">No lifecycle events captured yet.</span>
+          )}
+        </li>
+        <li>
+          <span>Next action</span>
+          <span className="meta-text">{primaryAction.label}</span>
+        </li>
+      </ul>
+
+      <div className="action-row run-detail-primary-actions">
+        {primaryAction.href ? (
+          <ButtonLink href={primaryAction.href} tone="primary">
+            {primaryAction.label}
+          </ButtonLink>
+        ) : (
+          <ActionButton
+            tone="primary"
+            disabled={primaryAction.disabledReason !== null || pendingControlAction !== null}
+            aria-disabled={primaryAction.disabledReason !== null || pendingControlAction !== null}
+            title={primaryAction.disabledReason ?? undefined}
+            onClick={() => {
+              triggerRunControlAction({
+                action: primaryAction.controlAction,
+                onRunControlAction,
+              });
+            }}
+          >
+            {resolveActionButtonLabel({
+              action: primaryAction,
+              pendingControlAction,
+            })}
+          </ActionButton>
+        )}
+        {secondaryAction ? (
+          <ActionButton
+            disabled={secondaryAction.disabledReason !== null || pendingControlAction !== null}
+            aria-disabled={secondaryAction.disabledReason !== null || pendingControlAction !== null}
+            title={secondaryAction.disabledReason ?? undefined}
+            onClick={() => {
+              triggerRunControlAction({
+                action: secondaryAction.controlAction,
+                onRunControlAction,
+              });
+            }}
+          >
+            {resolveActionButtonLabel({
+              action: secondaryAction,
+              pendingControlAction,
+            })}
+          </ActionButton>
+        ) : null}
+        <ButtonLink href="/runs">Back to Runs</ButtonLink>
+      </div>
+      {actionHint ? (
+        <output className={`run-action-feedback run-action-feedback--${actionHintTone}`} aria-live="polite">
+          {actionHint}
+        </output>
+      ) : null}
+
+      <output className={`run-realtime-status run-realtime-status--${channelState}`} aria-live="polite">
+        <span className="run-realtime-status__badge">{realtimeLabel.badgeLabel}</span>
+        <span className="meta-text">{realtimeLabel.detail}</span>
+        <span className="meta-text">
+          {`Last updated ${formatLastUpdated(lastUpdatedAtMs, hasHydrated)}.`}
+          {isRefreshing ? ' Refreshing timeline...' : ''}
+        </span>
+      </output>
+
+      {updateError && (channelState === 'reconnecting' || channelState === 'stale') ? (
+        <output className="run-realtime-warning" aria-live="polite">
+          {`Update channel degraded: ${updateError}`}
+        </output>
+      ) : null}
+    </Card>
+  );
+}
+
+function resolveEmptyTimelineLabel(filteredNodeId: number | null): string {
+  return filteredNodeId === null ? 'No lifecycle events captured yet.' : 'No events match the selected node.';
+}
+
+type RunDetailLifecycleGridProps = Readonly<{
+  detail: DashboardRunDetail;
+  selectedNode: DashboardRunDetail['nodes'][number] | null;
+  filteredNodeId: number | null;
+  highlightedNodeId: number | null;
+  hasHydrated: boolean;
+  visibleTimeline: readonly TimelineItem[];
+  visibleTimelinePartition: RecentPartition<TimelineItem>;
+  onSelectTimelineNode: (nodeId: number | null) => void;
+  onClearNodeFilter: () => void;
+  onToggleNodeFilter: (nodeId: number) => void;
+}>;
+
+function RunDetailLifecycleGrid({
+  detail,
+  selectedNode,
+  filteredNodeId,
+  highlightedNodeId,
+  hasHydrated,
+  visibleTimeline,
+  visibleTimelinePartition,
+  onSelectTimelineNode,
+  onClearNodeFilter,
+  onToggleNodeFilter,
+}: RunDetailLifecycleGridProps) {
+  const renderTimelineEvent = (event: TimelineItem) => {
+    const highlighted = highlightedNodeId !== null && event.relatedNodeId === highlightedNodeId;
+
+    return (
+      <li key={event.key}>
+        <button
+          type="button"
+          className={`run-timeline-event run-timeline-event--${event.category}${highlighted ? ' run-timeline-event--selected' : ''}`}
+          aria-pressed={highlighted}
+          onClick={() => {
+            onSelectTimelineNode(event.relatedNodeId);
+          }}
+        >
+          <span className="run-timeline-event__header">
+            <span className={`timeline-category-indicator timeline-category-indicator--${event.category}`}>
+              <TimelineCategoryIcon category={event.category} />
+              <span>{TIMELINE_CATEGORY_LABELS[event.category]}</span>
+            </span>
+            <span className="meta-text">{formatTimelineTime(event.timestamp, hasHydrated)}</span>
+          </span>
+          <p>{event.summary}</p>
+        </button>
+      </li>
+    );
+  };
+
+  return (
+    <div className="page-grid run-detail-lifecycle-grid">
+      <Card title="Timeline" description="Latest run events">
+        {selectedNode ? (
+          <div className="run-timeline-filter">
+            <p className="meta-text">{`Filtered to ${selectedNode.nodeKey} (attempt ${selectedNode.attempt}).`}</p>
+            <ActionButton className="run-timeline-clear" onClick={onClearNodeFilter}>
+              Show all events
+            </ActionButton>
+          </div>
+        ) : null}
+
+        <ol className="page-stack run-timeline-list" aria-label="Run timeline">
+          {visibleTimeline.length > 0 ? (
+            <>
+              {visibleTimelinePartition.earlier.length > 0 ? (
+                <li>
+                  <details className="run-collapsible-history">
+                    <summary className="run-collapsible-history__summary">
+                      {`Show ${visibleTimelinePartition.earlier.length} earlier events`}
+                    </summary>
+                    <ol className="page-stack run-collapsible-history__list" aria-label="Earlier run timeline events">
+                      {visibleTimelinePartition.earlier.map((event) => renderTimelineEvent(event))}
+                    </ol>
+                  </details>
+                </li>
+              ) : null}
+              {visibleTimelinePartition.recent.map((event) => renderTimelineEvent(event))}
+            </>
+          ) : (
+            <li>
+              <p>{resolveEmptyTimelineLabel(filteredNodeId)}</p>
+            </li>
+          )}
+        </ol>
+      </Card>
+
+      <Panel title="Node status" description="Node lifecycle snapshot">
+        <ul className="entity-list run-node-status-list">
+          {detail.nodes.length > 0 ? (
+            detail.nodes.map((node) => {
+              const selected = filteredNodeId === node.id;
+
+              return (
+                <li key={node.id}>
+                  <ActionButton
+                    className={`run-node-filter${selected ? ' run-node-filter--selected' : ''}`}
+                    aria-pressed={selected}
+                    onClick={() => {
+                      onToggleNodeFilter(node.id);
+                    }}
+                  >
+                    {`${node.nodeKey} (attempt ${node.attempt})`}
+                  </ActionButton>
+                  <StatusBadge status={node.status} />
+                </li>
+              );
+            })
+          ) : (
+            <li>
+              <span>No run nodes have been materialized yet.</span>
+            </li>
+          )}
+        </ul>
+      </Panel>
+    </div>
+  );
+}
+
 export function RunDetailContent({
   initialDetail,
   repositories,
@@ -2709,30 +2986,9 @@ export function RunDetailContent({
     setPendingControlAction(null);
   };
 
-  const renderTimelineEvent = (event: TimelineItem) => {
-    const highlighted = highlightedNodeId !== null && event.relatedNodeId === highlightedNodeId;
-
-    return (
-      <li key={event.key}>
-        <button
-          type="button"
-          className={`run-timeline-event run-timeline-event--${event.category}${highlighted ? ' run-timeline-event--selected' : ''}`}
-          aria-pressed={highlighted}
-          onClick={() => {
-            setHighlightedNodeId(event.relatedNodeId);
-          }}
-        >
-          <span className="run-timeline-event__header">
-            <span className={`timeline-category-indicator timeline-category-indicator--${event.category}`}>
-              <TimelineCategoryIcon category={event.category} />
-              <span>{TIMELINE_CATEGORY_LABELS[event.category]}</span>
-            </span>
-            <span className="meta-text">{formatTimelineTime(event.timestamp, hasHydrated)}</span>
-          </span>
-          <p>{event.summary}</p>
-        </button>
-      </li>
-    );
+  const clearNodeFilter = (): void => {
+    setFilteredNodeId(null);
+    setHighlightedNodeId(null);
   };
 
   return (
@@ -2743,97 +2999,22 @@ export function RunDetailContent({
       </section>
 
       <div className="page-grid run-detail-priority-grid">
-        <Card
-          title="Operator focus"
-          description="Current run status, latest event, and next likely operator action."
-          className="run-operator-focus"
-        >
-          <ul className="entity-list run-operator-focus-list">
-            <li>
-              <span>Current status</span>
-              <StatusBadge status={detail.run.status} />
-            </li>
-            <li>
-              <span>Latest event</span>
-              {latestTimelineEvent ? (
-                <div className="run-operator-focus-list__value">
-                  <p>{latestTimelineEvent.summary}</p>
-                  <p className="meta-text">{formatTimelineTime(latestTimelineEvent.timestamp, hasHydrated)}</p>
-                </div>
-              ) : (
-                <span className="meta-text">No lifecycle events captured yet.</span>
-              )}
-            </li>
-            <li>
-              <span>Next action</span>
-              <span className="meta-text">{primaryAction.label}</span>
-            </li>
-          </ul>
-
-          <div className="action-row run-detail-primary-actions">
-            {primaryAction.href ? (
-              <ButtonLink href={primaryAction.href} tone="primary">
-                {primaryAction.label}
-              </ButtonLink>
-            ) : (
-              <ActionButton
-                tone="primary"
-                disabled={primaryAction.disabledReason !== null || pendingControlAction !== null}
-                aria-disabled={primaryAction.disabledReason !== null || pendingControlAction !== null}
-                title={primaryAction.disabledReason ?? undefined}
-                onClick={() => {
-                  if (primaryAction.controlAction !== null) {
-                    void handleRunControlAction(primaryAction.controlAction);
-                  }
-                }}
-              >
-                {pendingControlAction === primaryAction.controlAction && primaryAction.controlAction !== null
-                  ? `${primaryAction.label}...`
-                  : primaryAction.label}
-              </ActionButton>
-            )}
-            {secondaryAction ? (
-              <ActionButton
-                disabled={secondaryAction.disabledReason !== null || pendingControlAction !== null}
-                aria-disabled={secondaryAction.disabledReason !== null || pendingControlAction !== null}
-                title={secondaryAction.disabledReason ?? undefined}
-                onClick={() => {
-                  if (secondaryAction.controlAction !== null) {
-                    void handleRunControlAction(secondaryAction.controlAction);
-                  }
-                }}
-              >
-                {pendingControlAction === secondaryAction.controlAction && secondaryAction.controlAction !== null
-                  ? `${secondaryAction.label}...`
-                  : secondaryAction.label}
-              </ActionButton>
-            ) : null}
-            <ButtonLink href="/runs">Back to Runs</ButtonLink>
-          </div>
-          {actionHint ? (
-            <output
-              className={`run-action-feedback run-action-feedback--${actionHintTone}`}
-              aria-live="polite"
-            >
-              {actionHint}
-            </output>
-          ) : null}
-
-          <output className={`run-realtime-status run-realtime-status--${channelState}`} aria-live="polite">
-            <span className="run-realtime-status__badge">{realtimeLabel.badgeLabel}</span>
-            <span className="meta-text">{realtimeLabel.detail}</span>
-            <span className="meta-text">
-              {`Last updated ${formatLastUpdated(lastUpdatedAtMs, hasHydrated)}.`}
-              {isRefreshing ? ' Refreshing timeline...' : ''}
-            </span>
-          </output>
-
-          {updateError && (channelState === 'reconnecting' || channelState === 'stale') ? (
-            <output className="run-realtime-warning" aria-live="polite">
-              {`Update channel degraded: ${updateError}`}
-            </output>
-          ) : null}
-        </Card>
+        <RunOperatorFocusCard
+          detail={detail}
+          latestTimelineEvent={latestTimelineEvent}
+          hasHydrated={hasHydrated}
+          primaryAction={primaryAction}
+          secondaryAction={secondaryAction}
+          pendingControlAction={pendingControlAction}
+          actionHint={actionHint}
+          actionHintTone={actionHintTone}
+          channelState={channelState}
+          realtimeLabel={realtimeLabel}
+          lastUpdatedAtMs={lastUpdatedAtMs}
+          isRefreshing={isRefreshing}
+          updateError={updateError}
+          onRunControlAction={handleRunControlAction}
+        />
 
         <Panel title="Run summary" description="Workflow context and timestamps." className="run-detail-summary-panel">
           <ul className="entity-list run-detail-summary-list">
@@ -2861,77 +3042,18 @@ export function RunDetailContent({
         </Panel>
       </div>
 
-      <div className="page-grid run-detail-lifecycle-grid">
-        <Card title="Timeline" description="Latest run events">
-          {selectedNode ? (
-            <div className="run-timeline-filter">
-              <p className="meta-text">{`Filtered to ${selectedNode.nodeKey} (attempt ${selectedNode.attempt}).`}</p>
-              <ActionButton
-                className="run-timeline-clear"
-                onClick={() => {
-                  setFilteredNodeId(null);
-                  setHighlightedNodeId(null);
-                }}
-              >
-                Show all events
-              </ActionButton>
-            </div>
-          ) : null}
-
-          <ol className="page-stack run-timeline-list" aria-label="Run timeline">
-            {visibleTimeline.length > 0 ? (
-              <>
-                {visibleTimelinePartition.earlier.length > 0 ? (
-                  <li>
-                    <details className="run-collapsible-history">
-                      <summary className="run-collapsible-history__summary">
-                        {`Show ${visibleTimelinePartition.earlier.length} earlier events`}
-                      </summary>
-                      <ol className="page-stack run-collapsible-history__list" aria-label="Earlier run timeline events">
-                        {visibleTimelinePartition.earlier.map((event) => renderTimelineEvent(event))}
-                      </ol>
-                    </details>
-                  </li>
-                ) : null}
-                {visibleTimelinePartition.recent.map((event) => renderTimelineEvent(event))}
-              </>
-            ) : (
-              <li>
-                <p>{filteredNodeId === null ? 'No lifecycle events captured yet.' : 'No events match the selected node.'}</p>
-              </li>
-            )}
-          </ol>
-        </Card>
-
-        <Panel title="Node status" description="Node lifecycle snapshot">
-          <ul className="entity-list run-node-status-list">
-            {detail.nodes.length > 0 ? (
-              detail.nodes.map((node) => {
-                const selected = filteredNodeId === node.id;
-
-                return (
-                  <li key={node.id}>
-                    <ActionButton
-                      className={`run-node-filter${selected ? ' run-node-filter--selected' : ''}`}
-                      aria-pressed={selected}
-                      onClick={() => {
-                        toggleNodeFilter(node.id);
-                      }}
-                    >
-                      {`${node.nodeKey} (attempt ${node.attempt})`}
-                    </ActionButton>
-                    <StatusBadge status={node.status} />
-                  </li>
-                );
-              })
-            ) : (
-              <li>
-                <span>No run nodes have been materialized yet.</span>
-              </li>
-            )}
-          </ul>
-        </Panel>
-      </div>
+      <RunDetailLifecycleGrid
+        detail={detail}
+        selectedNode={selectedNode}
+        filteredNodeId={filteredNodeId}
+        highlightedNodeId={highlightedNodeId}
+        hasHydrated={hasHydrated}
+        visibleTimeline={visibleTimeline}
+        visibleTimelinePartition={visibleTimelinePartition}
+        onSelectTimelineNode={setHighlightedNodeId}
+        onClearNodeFilter={clearNodeFilter}
+        onToggleNodeFilter={toggleNodeFilter}
+      />
 
       <RunAgentStreamCard
         isTerminalRun={!isActiveRunStatus(detail.run.status)}
