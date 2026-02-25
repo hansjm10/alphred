@@ -143,6 +143,32 @@ describe('POST /api/dashboard/repositories/[name]/sync', () => {
     expect(syncRepositoryMock).not.toHaveBeenCalled();
   });
 
+  it('returns invalid_request when strategy is provided as a non-string value', async () => {
+    const response = await POST(
+      new Request('http://localhost/api/dashboard/repositories/demo-repo/sync', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({
+          strategy: 42,
+        }),
+      }),
+      {
+        params: Promise.resolve({ name: 'demo-repo' }),
+      },
+    );
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      error: {
+        code: 'invalid_request',
+        message: 'Field "strategy" must be a string when provided.',
+      },
+    });
+    expect(syncRepositoryMock).not.toHaveBeenCalled();
+  });
+
   it('returns invalid_request when the request payload is a JSON array', async () => {
     const response = await POST(
       new Request('http://localhost/api/dashboard/repositories/demo-repo/sync', {

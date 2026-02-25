@@ -1499,6 +1499,47 @@ describe('CLI repo commands', () => {
     expect(captured.stdout).toContain('Sync status: up_to_date (mode=pull, strategy=rebase, branch=main).');
   });
 
+  it('prints an unavailable sync summary when repository sync metadata is missing', async () => {
+    const db = createDatabase(':memory:');
+    migrateDatabase(db);
+    insertRepository(db, {
+      name: 'frontend',
+      provider: 'github',
+      remoteUrl: 'https://github.com/acme/frontend.git',
+      remoteRef: 'acme/frontend',
+      cloneStatus: 'pending',
+      localPath: null,
+    });
+
+    const ensureRepositoryCloneMock = vi.fn(async () => {
+      const repository = getRepositoryByName(db, 'frontend');
+      if (!repository) {
+        throw new Error('Expected repository row.');
+      }
+
+      return {
+        repository: {
+          ...repository,
+          cloneStatus: 'cloned' as const,
+          localPath: '/tmp/alphred/repos/github/acme/frontend',
+        },
+        action: 'fetched' as const,
+      };
+    });
+
+    const captured = createCapturedIo();
+
+    const exitCode = await main(['repo', 'sync', 'frontend'], {
+      dependencies: createDependencies(db, createUnusedProviderResolver(), {
+        ensureRepositoryClone: ensureRepositoryCloneMock,
+      }),
+      io: captured.io,
+    });
+
+    expect(exitCode).toBe(0);
+    expect(captured.stdout).toContain('Sync status unavailable.');
+  });
+
   it('fails with usage error when repo sync strategy is invalid', async () => {
     const db = createDatabase(':memory:');
     migrateDatabase(db);

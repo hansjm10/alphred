@@ -602,6 +602,216 @@ describe('ensureRepositoryClone', () => {
     });
   });
 
+  it('reports up_to_date when pull sync finds no remote divergence', async () => {
+    const fixture = await createSyncFixture();
+    const db = createMigratedDb();
+
+    insertRepository(db, {
+      name: 'frontend',
+      provider: 'github',
+      remoteUrl: fixture.expectedRemoteUrl,
+      remoteRef: 'acme/frontend',
+      localPath: fixture.localPath,
+      cloneStatus: 'cloned',
+      defaultBranch: 'main',
+    });
+
+    const result = await ensureRepositoryClone({
+      db,
+      repository: {
+        name: 'frontend',
+        provider: 'github',
+        remoteUrl: fixture.expectedRemoteUrl,
+        remoteRef: 'acme/frontend',
+        defaultBranch: 'main',
+      },
+      fetchAll: createFixtureFetchAll(fixture.remotePath),
+      environment: {
+        ALPHRED_SANDBOX_DIR: fixture.sandboxDir,
+      },
+      sync: {
+        mode: 'pull',
+        strategy: 'ff-only',
+      },
+    });
+
+    expect(result.sync).toEqual({
+      mode: 'pull',
+      strategy: 'ff-only',
+      branch: 'main',
+      status: 'up_to_date',
+      conflictMessage: null,
+    });
+  });
+
+  it('creates a missing local branch during pull sync and marks the result as updated', async () => {
+    const fixture = await createSyncFixture();
+    const db = createMigratedDb();
+
+    insertRepository(db, {
+      name: 'frontend',
+      provider: 'github',
+      remoteUrl: fixture.expectedRemoteUrl,
+      remoteRef: 'acme/frontend',
+      localPath: fixture.localPath,
+      cloneStatus: 'cloned',
+      defaultBranch: 'main',
+    });
+
+    const { stdout: detachedRevisionStdout } = await execFileAsync('git', ['rev-parse', 'HEAD'], {
+      cwd: fixture.localPath,
+    });
+    await execFileAsync('git', ['checkout', '--detach', detachedRevisionStdout.trim()], {
+      cwd: fixture.localPath,
+    });
+    await execFileAsync('git', ['branch', '-D', 'main'], {
+      cwd: fixture.localPath,
+    });
+
+    const result = await ensureRepositoryClone({
+      db,
+      repository: {
+        name: 'frontend',
+        provider: 'github',
+        remoteUrl: fixture.expectedRemoteUrl,
+        remoteRef: 'acme/frontend',
+        defaultBranch: 'main',
+      },
+      fetchAll: createFixtureFetchAll(fixture.remotePath),
+      environment: {
+        ALPHRED_SANDBOX_DIR: fixture.sandboxDir,
+      },
+      sync: {
+        mode: 'pull',
+        strategy: 'ff-only',
+      },
+    });
+
+    await expect(
+      execFileAsync('git', ['rev-parse', '--verify', '--quiet', 'refs/heads/main'], {
+        cwd: fixture.localPath,
+      }),
+    ).resolves.toMatchObject({
+      stdout: expect.stringMatching(/[0-9a-f]{40}\n?$/i),
+    });
+    expect(result.sync).toEqual({
+      mode: 'pull',
+      strategy: 'ff-only',
+      branch: 'main',
+      status: 'updated',
+      conflictMessage: null,
+    });
+  });
+
+  it('aborts merge sync conflicts and reports a conflicted status', async () => {
+    const fixture = await createSyncFixture();
+    const db = createMigratedDb();
+
+    insertRepository(db, {
+      name: 'frontend',
+      provider: 'github',
+      remoteUrl: fixture.expectedRemoteUrl,
+      remoteRef: 'acme/frontend',
+      localPath: fixture.localPath,
+      cloneStatus: 'cloned',
+      defaultBranch: 'main',
+    });
+
+    await commitFile(
+      fixture.localPath,
+      'README.md',
+      '# local change\n',
+      'local: conflicting README change',
+    );
+    await commitFile(
+      fixture.sourcePath,
+      'README.md',
+      '# remote change\n',
+      'remote: conflicting README change',
+    );
+    await execFileAsync('git', ['push', 'origin', 'main'], { cwd: fixture.sourcePath });
+
+    const result = await ensureRepositoryClone({
+      db,
+      repository: {
+        name: 'frontend',
+        provider: 'github',
+        remoteUrl: fixture.expectedRemoteUrl,
+        remoteRef: 'acme/frontend',
+        defaultBranch: 'main',
+      },
+      fetchAll: createFixtureFetchAll(fixture.remotePath),
+      environment: {
+        ALPHRED_SANDBOX_DIR: fixture.sandboxDir,
+      },
+      sync: {
+        mode: 'pull',
+        strategy: 'merge',
+      },
+    });
+
+    const { stdout: statusStdout } = await execFileAsync('git', ['status', '--porcelain'], {
+      cwd: fixture.localPath,
+    });
+    await expect(
+      execFileAsync('git', ['rev-parse', '--verify', '--quiet', 'MERGE_HEAD'], {
+        cwd: fixture.localPath,
+      }),
+    ).rejects.toThrow();
+    expect(statusStdout.trim()).toBe('');
+    expect(result.sync?.status).toBe('conflicted');
+    expect(result.sync?.conflictMessage).toContain('strategy "merge"');
+  });
+
+  it('returns conflicted status when rebase sync is blocked by local working tree changes', async () => {
+    const fixture = await createSyncFixture();
+    const db = createMigratedDb();
+
+    insertRepository(db, {
+      name: 'frontend',
+      provider: 'github',
+      remoteUrl: fixture.expectedRemoteUrl,
+      remoteRef: 'acme/frontend',
+      localPath: fixture.localPath,
+      cloneStatus: 'cloned',
+      defaultBranch: 'main',
+    });
+
+    await commitFile(
+      fixture.sourcePath,
+      'remote.txt',
+      'remote update\n',
+      'remote: update main',
+    );
+    await execFileAsync('git', ['push', 'origin', 'main'], { cwd: fixture.sourcePath });
+    await writeFile(join(fixture.localPath, 'README.md'), '# dirty working tree\n');
+
+    const result = await ensureRepositoryClone({
+      db,
+      repository: {
+        name: 'frontend',
+        provider: 'github',
+        remoteUrl: fixture.expectedRemoteUrl,
+        remoteRef: 'acme/frontend',
+        defaultBranch: 'main',
+      },
+      fetchAll: createFixtureFetchAll(fixture.remotePath),
+      environment: {
+        ALPHRED_SANDBOX_DIR: fixture.sandboxDir,
+        GIT_AUTHOR_NAME: '  Alphred Author  ',
+        GIT_AUTHOR_EMAIL: '  author@example.com  ',
+      },
+      sync: {
+        mode: 'pull',
+        strategy: 'rebase',
+      },
+    });
+
+    expect(result.sync?.status).toBe('conflicted');
+    expect(result.sync?.conflictMessage).toContain('strategy "rebase"');
+    expect(result.sync?.conflictMessage).toContain('Please commit or stash them.');
+  });
+
   it('applies merge strategy when branches diverge without conflicts', async () => {
     const fixture = await createSyncFixture();
     const db = createMigratedDb();

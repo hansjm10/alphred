@@ -27,4 +27,10 @@ describe('git index exports', () => {
     expect(typeof git.resolveSandboxDir).toBe('function');
     expect(typeof git.deriveSandboxRepoPath).toBe('function');
   });
+
+  it('exports unique sync enum values without duplicates', () => {
+    expect(new Set(git.repositorySyncModes).size).toBe(git.repositorySyncModes.length);
+    expect(new Set(git.repositorySyncStrategies).size).toBe(git.repositorySyncStrategies.length);
+    expect(new Set(git.repositorySyncStatuses).size).toBe(git.repositorySyncStatuses.length);
+  });
 });

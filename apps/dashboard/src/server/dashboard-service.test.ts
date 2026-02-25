@@ -2201,6 +2201,46 @@ describe('createDashboardService', () => {
     );
   });
 
+  it('falls back to fetched sync details when clone sync metadata is absent', async () => {
+    const checkAuth = vi.fn(async () => ({
+      authenticated: true,
+      user: 'sync-user',
+      scopes: ['repo'],
+    } satisfies AuthStatus));
+
+    const ensureRepositoryCloneMock: DashboardServiceDependencies['ensureRepositoryClone'] = vi.fn(async () => ({
+      action: 'fetched' as const,
+      repository: {
+        id: 1,
+        name: 'demo-repo',
+        provider: 'github',
+        remoteUrl: 'https://github.com/octocat/demo-repo.git',
+        remoteRef: 'octocat/demo-repo',
+        defaultBranch: 'main',
+        branchTemplate: null,
+        localPath: '/tmp/repos/demo-repo',
+        cloneStatus: 'cloned',
+      } satisfies RepositoryConfig,
+    }));
+
+    const { db, dependencies } = createHarness({
+      createScmProvider: () => ({ checkAuth }),
+      ensureRepositoryClone: ensureRepositoryCloneMock,
+    });
+    seedRunData(db);
+
+    const service = createDashboardService({ dependencies });
+    const result = await service.syncRepository('demo-repo');
+
+    expect(result.sync).toEqual({
+      mode: 'fetch',
+      strategy: null,
+      branch: 'main',
+      status: 'fetched',
+      conflictMessage: null,
+    });
+  });
+
   it('supports rebase sync strategy and surfaces conflict outcomes as 409 errors', async () => {
     const checkAuth = vi.fn(async () => ({
       authenticated: true,
