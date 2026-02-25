@@ -1,4 +1,21 @@
-import { expect, test } from '@playwright/test';
+import { expect, test, type Page } from '@playwright/test';
+
+async function createDraftWorkflowTree(page: Page): Promise<string> {
+  const treeKey = `workflow-editor-e2e-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const response = await page.request.post('/api/dashboard/workflows', {
+    data: {
+      template: 'blank',
+      name: 'Workflow Editor E2E Fixture',
+      treeKey,
+      description: 'Created by Playwright e2e for editor coverage.',
+    },
+  });
+
+  expect(response.status()).toBe(201);
+  const payload = await response.json() as { workflow?: { treeKey?: string } };
+  expect(payload.workflow?.treeKey).toBe(treeKey);
+  return treeKey;
+}
 
 test('validates tree-key format inline on workflow creation', async ({ page }) => {
   await page.goto('/workflows/new');
@@ -20,7 +37,8 @@ test('validates tree-key format inline on workflow creation', async ({ page }) =
 
 test('supports palette search and mobile inspector drawer behavior in the editor', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
-  await page.goto('/workflows/test/edit');
+  const treeKey = await createDraftWorkflowTree(page);
+  await page.goto(`/workflows/${treeKey}/edit`);
 
   const palette = page.getByRole('complementary', { name: 'Node palette' });
   const paletteSearch = page.getByRole('searchbox', { name: 'Search node templates' });

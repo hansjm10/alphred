@@ -1,16 +1,44 @@
 import { expect, test, type Page } from '@playwright/test';
 
-async function createPersistedRunWithoutWorktree(page: Page): Promise<number> {
-  const workflowsResponse = await page.request.get('/api/dashboard/workflows');
-  expect(workflowsResponse.ok()).toBeTruthy();
-  const workflowsPayload = await workflowsResponse.json() as {
-    workflows?: { treeKey?: string }[];
+type CreateWorkflowResponse = {
+  workflow?: {
+    treeKey?: string;
+    draftVersion?: number;
   };
-  const treeKey = workflowsPayload.workflows?.[0]?.treeKey;
-  expect(typeof treeKey).toBe('string');
-  if (typeof treeKey !== 'string') {
-    throw new Error('Expected /api/dashboard/workflows to return at least one workflow tree key.');
+};
+
+async function createPublishedWorkflowTree(page: Page): Promise<string> {
+  const treeKey = `worktree-e2e-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const createResponse = await page.request.post('/api/dashboard/workflows', {
+    data: {
+      template: 'design-implement-review',
+      name: 'Worktree E2E Fixture',
+      treeKey,
+      description: 'Created by Playwright e2e for persisted run coverage.',
+    },
+  });
+  expect(createResponse.status()).toBe(201);
+  const createPayload = await createResponse.json() as CreateWorkflowResponse;
+  expect(createPayload.workflow?.treeKey).toBe(treeKey);
+  const draftVersion = createPayload.workflow?.draftVersion;
+  expect(typeof draftVersion).toBe('number');
+  if (typeof draftVersion !== 'number') {
+    throw new Error('Expected workflow creation response to include draftVersion.');
   }
+
+  const publishResponse = await page.request.post(
+    `/api/dashboard/workflows/${encodeURIComponent(treeKey)}/draft/publish?version=${draftVersion}`,
+    {
+      data: {},
+    },
+  );
+  expect(publishResponse.status()).toBe(200);
+
+  return treeKey;
+}
+
+async function createPersistedRunWithoutWorktree(page: Page): Promise<number> {
+  const treeKey = await createPublishedWorkflowTree(page);
 
   const launchResponse = await page.request.post('/api/dashboard/runs', {
     data: {
@@ -18,7 +46,7 @@ async function createPersistedRunWithoutWorktree(page: Page): Promise<number> {
       executionMode: 'async',
     },
   });
-  expect([200, 202]).toContain(launchResponse.status());
+  expect(launchResponse.status()).toBe(202);
 
   const launchPayload = await launchResponse.json() as { workflowRunId?: number };
   const workflowRunId = launchPayload.workflowRunId;

@@ -128,6 +128,10 @@ function runCapture(cmd, args, options) {
   });
 }
 
+export function resolveE2eRuntimeRoot(dashboardDir, port) {
+  return path.join(dashboardDir, '.e2e-runtime', `port-${port}`);
+}
+
 async function main() {
   const { port, testRoutes, buildTestRoutes } = parseArgs(process.argv.slice(2));
 
@@ -135,6 +139,9 @@ async function main() {
   const dashboardDir = path.resolve(scriptDir, '..'); // apps/dashboard
   const repoRoot = path.resolve(dashboardDir, '..', '..');
   const sanitizedEnv = normalizeColorEnv(process.env);
+  const e2eRuntimeRoot = resolveE2eRuntimeRoot(dashboardDir, port);
+  const e2eDatabasePath = path.join(e2eRuntimeRoot, 'alphred.e2e.db');
+  const e2eSandboxDir = path.join(e2eRuntimeRoot, 'sandbox');
 
   const nextDir = path.join(dashboardDir, '.next');
   const buildIdPath = path.join(nextDir, 'BUILD_ID');
@@ -147,6 +154,9 @@ async function main() {
     ...sanitizedEnv,
     // Force explicit behavior per suite, while still using a shared build output.
     ALPHRED_DASHBOARD_TEST_ROUTES: testRoutes,
+    // Isolate e2e run data from developer/runtime state.
+    ALPHRED_DB_PATH: e2eDatabasePath,
+    ALPHRED_SANDBOX_DIR: e2eSandboxDir,
   };
 
   const envForBuild = {
@@ -179,6 +189,11 @@ async function main() {
   } finally {
     await releaseLock(lockDir);
   }
+
+  // Reset suite-local runtime state each execution to keep e2e deterministic and avoid
+  // leaking fixture runs/worktrees into non-test dashboard usage.
+  await fs.rm(e2eRuntimeRoot, { recursive: true, force: true });
+  await fs.mkdir(e2eRuntimeRoot, { recursive: true });
 
   // Keep running until Playwright stops us.
   await run(
