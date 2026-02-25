@@ -2,7 +2,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { acquireLock, normalizeColorEnv, parseArgs } from './e2e-webserver.mjs';
+import { acquireLock, normalizeColorEnv, parseArgs, resolveE2eRuntimeRoot } from './e2e-webserver.mjs';
 
 const tempDirs: string[] = [];
 
@@ -84,5 +84,16 @@ describe('acquireLock', () => {
         nowFn,
       }),
     ).rejects.toThrow(/Timed out after 75ms waiting for e2e build lock/);
+  });
+});
+
+describe('resolveE2eRuntimeRoot', () => {
+  it('resolves suite-local runtime directories by port', () => {
+    expect(resolveE2eRuntimeRoot('/repo/apps/dashboard', 18080)).toBe(
+      path.join('/repo/apps/dashboard', '.e2e-runtime', 'port-18080'),
+    );
+    expect(resolveE2eRuntimeRoot('/repo/apps/dashboard', 18081)).toBe(
+      path.join('/repo/apps/dashboard', '.e2e-runtime', 'port-18081'),
+    );
   });
 });
