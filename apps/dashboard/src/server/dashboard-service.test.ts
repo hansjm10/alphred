@@ -2384,6 +2384,96 @@ describe('createDashboardService', () => {
     expect(service.hasBackgroundExecution(88)).toBe(false);
   });
 
+  it('reschedules resume control when the prior background execution is still draining', async () => {
+    let resolveDrainingExecution:
+      | ((value: { finalStep: { runStatus: 'paused'; outcome: string }; executedNodes: number }) => void)
+      | undefined;
+    const drainingExecution = new Promise<{ finalStep: { runStatus: 'paused'; outcome: string }; executedNodes: number }>(
+      resolve => {
+        resolveDrainingExecution = resolve;
+      },
+    );
+
+    let resolveRescheduledExecutionStarted: (() => void) | undefined;
+    const rescheduledExecutionStarted = new Promise<void>(resolve => {
+      resolveRescheduledExecutionStarted = resolve;
+    });
+
+    let executeCallCount = 0;
+    const executeRun = vi.fn(async () => {
+      executeCallCount += 1;
+      if (executeCallCount === 1) {
+        return drainingExecution;
+      }
+
+      resolveRescheduledExecutionStarted?.();
+      return {
+        finalStep: {
+          runStatus: 'completed',
+          outcome: 'completed',
+        },
+        executedNodes: 1,
+      };
+    });
+    const resumeRun = vi.fn(async () => ({
+      action: 'resume' as const,
+      outcome: 'applied' as const,
+      workflowRunId: 1,
+      previousRunStatus: 'paused' as const,
+      runStatus: 'running' as const,
+      retriedRunNodeIds: [] as number[],
+    }));
+
+    const { db, dependencies } = createHarness({
+      createSqlWorkflowExecutor: () =>
+        ({
+          executeRun,
+          cancelRun: vi.fn(),
+          pauseRun: vi.fn(),
+          resumeRun,
+          retryRun: vi.fn(),
+        }) as unknown as ReturnType<DashboardServiceDependencies['createSqlWorkflowExecutor']>,
+    });
+    seedRunData(db);
+    db.update(workflowRuns)
+      .set({
+        status: 'running',
+        completedAt: null,
+      })
+      .where(eq(workflowRuns.id, 1))
+      .run();
+
+    const service = createDashboardService({ dependencies });
+
+    await service.controlWorkflowRun(1, 'resume');
+    expect(executeRun).toHaveBeenCalledTimes(1);
+    expect(service.hasBackgroundExecution(1)).toBe(true);
+
+    await service.controlWorkflowRun(1, 'resume');
+    expect(executeRun).toHaveBeenCalledTimes(1);
+
+    expect(resolveDrainingExecution).toBeDefined();
+    resolveDrainingExecution?.({
+      finalStep: {
+        runStatus: 'paused',
+        outcome: 'paused',
+      },
+      executedNodes: 0,
+    });
+
+    const didReschedule = await Promise.race([
+      rescheduledExecutionStarted.then(() => true),
+      new Promise<boolean>(resolve => setTimeout(() => resolve(false), 1000)),
+    ]);
+
+    expect(didReschedule).toBe(true);
+    expect(executeRun).toHaveBeenCalledTimes(2);
+
+    await waitForBackgroundExecution(service, 1);
+
+    expect(service.hasBackgroundExecution(1)).toBe(false);
+  });
+
   it('rejects invalid run ids for control actions', () => {
     const { dependencies } = createHarness();
     const service = createDashboardService({ dependencies });

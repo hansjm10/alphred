@@ -657,6 +657,7 @@ export function createDashboardService(options: {
   const dependencies = options.dependencies ?? defaultDependencies;
   const environment = options.environment ?? process.env;
   const cwd = options.cwd ?? process.cwd();
+  const pendingBackgroundExecutionReschedules = new Set<number>();
 
   async function withDatabase<T>(operation: (db: AlphredDatabase) => Promise<T> | T): Promise<T> {
     const db = dependencies.openDatabase(resolveDatabasePath(environment, cwd));
@@ -1004,6 +1005,68 @@ export function createDashboardService(options: {
 
     backgroundRunExecutions.set(params.runId, executionPromise);
     return true;
+  }
+
+  function scheduleBackgroundRunExecutionReschedule(params: {
+    runId: number;
+    cleanupWorktree: boolean;
+  }): void {
+    if (pendingBackgroundExecutionReschedules.has(params.runId)) {
+      return;
+    }
+
+    const activeExecution = backgroundRunExecutions.get(params.runId);
+    if (!activeExecution) {
+      return;
+    }
+
+    pendingBackgroundExecutionReschedules.add(params.runId);
+
+    void activeExecution.finally(() => {
+      pendingBackgroundExecutionReschedules.delete(params.runId);
+
+      void withDatabase(async db => {
+        const run = db
+          .select({
+            status: workflowRuns.status,
+          })
+          .from(workflowRuns)
+          .where(eq(workflowRuns.id, params.runId))
+          .get();
+        if (!run || run.status !== 'running') {
+          return;
+        }
+
+        const executionContext = resolveRunExecutionContext(db, params.runId);
+        enqueueBackgroundRunExecution({
+          runId: params.runId,
+          workingDirectory: executionContext.workingDirectory,
+          hasManagedWorktree: executionContext.hasManagedWorktree,
+          cleanupWorktree: params.cleanupWorktree,
+        });
+      }).catch((error: unknown) => {
+        console.error(
+          `Run id=${params.runId} background execution reschedule failed: ${toErrorMessage(error)}`,
+        );
+      });
+    });
+  }
+
+  function ensureBackgroundRunExecution(params: {
+    runId: number;
+    workingDirectory: string;
+    hasManagedWorktree: boolean;
+    cleanupWorktree: boolean;
+  }): void {
+    const didEnqueue = enqueueBackgroundRunExecution(params);
+    if (didEnqueue) {
+      return;
+    }
+
+    scheduleBackgroundRunExecutionReschedule({
+      runId: params.runId,
+      cleanupWorktree: params.cleanupWorktree,
+    });
   }
 
   const utcNow = sql`(strftime('%Y-%m-%dT%H:%M:%fZ','now'))`;
@@ -3298,7 +3361,7 @@ export function createDashboardService(options: {
 
         if ((action === 'resume' || action === 'retry') && controlResult.runStatus === 'running') {
           const executionContext = resolveRunExecutionContext(db, runId);
-          enqueueBackgroundRunExecution({
+          ensureBackgroundRunExecution({
             runId,
             workingDirectory: executionContext.workingDirectory,
             hasManagedWorktree: executionContext.hasManagedWorktree,
