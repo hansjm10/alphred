@@ -1543,6 +1543,137 @@ async function executeRunControlAction(params: ExecuteRunControlActionParams): P
   }
 }
 
+function resetRunDetailStateFromInitialDetail(params: {
+  initialDetail: DashboardRunDetail;
+  enableRealtime: boolean;
+  streamLastSequenceRef: { current: number };
+  setDetail: StateSetter<DashboardRunDetail>;
+  setUpdateError: StateSetter<string | null>;
+  setIsRefreshing: StateSetter<boolean>;
+  setNextRetryAtMs: StateSetter<number | null>;
+  setRetryCountdownSeconds: StateSetter<number | null>;
+  setLastUpdatedAtMs: StateSetter<number>;
+  setChannelState: StateSetter<RealtimeChannelState>;
+  setStreamTarget: StateSetter<AgentStreamTarget | null>;
+  setStreamEvents: StateSetter<DashboardRunNodeStreamEvent[]>;
+  setStreamBufferedEvents: StateSetter<DashboardRunNodeStreamEvent[]>;
+  setStreamConnectionState: StateSetter<AgentStreamConnectionState>;
+  setStreamError: StateSetter<string | null>;
+  setStreamNextRetryAtMs: StateSetter<number | null>;
+  setStreamRetryCountdownSeconds: StateSetter<number | null>;
+  setStreamAutoScroll: StateSetter<boolean>;
+  setStreamLastUpdatedAtMs: StateSetter<number>;
+  setPendingControlAction: StateSetter<DashboardRunControlAction | null>;
+  setActionFeedback: StateSetter<ActionFeedbackState>;
+}): void {
+  const {
+    initialDetail,
+    enableRealtime,
+    streamLastSequenceRef,
+    setDetail,
+    setUpdateError,
+    setIsRefreshing,
+    setNextRetryAtMs,
+    setRetryCountdownSeconds,
+    setLastUpdatedAtMs,
+    setChannelState,
+    setStreamTarget,
+    setStreamEvents,
+    setStreamBufferedEvents,
+    setStreamConnectionState,
+    setStreamError,
+    setStreamNextRetryAtMs,
+    setStreamRetryCountdownSeconds,
+    setStreamAutoScroll,
+    setStreamLastUpdatedAtMs,
+    setPendingControlAction,
+    setActionFeedback,
+  } = params;
+
+  setDetail(initialDetail);
+  setUpdateError(null);
+  setIsRefreshing(false);
+  setNextRetryAtMs(null);
+  setRetryCountdownSeconds(null);
+  setLastUpdatedAtMs(Date.now());
+  setChannelState(enableRealtime && isActiveRunStatus(initialDetail.run.status) ? 'live' : 'disabled');
+  setStreamTarget(resolveInitialAgentStreamTarget(initialDetail));
+  setStreamEvents([]);
+  setStreamBufferedEvents([]);
+  setStreamConnectionState('ended');
+  setStreamError(null);
+  setStreamNextRetryAtMs(null);
+  setStreamRetryCountdownSeconds(null);
+  setStreamAutoScroll(true);
+  setStreamLastUpdatedAtMs(Date.now());
+  setPendingControlAction(null);
+  setActionFeedback(null);
+  streamLastSequenceRef.current = 0;
+}
+
+function flushBufferedAgentStreamEvents(params: {
+  streamAutoScroll: boolean;
+  streamBufferedEvents: readonly DashboardRunNodeStreamEvent[];
+  setStreamEvents: StateSetter<DashboardRunNodeStreamEvent[]>;
+  setStreamBufferedEvents: StateSetter<DashboardRunNodeStreamEvent[]>;
+}): void {
+  const { streamAutoScroll, streamBufferedEvents, setStreamEvents, setStreamBufferedEvents } = params;
+  if (!streamAutoScroll || streamBufferedEvents.length === 0) {
+    return;
+  }
+
+  setStreamEvents(previous => mergeAgentStreamEvents(previous, streamBufferedEvents));
+  setStreamBufferedEvents([]);
+}
+
+function syncStreamEventListScroll(params: {
+  streamAutoScroll: boolean;
+  streamEventListRef: { current: HTMLOListElement | null };
+}): void {
+  const { streamAutoScroll, streamEventListRef } = params;
+  if (!streamAutoScroll || streamEventListRef.current === null) {
+    return;
+  }
+
+  streamEventListRef.current.scrollTop = streamEventListRef.current.scrollHeight;
+}
+
+function createRetryCountdownEffect(params: {
+  retryAtMs: number | null;
+  setRetryCountdownSeconds: StateSetter<number | null>;
+}): () => void {
+  const { retryAtMs, setRetryCountdownSeconds } = params;
+  if (retryAtMs === null) {
+    setRetryCountdownSeconds(null);
+    return () => undefined;
+  }
+
+  const updateCountdown = (): void => {
+    const remainingSeconds = Math.max(0, Math.ceil((retryAtMs - Date.now()) / 1000));
+    setRetryCountdownSeconds(remainingSeconds);
+  };
+
+  updateCountdown();
+  const intervalId = globalThis.setInterval(updateCountdown, 250);
+  return () => {
+    clearInterval(intervalId);
+  };
+}
+
+function clearActionFeedbackOnStatusChange(params: {
+  runStatus: DashboardRunSummary['status'];
+  setActionFeedback: StateSetter<ActionFeedbackState>;
+}): void {
+  const { runStatus, setActionFeedback } = params;
+  setActionFeedback((current) => {
+    if (current === null || current.runStatus === null || current.runStatus === runStatus) {
+      return current;
+    }
+
+    return null;
+  });
+}
+
 type RunDetailPollingEffectParams = {
   enableRealtime: boolean;
   runId: number;
@@ -2379,25 +2510,29 @@ export function RunDetailContent({
   }, []);
 
   useEffect(() => {
-    setDetail(initialDetail);
-    setUpdateError(null);
-    setIsRefreshing(false);
-    setNextRetryAtMs(null);
-    setRetryCountdownSeconds(null);
-    setLastUpdatedAtMs(Date.now());
-    setChannelState(enableRealtime && isActiveRunStatus(initialDetail.run.status) ? 'live' : 'disabled');
-    setStreamTarget(resolveInitialAgentStreamTarget(initialDetail));
-    setStreamEvents([]);
-    setStreamBufferedEvents([]);
-    setStreamConnectionState('ended');
-    setStreamError(null);
-    setStreamNextRetryAtMs(null);
-    setStreamRetryCountdownSeconds(null);
-    setStreamAutoScroll(true);
-    setStreamLastUpdatedAtMs(Date.now());
-    setPendingControlAction(null);
-    setActionFeedback(null);
-    streamLastSequenceRef.current = 0;
+    resetRunDetailStateFromInitialDetail({
+      initialDetail,
+      enableRealtime,
+      streamLastSequenceRef,
+      setDetail,
+      setUpdateError,
+      setIsRefreshing,
+      setNextRetryAtMs,
+      setRetryCountdownSeconds,
+      setLastUpdatedAtMs,
+      setChannelState,
+      setStreamTarget,
+      setStreamEvents,
+      setStreamBufferedEvents,
+      setStreamConnectionState,
+      setStreamError,
+      setStreamNextRetryAtMs,
+      setStreamRetryCountdownSeconds,
+      setStreamAutoScroll,
+      setStreamLastUpdatedAtMs,
+      setPendingControlAction,
+      setActionFeedback,
+    });
   }, [enableRealtime, initialDetail]);
 
   useEffect(() => {
@@ -2458,67 +2593,39 @@ export function RunDetailContent({
   }, [detail.run.id, streamTarget]);
 
   useEffect(() => {
-    if (!streamAutoScroll || streamBufferedEvents.length === 0) {
-      return;
-    }
-
-    setStreamEvents(previous => mergeAgentStreamEvents(previous, streamBufferedEvents));
-    setStreamBufferedEvents([]);
+    flushBufferedAgentStreamEvents({
+      streamAutoScroll,
+      streamBufferedEvents,
+      setStreamEvents,
+      setStreamBufferedEvents,
+    });
   }, [streamAutoScroll, streamBufferedEvents]);
 
   useEffect(() => {
-    if (!streamAutoScroll || streamEventListRef.current === null) {
-      return;
-    }
-
-    streamEventListRef.current.scrollTop = streamEventListRef.current.scrollHeight;
+    syncStreamEventListScroll({
+      streamAutoScroll,
+      streamEventListRef,
+    });
   }, [streamAutoScroll, streamEvents]);
 
   useEffect(() => {
-    if (nextRetryAtMs === null) {
-      setRetryCountdownSeconds(null);
-      return;
-    }
-
-    const updateCountdown = (): void => {
-      const remainingSeconds = Math.max(0, Math.ceil((nextRetryAtMs - Date.now()) / 1000));
-      setRetryCountdownSeconds(remainingSeconds);
-    };
-
-    updateCountdown();
-    const intervalId = globalThis.setInterval(updateCountdown, 250);
-
-    return () => {
-      clearInterval(intervalId);
-    };
+    return createRetryCountdownEffect({
+      retryAtMs: nextRetryAtMs,
+      setRetryCountdownSeconds,
+    });
   }, [nextRetryAtMs]);
 
   useEffect(() => {
-    if (streamNextRetryAtMs === null) {
-      setStreamRetryCountdownSeconds(null);
-      return;
-    }
-
-    const updateCountdown = (): void => {
-      const remainingSeconds = Math.max(0, Math.ceil((streamNextRetryAtMs - Date.now()) / 1000));
-      setStreamRetryCountdownSeconds(remainingSeconds);
-    };
-
-    updateCountdown();
-    const intervalId = globalThis.setInterval(updateCountdown, 250);
-
-    return () => {
-      clearInterval(intervalId);
-    };
+    return createRetryCountdownEffect({
+      retryAtMs: streamNextRetryAtMs,
+      setRetryCountdownSeconds: setStreamRetryCountdownSeconds,
+    });
   }, [streamNextRetryAtMs]);
 
   useEffect(() => {
-    setActionFeedback((current) => {
-      if (current === null || current.runStatus === null || current.runStatus === detail.run.status) {
-        return current;
-      }
-
-      return null;
+    clearActionFeedbackOnStatusChange({
+      runStatus: detail.run.status,
+      setActionFeedback,
     });
   }, [detail.run.status]);
 
