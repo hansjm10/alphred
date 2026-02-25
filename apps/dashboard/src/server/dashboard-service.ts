@@ -1,7 +1,12 @@
 import { join, resolve } from 'node:path';
 import { and, asc, desc, eq, inArray, sql } from 'drizzle-orm';
 import { UnknownAgentProviderError, resolveAgentProvider } from '@alphred/agents';
-import { createSqlWorkflowExecutor, createSqlWorkflowPlanner, type PhaseProviderResolver } from '@alphred/core';
+import {
+  WorkflowRunControlError,
+  createSqlWorkflowExecutor,
+  createSqlWorkflowPlanner,
+  type PhaseProviderResolver,
+} from '@alphred/core';
 import {
   createDatabase,
   agentModels,
@@ -57,6 +62,8 @@ import type {
   DashboardRunDetail,
   DashboardRunLaunchRequest,
   DashboardRunLaunchResult,
+  DashboardRunControlAction,
+  DashboardRunControlResult,
   DashboardRunNodeDiagnosticPayload,
   DashboardRunNodeDiagnosticsSnapshot,
   DashboardRunNodeStreamEvent,
@@ -627,6 +634,19 @@ function toBackgroundFailureTransition(
   return null;
 }
 
+function toDashboardRunControlConflictError(error: WorkflowRunControlError): DashboardIntegrationError {
+  return new DashboardIntegrationError('conflict', error.message, {
+    status: 409,
+    details: {
+      controlCode: error.code,
+      action: error.action,
+      workflowRunId: error.workflowRunId,
+      runStatus: error.runStatus,
+    },
+    cause: error,
+  });
+}
+
 export type DashboardService = ReturnType<typeof createDashboardService>;
 
 export function createDashboardService(options: {
@@ -637,6 +657,7 @@ export function createDashboardService(options: {
   const dependencies = options.dependencies ?? defaultDependencies;
   const environment = options.environment ?? process.env;
   const cwd = options.cwd ?? process.cwd();
+  const pendingBackgroundExecutionReschedules = new Set<number>();
 
   async function withDatabase<T>(operation: (db: AlphredDatabase) => Promise<T> | T): Promise<T> {
     const db = dependencies.openDatabase(resolveDatabasePath(environment, cwd));
@@ -920,6 +941,132 @@ export function createDashboardService(options: {
     } catch (transitionError) {
       console.error(`Run id=${runId} background failure status update failed: ${toErrorMessage(transitionError)}`);
     }
+  }
+
+  function resolveRunExecutionContext(db: Pick<AlphredDatabase, 'select'>, runId: number): {
+    workingDirectory: string;
+    hasManagedWorktree: boolean;
+  } {
+    const worktreeRows = db
+      .select({
+        path: runWorktrees.worktreePath,
+        status: runWorktrees.status,
+      })
+      .from(runWorktrees)
+      .where(eq(runWorktrees.workflowRunId, runId))
+      .orderBy(asc(runWorktrees.createdAt), asc(runWorktrees.id))
+      .all();
+
+    const selectedWorktree = worktreeRows.filter(worktree => worktree.status === 'active').at(-1);
+    if (!selectedWorktree) {
+      return {
+        workingDirectory: cwd,
+        hasManagedWorktree: false,
+      };
+    }
+
+    return {
+      workingDirectory: selectedWorktree.path,
+      hasManagedWorktree: true,
+    };
+  }
+
+  function enqueueBackgroundRunExecution(params: {
+    runId: number;
+    workingDirectory: string;
+    hasManagedWorktree: boolean;
+    cleanupWorktree: boolean;
+  }): boolean {
+    if (backgroundRunExecutions.has(params.runId)) {
+      return false;
+    }
+
+    const executionPromise = withDatabase(async backgroundDb => {
+      const backgroundWorktreeManager = params.hasManagedWorktree
+        ? dependencies.createWorktreeManager(backgroundDb, environment)
+        : null;
+      await executeWorkflowRun(
+        backgroundDb,
+        params.runId,
+        params.workingDirectory,
+        backgroundWorktreeManager,
+        params.cleanupWorktree,
+      );
+    })
+      .then(() => undefined)
+      .catch(async (error: unknown) => {
+        await markRunTerminalAfterBackgroundFailure(params.runId, error);
+      })
+      .finally(() => {
+        if (backgroundRunExecutions.get(params.runId) === executionPromise) {
+          backgroundRunExecutions.delete(params.runId);
+        }
+      });
+
+    backgroundRunExecutions.set(params.runId, executionPromise);
+    return true;
+  }
+
+  function scheduleBackgroundRunExecutionReschedule(params: {
+    runId: number;
+    cleanupWorktree: boolean;
+  }): void {
+    if (pendingBackgroundExecutionReschedules.has(params.runId)) {
+      return;
+    }
+
+    const activeExecution = backgroundRunExecutions.get(params.runId);
+    if (!activeExecution) {
+      return;
+    }
+
+    pendingBackgroundExecutionReschedules.add(params.runId);
+
+    void activeExecution.finally(() => {
+      pendingBackgroundExecutionReschedules.delete(params.runId);
+
+      void withDatabase(async db => {
+        const run = db
+          .select({
+            status: workflowRuns.status,
+          })
+          .from(workflowRuns)
+          .where(eq(workflowRuns.id, params.runId))
+          .get();
+        if (!run || run.status !== 'running') {
+          return;
+        }
+
+        const executionContext = resolveRunExecutionContext(db, params.runId);
+        enqueueBackgroundRunExecution({
+          runId: params.runId,
+          workingDirectory: executionContext.workingDirectory,
+          hasManagedWorktree: executionContext.hasManagedWorktree,
+          cleanupWorktree: params.cleanupWorktree,
+        });
+      }).catch((error: unknown) => {
+        console.error(
+          `Run id=${params.runId} background execution reschedule failed: ${toErrorMessage(error)}`,
+        );
+      });
+    });
+  }
+
+  function ensureBackgroundRunExecution(params: {
+    runId: number;
+    workingDirectory: string;
+    hasManagedWorktree: boolean;
+    cleanupWorktree: boolean;
+  }): void {
+    const didEnqueue = enqueueBackgroundRunExecution(params);
+    if (didEnqueue) {
+      return;
+    }
+
+    scheduleBackgroundRunExecutionReschedule({
+      runId: params.runId,
+      cleanupWorktree: params.cleanupWorktree,
+    });
   }
 
   const utcNow = sql`(strftime('%Y-%m-%dT%H:%M:%fZ','now'))`;
@@ -3154,27 +3301,12 @@ export function createDashboardService(options: {
             };
           }
 
-          const executionPromise = withDatabase(async backgroundDb => {
-            const backgroundWorktreeManager = worktreeManager
-              ? dependencies.createWorktreeManager(backgroundDb, environment)
-              : null;
-            await executeWorkflowRun(
-              backgroundDb,
-              runId,
-              workingDirectory,
-              backgroundWorktreeManager,
-              request.cleanupWorktree ?? false,
-            );
-          })
-            .then(() => undefined)
-            .catch(async (error: unknown) => {
-              await markRunTerminalAfterBackgroundFailure(runId, error);
-            })
-            .finally(() => {
-              backgroundRunExecutions.delete(runId);
-            });
-
-          backgroundRunExecutions.set(runId, executionPromise);
+          enqueueBackgroundRunExecution({
+            runId,
+            workingDirectory,
+            hasManagedWorktree: worktreeManager !== null,
+            cleanupWorktree: request.cleanupWorktree ?? false,
+          });
 
           return {
             workflowRunId,
@@ -3188,6 +3320,63 @@ export function createDashboardService(options: {
           await markPendingRunCancelled(db, workflowRunId);
           throw error;
         }
+      });
+    },
+
+    controlWorkflowRun(runId: number, action: DashboardRunControlAction): Promise<DashboardRunControlResult> {
+      if (!Number.isInteger(runId) || runId < 1) {
+        throw new DashboardIntegrationError('invalid_request', 'Run id must be a positive integer.', {
+          status: 400,
+        });
+      }
+
+      return withDatabase(async db => {
+        const executor = dependencies.createSqlWorkflowExecutor(db, {
+          resolveProvider: dependencies.resolveProvider,
+        });
+
+        let controlResult: Awaited<ReturnType<typeof executor.cancelRun>>;
+        try {
+          switch (action) {
+            case 'cancel':
+              controlResult = await executor.cancelRun({ workflowRunId: runId });
+              break;
+            case 'pause':
+              controlResult = await executor.pauseRun({ workflowRunId: runId });
+              break;
+            case 'resume':
+              controlResult = await executor.resumeRun({ workflowRunId: runId });
+              break;
+            case 'retry':
+              controlResult = await executor.retryRun({ workflowRunId: runId });
+              break;
+          }
+        } catch (error) {
+          if (error instanceof WorkflowRunControlError) {
+            throw toDashboardRunControlConflictError(error);
+          }
+
+          throw error;
+        }
+
+        if ((action === 'resume' || action === 'retry') && controlResult.runStatus === 'running') {
+          const executionContext = resolveRunExecutionContext(db, runId);
+          ensureBackgroundRunExecution({
+            runId,
+            workingDirectory: executionContext.workingDirectory,
+            hasManagedWorktree: executionContext.hasManagedWorktree,
+            cleanupWorktree: false,
+          });
+        }
+
+        return {
+          action: controlResult.action as DashboardRunControlAction,
+          outcome: controlResult.outcome,
+          workflowRunId: controlResult.workflowRunId,
+          previousRunStatus: controlResult.previousRunStatus as DashboardRunControlResult['previousRunStatus'],
+          runStatus: controlResult.runStatus as DashboardRunControlResult['runStatus'],
+          retriedRunNodeIds: [...controlResult.retriedRunNodeIds],
+        };
       });
     },
 
