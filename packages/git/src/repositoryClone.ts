@@ -26,6 +26,8 @@ const WINDOWS_GIT_EXECUTABLE_CANDIDATES = [
   String.raw`C:\Program Files\Git\cmd\git.exe`,
   String.raw`C:\Program Files\Git\bin\git.exe`,
 ];
+const DEFAULT_SYNC_COMMITTER_NAME = 'Alphred Sync';
+const DEFAULT_SYNC_COMMITTER_EMAIL = 'alphred-sync@localhost';
 
 export const repositorySyncModes = ['fetch', 'pull'] as const;
 export type RepositorySyncMode = (typeof repositorySyncModes)[number];
@@ -253,6 +255,7 @@ async function pullFetchedBranch(params: PullFetchedBranchParams): Promise<PullF
   const previousHeadRevision = previousBranch === undefined
     ? await resolveCurrentHeadRevision(params.localPath, params.environment)
     : undefined;
+  const pullEnvironment = resolvePullEnvironment(params.strategy, params.environment);
   let switchedToTargetBranch = false;
 
   try {
@@ -266,7 +269,7 @@ async function pullFetchedBranch(params: PullFetchedBranchParams): Promise<PullF
 
     await runGitCommandWithOutput(resolvePullCommand(params.strategy, normalizedBranch), {
       cwd: params.localPath,
-      environment: params.environment,
+      environment: pullEnvironment,
     });
 
     return {
@@ -278,7 +281,7 @@ async function pullFetchedBranch(params: PullFetchedBranchParams): Promise<PullF
       throw error;
     }
 
-    await abortSyncIfNeeded(params.localPath, params.strategy, params.environment);
+    await abortSyncIfNeeded(params.localPath, params.strategy, pullEnvironment);
     const conflictSummary = extractSyncConflictSummary(error);
 
     return {
@@ -412,6 +415,41 @@ function resolvePullCommand(strategy: RepositorySyncStrategy, branch: string): s
   }
 
   return ['rebase', targetRef];
+}
+
+function resolvePullEnvironment(
+  strategy: RepositorySyncStrategy,
+  environment: NodeJS.ProcessEnv,
+): NodeJS.ProcessEnv {
+  if (strategy === 'ff-only') {
+    return environment;
+  }
+
+  const committerName = resolveIdentityValue(environment.GIT_COMMITTER_NAME)
+    ?? resolveIdentityValue(environment.GIT_AUTHOR_NAME)
+    ?? DEFAULT_SYNC_COMMITTER_NAME;
+  const committerEmail = resolveIdentityValue(environment.GIT_COMMITTER_EMAIL)
+    ?? resolveIdentityValue(environment.GIT_AUTHOR_EMAIL)
+    ?? DEFAULT_SYNC_COMMITTER_EMAIL;
+  const authorName = resolveIdentityValue(environment.GIT_AUTHOR_NAME) ?? committerName;
+  const authorEmail = resolveIdentityValue(environment.GIT_AUTHOR_EMAIL) ?? committerEmail;
+
+  return {
+    ...environment,
+    GIT_COMMITTER_NAME: committerName,
+    GIT_COMMITTER_EMAIL: committerEmail,
+    GIT_AUTHOR_NAME: authorName,
+    GIT_AUTHOR_EMAIL: authorEmail,
+  };
+}
+
+function resolveIdentityValue(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  if (trimmed === undefined || trimmed.length === 0) {
+    return undefined;
+  }
+
+  return trimmed;
 }
 
 async function abortSyncIfNeeded(

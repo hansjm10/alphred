@@ -86,6 +86,23 @@ function createFixtureFetchAll(remotePath: string) {
   };
 }
 
+async function createSyncEnvironmentWithoutGitIdentity(sandboxDir: string): Promise<NodeJS.ProcessEnv> {
+  const emptyGlobalConfigPath = join(sandboxDir, 'empty.gitconfig');
+  await writeFile(emptyGlobalConfigPath, '');
+  return {
+    ALPHRED_SANDBOX_DIR: sandboxDir,
+    HOME: sandboxDir,
+    XDG_CONFIG_HOME: sandboxDir,
+    GIT_CONFIG_GLOBAL: emptyGlobalConfigPath,
+    GIT_CONFIG_NOSYSTEM: '1',
+  };
+}
+
+async function clearLocalGitIdentity(path: string): Promise<void> {
+  await execFileAsync('git', ['config', '--local', '--unset-all', 'user.email'], { cwd: path }).catch(() => undefined);
+  await execFileAsync('git', ['config', '--local', '--unset-all', 'user.name'], { cwd: path }).catch(() => undefined);
+}
+
 async function commitFile(path: string, relativePath: string, content: string, message: string): Promise<string> {
   await writeFile(join(path, relativePath), content);
   await execFileAsync('git', ['add', relativePath], { cwd: path });
@@ -612,6 +629,8 @@ describe('ensureRepositoryClone', () => {
       'remote: add remote-only file',
     );
     await execFileAsync('git', ['push', 'origin', 'main'], { cwd: fixture.sourcePath });
+    await clearLocalGitIdentity(fixture.localPath);
+    const environment = await createSyncEnvironmentWithoutGitIdentity(fixture.sandboxDir);
 
     const result = await ensureRepositoryClone({
       db,
@@ -623,18 +642,82 @@ describe('ensureRepositoryClone', () => {
         defaultBranch: 'main',
       },
       fetchAll: createFixtureFetchAll(fixture.remotePath),
-      environment: {
-        ALPHRED_SANDBOX_DIR: fixture.sandboxDir,
-      },
+      environment,
       sync: {
         mode: 'pull',
         strategy: 'merge',
       },
     });
 
+    const { stdout: mergeParentsStdout } = await execFileAsync(
+      'git',
+      ['show', '--format=%P', '--no-patch', 'HEAD'],
+      { cwd: fixture.localPath },
+    );
+    expect(mergeParentsStdout.trim().split(/\s+/)).toHaveLength(2);
     expect(result.sync).toEqual({
       mode: 'pull',
       strategy: 'merge',
+      branch: 'main',
+      status: 'updated',
+      conflictMessage: null,
+    });
+  });
+
+  it('applies rebase strategy without configured git identity', async () => {
+    const fixture = await createSyncFixture();
+    const db = createMigratedDb();
+
+    insertRepository(db, {
+      name: 'frontend',
+      provider: 'github',
+      remoteUrl: fixture.expectedRemoteUrl,
+      remoteRef: 'acme/frontend',
+      localPath: fixture.localPath,
+      cloneStatus: 'cloned',
+      defaultBranch: 'main',
+    });
+
+    await commitFile(
+      fixture.localPath,
+      'local-only.txt',
+      'local only\n',
+      'local: add local-only file',
+    );
+    const remoteHead = await commitFile(
+      fixture.sourcePath,
+      'remote-only.txt',
+      'remote only\n',
+      'remote: add remote-only file',
+    );
+    await execFileAsync('git', ['push', 'origin', 'main'], { cwd: fixture.sourcePath });
+    await clearLocalGitIdentity(fixture.localPath);
+    const environment = await createSyncEnvironmentWithoutGitIdentity(fixture.sandboxDir);
+
+    const result = await ensureRepositoryClone({
+      db,
+      repository: {
+        name: 'frontend',
+        provider: 'github',
+        remoteUrl: fixture.expectedRemoteUrl,
+        remoteRef: 'acme/frontend',
+        defaultBranch: 'main',
+      },
+      fetchAll: createFixtureFetchAll(fixture.remotePath),
+      environment,
+      sync: {
+        mode: 'pull',
+        strategy: 'rebase',
+      },
+    });
+
+    const { stdout: headParentStdout } = await execFileAsync('git', ['rev-parse', 'HEAD^'], {
+      cwd: fixture.localPath,
+    });
+    expect(headParentStdout.trim()).toBe(remoteHead);
+    expect(result.sync).toEqual({
+      mode: 'pull',
+      strategy: 'rebase',
       branch: 'main',
       status: 'updated',
       conflictMessage: null,
