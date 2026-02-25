@@ -628,6 +628,256 @@ describe('createDashboardService', () => {
     }
   });
 
+  it('marks resumed runs as cancelled when detached execution fails after pausing mid-flight', async () => {
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const resumeRun = vi.fn(async () => ({
+      action: 'resume' as const,
+      outcome: 'applied' as const,
+      workflowRunId: 2,
+      previousRunStatus: 'paused' as const,
+      runStatus: 'running' as const,
+      retriedRunNodeIds: [] as number[],
+    }));
+    const { db, dependencies } = createHarness({
+      createSqlWorkflowExecutor: () =>
+        ({
+          executeRun: async (params: { workflowRunId: number }) => {
+            transitionWorkflowRunStatus(db, {
+              workflowRunId: params.workflowRunId,
+              expectedFrom: 'running',
+              to: 'paused',
+              occurredAt: '2026-02-17T20:03:00.000Z',
+            });
+            throw new Error('executor interrupted after pause');
+          },
+          cancelRun: vi.fn(),
+          pauseRun: vi.fn(),
+          resumeRun,
+          retryRun: vi.fn(),
+        }) as unknown as ReturnType<DashboardServiceDependencies['createSqlWorkflowExecutor']>,
+    });
+    seedRunData(db);
+    const planner = createSqlWorkflowPlanner(db);
+    const materialized = planner.materializeRun({ treeKey: 'demo-tree' });
+
+    transitionWorkflowRunStatus(db, {
+      workflowRunId: materialized.run.id,
+      expectedFrom: 'pending',
+      to: 'running',
+      occurredAt: '2026-02-17T20:01:00.000Z',
+    });
+    transitionWorkflowRunStatus(db, {
+      workflowRunId: materialized.run.id,
+      expectedFrom: 'running',
+      to: 'paused',
+      occurredAt: '2026-02-17T20:02:00.000Z',
+    });
+
+    try {
+      const service = createDashboardService({ dependencies });
+      const result = await service.controlWorkflowRun(materialized.run.id, 'resume');
+      expect(result).toMatchObject({
+        action: 'resume',
+        outcome: 'applied',
+        workflowRunId: materialized.run.id,
+        previousRunStatus: 'paused',
+        runStatus: 'running',
+      });
+      await waitForBackgroundExecution(service, materialized.run.id);
+
+      const persisted = db
+        .select({
+          status: workflowRuns.status,
+        })
+        .from(workflowRuns)
+        .where(eq(workflowRuns.id, materialized.run.id))
+        .get();
+      expect(persisted?.status).toBe('cancelled');
+      expect(service.hasBackgroundExecution(materialized.run.id)).toBe(false);
+    } finally {
+      consoleErrorSpy.mockRestore();
+    }
+  });
+
+  it('preserves attempt-one telemetry when retry requeues failed nodes', async () => {
+    const { db, dependencies } = createHarness({
+      resolveProvider: () => ({
+        name: 'codex',
+        async *run() {
+          yield {
+            type: 'result' as const,
+            content: 'retry-complete',
+            timestamp: 1,
+          };
+        },
+      }),
+    });
+    seedRunData(db);
+
+    const planner = createSqlWorkflowPlanner(db);
+    const materialized = planner.materializeRun({ treeKey: 'demo-tree' });
+    const runNodeId = materialized.runNodes[0]?.id;
+    if (runNodeId === undefined) {
+      throw new Error('Expected materialized run to include a node.');
+    }
+
+    transitionWorkflowRunStatus(db, {
+      workflowRunId: materialized.run.id,
+      expectedFrom: 'pending',
+      to: 'running',
+      occurredAt: '2026-02-17T20:10:00.000Z',
+    });
+    transitionRunNodeStatus(db, {
+      runNodeId,
+      expectedFrom: 'pending',
+      to: 'running',
+      occurredAt: '2026-02-17T20:10:10.000Z',
+    });
+    transitionRunNodeStatus(db, {
+      runNodeId,
+      expectedFrom: 'running',
+      to: 'failed',
+      occurredAt: '2026-02-17T20:10:20.000Z',
+    });
+    transitionWorkflowRunStatus(db, {
+      workflowRunId: materialized.run.id,
+      expectedFrom: 'running',
+      to: 'failed',
+      occurredAt: '2026-02-17T20:10:30.000Z',
+    });
+
+    db.insert(runNodeDiagnostics)
+      .values({
+        workflowRunId: materialized.run.id,
+        runNodeId,
+        attempt: 1,
+        outcome: 'failed',
+        eventCount: 2,
+        retainedEventCount: 2,
+        droppedEventCount: 0,
+        redacted: 0,
+        truncated: 0,
+        payloadChars: 256,
+        diagnostics: {
+          schemaVersion: 1,
+          workflowRunId: materialized.run.id,
+          runNodeId,
+          nodeKey: 'design',
+          attempt: 1,
+          outcome: 'failed',
+          status: 'failed',
+          provider: 'codex',
+          timing: {
+            queuedAt: '2026-02-17T20:10:00.000Z',
+            startedAt: '2026-02-17T20:10:10.000Z',
+            completedAt: null,
+            failedAt: '2026-02-17T20:10:20.000Z',
+            persistedAt: '2026-02-17T20:10:31.000Z',
+          },
+          summary: {
+            tokensUsed: 0,
+            eventCount: 2,
+            retainedEventCount: 2,
+            droppedEventCount: 0,
+            toolEventCount: 0,
+            redacted: false,
+            truncated: false,
+          },
+          contextHandoff: {},
+          eventTypeCounts: {
+            system: 1,
+            result: 1,
+          },
+          events: [],
+          toolEvents: [],
+          routingDecision: null,
+          error: {
+            code: 'RETRY_FIXTURE_FAILED',
+            message: 'first attempt failed',
+          },
+        },
+        createdAt: '2026-02-17T20:10:31.000Z',
+      })
+      .run();
+
+    db.insert(runNodeStreamEvents)
+      .values([
+        {
+          workflowRunId: materialized.run.id,
+          runNodeId,
+          attempt: 1,
+          sequence: 1,
+          eventType: 'system',
+          timestamp: 100,
+          contentChars: 7,
+          contentPreview: 'started',
+          metadata: null,
+          usageDeltaTokens: null,
+          usageCumulativeTokens: null,
+          createdAt: '2026-02-17T20:10:10.000Z',
+        },
+        {
+          workflowRunId: materialized.run.id,
+          runNodeId,
+          attempt: 1,
+          sequence: 2,
+          eventType: 'result',
+          timestamp: 101,
+          contentChars: 6,
+          contentPreview: 'failed',
+          metadata: null,
+          usageDeltaTokens: null,
+          usageCumulativeTokens: null,
+          createdAt: '2026-02-17T20:10:20.000Z',
+        },
+      ])
+      .run();
+
+    const service = createDashboardService({ dependencies });
+    const retryResult = await service.controlWorkflowRun(materialized.run.id, 'retry');
+    expect(retryResult).toEqual({
+      action: 'retry',
+      outcome: 'applied',
+      workflowRunId: materialized.run.id,
+      previousRunStatus: 'failed',
+      runStatus: 'running',
+      retriedRunNodeIds: [runNodeId],
+    });
+
+    await waitForBackgroundExecution(service, materialized.run.id);
+
+    const detail = await service.getWorkflowRunDetail(materialized.run.id);
+    expect(detail.diagnostics).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          runNodeId,
+          attempt: 1,
+          outcome: 'failed',
+        }),
+      ]),
+    );
+
+    const streamSnapshot = await service.getRunNodeStreamSnapshot({
+      runId: materialized.run.id,
+      runNodeId,
+      attempt: 1,
+    });
+    expect(streamSnapshot.attempt).toBe(1);
+    expect(streamSnapshot.ended).toBe(true);
+    expect(streamSnapshot.events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          attempt: 1,
+          sequence: 1,
+        }),
+        expect.objectContaining({
+          attempt: 1,
+          sequence: 2,
+        }),
+      ]),
+    );
+  });
+
   it('loads repository and run snapshots from the shared db schema', async () => {
     const { db, dependencies } = createHarness();
     seedRunData(db);
