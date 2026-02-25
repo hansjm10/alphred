@@ -228,7 +228,18 @@ async function pullFetchedBranch(params: PullFetchedBranchParams): Promise<PullF
     };
   }
 
-  await assertRemoteBranchExists(params.localPath, normalizedBranch, params.environment);
+  const hasRemoteBranch = await hasGitRef(
+    params.localPath,
+    `refs/remotes/origin/${normalizedBranch}`,
+    params.environment,
+  );
+  if (!hasRemoteBranch) {
+    return {
+      status: 'up_to_date',
+      conflictMessage: null,
+    };
+  }
+
   const createdLocalBranch = await ensureLocalBranchExists(params.localPath, normalizedBranch, params.environment);
   const divergence = await resolveBranchDivergence(params.localPath, normalizedBranch, params.environment);
   if (divergence.behind === 0) {
@@ -279,18 +290,6 @@ async function pullFetchedBranch(params: PullFetchedBranchParams): Promise<PullF
       }).catch(() => undefined);
     }
   }
-}
-
-async function assertRemoteBranchExists(
-  localPath: string,
-  branch: string,
-  environment: NodeJS.ProcessEnv,
-): Promise<void> {
-  if (await hasGitRef(localPath, `refs/remotes/origin/${branch}`, environment)) {
-    return;
-  }
-
-  throw new Error(`Remote branch "origin/${branch}" was not found during repository sync.`);
 }
 
 async function ensureLocalBranchExists(

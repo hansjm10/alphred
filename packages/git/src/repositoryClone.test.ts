@@ -454,6 +454,61 @@ describe('ensureRepositoryClone', () => {
     expect(getRepositoryByName(db, 'frontend')?.cloneStatus).toBe('cloned');
   });
 
+  it('treats missing remote sync branches as up_to_date instead of throwing', async () => {
+    const fixture = await createSyncFixture();
+    const db = createMigratedDb();
+
+    insertRepository(db, {
+      name: 'frontend',
+      provider: 'github',
+      remoteUrl: fixture.expectedRemoteUrl,
+      remoteRef: 'acme/frontend',
+      localPath: fixture.localPath,
+      cloneStatus: 'cloned',
+      defaultBranch: 'main',
+    });
+
+    const { stdout: localHeadBeforeStdout } = await execFileAsync('git', ['rev-parse', 'HEAD'], {
+      cwd: fixture.localPath,
+    });
+
+    await execFileAsync('git', ['symbolic-ref', 'HEAD', 'refs/heads/branchless'], {
+      cwd: fixture.remotePath,
+    });
+    await execFileAsync('git', ['push', 'origin', '--delete', 'main'], { cwd: fixture.sourcePath });
+
+    const result = await ensureRepositoryClone({
+      db,
+      repository: {
+        name: 'frontend',
+        provider: 'github',
+        remoteUrl: fixture.expectedRemoteUrl,
+        remoteRef: 'acme/frontend',
+        defaultBranch: 'main',
+      },
+      fetchAll: createFixtureFetchAll(fixture.remotePath),
+      environment: {
+        ALPHRED_SANDBOX_DIR: fixture.sandboxDir,
+      },
+      sync: {
+        mode: 'pull',
+        strategy: 'ff-only',
+      },
+    });
+
+    const { stdout: localHeadAfterStdout } = await execFileAsync('git', ['rev-parse', 'HEAD'], {
+      cwd: fixture.localPath,
+    });
+    expect(localHeadAfterStdout.trim()).toBe(localHeadBeforeStdout.trim());
+    expect(result.sync).toEqual({
+      mode: 'pull',
+      strategy: 'ff-only',
+      branch: 'main',
+      status: 'up_to_date',
+      conflictMessage: null,
+    });
+  });
+
   it('applies merge strategy when branches diverge without conflicts', async () => {
     const fixture = await createSyncFixture();
     const db = createMigratedDb();

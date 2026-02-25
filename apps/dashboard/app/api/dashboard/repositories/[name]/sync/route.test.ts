@@ -143,6 +143,30 @@ describe('POST /api/dashboard/repositories/[name]/sync', () => {
     expect(syncRepositoryMock).not.toHaveBeenCalled();
   });
 
+  it('returns invalid_request when the request payload is a JSON array', async () => {
+    const response = await POST(
+      new Request('http://localhost/api/dashboard/repositories/demo-repo/sync', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+        },
+        body: '[]',
+      }),
+      {
+        params: Promise.resolve({ name: 'demo-repo' }),
+      },
+    );
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      error: {
+        code: 'invalid_request',
+        message: 'Repository sync request body must be an object.',
+      },
+    });
+    expect(syncRepositoryMock).not.toHaveBeenCalled();
+  });
+
   it('returns invalid_request for malformed json payloads', async () => {
     const response = await POST(
       new Request('http://localhost/api/dashboard/repositories/demo-repo/sync', {

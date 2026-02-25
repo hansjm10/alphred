@@ -16,7 +16,7 @@ type RouteContext = {
 const allowedSyncStrategies = new Set<DashboardRepositorySyncStrategy>(['ff-only', 'merge', 'rebase']);
 
 function parseSyncRequest(payload: unknown): DashboardRepositorySyncRequest {
-  if (typeof payload !== 'object' || payload === null) {
+  if (typeof payload !== 'object' || payload === null || Array.isArray(payload)) {
     throw new DashboardIntegrationError('invalid_request', 'Repository sync request body must be an object.', {
       status: 400,
     });
