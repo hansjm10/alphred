@@ -360,3 +360,14 @@ export type DashboardRunLaunchResult = {
   executionOutcome: string | null;
   executedNodes: number | null;
 };
+
+export type DashboardRunControlAction = 'cancel' | 'pause' | 'resume' | 'retry';
+
+export type DashboardRunControlResult = {
+  action: DashboardRunControlAction;
+  outcome: 'applied' | 'noop';
+  workflowRunId: number;
+  previousRunStatus: DashboardRunSummary['status'];
+  runStatus: DashboardRunSummary['status'];
+  retriedRunNodeIds: number[];
+};

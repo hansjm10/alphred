@@ -451,6 +451,41 @@ Run detail includes:
 - `routingDecisions`: latest routing decisions.
 - `diagnostics`: persisted per-node/per-attempt diagnostics payloads for post-run inspection (inspection-only, not execution context).
 
+### `POST /runs/[runId]/actions/[action]`
+
+Applies a run lifecycle control action.
+
+Path parameters:
+- `runId`: positive integer.
+- `action`: one of `cancel`, `pause`, `resume`, `retry`.
+
+Request body:
+- None.
+
+Response `200` (`DashboardRunControlResult`):
+
+```json
+{
+  "action": "pause",
+  "outcome": "applied",
+  "workflowRunId": 42,
+  "previousRunStatus": "running",
+  "runStatus": "paused",
+  "retriedRunNodeIds": []
+}
+```
+
+Response semantics:
+- `outcome: "applied"` means the control changed persisted lifecycle state.
+- `outcome: "noop"` means the requested control was already satisfied and no additional change was required.
+- `retriedRunNodeIds` is populated for successful retry controls and empty for non-retry controls/noop retries.
+
+Error semantics:
+- `400 invalid_request` for malformed `runId` or unsupported `action`.
+- `404 not_found` when `runId` does not exist.
+- `409 conflict` for invalid lifecycle transitions, retry-target-not-found, or concurrent control conflicts.
+- Conflict responses include `error.details.controlCode` when available from typed runtime control errors.
+
 ### `GET /runs/[runId]/nodes/[runNodeId]/stream`
 
 Gets persisted provider stream events for a specific run-node attempt and supports live SSE transport.
