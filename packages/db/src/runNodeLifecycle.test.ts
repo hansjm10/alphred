@@ -289,6 +289,19 @@ describe('run-node lifecycle guard', () => {
     expect(persisted?.status).toBe('running');
   });
 
+  it('requires workflowRunId when required run statuses are provided', () => {
+    const { db, runNodeId } = seedPendingRunNode();
+
+    expect(() =>
+      transitionRunNodeStatus(db, {
+        runNodeId,
+        expectedFrom: 'pending',
+        to: 'running',
+        requiredRunStatuses: ['pending', 'running'],
+      }),
+    ).toThrow('workflowRunId must be provided when requiredRunStatuses is set.');
+  });
+
   it('rejects guarded claim transitions when run status no longer matches required statuses', () => {
     const { db, runId, runNodeId } = seedPendingRunNode();
     transitionWorkflowRunStatus(db, {

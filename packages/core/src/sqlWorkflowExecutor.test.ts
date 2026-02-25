@@ -6732,4 +6732,239 @@ describe('createSqlWorkflowExecutor', () => {
       retriedRunNodeIds: [],
     });
   });
+
+  it('returns noop when cancelRun is called for an already cancelled run', async () => {
+    const { db, runId } = seedSingleAgentRun();
+    transitionWorkflowRunStatus(db, {
+      workflowRunId: runId,
+      expectedFrom: 'pending',
+      to: 'cancelled',
+      occurredAt: '2026-01-01T00:00:00.000Z',
+    });
+
+    const onRunTerminal = vi.fn(async () => undefined);
+    const executor = createSqlWorkflowExecutor(db, {
+      resolveProvider: () => createProvider([]),
+      onRunTerminal,
+    });
+
+    const result = await executor.cancelRun({
+      workflowRunId: runId,
+    });
+
+    expect(result).toEqual({
+      action: 'cancel',
+      outcome: 'noop',
+      workflowRunId: runId,
+      previousRunStatus: 'cancelled',
+      runStatus: 'cancelled',
+      retriedRunNodeIds: [],
+    });
+    expect(onRunTerminal).not.toHaveBeenCalled();
+  });
+
+  it('returns a typed invalid-transition error when cancelRun is called from completed', async () => {
+    const { db, runId } = seedSingleAgentRun();
+    transitionWorkflowRunStatus(db, {
+      workflowRunId: runId,
+      expectedFrom: 'pending',
+      to: 'running',
+      occurredAt: '2026-01-01T00:00:00.000Z',
+    });
+    transitionWorkflowRunStatus(db, {
+      workflowRunId: runId,
+      expectedFrom: 'running',
+      to: 'completed',
+      occurredAt: '2026-01-01T00:01:00.000Z',
+    });
+
+    const executor = createSqlWorkflowExecutor(db, {
+      resolveProvider: () => createProvider([]),
+    });
+
+    await expect(
+      executor.cancelRun({
+        workflowRunId: runId,
+      }),
+    ).rejects.toMatchObject({
+      name: 'WorkflowRunControlError',
+      code: 'WORKFLOW_RUN_CONTROL_INVALID_TRANSITION',
+      action: 'cancel',
+      workflowRunId: runId,
+      runStatus: 'completed',
+      message: `Cannot cancel workflow run id=${runId} from status "completed". Expected pending, running, or paused.`,
+    });
+  });
+
+  it('returns a typed invalid-transition error when resumeRun is called from pending', async () => {
+    const { db, runId } = seedSingleAgentRun();
+    const executor = createSqlWorkflowExecutor(db, {
+      resolveProvider: () => createProvider([]),
+    });
+
+    await expect(
+      executor.resumeRun({
+        workflowRunId: runId,
+      }),
+    ).rejects.toMatchObject({
+      name: 'WorkflowRunControlError',
+      code: 'WORKFLOW_RUN_CONTROL_INVALID_TRANSITION',
+      action: 'resume',
+      workflowRunId: runId,
+      runStatus: 'pending',
+      message: `Cannot resume workflow run id=${runId} from status "pending". Expected status "paused".`,
+    });
+  });
+
+  it('returns retry-targets-not-found when a failed run has no failed nodes to retry', async () => {
+    const { db, runId } = seedSingleAgentRun();
+    transitionWorkflowRunStatus(db, {
+      workflowRunId: runId,
+      expectedFrom: 'pending',
+      to: 'running',
+      occurredAt: '2026-01-01T00:00:00.000Z',
+    });
+    transitionWorkflowRunStatus(db, {
+      workflowRunId: runId,
+      expectedFrom: 'running',
+      to: 'failed',
+      occurredAt: '2026-01-01T00:01:00.000Z',
+    });
+
+    const executor = createSqlWorkflowExecutor(db, {
+      resolveProvider: () => createProvider([]),
+    });
+
+    await expect(
+      executor.retryRun({
+        workflowRunId: runId,
+      }),
+    ).rejects.toMatchObject({
+      name: 'WorkflowRunControlError',
+      code: 'WORKFLOW_RUN_CONTROL_RETRY_TARGETS_NOT_FOUND',
+      action: 'retry',
+      workflowRunId: runId,
+      runStatus: 'failed',
+    });
+  });
+
+  it('retries pause control precondition conflicts and returns a concurrent conflict error on exhaustion', async () => {
+    const { db, runId } = seedSingleAgentRun();
+    transitionWorkflowRunStatus(db, {
+      workflowRunId: runId,
+      expectedFrom: 'pending',
+      to: 'running',
+      occurredAt: '2026-01-01T00:00:00.000Z',
+    });
+
+    const dbModule = await import('@alphred/db');
+    const originalTransitionWorkflowRunStatus = dbModule.transitionWorkflowRunStatus;
+    const transitionSpy = vi.spyOn(dbModule, 'transitionWorkflowRunStatus').mockImplementation((database, params) => {
+      if (params.workflowRunId === runId && params.to === 'paused') {
+        throw new Error(
+          `Workflow-run transition precondition failed for id=${params.workflowRunId}; expected status "${params.expectedFrom}".`,
+        );
+      }
+      return originalTransitionWorkflowRunStatus(database, params);
+    });
+
+    const executor = createSqlWorkflowExecutor(db, {
+      resolveProvider: () => createProvider([]),
+    });
+
+    try {
+      await expect(
+        executor.pauseRun({
+          workflowRunId: runId,
+        }),
+      ).rejects.toMatchObject({
+        name: 'WorkflowRunControlError',
+        code: 'WORKFLOW_RUN_CONTROL_CONCURRENT_CONFLICT',
+        action: 'pause',
+        workflowRunId: runId,
+        runStatus: 'running',
+      });
+    } finally {
+      transitionSpy.mockRestore();
+    }
+  });
+
+  it('retries retry-control precondition conflicts and keeps retried node ids unique per run node', async () => {
+    const { db, runId, firstRunNodeId, secondRunNodeId } = seedTwoRootAgentRun();
+    transitionWorkflowRunStatus(db, {
+      workflowRunId: runId,
+      expectedFrom: 'pending',
+      to: 'running',
+      occurredAt: '2026-01-01T00:00:00.000Z',
+    });
+    for (const [index, runNodeId] of [firstRunNodeId, secondRunNodeId].entries()) {
+      transitionRunNodeStatus(db, {
+        runNodeId,
+        expectedFrom: 'pending',
+        to: 'running',
+        occurredAt: `2026-01-01T00:0${index + 1}:00.000Z`,
+      });
+      transitionRunNodeStatus(db, {
+        runNodeId,
+        expectedFrom: 'running',
+        to: 'failed',
+        occurredAt: `2026-01-01T00:1${index + 1}:00.000Z`,
+      });
+    }
+    transitionWorkflowRunStatus(db, {
+      workflowRunId: runId,
+      expectedFrom: 'running',
+      to: 'failed',
+      occurredAt: '2026-01-01T00:20:00.000Z',
+    });
+
+    const executor = createSqlWorkflowExecutor(db, {
+      resolveProvider: () => createProvider([]),
+    });
+
+    const retryResult = await executor.retryRun({
+      workflowRunId: runId,
+    });
+    expect(retryResult.retriedRunNodeIds).toEqual([firstRunNodeId, secondRunNodeId]);
+    expect(new Set(retryResult.retriedRunNodeIds).size).toBe(retryResult.retriedRunNodeIds.length);
+
+    for (const [index, runNodeId] of [firstRunNodeId, secondRunNodeId].entries()) {
+      transitionRunNodeStatus(db, {
+        runNodeId,
+        expectedFrom: 'pending',
+        to: 'running',
+        occurredAt: `2026-01-01T00:2${index + 1}:00.000Z`,
+      });
+      transitionRunNodeStatus(db, {
+        runNodeId,
+        expectedFrom: 'running',
+        to: 'failed',
+        occurredAt: `2026-01-01T00:3${index + 1}:00.000Z`,
+      });
+    }
+    transitionWorkflowRunStatus(db, {
+      workflowRunId: runId,
+      expectedFrom: 'running',
+      to: 'failed',
+      occurredAt: '2026-01-01T00:40:00.000Z',
+    });
+    const transactionSpy = vi.spyOn(db, 'transaction').mockImplementation(() => {
+      throw new Error(`Workflow-run retry control precondition failed for id=${runId}; expected status "failed".`);
+    });
+    try {
+      await expect(
+        executor.retryRun({
+          workflowRunId: runId,
+        }),
+      ).rejects.toMatchObject({
+        name: 'WorkflowRunControlError',
+        code: 'WORKFLOW_RUN_CONTROL_CONCURRENT_CONFLICT',
+        action: 'retry',
+        workflowRunId: runId,
+        runStatus: 'failed',
+      });
+    } finally {
+      transactionSpy.mockRestore();
+    }
+  });
 });
