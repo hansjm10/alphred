@@ -11,6 +11,7 @@ import {
   migrateDatabase,
   promptTemplates,
   runNodes,
+  transitionWorkflowRunStatus,
   treeNodes,
   workflowRuns,
   workflowTrees,
@@ -656,6 +657,209 @@ describe('CLI run/status commands', () => {
     expect(captured.stderr).toEqual(['Invalid run id "abc". Run id must be a positive integer.']);
   });
 
+  it('applies pause/resume/cancel lifecycle controls and prints machine-readable results', async () => {
+    const db = createDatabase(':memory:');
+    migrateDatabase(db);
+    seedSingleNodeTree(db, 'design_tree');
+    const materialized = materializeWorkflowRunFromTree(db, { treeKey: 'design_tree' });
+    transitionWorkflowRunStatus(db, {
+      workflowRunId: materialized.run.id,
+      expectedFrom: 'pending',
+      to: 'running',
+    });
+
+    const pauseCaptured = createCapturedIo();
+    const pauseExitCode = await main(['run', 'pause', '--run', String(materialized.run.id)], {
+      dependencies: createDependencies(db, createUnusedProviderResolver()),
+      io: pauseCaptured.io,
+    });
+
+    expect(pauseExitCode).toBe(0);
+    expect(pauseCaptured.stderr).toEqual([]);
+    expect(pauseCaptured.stdout).toHaveLength(1);
+    expect(JSON.parse(pauseCaptured.stdout[0] ?? '')).toEqual({
+      action: 'pause',
+      outcome: 'applied',
+      workflowRunId: materialized.run.id,
+      previousRunStatus: 'running',
+      runStatus: 'paused',
+      retriedRunNodeIds: [],
+    });
+
+    const resumeCaptured = createCapturedIo();
+    const resumeExitCode = await main(['run', 'resume', '--run', String(materialized.run.id)], {
+      dependencies: createDependencies(db, createUnusedProviderResolver()),
+      io: resumeCaptured.io,
+    });
+
+    expect(resumeExitCode).toBe(0);
+    expect(resumeCaptured.stderr).toEqual([]);
+    expect(resumeCaptured.stdout).toHaveLength(1);
+    expect(JSON.parse(resumeCaptured.stdout[0] ?? '')).toEqual({
+      action: 'resume',
+      outcome: 'applied',
+      workflowRunId: materialized.run.id,
+      previousRunStatus: 'paused',
+      runStatus: 'running',
+      retriedRunNodeIds: [],
+    });
+
+    const cancelCaptured = createCapturedIo();
+    const cancelExitCode = await main(['run', 'cancel', '--run', String(materialized.run.id)], {
+      dependencies: createDependencies(db, createUnusedProviderResolver()),
+      io: cancelCaptured.io,
+    });
+
+    expect(cancelExitCode).toBe(0);
+    expect(cancelCaptured.stderr).toEqual([]);
+    expect(cancelCaptured.stdout).toHaveLength(1);
+    expect(JSON.parse(cancelCaptured.stdout[0] ?? '')).toEqual({
+      action: 'cancel',
+      outcome: 'applied',
+      workflowRunId: materialized.run.id,
+      previousRunStatus: 'running',
+      runStatus: 'cancelled',
+      retriedRunNodeIds: [],
+    });
+  });
+
+  it('retries a failed run and reports retried run-node ids', async () => {
+    const db = createDatabase(':memory:');
+    migrateDatabase(db);
+    seedSingleNodeTree(db, 'design_tree');
+
+    const runCaptured = createCapturedIo();
+    const runExitCode = await main(['run', '--tree', 'design_tree'], {
+      dependencies: createDependencies(db, createFailingProviderResolver()),
+      io: runCaptured.io,
+    });
+
+    expect(runExitCode).toBe(4);
+    const failedRun = db
+      .select({
+        id: workflowRuns.id,
+        status: workflowRuns.status,
+      })
+      .from(workflowRuns)
+      .all()[0];
+    expect(failedRun?.status).toBe('failed');
+    expect(failedRun?.id).toBeTypeOf('number');
+    if (!failedRun) {
+      return;
+    }
+
+    const failedRunNode = db
+      .select({
+        id: runNodes.id,
+        status: runNodes.status,
+      })
+      .from(runNodes)
+      .all()[0];
+    expect(failedRunNode?.status).toBe('failed');
+    if (!failedRunNode) {
+      return;
+    }
+
+    const retryCaptured = createCapturedIo();
+    const retryExitCode = await main(['run', 'retry', '--run', String(failedRun.id)], {
+      dependencies: createDependencies(db, createUnusedProviderResolver()),
+      io: retryCaptured.io,
+    });
+
+    expect(retryExitCode).toBe(0);
+    expect(retryCaptured.stderr).toEqual([]);
+    expect(retryCaptured.stdout).toHaveLength(1);
+    expect(JSON.parse(retryCaptured.stdout[0] ?? '')).toEqual({
+      action: 'retry',
+      outcome: 'applied',
+      workflowRunId: failedRun.id,
+      previousRunStatus: 'failed',
+      runStatus: 'running',
+      retriedRunNodeIds: [failedRunNode.id],
+    });
+
+    expect(
+      db.select({
+        status: workflowRuns.status,
+      })
+        .from(workflowRuns)
+        .all()[0]?.status,
+    ).toBe('running');
+    expect(
+      db.select({
+        status: runNodes.status,
+        attempt: runNodes.attempt,
+      })
+        .from(runNodes)
+        .all()[0],
+    ).toEqual({
+      status: 'pending',
+      attempt: 2,
+    });
+  });
+
+  it('returns not-found exit code for unknown run control run ids', async () => {
+    const db = createDatabase(':memory:');
+    migrateDatabase(db);
+    const captured = createCapturedIo();
+
+    const exitCode = await main(['run', 'cancel', '--run', '99'], {
+      dependencies: createDependencies(db, createUnusedProviderResolver()),
+      io: captured.io,
+    });
+
+    expect(exitCode).toBe(3);
+    expect(captured.stderr).toEqual(['Workflow run id=99 was not found.']);
+  });
+
+  it('returns runtime failure with typed control details for invalid transitions', async () => {
+    const db = createDatabase(':memory:');
+    migrateDatabase(db);
+    seedSingleNodeTree(db, 'design_tree');
+    const materialized = materializeWorkflowRunFromTree(db, { treeKey: 'design_tree' });
+    const captured = createCapturedIo();
+
+    const exitCode = await main(['run', 'pause', '--run', String(materialized.run.id)], {
+      dependencies: createDependencies(db, createUnusedProviderResolver()),
+      io: captured.io,
+    });
+
+    expect(exitCode).toBe(4);
+    expect(captured.stderr).toEqual([
+      `Cannot pause workflow run id=${materialized.run.id} from status "pending". Expected status "running".`,
+      'Control failure: code=WORKFLOW_RUN_CONTROL_INVALID_TRANSITION action=pause runStatus=pending.',
+    ]);
+  });
+
+  it('returns runtime failure for retry when failed run has no failed nodes', async () => {
+    const db = createDatabase(':memory:');
+    migrateDatabase(db);
+    seedSingleNodeTree(db, 'design_tree');
+    const materialized = materializeWorkflowRunFromTree(db, { treeKey: 'design_tree' });
+    transitionWorkflowRunStatus(db, {
+      workflowRunId: materialized.run.id,
+      expectedFrom: 'pending',
+      to: 'running',
+    });
+    transitionWorkflowRunStatus(db, {
+      workflowRunId: materialized.run.id,
+      expectedFrom: 'running',
+      to: 'failed',
+    });
+    const captured = createCapturedIo();
+
+    const exitCode = await main(['run', 'retry', '--run', String(materialized.run.id)], {
+      dependencies: createDependencies(db, createUnusedProviderResolver()),
+      io: captured.io,
+    });
+
+    expect(exitCode).toBe(4);
+    expect(captured.stderr).toEqual([
+      `Workflow run id=${materialized.run.id} is failed but has no failed run nodes to retry.`,
+      'Control failure: code=WORKFLOW_RUN_CONTROL_RETRY_TARGETS_NOT_FOUND action=retry runStatus=failed.',
+    ]);
+  });
+
   it('prints usage for help invocations and returns success', async () => {
     const cases = [[], ['help'], ['--help'], ['-h']];
 
@@ -769,6 +973,7 @@ describe('CLI run/status commands', () => {
 
   it('returns usage exit code for invalid run command inputs', async () => {
     const runUsage = 'Usage: alphred run --tree <tree_key> [--repo <name|github:owner/repo|azure:org/project/repo>] [--branch <branch_name>]';
+    const runPauseUsage = 'Usage: alphred run pause --run <run_id>';
     const cases: readonly {
       args: string[];
       stderr: string[];
@@ -808,6 +1013,34 @@ describe('CLI run/status commands', () => {
       {
         args: ['run', '--tree', 'design_tree', '--branch', 'fix/auth-bug'],
         stderr: ['Option "--branch" requires "--repo".', runUsage],
+      },
+      {
+        args: ['run', 'pause'],
+        stderr: ['Missing required option: --run <run_id>', runPauseUsage],
+      },
+      {
+        args: ['run', 'pause', '--run'],
+        stderr: ['Option "--run" requires a value.', runPauseUsage],
+      },
+      {
+        args: ['run', 'pause', '--run', '1', 'extra'],
+        stderr: ['Unexpected positional arguments for "run pause": extra', runPauseUsage],
+      },
+      {
+        args: ['run', 'pause', '--tree', 'design_tree'],
+        stderr: ['Unknown option for "run pause": --tree', runPauseUsage],
+      },
+      {
+        args: ['run', 'pause', '--run', '1', '--run', '2'],
+        stderr: ['Option "--run" cannot be provided more than once.', runPauseUsage],
+      },
+      {
+        args: ['run', 'pause', '--run='],
+        stderr: ['Option "--run" requires a value.', runPauseUsage],
+      },
+      {
+        args: ['run', 'pause', '--run=abc'],
+        stderr: ['Invalid run id "abc". Run id must be a positive integer.'],
       },
     ];
 

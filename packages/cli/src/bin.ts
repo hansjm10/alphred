@@ -23,7 +23,13 @@ import {
   type RunNodeStatus,
   type WorkflowRunStatus,
 } from '@alphred/db';
-import { createSqlWorkflowExecutor, createSqlWorkflowPlanner, type PhaseProviderResolver } from '@alphred/core';
+import {
+  WorkflowRunControlError,
+  createSqlWorkflowExecutor,
+  createSqlWorkflowPlanner,
+  type PhaseProviderResolver,
+  type WorkflowRunControlAction,
+} from '@alphred/core';
 import {
   WorktreeManager,
   createScmProvider as createGitScmProvider,
@@ -163,6 +169,12 @@ type RunExecutionSetup = {
   worktreeManager: RunWorktreeManager | null;
 };
 
+type RunRepositoryPreparation = {
+  resolvedRepo: ResolvedRunRepository | null;
+  worktreeManager: RunWorktreeManager | null;
+  authExitCode: ExitCode | null;
+};
+
 type RunExecutionSummary = {
   workflowRunId: number;
   finalStep: {
@@ -229,6 +241,10 @@ function hasErrorCode(error: unknown, expectedCode: string): boolean {
   );
 }
 
+function isWorkflowRunNotFoundError(error: unknown): boolean {
+  return error instanceof Error && /^Workflow run id=\d+ was not found\.$/.test(error.message);
+}
+
 function printGeneralUsage(io: Pick<CliIo, 'stdout'>): void {
   io.stdout('Alphred - LLM Agent Orchestrator');
   io.stdout('');
@@ -237,6 +253,8 @@ function printGeneralUsage(io: Pick<CliIo, 'stdout'>): void {
   io.stdout('Commands:');
   io.stdout('  run --tree <tree_key> [--repo <name|github:owner/repo|azure:org/project/repo>] [--branch <name>]');
   io.stdout('                             Start and execute a workflow run');
+  io.stdout('  run <cancel|pause|resume|retry> --run <run_id>');
+  io.stdout('                             Control lifecycle state for an existing run');
   io.stdout('  status --run <run_id>      Show workflow run and node status');
   io.stdout('  repo add --name <name> (--github <owner/repo> | --azure <org/project/repo>)');
   io.stdout('                             Register a managed repository');
@@ -529,6 +547,14 @@ const REPO_REMOVE_USAGE = 'Usage: alphred repo remove <name> [--purge]';
 const REPO_SYNC_USAGE = 'Usage: alphred repo sync <name>';
 type ScmAuthPreflightMode = 'warn' | 'require';
 
+function isRunControlAction(value: string): value is WorkflowRunControlAction {
+  return value === 'cancel' || value === 'pause' || value === 'resume' || value === 'retry';
+}
+
+function getRunControlUsage(action: WorkflowRunControlAction): string {
+  return `Usage: alphred run ${action} --run <run_id>`;
+}
+
 function parseGitHubRemoteRef(ref: string): { remoteRef: string; remoteUrl: string; derivedName: string } {
   const segments = ref
     .split('/')
@@ -783,6 +809,78 @@ function parseRunCommandInput(rawArgs: readonly string[], io: CliIo): ParsedRunC
   };
 }
 
+async function handleRunControlCommand(
+  action: WorkflowRunControlAction,
+  rawArgs: readonly string[],
+  dependencies: CliDependencies,
+  io: CliIo,
+): Promise<ExitCode> {
+  const usage = getRunControlUsage(action);
+  const parsedOptions = validateCommandOptions(
+    rawArgs,
+    {
+      commandName: `run ${action}`,
+      usage,
+      allowedOptions: ['run'],
+    },
+    io,
+  );
+  if (!parsedOptions.ok) {
+    return parsedOptions.exitCode;
+  }
+
+  const runIdRaw = getRequiredOption(parsedOptions.options, 'run', 'run_id', usage, io);
+  if (!runIdRaw) {
+    return EXIT_USAGE_ERROR;
+  }
+
+  const runId = parseStrictPositiveInteger(runIdRaw);
+  if (runId === null) {
+    io.stderr(`Invalid run id "${runIdRaw}". Run id must be a positive integer.`);
+    return EXIT_USAGE_ERROR;
+  }
+
+  try {
+    const db = openInitializedDatabase(dependencies, io);
+    const executor = createSqlWorkflowExecutor(db, {
+      resolveProvider: dependencies.resolveProvider,
+    });
+
+    let result;
+    switch (action) {
+      case 'cancel':
+        result = await executor.cancelRun({ workflowRunId: runId });
+        break;
+      case 'pause':
+        result = await executor.pauseRun({ workflowRunId: runId });
+        break;
+      case 'resume':
+        result = await executor.resumeRun({ workflowRunId: runId });
+        break;
+      case 'retry':
+        result = await executor.retryRun({ workflowRunId: runId });
+        break;
+    }
+
+    io.stdout(JSON.stringify(result));
+    return EXIT_SUCCESS;
+  } catch (error) {
+    if (error instanceof WorkflowRunControlError) {
+      io.stderr(error.message);
+      io.stderr(`Control failure: code=${error.code} action=${error.action} runStatus=${error.runStatus}.`);
+      return EXIT_RUNTIME_ERROR;
+    }
+
+    if (isWorkflowRunNotFoundError(error)) {
+      io.stderr(toErrorMessage(error));
+      return EXIT_NOT_FOUND;
+    }
+
+    io.stderr(`Failed to apply ${action} control for run id=${runId}: ${toErrorMessage(error)}`);
+    return EXIT_RUNTIME_ERROR;
+  }
+}
+
 function formatScmProviderLabel(provider: RepositoryConfig['provider']): string {
   return provider === 'github' ? 'GitHub' : 'Azure DevOps';
 }
@@ -960,7 +1058,50 @@ async function cleanupRunWorktrees(
   }
 }
 
+async function prepareRunRepository(
+  db: AlphredDatabase,
+  repoInput: string | null,
+  dependencies: CliDependencies,
+  io: Pick<CliIo, 'stdout' | 'stderr' | 'env'>,
+): Promise<RunRepositoryPreparation> {
+  const resolvedRepo = repoInput ? resolveRunRepository(db, repoInput) : null;
+  const runRepository = resolvedRepo ? getRepositoryByName(db, resolvedRepo.repoName) : null;
+  if (resolvedRepo && !runRepository) {
+    throw new Error(`Repository "${resolvedRepo.repoName}" was not found.`);
+  }
+
+  if (runRepository) {
+    const authExitCode = await runScmAuthPreflight(runRepository, dependencies, io, {
+      commandName: 'run --repo',
+      mode: 'require',
+    });
+    if (authExitCode !== null) {
+      return {
+        resolvedRepo,
+        worktreeManager: null,
+        authExitCode,
+      };
+    }
+  }
+
+  reportAutoRegisteredRepository(io, resolvedRepo);
+  return {
+    resolvedRepo,
+    worktreeManager: resolvedRepo
+      ? dependencies.createWorktreeManager(db, {
+          environment: io.env,
+        })
+      : null,
+    authExitCode: null,
+  };
+}
+
 async function handleRunCommand(rawArgs: readonly string[], dependencies: CliDependencies, io: CliIo): Promise<ExitCode> {
+  const runSubcommand = rawArgs[0];
+  if (runSubcommand && isRunControlAction(runSubcommand)) {
+    return handleRunControlCommand(runSubcommand, rawArgs.slice(1), dependencies, io);
+  }
+
   const parsedInput = parseRunCommandInput(rawArgs, io);
   if (!parsedInput.ok) {
     return parsedInput.exitCode;
@@ -975,27 +1116,12 @@ async function handleRunCommand(rawArgs: readonly string[], dependencies: CliDep
 
   try {
     db = openInitializedDatabase(dependencies, io);
-    const resolvedRepo = repoInput ? resolveRunRepository(db, repoInput) : null;
-    const runRepository = resolvedRepo ? getRepositoryByName(db, resolvedRepo.repoName) : null;
-    if (resolvedRepo && !runRepository) {
-      throw new Error(`Repository "${resolvedRepo.repoName}" was not found.`);
+    const runRepository = await prepareRunRepository(db, repoInput, dependencies, io);
+    if (runRepository.authExitCode !== null) {
+      return runRepository.authExitCode;
     }
-    if (runRepository) {
-      const authExitCode = await runScmAuthPreflight(runRepository, dependencies, io, {
-        commandName: 'run --repo',
-        mode: 'require',
-      });
-      if (authExitCode !== null) {
-        return authExitCode;
-      }
-    }
-    reportAutoRegisteredRepository(io, resolvedRepo);
-
-    if (resolvedRepo) {
-      worktreeManager = dependencies.createWorktreeManager(db, {
-        environment: io.env,
-      });
-    }
+    const { resolvedRepo } = runRepository;
+    worktreeManager = runRepository.worktreeManager;
 
     runId = materializeRun(treeKey, db, io);
     const runSetup = await setupRunExecution(runId, treeKey, resolvedRepo, branchOverride, worktreeManager, io);
