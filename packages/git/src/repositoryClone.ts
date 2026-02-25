@@ -250,6 +250,9 @@ async function pullFetchedBranch(params: PullFetchedBranchParams): Promise<PullF
   }
 
   const previousBranch = await resolveCurrentBranch(params.localPath, params.environment);
+  const previousHeadRevision = previousBranch === undefined
+    ? await resolveCurrentHeadRevision(params.localPath, params.environment)
+    : undefined;
   let switchedToTargetBranch = false;
 
   try {
@@ -283,8 +286,13 @@ async function pullFetchedBranch(params: PullFetchedBranchParams): Promise<PullF
       conflictMessage: `Sync conflict on branch "${normalizedBranch}" with strategy "${params.strategy}": ${conflictSummary}`,
     };
   } finally {
-    if (switchedToTargetBranch && previousBranch !== undefined) {
-      await runGitCommandWithOutput(['checkout', previousBranch], {
+    const restoreCommand = previousBranch !== undefined
+      ? ['checkout', previousBranch]
+      : previousHeadRevision !== undefined
+        ? ['checkout', '--detach', previousHeadRevision]
+        : undefined;
+    if (switchedToTargetBranch && restoreCommand !== undefined) {
+      await runGitCommandWithOutput(restoreCommand, {
         cwd: params.localPath,
         environment: params.environment,
       }).catch(() => undefined);
@@ -334,6 +342,26 @@ async function resolveCurrentBranch(
 ): Promise<string | undefined> {
   try {
     const { stdout } = await runGitCommandWithOutput(['symbolic-ref', '--quiet', '--short', 'HEAD'], {
+      cwd: localPath,
+      environment,
+    });
+    const trimmed = stdout.trim();
+    return trimmed.length > 0 ? trimmed : undefined;
+  } catch (error) {
+    if (isExecErrorCode(error, 1)) {
+      return undefined;
+    }
+
+    throw error;
+  }
+}
+
+async function resolveCurrentHeadRevision(
+  localPath: string,
+  environment: NodeJS.ProcessEnv,
+): Promise<string | undefined> {
+  try {
+    const { stdout } = await runGitCommandWithOutput(['rev-parse', '--verify', '--quiet', 'HEAD'], {
       cwd: localPath,
       environment,
     });

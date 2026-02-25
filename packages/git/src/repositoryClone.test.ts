@@ -402,6 +402,82 @@ describe('ensureRepositoryClone', () => {
     });
   });
 
+  it('restores detached HEAD after syncing updates on the target branch', async () => {
+    const fixture = await createSyncFixture();
+    const db = createMigratedDb();
+
+    insertRepository(db, {
+      name: 'frontend',
+      provider: 'github',
+      remoteUrl: fixture.expectedRemoteUrl,
+      remoteRef: 'acme/frontend',
+      localPath: fixture.localPath,
+      cloneStatus: 'cloned',
+      defaultBranch: 'main',
+    });
+
+    const remoteHead = await commitFile(
+      fixture.sourcePath,
+      'remote.txt',
+      'remote update\n',
+      'remote: update main',
+    );
+    await execFileAsync('git', ['push', 'origin', 'main'], { cwd: fixture.sourcePath });
+
+    const { stdout: detachedHeadBeforeStdout } = await execFileAsync('git', ['rev-parse', 'HEAD'], {
+      cwd: fixture.localPath,
+    });
+    const detachedHeadBefore = detachedHeadBeforeStdout.trim();
+    await execFileAsync('git', ['checkout', '--detach', detachedHeadBefore], {
+      cwd: fixture.localPath,
+    });
+
+    const { stdout: detachedStateBeforeStdout } = await execFileAsync('git', ['rev-parse', '--abbrev-ref', 'HEAD'], {
+      cwd: fixture.localPath,
+    });
+    expect(detachedStateBeforeStdout.trim()).toBe('HEAD');
+
+    const result = await ensureRepositoryClone({
+      db,
+      repository: {
+        name: 'frontend',
+        provider: 'github',
+        remoteUrl: fixture.expectedRemoteUrl,
+        remoteRef: 'acme/frontend',
+        defaultBranch: 'main',
+      },
+      fetchAll: createFixtureFetchAll(fixture.remotePath),
+      environment: {
+        ALPHRED_SANDBOX_DIR: fixture.sandboxDir,
+      },
+      sync: {
+        mode: 'pull',
+        strategy: 'ff-only',
+      },
+    });
+
+    const { stdout: headAfterStdout } = await execFileAsync('git', ['rev-parse', 'HEAD'], {
+      cwd: fixture.localPath,
+    });
+    const { stdout: detachedStateAfterStdout } = await execFileAsync('git', ['rev-parse', '--abbrev-ref', 'HEAD'], {
+      cwd: fixture.localPath,
+    });
+    const { stdout: mainBranchAfterStdout } = await execFileAsync('git', ['rev-parse', 'refs/heads/main'], {
+      cwd: fixture.localPath,
+    });
+
+    expect(headAfterStdout.trim()).toBe(detachedHeadBefore);
+    expect(detachedStateAfterStdout.trim()).toBe('HEAD');
+    expect(mainBranchAfterStdout.trim()).toBe(remoteHead);
+    expect(result.sync).toEqual({
+      mode: 'pull',
+      strategy: 'ff-only',
+      branch: 'main',
+      status: 'updated',
+      conflictMessage: null,
+    });
+  });
+
   it('returns conflicted sync status when ff-only cannot fast-forward', async () => {
     const fixture = await createSyncFixture();
     const db = createMigratedDb();
