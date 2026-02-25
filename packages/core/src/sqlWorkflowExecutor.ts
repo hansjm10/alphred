@@ -2810,11 +2810,11 @@ type ClaimedNodeFailure = {
   runStatus: WorkflowRunStatus;
   runNodeStatus: 'completed' | 'failed';
   nextAttempt: number | null;
+  nextStepOutcome: Extract<ExecuteNextRunnableNodeResult, { outcome: 'blocked' | 'run_terminal' }>['outcome'] | null;
 };
 
 type ClaimedNodeFailureParams = {
   currentAttempt: number;
-  currentRunStatus: WorkflowRunStatus;
   contextManifest: ContextHandoffManifest;
   failureEvents: ProviderEvent[];
   failureTokensUsed: number;
@@ -2973,10 +2973,14 @@ function handleClaimedNodeFailure(
   node: RunNodeExecutionRow,
   params: ClaimedNodeFailureParams,
 ): ClaimedNodeFailure {
-  const { currentAttempt, currentRunStatus, contextManifest, failureEvents, failureTokensUsed, error } = params;
+  const { currentAttempt, contextManifest, failureEvents, failureTokensUsed, error } = params;
   const errorMessage = toErrorMessage(error);
   const persistedNodeStatus = loadRunNodeExecutionRowById(db, run.id, node.runNodeId).status;
-  const canRetry = persistedNodeStatus === 'running' && shouldRetryNodeAttempt(currentAttempt, node.maxRetries);
+  const latestRunStatus = loadWorkflowRunRow(db, run.id).status;
+  const retryEligible = persistedNodeStatus === 'running' && shouldRetryNodeAttempt(currentAttempt, node.maxRetries);
+  const canRetryImmediately = retryEligible && latestRunStatus === 'running';
+  const shouldDeferRetry = retryEligible && latestRunStatus === 'paused';
+  const canRetry = canRetryImmediately || shouldDeferRetry;
   const retriesRemaining = Math.max(node.maxRetries - currentAttempt, 0);
   const failureReason = resolveFailureReason(persistedNodeStatus, canRetry);
 
@@ -3024,16 +3028,42 @@ function handleClaimedNodeFailure(
 
   if (canRetry) {
     const nextAttempt = currentAttempt + 1;
-    transitionFailedRunNodeToRetryAttempt(db, {
+    if (canRetryImmediately) {
+      transitionFailedRunNodeToRetryAttempt(db, {
+        runNodeId: node.runNodeId,
+        currentAttempt,
+        nextAttempt,
+      });
+      return {
+        artifactId,
+        runStatus: latestRunStatus,
+        runNodeStatus: 'failed',
+        nextAttempt,
+        nextStepOutcome: null,
+      };
+    }
+
+    transitionFailedRunNodeToPendingAttempt(db, {
       runNodeId: node.runNodeId,
       currentAttempt,
       nextAttempt,
     });
     return {
       artifactId,
-      runStatus: currentRunStatus,
+      runStatus: latestRunStatus,
       runNodeStatus: 'failed',
-      nextAttempt,
+      nextAttempt: null,
+      nextStepOutcome: 'blocked',
+    };
+  }
+
+  if (retryEligible && isTerminalWorkflowRunStatus(latestRunStatus)) {
+    return {
+      artifactId,
+      runStatus: latestRunStatus,
+      runNodeStatus: 'failed',
+      nextAttempt: null,
+      nextStepOutcome: 'run_terminal',
     };
   }
 
@@ -3048,6 +3078,7 @@ function handleClaimedNodeFailure(
     runStatus,
     runNodeStatus,
     nextAttempt: null,
+    nextStepOutcome: null,
   };
 }
 
@@ -3126,7 +3157,6 @@ async function executeClaimedRunnableNode(
         node,
         {
           currentAttempt,
-          currentRunStatus,
           contextManifest: contextAssembly.manifest,
           failureEvents,
           failureTokensUsed,
@@ -3136,6 +3166,14 @@ async function executeClaimedRunnableNode(
       if (failure.nextAttempt !== null) {
         currentAttempt = failure.nextAttempt;
         continue;
+      }
+
+      if (failure.nextStepOutcome !== null) {
+        return {
+          outcome: failure.nextStepOutcome,
+          workflowRunId: run.id,
+          runStatus: failure.runStatus,
+        };
       }
 
       currentRunStatus = failure.runStatus;
@@ -3181,7 +3219,17 @@ function applyWorkflowRunStatusControl(
     }
 
     try {
-      const nextStatus = transitionRunTo(db, run.id, run.status, params.targetStatus);
+      let nextStatus: WorkflowRunStatus;
+      if (params.action === 'cancel' && run.status === 'pending') {
+        transitionWorkflowRunStatus(db, {
+          workflowRunId: run.id,
+          expectedFrom: 'pending',
+          to: 'cancelled',
+        });
+        nextStatus = 'cancelled';
+      } else {
+        nextStatus = transitionRunTo(db, run.id, run.status, params.targetStatus);
+      }
       return createWorkflowRunControlResult({
         action: params.action,
         outcome: 'applied',

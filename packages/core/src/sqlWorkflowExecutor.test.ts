@@ -6153,6 +6153,44 @@ describe('createSqlWorkflowExecutor', () => {
     });
   });
 
+  it('cancels pending runs without recording a startedAt timestamp', async () => {
+    const { db, runId } = seedSingleAgentRun();
+    const executor = createSqlWorkflowExecutor(db, {
+      resolveProvider: () => createProvider([]),
+    });
+
+    const cancelResult = await executor.cancelRun({
+      workflowRunId: runId,
+    });
+
+    expect(cancelResult).toEqual({
+      action: 'cancel',
+      outcome: 'applied',
+      workflowRunId: runId,
+      previousRunStatus: 'pending',
+      runStatus: 'cancelled',
+      retriedRunNodeIds: [],
+    });
+
+    const persistedRun = db
+      .select({
+        status: workflowRuns.status,
+        startedAt: workflowRuns.startedAt,
+        completedAt: workflowRuns.completedAt,
+      })
+      .from(workflowRuns)
+      .where(eq(workflowRuns.id, runId))
+      .get();
+    expect(persistedRun).toBeDefined();
+    if (!persistedRun) {
+      throw new Error('Expected persisted workflow run row.');
+    }
+
+    expect(persistedRun.status).toBe('cancelled');
+    expect(persistedRun.startedAt).toBeNull();
+    expect(persistedRun.completedAt).not.toBeNull();
+  });
+
   it('preserves in-flight node completion when paused and blocks additional node claims', async () => {
     const { db, runId, sourceRunNodeId, targetRunNodeId } = seedLinearAutoRun();
     let invocationCount = 0;
@@ -6216,6 +6254,63 @@ describe('createSqlWorkflowExecutor', () => {
     );
   });
 
+  it('halts immediate retry attempts when pause control is requested during a retryable failure', async () => {
+    const { db, runId, runNodeId } = seedSingleAgentRun('markdown', 1);
+    let invocationCount = 0;
+
+    const executor = createSqlWorkflowExecutor(db, {
+      resolveProvider: () => ({
+        async *run(): AsyncIterable<ProviderEvent> {
+          invocationCount += 1;
+          if (invocationCount === 1) {
+            await executor.pauseRun({
+              workflowRunId: runId,
+            });
+          }
+
+          yield* [];
+          throw new Error(`attempt-${invocationCount}-failed`);
+        },
+      }),
+    });
+
+    const result = await executor.executeRun({
+      workflowRunId: runId,
+      options: {
+        workingDirectory: '/tmp/alphred-worktree',
+      },
+    });
+
+    expect(result.finalStep).toEqual({
+      outcome: 'blocked',
+      workflowRunId: runId,
+      runStatus: 'paused',
+    });
+    expect(invocationCount).toBe(1);
+
+    const persistedRunNode = db
+      .select({
+        status: runNodes.status,
+        attempt: runNodes.attempt,
+        startedAt: runNodes.startedAt,
+        completedAt: runNodes.completedAt,
+      })
+      .from(runNodes)
+      .where(eq(runNodes.id, runNodeId))
+      .get();
+    expect(persistedRunNode).toBeDefined();
+    if (!persistedRunNode) {
+      throw new Error('Expected persisted run-node row.');
+    }
+
+    expect(persistedRunNode).toEqual({
+      status: 'pending',
+      attempt: 2,
+      startedAt: null,
+      completedAt: null,
+    });
+  });
+
   it('keeps run cancelled when cancel control is requested during in-flight execution', async () => {
     const { db, runId, sourceRunNodeId, targetRunNodeId } = seedLinearAutoRun();
     let invocationCount = 0;
@@ -6277,6 +6372,57 @@ describe('createSqlWorkflowExecutor', () => {
         { id: targetRunNodeId, status: 'pending' },
       ]),
     );
+  });
+
+  it('halts immediate retry attempts when cancel control is requested during a retryable failure', async () => {
+    const { db, runId, runNodeId } = seedSingleAgentRun('markdown', 1);
+    let invocationCount = 0;
+
+    const executor = createSqlWorkflowExecutor(db, {
+      resolveProvider: () => ({
+        async *run(): AsyncIterable<ProviderEvent> {
+          invocationCount += 1;
+          if (invocationCount === 1) {
+            await executor.cancelRun({
+              workflowRunId: runId,
+            });
+          }
+
+          yield* [];
+          throw new Error(`attempt-${invocationCount}-failed`);
+        },
+      }),
+    });
+
+    const result = await executor.executeRun({
+      workflowRunId: runId,
+      options: {
+        workingDirectory: '/tmp/alphred-worktree',
+      },
+    });
+
+    expect(result.finalStep).toEqual({
+      outcome: 'run_terminal',
+      workflowRunId: runId,
+      runStatus: 'cancelled',
+    });
+    expect(invocationCount).toBe(1);
+
+    const persistedRunNode = db
+      .select({
+        status: runNodes.status,
+        attempt: runNodes.attempt,
+      })
+      .from(runNodes)
+      .where(eq(runNodes.id, runNodeId))
+      .get();
+    expect(persistedRunNode).toBeDefined();
+    if (!persistedRunNode) {
+      throw new Error('Expected persisted run-node row.');
+    }
+
+    expect(persistedRunNode.status).toBe('failed');
+    expect(persistedRunNode.attempt).toBe(1);
   });
 
   it('requeues only failed latest attempts on retry control and keeps successful nodes intact', async () => {
