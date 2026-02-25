@@ -2,6 +2,8 @@
 
 import { useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from 'react';
 import type {
+  DashboardRunControlAction,
+  DashboardRunControlResult,
   DashboardRepositoryState,
   DashboardRunDetail,
   DashboardRunNodeStreamEvent,
@@ -21,11 +23,23 @@ type TimelineItem = Readonly<{
   category: TimelineCategory;
 }>;
 
-type PrimaryActionState = Readonly<{
+type OperatorActionState = Readonly<{
   label: string;
   href: string | null;
+  controlAction: DashboardRunControlAction | null;
   disabledReason: string | null;
 }>;
+
+type OperatorActionSet = Readonly<{
+  primary: OperatorActionState;
+  secondary: OperatorActionState | null;
+}>;
+
+type ActionFeedbackState = Readonly<{
+  tone: 'info' | 'success' | 'error';
+  message: string;
+  runStatus: DashboardRunSummary['status'] | null;
+}> | null;
 
 type RealtimeChannelState = 'disabled' | 'live' | 'reconnecting' | 'stale';
 type AgentStreamConnectionState = 'live' | 'reconnecting' | 'stale' | 'ended';
@@ -66,6 +80,8 @@ const RUN_STATUSES = new Set<DashboardRunSummary['status']>([
   'failed',
   'cancelled',
 ]);
+const RUN_CONTROL_ACTIONS = new Set<DashboardRunControlAction>(['cancel', 'pause', 'resume', 'retry']);
+const RUN_CONTROL_OUTCOMES = new Set<DashboardRunControlResult['outcome']>(['applied', 'noop']);
 const NODE_STATUSES = new Set<DashboardRunDetail['nodes'][number]['status']>([
   'pending',
   'running',
@@ -555,6 +571,55 @@ function parseRunDetailPayload(payload: unknown, expectedRunId: number): Dashboa
   return payload as DashboardRunDetail;
 }
 
+function parseRunControlPayload(payload: unknown, expectedRunId: number): DashboardRunControlResult | null {
+  if (!isRecord(payload)) {
+    return null;
+  }
+
+  if (
+    typeof payload.action !== 'string' ||
+    !RUN_CONTROL_ACTIONS.has(payload.action as DashboardRunControlAction) ||
+    typeof payload.outcome !== 'string' ||
+    !RUN_CONTROL_OUTCOMES.has(payload.outcome as DashboardRunControlResult['outcome']) ||
+    !isInteger(payload.workflowRunId) ||
+    payload.workflowRunId !== expectedRunId ||
+    typeof payload.previousRunStatus !== 'string' ||
+    !RUN_STATUSES.has(payload.previousRunStatus as DashboardRunSummary['status']) ||
+    typeof payload.runStatus !== 'string' ||
+    !RUN_STATUSES.has(payload.runStatus as DashboardRunSummary['status']) ||
+    !Array.isArray(payload.retriedRunNodeIds) ||
+    !payload.retriedRunNodeIds.every(isInteger)
+  ) {
+    return null;
+  }
+
+  return payload as DashboardRunControlResult;
+}
+
+async function fetchRunDetailSnapshot(
+  runId: number,
+  options: Readonly<{ signal?: AbortSignal }> = {},
+): Promise<DashboardRunDetail> {
+  const response = await fetch(`/api/dashboard/runs/${runId}`, {
+    method: 'GET',
+    headers: {
+      accept: 'application/json',
+    },
+    signal: options.signal,
+  });
+  const payload = (await response.json().catch(() => null)) as unknown;
+  if (!response.ok) {
+    throw new Error(resolveApiErrorMessage(response.status, payload, 'Unable to refresh run timeline'));
+  }
+
+  const parsedDetail = parseRunDetailPayload(payload, runId);
+  if (parsedDetail === null) {
+    throw new Error('Realtime run detail response was malformed.');
+  }
+
+  return parsedDetail;
+}
+
 function parseRunNodeStreamSnapshotPayload(
   payload: unknown,
   expectedRunId: number,
@@ -838,63 +903,164 @@ function resolveRepositoryContext(
   );
 }
 
-function resolvePrimaryAction(
+function resolveOperatorActions(
   run: DashboardRunSummary,
   hasWorktree: boolean,
-): PrimaryActionState {
+): OperatorActionSet {
   if (run.status === 'completed') {
     if (hasWorktree) {
       return {
-        label: 'Open Worktree',
-        href: `/runs/${run.id}/worktree`,
-        disabledReason: null,
+        primary: {
+          label: 'Open Worktree',
+          href: `/runs/${run.id}/worktree`,
+          controlAction: null,
+          disabledReason: null,
+        },
+        secondary: null,
       };
     }
 
     return {
-      label: 'Open Worktree',
-      href: null,
-      disabledReason: 'No worktree was captured for this run.',
+      primary: {
+        label: 'Open Worktree',
+        href: null,
+        controlAction: null,
+        disabledReason: 'No worktree was captured for this run.',
+      },
+      secondary: null,
     };
   }
 
   if (run.status === 'running') {
     return {
-      label: 'Pause',
-      href: null,
-      disabledReason: 'Pause action is blocked until lifecycle controls are available.',
+      primary: {
+        label: 'Pause',
+        href: null,
+        controlAction: 'pause',
+        disabledReason: null,
+      },
+      secondary: {
+        label: 'Cancel Run',
+        href: null,
+        controlAction: 'cancel',
+        disabledReason: null,
+      },
     };
   }
 
   if (run.status === 'paused') {
     return {
-      label: 'Resume',
-      href: null,
-      disabledReason: 'Resume action is blocked until lifecycle controls are available.',
+      primary: {
+        label: 'Resume',
+        href: null,
+        controlAction: 'resume',
+        disabledReason: null,
+      },
+      secondary: {
+        label: 'Cancel Run',
+        href: null,
+        controlAction: 'cancel',
+        disabledReason: null,
+      },
     };
   }
 
   if (run.status === 'failed') {
     return {
-      label: 'Retry Failed Node',
-      href: null,
-      disabledReason: 'Retry action is blocked until retry controls are available.',
+      primary: {
+        label: 'Retry Failed Node',
+        href: null,
+        controlAction: 'retry',
+        disabledReason: null,
+      },
+      secondary: null,
     };
   }
 
   if (run.status === 'pending') {
     return {
-      label: 'Pending Start',
-      href: null,
-      disabledReason: 'Run has not started yet.',
+      primary: {
+        label: 'Pending Start',
+        href: null,
+        controlAction: null,
+        disabledReason: 'Run has not started yet.',
+      },
+      secondary: {
+        label: 'Cancel Run',
+        href: null,
+        controlAction: 'cancel',
+        disabledReason: null,
+      },
     };
   }
 
   return {
-    label: 'Run Cancelled',
-    href: null,
-    disabledReason: 'Cancelled runs cannot be resumed from this view.',
+    primary: {
+      label: 'Run Cancelled',
+      href: null,
+      controlAction: null,
+      disabledReason: 'Cancelled runs cannot be resumed from this view.',
+    },
+    secondary: null,
   };
+}
+
+function toActionVerb(action: DashboardRunControlAction): string {
+  switch (action) {
+    case 'cancel':
+      return 'cancel';
+    case 'pause':
+      return 'pause';
+    case 'resume':
+      return 'resume';
+    case 'retry':
+      return 'retry';
+  }
+}
+
+function resolveRunControlErrorPrefix(action: DashboardRunControlAction): string {
+  switch (action) {
+    case 'cancel':
+      return 'Unable to cancel run';
+    case 'pause':
+      return 'Unable to pause run';
+    case 'resume':
+      return 'Unable to resume run';
+    case 'retry':
+      return 'Unable to retry failed node';
+  }
+}
+
+function resolveRunControlSuccessMessage(result: DashboardRunControlResult): string {
+  if (result.outcome === 'noop') {
+    switch (result.action) {
+      case 'cancel':
+        return 'Run is already cancelled.';
+      case 'pause':
+        return 'Run is already paused.';
+      case 'resume':
+        return 'Run is already running.';
+      case 'retry':
+        return 'No retryable failed nodes were queued.';
+    }
+  }
+
+  switch (result.action) {
+    case 'cancel':
+      return 'Run cancelled.';
+    case 'pause':
+      return 'Run paused.';
+    case 'resume':
+      return 'Run resumed.';
+    case 'retry':
+      if (result.retriedRunNodeIds.length < 1) {
+        return 'Retry queued for failed nodes.';
+      }
+
+      return result.retriedRunNodeIds.length === 1
+        ? 'Retry queued for 1 failed node.'
+        : `Retry queued for ${result.retriedRunNodeIds.length} failed nodes.`;
+  }
 }
 
 function truncatePreview(value: string, previewLength = 140): string {
@@ -1169,28 +1335,9 @@ function createRunDetailPollingEffect(params: RunDetailPollingEffectParams): () 
   };
 
   const fetchLatestRunDetail = async (): Promise<DashboardRunDetail | null> => {
-    const response = await fetch(`/api/dashboard/runs/${runId}`, {
-      method: 'GET',
-      headers: {
-        accept: 'application/json',
-      },
-      signal: abortController.signal,
-    });
+    const parsedDetail = await fetchRunDetailSnapshot(runId, { signal: abortController.signal });
     if (shouldSkipUpdate()) {
       return null;
-    }
-
-    const payload = (await response.json().catch(() => null)) as unknown;
-    if (shouldSkipUpdate()) {
-      return null;
-    }
-    if (!response.ok) {
-      throw new Error(resolveApiErrorMessage(response.status, payload, 'Unable to refresh run timeline'));
-    }
-
-    const parsedDetail = parseRunDetailPayload(payload, runId);
-    if (parsedDetail === null) {
-      throw new Error('Realtime run detail response was malformed.');
     }
 
     return shouldSkipUpdate() ? null : parsedDetail;
@@ -1960,6 +2107,8 @@ export function RunDetailContent({
   const [streamLastUpdatedAtMs, setStreamLastUpdatedAtMs] = useState<number>(() =>
     resolveInitialStreamLastUpdatedAtMs(initialDetail),
   );
+  const [pendingControlAction, setPendingControlAction] = useState<DashboardRunControlAction | null>(null);
+  const [actionFeedback, setActionFeedback] = useState<ActionFeedbackState>(null);
 
   const lastUpdatedAtRef = useRef<number>(lastUpdatedAtMs);
   const streamLastUpdatedAtRef = useRef<number>(streamLastUpdatedAtMs);
@@ -1988,6 +2137,8 @@ export function RunDetailContent({
     setStreamRetryCountdownSeconds(null);
     setStreamAutoScroll(true);
     setStreamLastUpdatedAtMs(Date.now());
+    setPendingControlAction(null);
+    setActionFeedback(null);
     streamLastSequenceRef.current = 0;
   }, [enableRealtime, initialDetail]);
 
@@ -2103,6 +2254,16 @@ export function RunDetailContent({
     };
   }, [streamNextRetryAtMs]);
 
+  useEffect(() => {
+    setActionFeedback((current) => {
+      if (current === null || current.runStatus === null || current.runStatus === detail.run.status) {
+        return current;
+      }
+
+      return null;
+    });
+  }, [detail.run.status]);
+
   const timeline = useMemo(() => buildTimeline(detail), [detail]);
   const repositoryContext = useMemo(
     () => resolveRepositoryContext(detail, repositories),
@@ -2111,8 +2272,8 @@ export function RunDetailContent({
   const pageSubtitle = detail.run.repository
     ? `${detail.run.tree.name} · ${detail.run.repository.name}`
     : detail.run.tree.name;
-  const primaryAction = useMemo(
-    () => resolvePrimaryAction(detail.run, detail.worktrees.length > 0),
+  const operatorActions = useMemo(
+    () => resolveOperatorActions(detail.run, detail.worktrees.length > 0),
     [detail.run, detail.worktrees.length],
   );
   const selectedNode = useMemo(
@@ -2137,6 +2298,11 @@ export function RunDetailContent({
     () => (streamTarget ? detail.nodes.find(node => node.id === streamTarget.runNodeId) ?? null : null),
     [detail.nodes, streamTarget],
   );
+  const primaryAction = operatorActions.primary;
+  const secondaryAction = operatorActions.secondary;
+  const actionHint = actionFeedback?.message ?? primaryAction.disabledReason ?? secondaryAction?.disabledReason ?? null;
+  const actionHintTone = actionFeedback?.tone ?? 'info';
+
   const toggleNodeFilter = (nodeId: number): void => {
     const nextNodeId = filteredNodeId === nodeId ? null : nodeId;
     setFilteredNodeId(nextNodeId);
@@ -2167,6 +2333,70 @@ export function RunDetailContent({
           setStreamBufferedEvents([]);
         }
       }
+    }
+  };
+
+  const handleRunControlAction = async (action: DashboardRunControlAction): Promise<void> => {
+    if (pendingControlAction !== null) {
+      return;
+    }
+
+    setPendingControlAction(action);
+    setActionFeedback({
+      tone: 'info',
+      message: `Applying ${toActionVerb(action)} action...`,
+      runStatus: null,
+    });
+
+    try {
+      const response = await fetch(`/api/dashboard/runs/${detail.run.id}/actions/${action}`, {
+        method: 'POST',
+        headers: {
+          accept: 'application/json',
+        },
+      });
+      const payload = (await response.json().catch(() => null)) as unknown;
+      if (!response.ok) {
+        throw new Error(resolveApiErrorMessage(response.status, payload, resolveRunControlErrorPrefix(action)));
+      }
+
+      const controlResult = parseRunControlPayload(payload, detail.run.id);
+      if (controlResult === null) {
+        throw new Error('Run action response was malformed.');
+      }
+
+      const successMessage = resolveRunControlSuccessMessage(controlResult);
+
+      try {
+        const refreshedDetail = await fetchRunDetailSnapshot(detail.run.id);
+        setDetail(refreshedDetail);
+        setUpdateError(null);
+        setIsRefreshing(false);
+        setLastUpdatedAtMs(Date.now());
+        setNextRetryAtMs(null);
+        setChannelState(enableRealtime && isActiveRunStatus(refreshedDetail.run.status) ? 'live' : 'disabled');
+        setActionFeedback({
+          tone: 'success',
+          message: successMessage,
+          runStatus: refreshedDetail.run.status,
+        });
+      } catch (refreshError) {
+        const refreshMessage = refreshError instanceof Error ? refreshError.message : 'Unable to refresh run timeline.';
+        setActionFeedback({
+          tone: 'error',
+          message: `${successMessage} Unable to refresh run timeline: ${refreshMessage}`,
+          runStatus: controlResult.runStatus,
+        });
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : resolveRunControlErrorPrefix(action);
+      setActionFeedback({
+        tone: 'error',
+        message,
+        runStatus: detail.run.status,
+      });
+    } finally {
+      setPendingControlAction(null);
     }
   };
 
@@ -2237,13 +2467,48 @@ export function RunDetailContent({
                 {primaryAction.label}
               </ButtonLink>
             ) : (
-              <ActionButton tone="primary" disabled aria-disabled="true" title={primaryAction.disabledReason ?? undefined}>
-                {primaryAction.label}
+              <ActionButton
+                tone="primary"
+                disabled={primaryAction.disabledReason !== null || pendingControlAction !== null}
+                aria-disabled={primaryAction.disabledReason !== null || pendingControlAction !== null}
+                title={primaryAction.disabledReason ?? undefined}
+                onClick={() => {
+                  if (primaryAction.controlAction !== null) {
+                    void handleRunControlAction(primaryAction.controlAction);
+                  }
+                }}
+              >
+                {pendingControlAction === primaryAction.controlAction && primaryAction.controlAction !== null
+                  ? `${primaryAction.label}...`
+                  : primaryAction.label}
               </ActionButton>
             )}
+            {secondaryAction ? (
+              <ActionButton
+                disabled={secondaryAction.disabledReason !== null || pendingControlAction !== null}
+                aria-disabled={secondaryAction.disabledReason !== null || pendingControlAction !== null}
+                title={secondaryAction.disabledReason ?? undefined}
+                onClick={() => {
+                  if (secondaryAction.controlAction !== null) {
+                    void handleRunControlAction(secondaryAction.controlAction);
+                  }
+                }}
+              >
+                {pendingControlAction === secondaryAction.controlAction && secondaryAction.controlAction !== null
+                  ? `${secondaryAction.label}...`
+                  : secondaryAction.label}
+              </ActionButton>
+            ) : null}
             <ButtonLink href="/runs">Back to Runs</ButtonLink>
           </div>
-          {primaryAction.disabledReason ? <p className="meta-text run-action-feedback">{primaryAction.disabledReason}</p> : null}
+          {actionHint ? (
+            <output
+              className={`meta-text run-action-feedback run-action-feedback--${actionHintTone}`}
+              aria-live="polite"
+            >
+              {actionHint}
+            </output>
+          ) : null}
 
           <output className={`run-realtime-status run-realtime-status--${channelState}`} aria-live="polite">
             <span className="run-realtime-status__badge">{realtimeLabel.badgeLabel}</span>

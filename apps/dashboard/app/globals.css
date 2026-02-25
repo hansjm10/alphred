@@ -679,7 +679,21 @@ output {
 }
 
 .run-action-feedback {
+  display: block;
+  font: 500 13px/20px var(--font-data);
   margin-top: var(--space-2);
+}
+
+.run-action-feedback--info {
+  color: var(--text-secondary);
+}
+
+.run-action-feedback--success {
+  color: var(--accent-success);
+}
+
+.run-action-feedback--error {
+  color: var(--accent-danger);
 }
 
 .run-detail-priority-grid {

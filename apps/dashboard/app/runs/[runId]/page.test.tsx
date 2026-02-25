@@ -234,16 +234,17 @@ describe('RunDetailPage', () => {
     expect(screen.getByRole('link', { name: 'Open Worktree' })).toHaveAttribute('href', '/runs/410/worktree');
   });
 
-  it('blocks invalid actions for running runs with explicit feedback', async () => {
+  it('renders actionable lifecycle controls for running runs', async () => {
     loadDashboardRunDetailMock.mockResolvedValue(createRunDetail());
     loadDashboardRepositoriesMock.mockResolvedValue([createRepository({ id: 1, name: 'demo-repo' })]);
 
     render(await RunDetailPage({ params: Promise.resolve({ runId: '412' }) }));
 
-    expect(screen.getByRole('button', { name: 'Pause' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Pause' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Cancel Run' })).toBeEnabled();
     expect(
-      screen.getByText('Pause action is blocked until lifecycle controls are available.'),
-    ).toBeInTheDocument();
+      screen.queryByText('Pause action is blocked until lifecycle controls are available.'),
+    ).toBeNull();
     expect(screen.getByLabelText('Run timeline')).toBeInTheDocument();
     expect(screen.getByText('Routing decision: approved.')).toBeInTheDocument();
   });

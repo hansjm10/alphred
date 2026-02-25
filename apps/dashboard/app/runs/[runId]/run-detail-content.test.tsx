@@ -223,6 +223,18 @@ function createStreamEvent(
   };
 }
 
+function createControlResult(overrides: Partial<Record<string, unknown>> = {}): Record<string, unknown> {
+  return {
+    action: 'pause',
+    outcome: 'applied',
+    workflowRunId: 412,
+    previousRunStatus: 'running',
+    runStatus: 'paused',
+    retriedRunNodeIds: [],
+    ...overrides,
+  };
+}
+
 class MockEventSource {
   static instances: MockEventSource[] = [];
 
@@ -382,7 +394,7 @@ describe('RunDetailContent realtime updates', () => {
       />,
     );
 
-    expect(screen.getByRole('button', { name: 'Pause' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Pause' })).toBeEnabled();
 
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledWith(
@@ -392,10 +404,162 @@ describe('RunDetailContent realtime updates', () => {
     }, { timeout: 2_000 });
 
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: 'Resume' })).toBeDisabled();
+      expect(screen.getByRole('button', { name: 'Resume' })).toBeEnabled();
     }, { timeout: 2_000 });
 
     expect(screen.getByText(/Live updates every 1s/)).toBeInTheDocument();
+  });
+
+  it('keeps pending start disabled while exposing cancel for pending runs', () => {
+    render(
+      <RunDetailContent
+        initialDetail={createRunDetail({
+          run: {
+            status: 'pending',
+            startedAt: null,
+            completedAt: null,
+          },
+        })}
+        repositories={[createRepository()]}
+        enableRealtime={false}
+      />,
+    );
+
+    expect(screen.getByRole('button', { name: 'Pending Start' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Cancel Run' })).toBeEnabled();
+    expect(screen.getByText('Run has not started yet.')).toBeInTheDocument();
+  });
+
+  it('shows retry as the failed-run primary action', () => {
+    render(
+      <RunDetailContent
+        initialDetail={createRunDetail({
+          run: {
+            status: 'failed',
+            completedAt: '2026-02-18T00:10:00.000Z',
+          },
+          nodes: [
+            {
+              id: 1,
+              treeNodeId: 1,
+              nodeKey: 'design',
+              sequenceIndex: 0,
+              attempt: 1,
+              status: 'failed',
+              startedAt: '2026-02-18T00:00:10.000Z',
+              completedAt: '2026-02-18T00:01:00.000Z',
+              latestArtifact: null,
+              latestRoutingDecision: null,
+              latestDiagnostics: null,
+            },
+          ],
+        })}
+        repositories={[createRepository()]}
+        enableRealtime={false}
+      />,
+    );
+
+    expect(screen.getByRole('button', { name: 'Retry Failed Node' })).toBeEnabled();
+    expect(screen.queryByRole('button', { name: 'Cancel Run' })).toBeNull();
+  });
+
+  it('applies pause control, refreshes detail, and shows in-flight and success feedback', async () => {
+    const pausedDetail = createRunDetail({
+      run: {
+        status: 'paused',
+      },
+    });
+    let resolvePauseActionResponse!: (response: Response) => void;
+    const pauseActionResponse = new Promise<Response>((resolve) => {
+      resolvePauseActionResponse = resolve;
+    });
+
+    fetchMock.mockImplementation((input, init) => {
+      const url = String(input);
+      if (url === '/api/dashboard/runs/412/actions/pause' && init?.method === 'POST') {
+        return pauseActionResponse;
+      }
+
+      if (url === '/api/dashboard/runs/412' && init?.method === 'GET') {
+        return Promise.resolve(createJsonResponse(pausedDetail));
+      }
+
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    });
+
+    render(
+      <RunDetailContent
+        initialDetail={createRunDetail()}
+        repositories={[createRepository()]}
+        enableRealtime={false}
+      />,
+    );
+
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('button', { name: 'Pause' }));
+
+    expect(screen.getByRole('button', { name: 'Pause...' })).toBeDisabled();
+    expect(screen.getByText('Applying pause action...')).toBeInTheDocument();
+
+    resolvePauseActionResponse(createJsonResponse(createControlResult()));
+
+    await waitFor(() => {
+      expect(screen.getByText('Run paused.')).toBeInTheDocument();
+    }, { timeout: 2_000 });
+
+    expect(screen.getByRole('button', { name: 'Resume' })).toBeEnabled();
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/dashboard/runs/412/actions/pause',
+      expect.objectContaining({ method: 'POST' }),
+    );
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/dashboard/runs/412',
+      expect.objectContaining({ method: 'GET' }),
+    );
+  });
+
+  it('surfaces lifecycle control API errors and leaves controls actionable', async () => {
+    fetchMock.mockImplementation((input, init) => {
+      const url = String(input);
+      if (url === '/api/dashboard/runs/412/actions/pause' && init?.method === 'POST') {
+        return Promise.resolve(
+          createJsonResponse(
+            {
+              error: {
+                message:
+                  'Cannot pause workflow run id=412 from status "completed". Expected status "running".',
+              },
+            },
+            409,
+          ),
+        );
+      }
+
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    });
+
+    render(
+      <RunDetailContent
+        initialDetail={createRunDetail()}
+        repositories={[createRepository()]}
+        enableRealtime={false}
+      />,
+    );
+
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('button', { name: 'Pause' }));
+
+    await waitFor(() => {
+      expect(
+        screen.getByText(
+          'Cannot pause workflow run id=412 from status "completed". Expected status "running".',
+        ),
+      ).toBeInTheDocument();
+    }, { timeout: 2_000 });
+
+    expect(screen.getByRole('button', { name: 'Pause' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Cancel Run' })).toBeEnabled();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it('shows reconnect state after transient failure and recovers on retry', async () => {
@@ -1231,7 +1395,8 @@ describe('RunDetailContent realtime updates', () => {
     expect(within(focusCard!).getByText('Current status')).toBeInTheDocument();
     expect(within(focusCard!).getByText('Latest event')).toBeInTheDocument();
     expect(within(focusCard!).getByText('Next action')).toBeInTheDocument();
-    expect(within(focusCard!).getByRole('button', { name: 'Pause' })).toBeDisabled();
+    expect(within(focusCard!).getByRole('button', { name: 'Pause' })).toBeEnabled();
+    expect(within(focusCard!).getByRole('button', { name: 'Cancel Run' })).toBeEnabled();
     expect(within(focusCard!).getByText(/implement started \(attempt 1\)\./i)).toBeInTheDocument();
   });
 
