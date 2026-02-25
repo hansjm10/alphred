@@ -38,11 +38,21 @@ async function seedLifecycleFixtures(page: Page): Promise<LifecycleFixturePayloa
   };
 }
 
+async function openRunDetail(page: Page, runId: number): Promise<void> {
+  await page.goto(`/runs/${runId}`);
+  await expect(page.getByRole('heading', { name: `Run #${runId}` })).toBeVisible();
+}
+
+async function getRunDetail<T>(page: Page, runId: number): Promise<T> {
+  const response = await page.request.get(`/api/dashboard/runs/${runId}`);
+  expect(response.ok()).toBeTruthy();
+  return (await response.json()) as T;
+}
+
 test('cancels an in-progress run from run detail controls', async ({ page }) => {
   const fixtures = await seedLifecycleFixtures(page);
 
-  await page.goto(`/runs/${fixtures.runningRunId}`);
-  await expect(page.getByRole('heading', { name: `Run #${fixtures.runningRunId}` })).toBeVisible();
+  await openRunDetail(page, fixtures.runningRunId);
   await expect(page.getByRole('button', { name: 'Cancel Run', exact: true })).toBeEnabled();
 
   await page.getByRole('button', { name: 'Cancel Run', exact: true }).click();
@@ -50,58 +60,49 @@ test('cancels an in-progress run from run detail controls', async ({ page }) => 
   await expect(page.getByText('Run cancelled.')).toBeVisible();
   await expect(page.getByRole('button', { name: 'Run Cancelled' })).toBeDisabled();
 
-  const detailResponse = await page.request.get(`/api/dashboard/runs/${fixtures.runningRunId}`);
-  expect(detailResponse.ok()).toBeTruthy();
-  const detail = (await detailResponse.json()) as {
+  const detail = await getRunDetail<{
     run?: {
       status?: string;
     };
-  };
+  }>(page, fixtures.runningRunId);
   expect(detail.run?.status).toBe('cancelled');
 });
 
 test('supports pause then resume lifecycle controls from run detail', async ({ page }) => {
   const fixtures = await seedLifecycleFixtures(page);
 
-  await page.goto(`/runs/${fixtures.runningRunId}`);
-  await expect(page.getByRole('heading', { name: `Run #${fixtures.runningRunId}` })).toBeVisible();
+  await openRunDetail(page, fixtures.runningRunId);
   await expect(page.getByRole('button', { name: 'Pause', exact: true })).toBeEnabled();
 
   await page.getByRole('button', { name: 'Pause', exact: true }).click();
   await expect(page.getByText('Run paused.')).toBeVisible();
   await expect(page.getByRole('button', { name: 'Resume', exact: true })).toBeEnabled();
 
-  const pausedDetailResponse = await page.request.get(`/api/dashboard/runs/${fixtures.runningRunId}`);
-  expect(pausedDetailResponse.ok()).toBeTruthy();
-  const pausedDetail = (await pausedDetailResponse.json()) as {
+  const pausedDetail = await getRunDetail<{
     run?: {
       status?: string;
     };
-  };
+  }>(page, fixtures.runningRunId);
   expect(pausedDetail.run?.status).toBe('paused');
 
-  await page.goto(`/runs/${fixtures.pausedRunId}`);
-  await expect(page.getByRole('heading', { name: `Run #${fixtures.pausedRunId}` })).toBeVisible();
+  await openRunDetail(page, fixtures.pausedRunId);
   await expect(page.getByRole('button', { name: 'Resume', exact: true })).toBeEnabled();
 
   await page.getByRole('button', { name: 'Resume', exact: true }).click();
   await expect(page.getByText('Run resumed.')).toBeVisible();
 
-  const resumedDetailResponse = await page.request.get(`/api/dashboard/runs/${fixtures.pausedRunId}`);
-  expect(resumedDetailResponse.ok()).toBeTruthy();
-  const resumedDetail = (await resumedDetailResponse.json()) as {
+  const resumedDetail = await getRunDetail<{
     run?: {
       status?: string;
     };
-  };
+  }>(page, fixtures.pausedRunId);
   expect(['running', 'completed']).toContain(resumedDetail.run?.status);
 });
 
 test('retries a failed run from run detail and preserves prior attempt telemetry', async ({ page }) => {
   const fixtures = await seedLifecycleFixtures(page);
 
-  await page.goto(`/runs/${fixtures.failedRunId}`);
-  await expect(page.getByRole('heading', { name: `Run #${fixtures.failedRunId}` })).toBeVisible();
+  await openRunDetail(page, fixtures.failedRunId);
   await expect(page.getByRole('button', { name: 'Retry Failed Node', exact: true })).toBeEnabled();
 
   await page.getByRole('button', { name: 'Retry Failed Node', exact: true }).click();
@@ -121,9 +122,7 @@ test('retries a failed run from run detail and preserves prior attempt telemetry
   expect(Array.isArray(streamSnapshot.events)).toBe(true);
   expect(streamSnapshot.events?.length ?? 0).toBeGreaterThan(0);
 
-  const detailResponse = await page.request.get(`/api/dashboard/runs/${fixtures.failedRunId}`);
-  expect(detailResponse.ok()).toBeTruthy();
-  const detail = (await detailResponse.json()) as {
+  const detail = await getRunDetail<{
     nodes?: {
       id: number;
       attempt: number;
@@ -132,7 +131,7 @@ test('retries a failed run from run detail and preserves prior attempt telemetry
       runNodeId: number;
       attempt: number;
     }[];
-  };
+  }>(page, fixtures.failedRunId);
 
   const retriedNode = detail.nodes?.find(node => node.id === fixtures.failedRunNodeId) ?? null;
   expect(retriedNode).not.toBeNull();
