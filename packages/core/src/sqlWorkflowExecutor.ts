@@ -2844,7 +2844,6 @@ type ClaimedNodeSuccess = {
 
 type ClaimedNodeSuccessParams = {
   currentAttempt: number;
-  currentRunStatus: WorkflowRunStatus;
   contextManifest: ContextHandoffManifest;
   phaseResult: Awaited<ReturnType<typeof runPhase>>;
 };
@@ -2940,7 +2939,7 @@ function handleClaimedNodeSuccess(
   edgeRows: EdgeRow[],
   params: ClaimedNodeSuccessParams,
 ): ClaimedNodeSuccess {
-  const { currentAttempt, currentRunStatus, contextManifest, phaseResult } = params;
+  const { currentAttempt, contextManifest, phaseResult } = params;
 
   const artifactId = persistSuccessArtifact(db, {
     workflowRunId: run.id,
@@ -2990,7 +2989,7 @@ function handleClaimedNodeSuccess(
     error: null,
   });
 
-  let runStatus = currentRunStatus;
+  let runStatus: WorkflowRunStatus;
   if (routingOutcome.decisionType === 'no_route') {
     runStatus = transitionRunToCurrentForExecutor(db, run.id, 'failed');
   } else {
@@ -3185,7 +3184,6 @@ async function executeClaimedRunnableNode(
         edgeRows,
         {
           currentAttempt,
-          currentRunStatus,
           contextManifest: contextAssembly.manifest,
           phaseResult,
         },
@@ -3348,7 +3346,7 @@ function applyWorkflowRunRetryControl(
           .from(workflowRuns)
           .where(eq(workflowRuns.id, run.id))
           .get();
-        if (!txRun || txRun.status !== 'failed') {
+        if (txRun?.status !== 'failed') {
           throw new Error(
             `Workflow-run retry control precondition failed for id=${run.id}; expected status "failed".`,
           );
