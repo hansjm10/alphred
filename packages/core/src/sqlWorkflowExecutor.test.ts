@@ -6075,6 +6075,33 @@ describe('createSqlWorkflowExecutor', () => {
     });
   });
 
+  it('invokes onRunTerminal when cancelRun transitions a run into cancelled', async () => {
+    const { db, runId } = seedSingleAgentRun();
+    const onRunTerminal = vi.fn(async () => undefined);
+    const executor = createSqlWorkflowExecutor(db, {
+      resolveProvider: () => createProvider([]),
+      onRunTerminal,
+    });
+
+    const result = await executor.cancelRun({
+      workflowRunId: runId,
+    });
+
+    expect(result).toEqual({
+      action: 'cancel',
+      outcome: 'applied',
+      workflowRunId: runId,
+      previousRunStatus: 'pending',
+      runStatus: 'cancelled',
+      retriedRunNodeIds: [],
+    });
+    expect(onRunTerminal).toHaveBeenCalledTimes(1);
+    expect(onRunTerminal).toHaveBeenCalledWith({
+      workflowRunId: runId,
+      runStatus: 'cancelled',
+    });
+  });
+
   it('does not invoke onRunTerminal for blocked non-terminal outcomes', async () => {
     const { db, runId, runNodeId } = seedSingleAgentRun();
     transitionWorkflowRunStatus(db, {

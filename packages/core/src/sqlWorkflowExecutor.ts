@@ -3535,7 +3535,7 @@ export function createSqlWorkflowExecutor(
     },
 
     async cancelRun(params: WorkflowRunControlParams): Promise<WorkflowRunControlResult> {
-      return applyWorkflowRunStatusControl(db, {
+      const result = applyWorkflowRunStatusControl(db, {
         action: 'cancel',
         workflowRunId: params.workflowRunId,
         targetStatus: 'cancelled',
@@ -3544,6 +3544,12 @@ export function createSqlWorkflowExecutor(
         invalidTransitionMessage: status =>
           `Cannot cancel workflow run id=${params.workflowRunId} from status "${status}". Expected pending, running, or paused.`,
       });
+      await notifyRunTerminalTransition(dependencies, {
+        workflowRunId: result.workflowRunId,
+        previousRunStatus: result.previousRunStatus,
+        nextRunStatus: result.runStatus,
+      });
+      return result;
     },
 
     async pauseRun(params: WorkflowRunControlParams): Promise<WorkflowRunControlResult> {
