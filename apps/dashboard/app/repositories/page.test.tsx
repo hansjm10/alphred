@@ -5,7 +5,7 @@ import userEvent from '@testing-library/user-event';
 import type { ReactElement } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import RepositoriesPage, { RepositoriesPageContent } from './page';
-import type { DashboardRepositoryState } from '../../src/server/dashboard-contracts';
+import type { DashboardRepositoryState, DashboardRepositorySyncResult } from '../../src/server/dashboard-contracts';
 import type { GitHubAuthGate } from '../ui/github-auth';
 import { createGitHubAuthGate } from '../ui/github-auth';
 
@@ -48,6 +48,23 @@ function createAuthenticatedAuthGate(): GitHubAuthGate {
 
 function createJsonResponse(payload: unknown, init?: ResponseInit): Response {
   return new Response(JSON.stringify(payload), init);
+}
+
+function createRepositorySyncResult(
+  action: DashboardRepositorySyncResult['action'],
+  repository: DashboardRepositoryState,
+): DashboardRepositorySyncResult {
+  return {
+    action,
+    repository,
+    sync: {
+      mode: 'pull',
+      strategy: 'ff-only',
+      branch: repository.defaultBranch,
+      status: action === 'cloned' ? 'updated' : 'up_to_date',
+      conflictMessage: null,
+    },
+  };
 }
 
 describe('RepositoriesPage', () => {
@@ -148,15 +165,19 @@ describe('RepositoriesPage', () => {
       }),
     ];
     const fetchMock = vi.mocked(global.fetch);
-    fetchMock.mockResolvedValueOnce(createJsonResponse({
-      action: 'cloned',
-      repository: createRepository({
-        id: 3,
-        name: 'new-repo',
-        cloneStatus: 'cloned',
-        localPath: '/tmp/repos/new-repo',
-      }),
-    }));
+    fetchMock.mockResolvedValueOnce(
+      createJsonResponse(
+        createRepositorySyncResult(
+          'cloned',
+          createRepository({
+            id: 3,
+            name: 'new-repo',
+            cloneStatus: 'cloned',
+            localPath: '/tmp/repos/new-repo',
+          }),
+        ),
+      ),
+    );
 
     const user = userEvent.setup();
     render(<RepositoriesPageContent repositories={repositories} authGate={createAuthenticatedAuthGate()} />);
@@ -170,7 +191,7 @@ describe('RepositoriesPage', () => {
     });
 
     expect(await screen.findAllByText('/tmp/repos/new-repo')).toHaveLength(2);
-    expect(screen.getByText('new-repo sync completed (cloned).')).toBeInTheDocument();
+    expect(screen.getByText('new-repo sync completed (cloned, updated).')).toBeInTheDocument();
   });
 
   it('disables all row sync actions while a sync is in progress', async () => {
@@ -205,15 +226,17 @@ describe('RepositoriesPage', () => {
     expect(screen.getByRole('button', { name: 'Sync beta-repo' })).toBeDisabled();
 
     resolveSync(
-      createJsonResponse({
-        action: 'cloned',
-        repository: createRepository({
-          id: 1,
-          name: 'alpha-repo',
-          cloneStatus: 'cloned',
-          localPath: '/tmp/repos/alpha-repo',
-        }),
-      }),
+      createJsonResponse(
+        createRepositorySyncResult(
+          'cloned',
+          createRepository({
+            id: 1,
+            name: 'alpha-repo',
+            cloneStatus: 'cloned',
+            localPath: '/tmp/repos/alpha-repo',
+          }),
+        ),
+      ),
     );
 
     await waitFor(() => {
@@ -243,15 +266,17 @@ describe('RepositoriesPage', () => {
         ),
       )
       .mockResolvedValueOnce(
-        createJsonResponse({
-          action: 'fetched',
-          repository: createRepository({
-            id: 2,
-            name: 'sample-repo',
-            cloneStatus: 'cloned',
-            localPath: '/tmp/repos/sample-repo',
-          }),
-        }),
+        createJsonResponse(
+          createRepositorySyncResult(
+            'fetched',
+            createRepository({
+              id: 2,
+              name: 'sample-repo',
+              cloneStatus: 'cloned',
+              localPath: '/tmp/repos/sample-repo',
+            }),
+          ),
+        ),
       );
 
     const user = userEvent.setup();
@@ -263,7 +288,7 @@ describe('RepositoriesPage', () => {
 
     await user.click(screen.getByRole('button', { name: 'Retry sample-repo' }));
     expect(await screen.findAllByText('/tmp/repos/sample-repo')).toHaveLength(2);
-    expect(screen.getByText('sample-repo sync completed (fetched).')).toBeInTheDocument();
+    expect(screen.getByText('sample-repo sync completed (fetched, up_to_date).')).toBeInTheDocument();
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
@@ -278,15 +303,19 @@ describe('RepositoriesPage', () => {
           localPath: null,
         }),
       }, { status: 201 }))
-      .mockResolvedValueOnce(createJsonResponse({
-        action: 'cloned',
-        repository: createRepository({
-          id: 22,
-          name: 'new-repo',
-          cloneStatus: 'cloned',
-          localPath: '/tmp/repos/new-repo',
-        }),
-      }));
+      .mockResolvedValueOnce(
+        createJsonResponse(
+          createRepositorySyncResult(
+            'cloned',
+            createRepository({
+              id: 22,
+              name: 'new-repo',
+              cloneStatus: 'cloned',
+              localPath: '/tmp/repos/new-repo',
+            }),
+          ),
+        ),
+      );
 
     const user = userEvent.setup();
     render(
@@ -319,7 +348,7 @@ describe('RepositoriesPage', () => {
     });
 
     expect(await screen.findAllByText('/tmp/repos/new-repo')).toHaveLength(2);
-    expect(screen.getByText('new-repo sync completed (cloned).')).toBeInTheDocument();
+    expect(screen.getByText('new-repo sync completed (cloned, updated).')).toBeInTheDocument();
   });
 
   it('keeps add form visible and surfaces errors when add repository fails', async () => {
@@ -399,14 +428,18 @@ describe('RepositoriesPage', () => {
 
   it('targets a visible filtered repository when syncing from side-panel action', async () => {
     const fetchMock = vi.mocked(global.fetch);
-    fetchMock.mockResolvedValueOnce(createJsonResponse({
-      action: 'fetched',
-      repository: createRepository({
-        id: 2,
-        name: 'beta-repo',
-        cloneStatus: 'cloned',
-      }),
-    }));
+    fetchMock.mockResolvedValueOnce(
+      createJsonResponse(
+        createRepositorySyncResult(
+          'fetched',
+          createRepository({
+            id: 2,
+            name: 'beta-repo',
+            cloneStatus: 'cloned',
+          }),
+        ),
+      ),
+    );
 
     const user = userEvent.setup();
     render(

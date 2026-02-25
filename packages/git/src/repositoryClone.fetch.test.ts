@@ -71,6 +71,8 @@ describe('fetchRepository', () => {
         'http.https://dev.azure.com/.extraheader=AUTHORIZATION: Basic OmF6dXJlLXBhdA==',
         'fetch',
         '--all',
+        '--prune',
+        '--tags',
       ],
       {
         cwd: '/tmp/repo',
@@ -103,6 +105,8 @@ describe('fetchRepository', () => {
         'http.https://github.com/.extraheader=AUTHORIZATION: Basic eC1hY2Nlc3MtdG9rZW46Z2gtdG9rZW4=',
         'fetch',
         '--all',
+        '--prune',
+        '--tags',
       ],
       {
         cwd: '/tmp/repo',
@@ -129,7 +133,7 @@ describe('fetchRepository', () => {
 
     expect(spawnMock).toHaveBeenCalledWith(
       expect.stringMatching(gitExecutablePattern),
-      ['fetch', '--all'],
+      ['fetch', '--all', '--prune', '--tags'],
       {
         cwd: '/tmp/repo',
         stdio: 'inherit',
@@ -160,6 +164,8 @@ describe('fetchRepository', () => {
         'http.https://github.example.com/.extraheader=AUTHORIZATION: Basic eC1hY2Nlc3MtdG9rZW46Z2hlcy10b2tlbg==',
         'fetch',
         '--all',
+        '--prune',
+        '--tags',
       ],
       {
         cwd: '/tmp/repo',
@@ -186,7 +192,7 @@ describe('fetchRepository', () => {
 
     expect(spawnMock).toHaveBeenCalledWith(
       expect.stringMatching(gitExecutablePattern),
-      ['fetch', '--all'],
+      ['fetch', '--all', '--prune', '--tags'],
       {
         cwd: '/tmp/repo',
         stdio: 'inherit',
@@ -212,7 +218,7 @@ describe('fetchRepository', () => {
 
     expect(spawnMock).toHaveBeenCalledWith(
       expect.stringMatching(gitExecutablePattern),
-      ['fetch', '--all'],
+      ['fetch', '--all', '--prune', '--tags'],
       {
         cwd: '/tmp/repo',
         stdio: 'inherit',
@@ -238,7 +244,7 @@ describe('fetchRepository', () => {
 
     expect(spawnMock).toHaveBeenCalledWith(
       expect.stringMatching(gitExecutablePattern),
-      ['fetch', '--all'],
+      ['fetch', '--all', '--prune', '--tags'],
       {
         cwd: '/tmp/repo',
         stdio: 'inherit',
@@ -253,7 +259,7 @@ describe('fetchRepository', () => {
 
     expect(spawnMock).toHaveBeenCalledWith(
       expect.stringMatching(gitExecutablePattern),
-      ['fetch', '--all'],
+      ['fetch', '--all', '--prune', '--tags'],
       {
         cwd: '/tmp/repo',
         stdio: 'inherit',

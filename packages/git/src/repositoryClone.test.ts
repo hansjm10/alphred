@@ -29,6 +29,71 @@ async function initializeGitRepository(path: string, originUrl?: string): Promis
   }
 }
 
+type SyncFixture = {
+  sandboxDir: string;
+  sourcePath: string;
+  remotePath: string;
+  localPath: string;
+  expectedRemoteUrl: string;
+};
+
+async function createSyncFixture(): Promise<SyncFixture> {
+  const sandboxDir = await createSandboxDir();
+  const fixtureDir = await createSandboxDir();
+  cleanupPaths.add(sandboxDir);
+  cleanupPaths.add(fixtureDir);
+
+  const sourcePath = join(fixtureDir, 'source');
+  const remotePath = join(fixtureDir, 'remote.git');
+  const localPath = join(sandboxDir, 'github', 'acme', 'frontend');
+  const expectedRemoteUrl = 'https://github.com/acme/frontend.git';
+
+  await mkdir(sourcePath, { recursive: true });
+  await execFileAsync('git', ['init'], { cwd: sourcePath });
+  await execFileAsync('git', ['config', 'user.email', 'alphred-tests@example.com'], { cwd: sourcePath });
+  await execFileAsync('git', ['config', 'user.name', 'Alphred Tests'], { cwd: sourcePath });
+  await execFileAsync('git', ['checkout', '-b', 'main'], { cwd: sourcePath });
+  await writeFile(join(sourcePath, 'README.md'), '# fixture\n');
+  await execFileAsync('git', ['add', 'README.md'], { cwd: sourcePath });
+  await execFileAsync('git', ['commit', '-m', 'initial'], { cwd: sourcePath });
+  await execFileAsync('git', ['init', '--bare', remotePath]);
+  await execFileAsync('git', ['remote', 'add', 'origin', remotePath], { cwd: sourcePath });
+  await execFileAsync('git', ['push', '--set-upstream', 'origin', 'main'], { cwd: sourcePath });
+  await execFileAsync('git', ['symbolic-ref', 'HEAD', 'refs/heads/main'], { cwd: remotePath });
+
+  await mkdir(dirname(localPath), { recursive: true });
+  await execFileAsync('git', ['clone', remotePath, localPath]);
+  await execFileAsync('git', ['remote', 'set-url', 'origin', expectedRemoteUrl], { cwd: localPath });
+  await execFileAsync('git', ['config', 'user.email', 'alphred-tests@example.com'], { cwd: localPath });
+  await execFileAsync('git', ['config', 'user.name', 'Alphred Tests'], { cwd: localPath });
+
+  return {
+    sandboxDir,
+    sourcePath,
+    remotePath,
+    localPath,
+    expectedRemoteUrl,
+  };
+}
+
+function createFixtureFetchAll(remotePath: string) {
+  return async (localPath: string): Promise<void> => {
+    await execFileAsync(
+      'git',
+      ['fetch', '--prune', '--tags', remotePath, '+refs/heads/*:refs/remotes/origin/*'],
+      { cwd: localPath },
+    );
+  };
+}
+
+async function commitFile(path: string, relativePath: string, content: string, message: string): Promise<string> {
+  await writeFile(join(path, relativePath), content);
+  await execFileAsync('git', ['add', relativePath], { cwd: path });
+  await execFileAsync('git', ['commit', '-m', message], { cwd: path });
+  const { stdout } = await execFileAsync('git', ['rev-parse', 'HEAD'], { cwd: path });
+  return stdout.trim();
+}
+
 function createMockProvider(
   kind: ScmProviderKind,
   cloneImpl?: (remote: string, localPath: string, environment?: NodeJS.ProcessEnv) => Promise<void>,
@@ -186,6 +251,209 @@ describe('ensureRepositoryClone', () => {
       },
     );
     expect(cloneRepo).not.toHaveBeenCalled();
+  });
+
+  it('returns fetched sync status by default for existing repositories', async () => {
+    const db = createMigratedDb();
+    const sandboxDir = await createSandboxDir();
+    cleanupPaths.add(sandboxDir);
+    const localPath = join(sandboxDir, 'github', 'acme', 'frontend');
+    await initializeGitRepository(localPath, 'https://github.com/acme/frontend.git');
+
+    insertRepository(db, {
+      name: 'frontend',
+      provider: 'github',
+      remoteUrl: 'https://github.com/acme/frontend.git',
+      remoteRef: 'acme/frontend',
+      localPath,
+      cloneStatus: 'cloned',
+    });
+
+    const fetchAll = vi.fn(async () => undefined);
+
+    const result = await ensureRepositoryClone({
+      db,
+      repository: {
+        name: 'frontend',
+        provider: 'github',
+        remoteUrl: 'https://github.com/acme/frontend.git',
+        remoteRef: 'acme/frontend',
+      },
+      fetchAll,
+      environment: {
+        ALPHRED_SANDBOX_DIR: sandboxDir,
+      },
+    });
+
+    expect(result.action).toBe('fetched');
+    expect(result.sync).toMatchObject({
+      mode: 'fetch',
+      strategy: null,
+      status: 'fetched',
+      conflictMessage: null,
+    });
+  });
+
+  it('pulls fetched updates with ff-only strategy when sync mode is pull', async () => {
+    const fixture = await createSyncFixture();
+    const db = createMigratedDb();
+
+    insertRepository(db, {
+      name: 'frontend',
+      provider: 'github',
+      remoteUrl: fixture.expectedRemoteUrl,
+      remoteRef: 'acme/frontend',
+      localPath: fixture.localPath,
+      cloneStatus: 'cloned',
+      defaultBranch: 'main',
+    });
+
+    const remoteHead = await commitFile(
+      fixture.sourcePath,
+      'remote.txt',
+      'remote update\n',
+      'remote: update main',
+    );
+    await execFileAsync('git', ['push', 'origin', 'main'], { cwd: fixture.sourcePath });
+
+    const result = await ensureRepositoryClone({
+      db,
+      repository: {
+        name: 'frontend',
+        provider: 'github',
+        remoteUrl: fixture.expectedRemoteUrl,
+        remoteRef: 'acme/frontend',
+        defaultBranch: 'main',
+      },
+      fetchAll: createFixtureFetchAll(fixture.remotePath),
+      environment: {
+        ALPHRED_SANDBOX_DIR: fixture.sandboxDir,
+      },
+      sync: {
+        mode: 'pull',
+        strategy: 'ff-only',
+      },
+    });
+
+    const { stdout: localHeadStdout } = await execFileAsync('git', ['rev-parse', 'HEAD'], {
+      cwd: fixture.localPath,
+    });
+    expect(localHeadStdout.trim()).toBe(remoteHead);
+    expect(result.sync).toEqual({
+      mode: 'pull',
+      strategy: 'ff-only',
+      branch: 'main',
+      status: 'updated',
+      conflictMessage: null,
+    });
+  });
+
+  it('returns conflicted sync status when ff-only cannot fast-forward', async () => {
+    const fixture = await createSyncFixture();
+    const db = createMigratedDb();
+
+    insertRepository(db, {
+      name: 'frontend',
+      provider: 'github',
+      remoteUrl: fixture.expectedRemoteUrl,
+      remoteRef: 'acme/frontend',
+      localPath: fixture.localPath,
+      cloneStatus: 'cloned',
+      defaultBranch: 'main',
+    });
+
+    await commitFile(
+      fixture.localPath,
+      'local.txt',
+      'local change\n',
+      'local: diverging change',
+    );
+    await commitFile(
+      fixture.sourcePath,
+      'remote.txt',
+      'remote change\n',
+      'remote: diverging change',
+    );
+    await execFileAsync('git', ['push', 'origin', 'main'], { cwd: fixture.sourcePath });
+
+    const result = await ensureRepositoryClone({
+      db,
+      repository: {
+        name: 'frontend',
+        provider: 'github',
+        remoteUrl: fixture.expectedRemoteUrl,
+        remoteRef: 'acme/frontend',
+        defaultBranch: 'main',
+      },
+      fetchAll: createFixtureFetchAll(fixture.remotePath),
+      environment: {
+        ALPHRED_SANDBOX_DIR: fixture.sandboxDir,
+      },
+      sync: {
+        mode: 'pull',
+        strategy: 'ff-only',
+      },
+    });
+
+    expect(result.sync?.status).toBe('conflicted');
+    expect(result.sync?.conflictMessage).toContain('Sync conflict on branch "main"');
+    expect(getRepositoryByName(db, 'frontend')?.cloneStatus).toBe('cloned');
+  });
+
+  it('applies merge strategy when branches diverge without conflicts', async () => {
+    const fixture = await createSyncFixture();
+    const db = createMigratedDb();
+
+    insertRepository(db, {
+      name: 'frontend',
+      provider: 'github',
+      remoteUrl: fixture.expectedRemoteUrl,
+      remoteRef: 'acme/frontend',
+      localPath: fixture.localPath,
+      cloneStatus: 'cloned',
+      defaultBranch: 'main',
+    });
+
+    await commitFile(
+      fixture.localPath,
+      'local-only.txt',
+      'local only\n',
+      'local: add local-only file',
+    );
+    await commitFile(
+      fixture.sourcePath,
+      'remote-only.txt',
+      'remote only\n',
+      'remote: add remote-only file',
+    );
+    await execFileAsync('git', ['push', 'origin', 'main'], { cwd: fixture.sourcePath });
+
+    const result = await ensureRepositoryClone({
+      db,
+      repository: {
+        name: 'frontend',
+        provider: 'github',
+        remoteUrl: fixture.expectedRemoteUrl,
+        remoteRef: 'acme/frontend',
+        defaultBranch: 'main',
+      },
+      fetchAll: createFixtureFetchAll(fixture.remotePath),
+      environment: {
+        ALPHRED_SANDBOX_DIR: fixture.sandboxDir,
+      },
+      sync: {
+        mode: 'pull',
+        strategy: 'merge',
+      },
+    });
+
+    expect(result.sync).toEqual({
+      mode: 'pull',
+      strategy: 'merge',
+      branch: 'main',
+      status: 'updated',
+      conflictMessage: null,
+    });
   });
 
   it('fetches existing git repositories even when clone status is error', async () => {

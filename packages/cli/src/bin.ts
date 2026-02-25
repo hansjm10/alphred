@@ -34,7 +34,10 @@ import {
   WorktreeManager,
   createScmProvider as createGitScmProvider,
   ensureRepositoryClone,
+  repositorySyncStrategies,
   resolveSandboxDir,
+  type RepositorySyncDetails,
+  type RepositorySyncStrategy,
   type ScmProviderConfig,
 } from '@alphred/git';
 import type { AuthStatus, RepositoryConfig } from '@alphred/shared';
@@ -262,7 +265,8 @@ function printGeneralUsage(io: Pick<CliIo, 'stdout'>): void {
   io.stdout('  repo show <name>           Show repository details');
   io.stdout('  repo remove <name> [--purge]');
   io.stdout('                             Remove repository and optionally local clone');
-  io.stdout('  repo sync <name>           Clone or fetch repository into sandbox');
+  io.stdout('  repo sync <name> [--strategy <ff-only|merge|rebase>]');
+  io.stdout('                             Clone or fetch repository into sandbox and update branch state');
   io.stdout('  list                     List available workflows (not implemented)');
 }
 
@@ -480,6 +484,33 @@ function parseStrictPositiveInteger(value: string): number | null {
   return parsed;
 }
 
+const repoSyncStrategySet = new Set<RepositorySyncStrategy>(repositorySyncStrategies);
+
+function parseRepoSyncStrategy(value: string | undefined, io: Pick<CliIo, 'stderr'>): RepositorySyncStrategy | null {
+  if (value === undefined) {
+    return 'ff-only';
+  }
+
+  if (repoSyncStrategySet.has(value as RepositorySyncStrategy)) {
+    return value as RepositorySyncStrategy;
+  }
+
+  io.stderr(`Option "--strategy" must be one of: ${repositorySyncStrategies.join(', ')}.`);
+  io.stderr(REPO_SYNC_USAGE);
+  return null;
+}
+
+function formatRepoSyncSummary(sync: RepositorySyncDetails | undefined): string {
+  if (!sync) {
+    return 'Sync status unavailable.';
+  }
+
+  const modeLabel = sync.mode === 'pull' ? 'pull' : 'fetch';
+  const strategyLabel = sync.strategy === null ? 'n/a' : sync.strategy;
+  const branchLabel = sync.branch === null ? 'n/a' : sync.branch;
+  return `Sync status: ${sync.status} (mode=${modeLabel}, strategy=${strategyLabel}, branch=${branchLabel}).`;
+}
+
 function resolveDatabasePath(io: CliIo): string {
   const configuredPath = io.env.ALPHRED_DB_PATH?.trim();
   if (configuredPath && configuredPath.length > 0) {
@@ -544,7 +575,7 @@ const REPO_ADD_USAGE = 'Usage: alphred repo add --name <name> (--github <owner/r
 const REPO_LIST_USAGE = 'Usage: alphred repo list';
 const REPO_SHOW_USAGE = 'Usage: alphred repo show <name>';
 const REPO_REMOVE_USAGE = 'Usage: alphred repo remove <name> [--purge]';
-const REPO_SYNC_USAGE = 'Usage: alphred repo sync <name>';
+const REPO_SYNC_USAGE = 'Usage: alphred repo sync <name> [--strategy <ff-only|merge|rebase>]';
 type ScmAuthPreflightMode = 'warn' | 'require';
 
 function isRunControlAction(value: string): value is WorkflowRunControlAction {
@@ -1387,7 +1418,7 @@ async function handleRepoSyncCommand(
     {
       commandName: 'repo sync',
       usage: REPO_SYNC_USAGE,
-      allowedOptions: [],
+      allowedOptions: ['strategy'],
       positionalCount: 1,
     },
     io,
@@ -1399,6 +1430,10 @@ async function handleRepoSyncCommand(
   const name = parsedOptions.positionals[0]?.trim() ?? '';
   if (name.length === 0) {
     return usageError(io, 'Repository name cannot be empty.', REPO_SYNC_USAGE);
+  }
+  const syncStrategy = parseRepoSyncStrategy(parsedOptions.options.get('strategy'), io);
+  if (!syncStrategy) {
+    return EXIT_USAGE_ERROR;
   }
 
   try {
@@ -1426,10 +1461,20 @@ async function handleRepoSyncCommand(
         defaultBranch: repository.defaultBranch,
       },
       environment: io.env,
+      sync: {
+        mode: 'pull',
+        strategy: syncStrategy,
+      },
     });
-    io.stdout(
-      `Repository "${name}" ${synced.action} at "${synced.repository.localPath ?? '(unknown path)'}".`,
-    );
+    const localPath = synced.repository.localPath ?? '(unknown path)';
+    if (synced.sync?.status === 'conflicted') {
+      io.stderr(synced.sync.conflictMessage ?? `Repository "${name}" sync encountered conflicts.`);
+      io.stderr(`Repository "${name}" remains at "${localPath}".`);
+      return EXIT_RUNTIME_ERROR;
+    }
+
+    io.stdout(`Repository "${name}" ${synced.action} at "${localPath}".`);
+    io.stdout(formatRepoSyncSummary(synced.sync));
     return EXIT_SUCCESS;
   } catch (error) {
     io.stderr(`Failed to sync repository: ${toErrorMessage(error)}`);

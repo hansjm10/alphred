@@ -18,5 +18,17 @@ export {
 export { createScmProvider, type ScmProvider, type ScmProviderConfig, type GitHubScmProviderConfig, type AzureDevOpsScmProviderConfig } from './scmProvider.js';
 export { GitHubScmProvider } from './githubScmProvider.js';
 export { AzureDevOpsScmProvider } from './azureDevopsScmProvider.js';
-export { ensureRepositoryClone, fetchRepository, type EnsureRepositoryCloneParams, type EnsureRepositoryCloneResult } from './repositoryClone.js';
+export {
+  ensureRepositoryClone,
+  fetchRepository,
+  repositorySyncModes,
+  repositorySyncStatuses,
+  repositorySyncStrategies,
+  type EnsureRepositoryCloneParams,
+  type EnsureRepositoryCloneResult,
+  type RepositorySyncDetails,
+  type RepositorySyncMode,
+  type RepositorySyncStatus,
+  type RepositorySyncStrategy,
+} from './repositoryClone.js';
 export { resolveSandboxDir, deriveSandboxRepoPath } from './sandbox.js';

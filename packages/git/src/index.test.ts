@@ -21,6 +21,9 @@ describe('git index exports', () => {
     expect(typeof git.AzureDevOpsScmProvider).toBe('function');
     expect(typeof git.ensureRepositoryClone).toBe('function');
     expect(typeof git.fetchRepository).toBe('function');
+    expect(Array.isArray(git.repositorySyncModes)).toBe(true);
+    expect(Array.isArray(git.repositorySyncStrategies)).toBe(true);
+    expect(Array.isArray(git.repositorySyncStatuses)).toBe(true);
     expect(typeof git.resolveSandboxDir).toBe('function');
     expect(typeof git.deriveSandboxRepoPath).toBe('function');
   });

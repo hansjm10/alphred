@@ -67,7 +67,7 @@ alphred repo add --name <name> (--github <owner/repo> | --azure <org/project/rep
 alphred repo list
 alphred repo show <name>
 alphred repo remove <name> [--purge]
-alphred repo sync <name>
+alphred repo sync <name> [--strategy <ff-only|merge|rebase>]
 alphred list
 ```
 
