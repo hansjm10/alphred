@@ -169,6 +169,12 @@ type RunExecutionSetup = {
   worktreeManager: RunWorktreeManager | null;
 };
 
+type RunRepositoryPreparation = {
+  resolvedRepo: ResolvedRunRepository | null;
+  worktreeManager: RunWorktreeManager | null;
+  authExitCode: ExitCode | null;
+};
+
 type RunExecutionSummary = {
   workflowRunId: number;
   finalStep: {
@@ -1052,6 +1058,44 @@ async function cleanupRunWorktrees(
   }
 }
 
+async function prepareRunRepository(
+  db: AlphredDatabase,
+  repoInput: string | null,
+  dependencies: CliDependencies,
+  io: Pick<CliIo, 'stdout' | 'stderr' | 'env'>,
+): Promise<RunRepositoryPreparation> {
+  const resolvedRepo = repoInput ? resolveRunRepository(db, repoInput) : null;
+  const runRepository = resolvedRepo ? getRepositoryByName(db, resolvedRepo.repoName) : null;
+  if (resolvedRepo && !runRepository) {
+    throw new Error(`Repository "${resolvedRepo.repoName}" was not found.`);
+  }
+
+  if (runRepository) {
+    const authExitCode = await runScmAuthPreflight(runRepository, dependencies, io, {
+      commandName: 'run --repo',
+      mode: 'require',
+    });
+    if (authExitCode !== null) {
+      return {
+        resolvedRepo,
+        worktreeManager: null,
+        authExitCode,
+      };
+    }
+  }
+
+  reportAutoRegisteredRepository(io, resolvedRepo);
+  return {
+    resolvedRepo,
+    worktreeManager: resolvedRepo
+      ? dependencies.createWorktreeManager(db, {
+          environment: io.env,
+        })
+      : null,
+    authExitCode: null,
+  };
+}
+
 async function handleRunCommand(rawArgs: readonly string[], dependencies: CliDependencies, io: CliIo): Promise<ExitCode> {
   const runSubcommand = rawArgs[0];
   if (runSubcommand && isRunControlAction(runSubcommand)) {
@@ -1072,27 +1116,12 @@ async function handleRunCommand(rawArgs: readonly string[], dependencies: CliDep
 
   try {
     db = openInitializedDatabase(dependencies, io);
-    const resolvedRepo = repoInput ? resolveRunRepository(db, repoInput) : null;
-    const runRepository = resolvedRepo ? getRepositoryByName(db, resolvedRepo.repoName) : null;
-    if (resolvedRepo && !runRepository) {
-      throw new Error(`Repository "${resolvedRepo.repoName}" was not found.`);
+    const runRepository = await prepareRunRepository(db, repoInput, dependencies, io);
+    if (runRepository.authExitCode !== null) {
+      return runRepository.authExitCode;
     }
-    if (runRepository) {
-      const authExitCode = await runScmAuthPreflight(runRepository, dependencies, io, {
-        commandName: 'run --repo',
-        mode: 'require',
-      });
-      if (authExitCode !== null) {
-        return authExitCode;
-      }
-    }
-    reportAutoRegisteredRepository(io, resolvedRepo);
-
-    if (resolvedRepo) {
-      worktreeManager = dependencies.createWorktreeManager(db, {
-        environment: io.env,
-      });
-    }
+    const { resolvedRepo } = runRepository;
+    worktreeManager = runRepository.worktreeManager;
 
     runId = materializeRun(treeKey, db, io);
     const runSetup = await setupRunExecution(runId, treeKey, resolvedRepo, branchOverride, worktreeManager, io);
