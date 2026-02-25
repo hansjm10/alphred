@@ -2267,6 +2267,68 @@ describe('createDashboardService', () => {
     expect(service.hasBackgroundExecution(77)).toBe(false);
   });
 
+  it('falls back to cwd when resume control has only removed run worktrees', async () => {
+    const resumeRun = vi.fn(async () => ({
+      action: 'resume' as const,
+      outcome: 'applied' as const,
+      workflowRunId: 1,
+      previousRunStatus: 'paused' as const,
+      runStatus: 'running' as const,
+      retriedRunNodeIds: [] as number[],
+    }));
+    const executeRun = vi.fn(async () => {
+      await new Promise(resolve => setTimeout(resolve, 20));
+      return {
+        finalStep: {
+          runStatus: 'completed',
+          outcome: 'completed',
+        },
+        executedNodes: 1,
+      };
+    });
+    const createWorktreeManager = vi.fn(() => ({
+      createRunWorktree: vi.fn(),
+      cleanupRun: vi.fn(),
+    }));
+
+    const { db, dependencies } = createHarness({
+      createSqlWorkflowExecutor: () =>
+        ({
+          executeRun,
+          cancelRun: vi.fn(),
+          pauseRun: vi.fn(),
+          resumeRun,
+          retryRun: vi.fn(),
+        }) as unknown as ReturnType<DashboardServiceDependencies['createSqlWorkflowExecutor']>,
+      createWorktreeManager,
+    });
+    seedRunData(db);
+    db.update(runWorktrees)
+      .set({
+        status: 'removed',
+        removedAt: '2026-02-17T20:03:00.000Z',
+      })
+      .where(eq(runWorktrees.workflowRunId, 1))
+      .run();
+
+    const service = createDashboardService({
+      dependencies,
+      cwd: '/work/alphred/fallback-cwd',
+    });
+
+    await service.controlWorkflowRun(1, 'resume');
+    await waitForBackgroundExecution(service, 1);
+
+    expect(executeRun).toHaveBeenCalledTimes(1);
+    expect(executeRun).toHaveBeenCalledWith({
+      workflowRunId: 1,
+      options: {
+        workingDirectory: '/work/alphred/fallback-cwd',
+      },
+    });
+    expect(createWorktreeManager).not.toHaveBeenCalled();
+  });
+
   it('keeps resume control idempotent while a background execution is already active', async () => {
     const resumeRun = vi
       .fn()

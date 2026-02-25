@@ -956,7 +956,7 @@ export function createDashboardService(options: {
       .orderBy(asc(runWorktrees.createdAt), asc(runWorktrees.id))
       .all();
 
-    const selectedWorktree = worktreeRows.find(worktree => worktree.status === 'active') ?? worktreeRows.at(-1);
+    const selectedWorktree = worktreeRows.filter(worktree => worktree.status === 'active').at(-1);
     if (!selectedWorktree) {
       return {
         workingDirectory: cwd,
