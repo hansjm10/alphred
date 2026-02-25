@@ -3220,10 +3220,10 @@ function applyWorkflowRunStatusControl(
 
     try {
       let nextStatus: WorkflowRunStatus;
-      if (params.action === 'cancel' && run.status === 'pending') {
+      if (params.action === 'cancel' && (run.status === 'pending' || run.status === 'paused')) {
         transitionWorkflowRunStatus(db, {
           workflowRunId: run.id,
-          expectedFrom: 'pending',
+          expectedFrom: run.status,
           to: 'cancelled',
         });
         nextStatus = 'cancelled';
@@ -3441,11 +3441,17 @@ export function createSqlWorkflowExecutor(
       }
 
       if (runTerminalStatuses.has(runStatus)) {
-        return {
+        const runTerminalResult: ExecuteNextRunnableNodeResult = {
           outcome: 'run_terminal',
           workflowRunId: currentRun.id,
           runStatus,
         };
+        await notifyRunTerminalTransition(dependencies, {
+          workflowRunId: currentRun.id,
+          previousRunStatus: currentRun.status,
+          nextRunStatus: runTerminalResult.runStatus,
+        });
+        return runTerminalResult;
       }
 
       const claimResult = claimRunnableNode(db, currentRun, nextRunnableNode);

@@ -4,6 +4,7 @@ import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { and, asc, eq, inArray, sql } from 'drizzle-orm';
+import { integer, sqliteTable, text } from 'drizzle-orm/sqlite-core';
 import type { ProviderEvent, ProviderRunOptions } from '@alphred/shared';
 import { describe, expect, it, vi } from 'vitest';
 import {
@@ -30,6 +31,11 @@ const coreSourceDirectory = fileURLToPath(new URL('.', import.meta.url));
 const corePackageRoot = resolve(coreSourceDirectory, '..');
 const workspaceRoot = resolve(corePackageRoot, '../..');
 const execFileAsync = promisify(execFile);
+const workflowRunStatusAudit = sqliteTable('workflow_run_status_audit', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  oldStatus: text('old_status').notNull(),
+  newStatus: text('new_status').notNull(),
+});
 
 async function pathExists(path: string): Promise<boolean> {
   try {
@@ -6189,6 +6195,73 @@ describe('createSqlWorkflowExecutor', () => {
     expect(persistedRun.status).toBe('cancelled');
     expect(persistedRun.startedAt).toBeNull();
     expect(persistedRun.completedAt).not.toBeNull();
+  });
+
+  it('cancels paused runs with a direct paused-to-cancelled transition', async () => {
+    const { db, runId } = seedSingleAgentRun();
+    transitionWorkflowRunStatus(db, {
+      workflowRunId: runId,
+      expectedFrom: 'pending',
+      to: 'running',
+      occurredAt: '2026-01-01T00:00:00.000Z',
+    });
+    transitionWorkflowRunStatus(db, {
+      workflowRunId: runId,
+      expectedFrom: 'running',
+      to: 'paused',
+      occurredAt: '2026-01-01T00:01:00.000Z',
+    });
+
+    db.run(sql`DROP TABLE IF EXISTS workflow_run_status_audit`);
+    db.run(sql`CREATE TABLE workflow_run_status_audit (
+      id integer primary key autoincrement,
+      old_status text not null,
+      new_status text not null
+    )`);
+    db.run(sql`DROP TRIGGER IF EXISTS workflow_runs_test_cancel_from_paused_audit`);
+    db.run(
+      sql.raw(`CREATE TRIGGER workflow_runs_test_cancel_from_paused_audit
+      AFTER UPDATE OF status ON workflow_runs
+      FOR EACH ROW
+      WHEN OLD.id = ${runId}
+      BEGIN
+        INSERT INTO workflow_run_status_audit(old_status, new_status)
+        VALUES (OLD.status, NEW.status);
+      END`),
+    );
+
+    const executor = createSqlWorkflowExecutor(db, {
+      resolveProvider: () => createProvider([]),
+    });
+
+    const cancelResult = await executor.cancelRun({
+      workflowRunId: runId,
+    });
+
+    expect(cancelResult).toEqual({
+      action: 'cancel',
+      outcome: 'applied',
+      workflowRunId: runId,
+      previousRunStatus: 'paused',
+      runStatus: 'cancelled',
+      retriedRunNodeIds: [],
+    });
+
+    const statusAuditRows = db
+      .select({
+        oldStatus: workflowRunStatusAudit.oldStatus,
+        newStatus: workflowRunStatusAudit.newStatus,
+      })
+      .from(workflowRunStatusAudit)
+      .orderBy(asc(workflowRunStatusAudit.id))
+      .all();
+
+    expect(statusAuditRows).toEqual([
+      {
+        oldStatus: 'paused',
+        newStatus: 'cancelled',
+      },
+    ]);
   });
 
   it('preserves in-flight node completion when paused and blocks additional node claims', async () => {
