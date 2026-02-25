@@ -2382,10 +2382,23 @@ export function RunDetailContent({
         });
       } catch (refreshError) {
         const refreshMessage = refreshError instanceof Error ? refreshError.message : 'Unable to refresh run timeline.';
+        const fallbackRunStatus = controlResult.runStatus;
+        setDetail(currentDetail => ({
+          ...currentDetail,
+          run: {
+            ...currentDetail.run,
+            status: fallbackRunStatus,
+          },
+        }));
+        setUpdateError(refreshMessage);
+        setIsRefreshing(false);
+        setLastUpdatedAtMs(Date.now());
+        setNextRetryAtMs(null);
+        setChannelState(enableRealtime && isActiveRunStatus(fallbackRunStatus) ? 'reconnecting' : 'disabled');
         setActionFeedback({
           tone: 'error',
           message: `${successMessage} Unable to refresh run timeline: ${refreshMessage}`,
-          runStatus: controlResult.runStatus,
+          runStatus: fallbackRunStatus,
         });
       }
     } catch (error) {
@@ -2503,7 +2516,7 @@ export function RunDetailContent({
           </div>
           {actionHint ? (
             <output
-              className={`meta-text run-action-feedback run-action-feedback--${actionHintTone}`}
+              className={`run-action-feedback run-action-feedback--${actionHintTone}`}
               aria-live="polite"
             >
               {actionHint}

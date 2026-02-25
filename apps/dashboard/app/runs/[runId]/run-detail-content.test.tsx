@@ -506,6 +506,9 @@ describe('RunDetailContent realtime updates', () => {
     await waitFor(() => {
       expect(screen.getByText('Run paused.')).toBeInTheDocument();
     }, { timeout: 2_000 });
+    const successFeedback = screen.getByText('Run paused.');
+    expect(successFeedback).toHaveClass('run-action-feedback', 'run-action-feedback--success');
+    expect(successFeedback).not.toHaveClass('meta-text');
 
     expect(screen.getByRole('button', { name: 'Resume' })).toBeEnabled();
     expect(fetchMock).toHaveBeenCalledWith(
@@ -556,10 +559,119 @@ describe('RunDetailContent realtime updates', () => {
         ),
       ).toBeInTheDocument();
     }, { timeout: 2_000 });
+    const errorFeedback = screen.getByText(
+      'Cannot pause workflow run id=412 from status "completed". Expected status "running".',
+    );
+    expect(errorFeedback).toHaveClass('run-action-feedback', 'run-action-feedback--error');
+    expect(errorFeedback).not.toHaveClass('meta-text');
 
     expect(screen.getByRole('button', { name: 'Pause' })).toBeEnabled();
     expect(screen.getByRole('button', { name: 'Cancel Run' })).toBeEnabled();
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('restarts realtime polling when retry succeeds but immediate refresh fails', async () => {
+    const failedDetail = createRunDetail({
+      run: {
+        status: 'failed',
+        completedAt: '2026-02-18T00:10:00.000Z',
+        nodeSummary: {
+          pending: 0,
+          running: 0,
+          completed: 0,
+          failed: 1,
+          skipped: 0,
+          cancelled: 0,
+        },
+      },
+      nodes: [
+        {
+          id: 1,
+          treeNodeId: 1,
+          nodeKey: 'design',
+          sequenceIndex: 0,
+          attempt: 1,
+          status: 'failed',
+          startedAt: '2026-02-18T00:00:10.000Z',
+          completedAt: '2026-02-18T00:01:00.000Z',
+          latestArtifact: null,
+          latestRoutingDecision: null,
+          latestDiagnostics: null,
+        },
+      ],
+    });
+    const resumedDetail = createRunDetail({
+      run: {
+        status: 'running',
+        completedAt: null,
+      },
+      nodes: [
+        {
+          id: 1,
+          treeNodeId: 1,
+          nodeKey: 'design',
+          sequenceIndex: 0,
+          attempt: 2,
+          status: 'running',
+          startedAt: '2026-02-18T00:10:05.000Z',
+          completedAt: null,
+          latestArtifact: null,
+          latestRoutingDecision: null,
+          latestDiagnostics: null,
+        },
+      ],
+    });
+    let detailFetchCount = 0;
+
+    fetchMock.mockImplementation((input, init) => {
+      const url = String(input);
+      if (url === '/api/dashboard/runs/412/actions/retry' && init?.method === 'POST') {
+        return Promise.resolve(
+          createJsonResponse(
+            createControlResult({
+              action: 'retry',
+              previousRunStatus: 'failed',
+              runStatus: 'running',
+              retriedRunNodeIds: [1],
+            }),
+          ),
+        );
+      }
+
+      if (url === '/api/dashboard/runs/412' && init?.method === 'GET') {
+        detailFetchCount += 1;
+        if (detailFetchCount === 1) {
+          return Promise.reject(new Error('refresh down'));
+        }
+
+        return Promise.resolve(createJsonResponse(resumedDetail));
+      }
+
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    });
+
+    render(
+      <RunDetailContent
+        initialDetail={failedDetail}
+        repositories={[createRepository()]}
+        pollIntervalMs={50}
+      />,
+    );
+
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('button', { name: 'Retry Failed Node' }));
+
+    await waitFor(() => {
+      expect(screen.getByText(/Unable to refresh run timeline: refresh down/i)).toBeInTheDocument();
+    }, { timeout: 2_000 });
+
+    await waitFor(() => {
+      expect(detailFetchCount).toBeGreaterThan(1);
+    }, { timeout: 2_000 });
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Pause' })).toBeEnabled();
+    }, { timeout: 2_000 });
   });
 
   it('shows reconnect state after transient failure and recovers on retry', async () => {
