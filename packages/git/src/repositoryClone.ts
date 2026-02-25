@@ -289,11 +289,15 @@ async function pullFetchedBranch(params: PullFetchedBranchParams): Promise<PullF
       conflictMessage: `Sync conflict on branch "${normalizedBranch}" with strategy "${params.strategy}": ${conflictSummary}`,
     };
   } finally {
-    const restoreCommand = previousBranch !== undefined
-      ? ['checkout', previousBranch]
-      : previousHeadRevision !== undefined
-        ? ['checkout', '--detach', previousHeadRevision]
-        : undefined;
+    let restoreCommand: string[] | undefined;
+    if (previousBranch === undefined) {
+      if (previousHeadRevision !== undefined) {
+        restoreCommand = ['checkout', '--detach', previousHeadRevision];
+      }
+    } else {
+      restoreCommand = ['checkout', previousBranch];
+    }
+
     if (switchedToTargetBranch && restoreCommand !== undefined) {
       await runGitCommandWithOutput(restoreCommand, {
         cwd: params.localPath,
