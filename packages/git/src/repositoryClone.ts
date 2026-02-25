@@ -381,7 +381,7 @@ function resolvePullCommand(strategy: RepositorySyncStrategy, branch: string): s
   }
 
   if (strategy === 'merge') {
-    return ['merge', '--no-ff', '--no-edit', targetRef];
+    return ['merge', '--no-edit', targetRef];
   }
 
   return ['rebase', targetRef];

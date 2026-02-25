@@ -348,6 +348,60 @@ describe('ensureRepositoryClone', () => {
     });
   });
 
+  it('fast-forwards with merge strategy when local branch is only behind origin', async () => {
+    const fixture = await createSyncFixture();
+    const db = createMigratedDb();
+
+    insertRepository(db, {
+      name: 'frontend',
+      provider: 'github',
+      remoteUrl: fixture.expectedRemoteUrl,
+      remoteRef: 'acme/frontend',
+      localPath: fixture.localPath,
+      cloneStatus: 'cloned',
+      defaultBranch: 'main',
+    });
+
+    const remoteHead = await commitFile(
+      fixture.sourcePath,
+      'remote.txt',
+      'remote update\n',
+      'remote: update main',
+    );
+    await execFileAsync('git', ['push', 'origin', 'main'], { cwd: fixture.sourcePath });
+
+    const result = await ensureRepositoryClone({
+      db,
+      repository: {
+        name: 'frontend',
+        provider: 'github',
+        remoteUrl: fixture.expectedRemoteUrl,
+        remoteRef: 'acme/frontend',
+        defaultBranch: 'main',
+      },
+      fetchAll: createFixtureFetchAll(fixture.remotePath),
+      environment: {
+        ALPHRED_SANDBOX_DIR: fixture.sandboxDir,
+      },
+      sync: {
+        mode: 'pull',
+        strategy: 'merge',
+      },
+    });
+
+    const { stdout: localHeadStdout } = await execFileAsync('git', ['rev-parse', 'HEAD'], {
+      cwd: fixture.localPath,
+    });
+    expect(localHeadStdout.trim()).toBe(remoteHead);
+    expect(result.sync).toEqual({
+      mode: 'pull',
+      strategy: 'merge',
+      branch: 'main',
+      status: 'updated',
+      conflictMessage: null,
+    });
+  });
+
   it('returns conflicted sync status when ff-only cannot fast-forward', async () => {
     const fixture = await createSyncFixture();
     const db = createMigratedDb();
