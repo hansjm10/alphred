@@ -2,6 +2,8 @@
 
 import { useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from 'react';
 import type {
+  DashboardRunControlAction,
+  DashboardRunControlResult,
   DashboardRepositoryState,
   DashboardRunDetail,
   DashboardRunNodeStreamEvent,
@@ -21,11 +23,23 @@ type TimelineItem = Readonly<{
   category: TimelineCategory;
 }>;
 
-type PrimaryActionState = Readonly<{
+type OperatorActionState = Readonly<{
   label: string;
   href: string | null;
+  controlAction: DashboardRunControlAction | null;
   disabledReason: string | null;
 }>;
+
+type OperatorActionSet = Readonly<{
+  primary: OperatorActionState;
+  secondary: OperatorActionState | null;
+}>;
+
+type ActionFeedbackState = Readonly<{
+  tone: 'info' | 'success' | 'error';
+  message: string;
+  runStatus: DashboardRunSummary['status'] | null;
+}> | null;
 
 type RealtimeChannelState = 'disabled' | 'live' | 'reconnecting' | 'stale';
 type AgentStreamConnectionState = 'live' | 'reconnecting' | 'stale' | 'ended';
@@ -66,6 +80,8 @@ const RUN_STATUSES = new Set<DashboardRunSummary['status']>([
   'failed',
   'cancelled',
 ]);
+const RUN_CONTROL_ACTIONS = new Set<DashboardRunControlAction>(['cancel', 'pause', 'resume', 'retry']);
+const RUN_CONTROL_OUTCOMES = new Set<DashboardRunControlResult['outcome']>(['applied', 'noop']);
 const NODE_STATUSES = new Set<DashboardRunDetail['nodes'][number]['status']>([
   'pending',
   'running',
@@ -555,6 +571,55 @@ function parseRunDetailPayload(payload: unknown, expectedRunId: number): Dashboa
   return payload as DashboardRunDetail;
 }
 
+function parseRunControlPayload(payload: unknown, expectedRunId: number): DashboardRunControlResult | null {
+  if (!isRecord(payload)) {
+    return null;
+  }
+
+  if (
+    typeof payload.action !== 'string' ||
+    !RUN_CONTROL_ACTIONS.has(payload.action as DashboardRunControlAction) ||
+    typeof payload.outcome !== 'string' ||
+    !RUN_CONTROL_OUTCOMES.has(payload.outcome as DashboardRunControlResult['outcome']) ||
+    !isInteger(payload.workflowRunId) ||
+    payload.workflowRunId !== expectedRunId ||
+    typeof payload.previousRunStatus !== 'string' ||
+    !RUN_STATUSES.has(payload.previousRunStatus as DashboardRunSummary['status']) ||
+    typeof payload.runStatus !== 'string' ||
+    !RUN_STATUSES.has(payload.runStatus as DashboardRunSummary['status']) ||
+    !Array.isArray(payload.retriedRunNodeIds) ||
+    !payload.retriedRunNodeIds.every(isInteger)
+  ) {
+    return null;
+  }
+
+  return payload as DashboardRunControlResult;
+}
+
+async function fetchRunDetailSnapshot(
+  runId: number,
+  options: Readonly<{ signal?: AbortSignal }> = {},
+): Promise<DashboardRunDetail> {
+  const response = await fetch(`/api/dashboard/runs/${runId}`, {
+    method: 'GET',
+    headers: {
+      accept: 'application/json',
+    },
+    signal: options.signal,
+  });
+  const payload = (await response.json().catch(() => null)) as unknown;
+  if (!response.ok) {
+    throw new Error(resolveApiErrorMessage(response.status, payload, 'Unable to refresh run timeline'));
+  }
+
+  const parsedDetail = parseRunDetailPayload(payload, runId);
+  if (parsedDetail === null) {
+    throw new Error('Realtime run detail response was malformed.');
+  }
+
+  return parsedDetail;
+}
+
 function parseRunNodeStreamSnapshotPayload(
   payload: unknown,
   expectedRunId: number,
@@ -838,63 +903,164 @@ function resolveRepositoryContext(
   );
 }
 
-function resolvePrimaryAction(
+function resolveOperatorActions(
   run: DashboardRunSummary,
   hasWorktree: boolean,
-): PrimaryActionState {
+): OperatorActionSet {
   if (run.status === 'completed') {
     if (hasWorktree) {
       return {
-        label: 'Open Worktree',
-        href: `/runs/${run.id}/worktree`,
-        disabledReason: null,
+        primary: {
+          label: 'Open Worktree',
+          href: `/runs/${run.id}/worktree`,
+          controlAction: null,
+          disabledReason: null,
+        },
+        secondary: null,
       };
     }
 
     return {
-      label: 'Open Worktree',
-      href: null,
-      disabledReason: 'No worktree was captured for this run.',
+      primary: {
+        label: 'Open Worktree',
+        href: null,
+        controlAction: null,
+        disabledReason: 'No worktree was captured for this run.',
+      },
+      secondary: null,
     };
   }
 
   if (run.status === 'running') {
     return {
-      label: 'Pause',
-      href: null,
-      disabledReason: 'Pause action is blocked until lifecycle controls are available.',
+      primary: {
+        label: 'Pause',
+        href: null,
+        controlAction: 'pause',
+        disabledReason: null,
+      },
+      secondary: {
+        label: 'Cancel Run',
+        href: null,
+        controlAction: 'cancel',
+        disabledReason: null,
+      },
     };
   }
 
   if (run.status === 'paused') {
     return {
-      label: 'Resume',
-      href: null,
-      disabledReason: 'Resume action is blocked until lifecycle controls are available.',
+      primary: {
+        label: 'Resume',
+        href: null,
+        controlAction: 'resume',
+        disabledReason: null,
+      },
+      secondary: {
+        label: 'Cancel Run',
+        href: null,
+        controlAction: 'cancel',
+        disabledReason: null,
+      },
     };
   }
 
   if (run.status === 'failed') {
     return {
-      label: 'Retry Failed Node',
-      href: null,
-      disabledReason: 'Retry action is blocked until retry controls are available.',
+      primary: {
+        label: 'Retry Failed Node',
+        href: null,
+        controlAction: 'retry',
+        disabledReason: null,
+      },
+      secondary: null,
     };
   }
 
   if (run.status === 'pending') {
     return {
-      label: 'Pending Start',
-      href: null,
-      disabledReason: 'Run has not started yet.',
+      primary: {
+        label: 'Pending Start',
+        href: null,
+        controlAction: null,
+        disabledReason: 'Run has not started yet.',
+      },
+      secondary: {
+        label: 'Cancel Run',
+        href: null,
+        controlAction: 'cancel',
+        disabledReason: null,
+      },
     };
   }
 
   return {
-    label: 'Run Cancelled',
-    href: null,
-    disabledReason: 'Cancelled runs cannot be resumed from this view.',
+    primary: {
+      label: 'Run Cancelled',
+      href: null,
+      controlAction: null,
+      disabledReason: 'Cancelled runs cannot be resumed from this view.',
+    },
+    secondary: null,
   };
+}
+
+function toActionVerb(action: DashboardRunControlAction): string {
+  switch (action) {
+    case 'cancel':
+      return 'cancel';
+    case 'pause':
+      return 'pause';
+    case 'resume':
+      return 'resume';
+    case 'retry':
+      return 'retry';
+  }
+}
+
+function resolveRunControlErrorPrefix(action: DashboardRunControlAction): string {
+  switch (action) {
+    case 'cancel':
+      return 'Unable to cancel run';
+    case 'pause':
+      return 'Unable to pause run';
+    case 'resume':
+      return 'Unable to resume run';
+    case 'retry':
+      return 'Unable to retry failed node';
+  }
+}
+
+function resolveRunControlSuccessMessage(result: DashboardRunControlResult): string {
+  if (result.outcome === 'noop') {
+    switch (result.action) {
+      case 'cancel':
+        return 'Run is already cancelled.';
+      case 'pause':
+        return 'Run is already paused.';
+      case 'resume':
+        return 'Run is already running.';
+      case 'retry':
+        return 'No retryable failed nodes were queued.';
+    }
+  }
+
+  switch (result.action) {
+    case 'cancel':
+      return 'Run cancelled.';
+    case 'pause':
+      return 'Run paused.';
+    case 'resume':
+      return 'Run resumed.';
+    case 'retry':
+      if (result.retriedRunNodeIds.length < 1) {
+        return 'Retry queued for failed nodes.';
+      }
+
+      return result.retriedRunNodeIds.length === 1
+        ? 'Retry queued for 1 failed node.'
+        : `Retry queued for ${result.retriedRunNodeIds.length} failed nodes.`;
+  }
 }
 
 function truncatePreview(value: string, previewLength = 140): string {
@@ -1119,6 +1285,395 @@ function syncSelectionStateWithNodes(params: {
   }
 }
 
+function isStreamSupportedNodeStatus(status: DashboardRunDetail['nodes'][number]['status']): boolean {
+  return status === 'running' || status === 'completed' || status === 'failed';
+}
+
+function isSameStreamTarget(
+  currentTarget: AgentStreamTarget | null,
+  nextTarget: AgentStreamTarget,
+): boolean {
+  return (
+    currentTarget !== null &&
+    currentTarget.runNodeId === nextTarget.runNodeId &&
+    currentTarget.attempt === nextTarget.attempt &&
+    currentTarget.nodeKey === nextTarget.nodeKey
+  );
+}
+
+function syncStreamSelectionForNode(params: {
+  node: DashboardRunDetail['nodes'][number];
+  streamTarget: AgentStreamTarget | null;
+  setStreamTarget: StateSetter<AgentStreamTarget | null>;
+  setStreamAutoScroll: StateSetter<boolean>;
+  setStreamBufferedEvents: StateSetter<DashboardRunNodeStreamEvent[]>;
+}): void {
+  const { node, streamTarget, setStreamTarget, setStreamAutoScroll, setStreamBufferedEvents } = params;
+  if (!isStreamSupportedNodeStatus(node.status)) {
+    if (streamTarget !== null) {
+      setStreamTarget(null);
+      setStreamAutoScroll(true);
+      setStreamBufferedEvents([]);
+    }
+    return;
+  }
+
+  const nextStreamTarget = toAgentStreamTarget(node);
+  if (isSameStreamTarget(streamTarget, nextStreamTarget)) {
+    return;
+  }
+
+  setStreamTarget(nextStreamTarget);
+  setStreamAutoScroll(true);
+  setStreamBufferedEvents([]);
+}
+
+function toggleNodeFilterState(params: {
+  nodeId: number;
+  filteredNodeId: number | null;
+  nodes: DashboardRunDetail['nodes'];
+  streamTarget: AgentStreamTarget | null;
+  setFilteredNodeId: StateSetter<number | null>;
+  setHighlightedNodeId: StateSetter<number | null>;
+  setStreamTarget: StateSetter<AgentStreamTarget | null>;
+  setStreamAutoScroll: StateSetter<boolean>;
+  setStreamBufferedEvents: StateSetter<DashboardRunNodeStreamEvent[]>;
+}): void {
+  const {
+    nodeId,
+    filteredNodeId,
+    nodes,
+    streamTarget,
+    setFilteredNodeId,
+    setHighlightedNodeId,
+    setStreamTarget,
+    setStreamAutoScroll,
+    setStreamBufferedEvents,
+  } = params;
+  const nextNodeId = filteredNodeId === nodeId ? null : nodeId;
+  setFilteredNodeId(nextNodeId);
+  setHighlightedNodeId(nextNodeId);
+
+  if (nextNodeId === null) {
+    return;
+  }
+
+  const selectedNode = nodes.find(node => node.id === nextNodeId);
+  if (!selectedNode) {
+    return;
+  }
+
+  syncStreamSelectionForNode({
+    node: selectedNode,
+    streamTarget,
+    setStreamTarget,
+    setStreamAutoScroll,
+    setStreamBufferedEvents,
+  });
+}
+
+function applyRunControlRefreshSuccess(params: {
+  refreshedDetail: DashboardRunDetail;
+  successMessage: string;
+  enableRealtime: boolean;
+  setDetail: StateSetter<DashboardRunDetail>;
+  setUpdateError: StateSetter<string | null>;
+  setIsRefreshing: StateSetter<boolean>;
+  setLastUpdatedAtMs: StateSetter<number>;
+  setNextRetryAtMs: StateSetter<number | null>;
+  setChannelState: StateSetter<RealtimeChannelState>;
+  setActionFeedback: StateSetter<ActionFeedbackState>;
+}): void {
+  const {
+    refreshedDetail,
+    successMessage,
+    enableRealtime,
+    setDetail,
+    setUpdateError,
+    setIsRefreshing,
+    setLastUpdatedAtMs,
+    setNextRetryAtMs,
+    setChannelState,
+    setActionFeedback,
+  } = params;
+  setDetail(refreshedDetail);
+  setUpdateError(null);
+  setIsRefreshing(false);
+  setLastUpdatedAtMs(Date.now());
+  setNextRetryAtMs(null);
+  setChannelState(enableRealtime && isActiveRunStatus(refreshedDetail.run.status) ? 'live' : 'disabled');
+  setActionFeedback({
+    tone: 'success',
+    message: successMessage,
+    runStatus: refreshedDetail.run.status,
+  });
+}
+
+function applyRunControlRefreshFailure(params: {
+  controlResult: DashboardRunControlResult;
+  successMessage: string;
+  refreshMessage: string;
+  enableRealtime: boolean;
+  setDetail: StateSetter<DashboardRunDetail>;
+  setUpdateError: StateSetter<string | null>;
+  setIsRefreshing: StateSetter<boolean>;
+  setLastUpdatedAtMs: StateSetter<number>;
+  setNextRetryAtMs: StateSetter<number | null>;
+  setChannelState: StateSetter<RealtimeChannelState>;
+  setActionFeedback: StateSetter<ActionFeedbackState>;
+}): void {
+  const {
+    controlResult,
+    successMessage,
+    refreshMessage,
+    enableRealtime,
+    setDetail,
+    setUpdateError,
+    setIsRefreshing,
+    setLastUpdatedAtMs,
+    setNextRetryAtMs,
+    setChannelState,
+    setActionFeedback,
+  } = params;
+  const fallbackRunStatus = controlResult.runStatus;
+  setDetail(currentDetail => ({
+    ...currentDetail,
+    run: {
+      ...currentDetail.run,
+      status: fallbackRunStatus,
+    },
+  }));
+  setUpdateError(refreshMessage);
+  setIsRefreshing(false);
+  setLastUpdatedAtMs(Date.now());
+  setNextRetryAtMs(null);
+  setChannelState(enableRealtime && isActiveRunStatus(fallbackRunStatus) ? 'reconnecting' : 'disabled');
+  setActionFeedback({
+    tone: 'error',
+    message: `${successMessage} Unable to refresh run timeline: ${refreshMessage}`,
+    runStatus: fallbackRunStatus,
+  });
+}
+
+type ExecuteRunControlActionParams = {
+  action: DashboardRunControlAction;
+  runId: number;
+  runStatus: DashboardRunSummary['status'];
+  enableRealtime: boolean;
+  setDetail: StateSetter<DashboardRunDetail>;
+  setUpdateError: StateSetter<string | null>;
+  setIsRefreshing: StateSetter<boolean>;
+  setLastUpdatedAtMs: StateSetter<number>;
+  setNextRetryAtMs: StateSetter<number | null>;
+  setChannelState: StateSetter<RealtimeChannelState>;
+  setActionFeedback: StateSetter<ActionFeedbackState>;
+};
+
+async function executeRunControlAction(params: ExecuteRunControlActionParams): Promise<void> {
+  const {
+    action,
+    runId,
+    runStatus,
+    enableRealtime,
+    setDetail,
+    setUpdateError,
+    setIsRefreshing,
+    setLastUpdatedAtMs,
+    setNextRetryAtMs,
+    setChannelState,
+    setActionFeedback,
+  } = params;
+
+  try {
+    const response = await fetch(`/api/dashboard/runs/${runId}/actions/${action}`, {
+      method: 'POST',
+      headers: {
+        accept: 'application/json',
+      },
+    });
+    const payload = (await response.json().catch(() => null)) as unknown;
+    if (!response.ok) {
+      throw new Error(resolveApiErrorMessage(response.status, payload, resolveRunControlErrorPrefix(action)));
+    }
+
+    const controlResult = parseRunControlPayload(payload, runId);
+    if (controlResult === null) {
+      throw new Error('Run action response was malformed.');
+    }
+
+    const successMessage = resolveRunControlSuccessMessage(controlResult);
+
+    try {
+      const refreshedDetail = await fetchRunDetailSnapshot(runId);
+      applyRunControlRefreshSuccess({
+        refreshedDetail,
+        successMessage,
+        enableRealtime,
+        setDetail,
+        setUpdateError,
+        setIsRefreshing,
+        setLastUpdatedAtMs,
+        setNextRetryAtMs,
+        setChannelState,
+        setActionFeedback,
+      });
+    } catch (refreshError) {
+      const refreshMessage = refreshError instanceof Error ? refreshError.message : 'Unable to refresh run timeline.';
+      applyRunControlRefreshFailure({
+        controlResult,
+        successMessage,
+        refreshMessage,
+        enableRealtime,
+        setDetail,
+        setUpdateError,
+        setIsRefreshing,
+        setLastUpdatedAtMs,
+        setNextRetryAtMs,
+        setChannelState,
+        setActionFeedback,
+      });
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : resolveRunControlErrorPrefix(action);
+    setActionFeedback({
+      tone: 'error',
+      message,
+      runStatus,
+    });
+  }
+}
+
+function resetRunDetailStateFromInitialDetail(params: {
+  initialDetail: DashboardRunDetail;
+  enableRealtime: boolean;
+  streamLastSequenceRef: { current: number };
+  setDetail: StateSetter<DashboardRunDetail>;
+  setUpdateError: StateSetter<string | null>;
+  setIsRefreshing: StateSetter<boolean>;
+  setNextRetryAtMs: StateSetter<number | null>;
+  setRetryCountdownSeconds: StateSetter<number | null>;
+  setLastUpdatedAtMs: StateSetter<number>;
+  setChannelState: StateSetter<RealtimeChannelState>;
+  setStreamTarget: StateSetter<AgentStreamTarget | null>;
+  setStreamEvents: StateSetter<DashboardRunNodeStreamEvent[]>;
+  setStreamBufferedEvents: StateSetter<DashboardRunNodeStreamEvent[]>;
+  setStreamConnectionState: StateSetter<AgentStreamConnectionState>;
+  setStreamError: StateSetter<string | null>;
+  setStreamNextRetryAtMs: StateSetter<number | null>;
+  setStreamRetryCountdownSeconds: StateSetter<number | null>;
+  setStreamAutoScroll: StateSetter<boolean>;
+  setStreamLastUpdatedAtMs: StateSetter<number>;
+  setPendingControlAction: StateSetter<DashboardRunControlAction | null>;
+  setActionFeedback: StateSetter<ActionFeedbackState>;
+}): void {
+  const {
+    initialDetail,
+    enableRealtime,
+    streamLastSequenceRef,
+    setDetail,
+    setUpdateError,
+    setIsRefreshing,
+    setNextRetryAtMs,
+    setRetryCountdownSeconds,
+    setLastUpdatedAtMs,
+    setChannelState,
+    setStreamTarget,
+    setStreamEvents,
+    setStreamBufferedEvents,
+    setStreamConnectionState,
+    setStreamError,
+    setStreamNextRetryAtMs,
+    setStreamRetryCountdownSeconds,
+    setStreamAutoScroll,
+    setStreamLastUpdatedAtMs,
+    setPendingControlAction,
+    setActionFeedback,
+  } = params;
+
+  setDetail(initialDetail);
+  setUpdateError(null);
+  setIsRefreshing(false);
+  setNextRetryAtMs(null);
+  setRetryCountdownSeconds(null);
+  setLastUpdatedAtMs(Date.now());
+  setChannelState(enableRealtime && isActiveRunStatus(initialDetail.run.status) ? 'live' : 'disabled');
+  setStreamTarget(resolveInitialAgentStreamTarget(initialDetail));
+  setStreamEvents([]);
+  setStreamBufferedEvents([]);
+  setStreamConnectionState('ended');
+  setStreamError(null);
+  setStreamNextRetryAtMs(null);
+  setStreamRetryCountdownSeconds(null);
+  setStreamAutoScroll(true);
+  setStreamLastUpdatedAtMs(Date.now());
+  setPendingControlAction(null);
+  setActionFeedback(null);
+  streamLastSequenceRef.current = 0;
+}
+
+function flushBufferedAgentStreamEvents(params: {
+  streamAutoScroll: boolean;
+  streamBufferedEvents: readonly DashboardRunNodeStreamEvent[];
+  setStreamEvents: StateSetter<DashboardRunNodeStreamEvent[]>;
+  setStreamBufferedEvents: StateSetter<DashboardRunNodeStreamEvent[]>;
+}): void {
+  const { streamAutoScroll, streamBufferedEvents, setStreamEvents, setStreamBufferedEvents } = params;
+  if (!streamAutoScroll || streamBufferedEvents.length === 0) {
+    return;
+  }
+
+  setStreamEvents(previous => mergeAgentStreamEvents(previous, streamBufferedEvents));
+  setStreamBufferedEvents([]);
+}
+
+function syncStreamEventListScroll(params: {
+  streamAutoScroll: boolean;
+  streamEventListRef: { current: HTMLOListElement | null };
+}): void {
+  const { streamAutoScroll, streamEventListRef } = params;
+  if (!streamAutoScroll || streamEventListRef.current === null) {
+    return;
+  }
+
+  streamEventListRef.current.scrollTop = streamEventListRef.current.scrollHeight;
+}
+
+function createRetryCountdownEffect(params: {
+  retryAtMs: number | null;
+  setRetryCountdownSeconds: StateSetter<number | null>;
+}): () => void {
+  const { retryAtMs, setRetryCountdownSeconds } = params;
+  if (retryAtMs === null) {
+    setRetryCountdownSeconds(null);
+    return () => undefined;
+  }
+
+  const updateCountdown = (): void => {
+    const remainingSeconds = Math.max(0, Math.ceil((retryAtMs - Date.now()) / 1000));
+    setRetryCountdownSeconds(remainingSeconds);
+  };
+
+  updateCountdown();
+  const intervalId = globalThis.setInterval(updateCountdown, 250);
+  return () => {
+    clearInterval(intervalId);
+  };
+}
+
+function clearActionFeedbackOnStatusChange(params: {
+  runStatus: DashboardRunSummary['status'];
+  setActionFeedback: StateSetter<ActionFeedbackState>;
+}): void {
+  const { runStatus, setActionFeedback } = params;
+  setActionFeedback((current) => {
+    if (current === null || current.runStatus === null || current.runStatus === runStatus) {
+      return current;
+    }
+
+    return null;
+  });
+}
+
 type RunDetailPollingEffectParams = {
   enableRealtime: boolean;
   runId: number;
@@ -1169,28 +1724,9 @@ function createRunDetailPollingEffect(params: RunDetailPollingEffectParams): () 
   };
 
   const fetchLatestRunDetail = async (): Promise<DashboardRunDetail | null> => {
-    const response = await fetch(`/api/dashboard/runs/${runId}`, {
-      method: 'GET',
-      headers: {
-        accept: 'application/json',
-      },
-      signal: abortController.signal,
-    });
+    const parsedDetail = await fetchRunDetailSnapshot(runId, { signal: abortController.signal });
     if (shouldSkipUpdate()) {
       return null;
-    }
-
-    const payload = (await response.json().catch(() => null)) as unknown;
-    if (shouldSkipUpdate()) {
-      return null;
-    }
-    if (!response.ok) {
-      throw new Error(resolveApiErrorMessage(response.status, payload, 'Unable to refresh run timeline'));
-    }
-
-    const parsedDetail = parseRunDetailPayload(payload, runId);
-    if (parsedDetail === null) {
-      throw new Error('Realtime run detail response was malformed.');
     }
 
     return shouldSkipUpdate() ? null : parsedDetail;
@@ -1929,6 +2465,283 @@ function RunObservabilityCard({ detail }: RunObservabilityCardProps) {
   );
 }
 
+function triggerRunControlAction(params: {
+  action: DashboardRunControlAction | null;
+  onRunControlAction: (action: DashboardRunControlAction) => Promise<void>;
+}): void {
+  const { action, onRunControlAction } = params;
+  if (action === null) {
+    return;
+  }
+
+  void onRunControlAction(action);
+}
+
+function resolveActionButtonLabel(params: {
+  action: OperatorActionState;
+  pendingControlAction: DashboardRunControlAction | null;
+}): string {
+  const { action, pendingControlAction } = params;
+  if (action.controlAction !== null && pendingControlAction === action.controlAction) {
+    return `${action.label}...`;
+  }
+
+  return action.label;
+}
+
+type RunOperatorFocusCardProps = Readonly<{
+  detail: DashboardRunDetail;
+  latestTimelineEvent: TimelineItem | null;
+  hasHydrated: boolean;
+  primaryAction: OperatorActionState;
+  secondaryAction: OperatorActionState | null;
+  pendingControlAction: DashboardRunControlAction | null;
+  actionHint: string | null;
+  actionHintTone: 'info' | 'success' | 'error';
+  channelState: RealtimeChannelState;
+  realtimeLabel: ReturnType<typeof resolveRealtimeLabel>;
+  lastUpdatedAtMs: number;
+  isRefreshing: boolean;
+  updateError: string | null;
+  onRunControlAction: (action: DashboardRunControlAction) => Promise<void>;
+}>;
+
+function RunOperatorFocusCard({
+  detail,
+  latestTimelineEvent,
+  hasHydrated,
+  primaryAction,
+  secondaryAction,
+  pendingControlAction,
+  actionHint,
+  actionHintTone,
+  channelState,
+  realtimeLabel,
+  lastUpdatedAtMs,
+  isRefreshing,
+  updateError,
+  onRunControlAction,
+}: RunOperatorFocusCardProps) {
+  return (
+    <Card
+      title="Operator focus"
+      description="Current run status, latest event, and next likely operator action."
+      className="run-operator-focus"
+    >
+      <ul className="entity-list run-operator-focus-list">
+        <li>
+          <span>Current status</span>
+          <StatusBadge status={detail.run.status} />
+        </li>
+        <li>
+          <span>Latest event</span>
+          {latestTimelineEvent ? (
+            <div className="run-operator-focus-list__value">
+              <p>{latestTimelineEvent.summary}</p>
+              <p className="meta-text">{formatTimelineTime(latestTimelineEvent.timestamp, hasHydrated)}</p>
+            </div>
+          ) : (
+            <span className="meta-text">No lifecycle events captured yet.</span>
+          )}
+        </li>
+        <li>
+          <span>Next action</span>
+          <span className="meta-text">{primaryAction.label}</span>
+        </li>
+      </ul>
+
+      <div className="action-row run-detail-primary-actions">
+        {primaryAction.href ? (
+          <ButtonLink href={primaryAction.href} tone="primary">
+            {primaryAction.label}
+          </ButtonLink>
+        ) : (
+          <ActionButton
+            tone="primary"
+            disabled={primaryAction.disabledReason !== null || pendingControlAction !== null}
+            aria-disabled={primaryAction.disabledReason !== null || pendingControlAction !== null}
+            title={primaryAction.disabledReason ?? undefined}
+            onClick={() => {
+              triggerRunControlAction({
+                action: primaryAction.controlAction,
+                onRunControlAction,
+              });
+            }}
+          >
+            {resolveActionButtonLabel({
+              action: primaryAction,
+              pendingControlAction,
+            })}
+          </ActionButton>
+        )}
+        {secondaryAction ? (
+          <ActionButton
+            disabled={secondaryAction.disabledReason !== null || pendingControlAction !== null}
+            aria-disabled={secondaryAction.disabledReason !== null || pendingControlAction !== null}
+            title={secondaryAction.disabledReason ?? undefined}
+            onClick={() => {
+              triggerRunControlAction({
+                action: secondaryAction.controlAction,
+                onRunControlAction,
+              });
+            }}
+          >
+            {resolveActionButtonLabel({
+              action: secondaryAction,
+              pendingControlAction,
+            })}
+          </ActionButton>
+        ) : null}
+        <ButtonLink href="/runs">Back to Runs</ButtonLink>
+      </div>
+      {actionHint ? (
+        <output className={`run-action-feedback run-action-feedback--${actionHintTone}`} aria-live="polite">
+          {actionHint}
+        </output>
+      ) : null}
+
+      <output className={`run-realtime-status run-realtime-status--${channelState}`} aria-live="polite">
+        <span className="run-realtime-status__badge">{realtimeLabel.badgeLabel}</span>
+        <span className="meta-text">{realtimeLabel.detail}</span>
+        <span className="meta-text">
+          {`Last updated ${formatLastUpdated(lastUpdatedAtMs, hasHydrated)}.`}
+          {isRefreshing ? ' Refreshing timeline...' : ''}
+        </span>
+      </output>
+
+      {updateError && (channelState === 'reconnecting' || channelState === 'stale') ? (
+        <output className="run-realtime-warning" aria-live="polite">
+          {`Update channel degraded: ${updateError}`}
+        </output>
+      ) : null}
+    </Card>
+  );
+}
+
+function resolveEmptyTimelineLabel(filteredNodeId: number | null): string {
+  return filteredNodeId === null ? 'No lifecycle events captured yet.' : 'No events match the selected node.';
+}
+
+type RunDetailLifecycleGridProps = Readonly<{
+  detail: DashboardRunDetail;
+  selectedNode: DashboardRunDetail['nodes'][number] | null;
+  filteredNodeId: number | null;
+  highlightedNodeId: number | null;
+  hasHydrated: boolean;
+  visibleTimeline: readonly TimelineItem[];
+  visibleTimelinePartition: RecentPartition<TimelineItem>;
+  onSelectTimelineNode: (nodeId: number | null) => void;
+  onClearNodeFilter: () => void;
+  onToggleNodeFilter: (nodeId: number) => void;
+}>;
+
+function RunDetailLifecycleGrid({
+  detail,
+  selectedNode,
+  filteredNodeId,
+  highlightedNodeId,
+  hasHydrated,
+  visibleTimeline,
+  visibleTimelinePartition,
+  onSelectTimelineNode,
+  onClearNodeFilter,
+  onToggleNodeFilter,
+}: RunDetailLifecycleGridProps) {
+  const renderTimelineEvent = (event: TimelineItem) => {
+    const highlighted = highlightedNodeId !== null && event.relatedNodeId === highlightedNodeId;
+
+    return (
+      <li key={event.key}>
+        <button
+          type="button"
+          className={`run-timeline-event run-timeline-event--${event.category}${highlighted ? ' run-timeline-event--selected' : ''}`}
+          aria-pressed={highlighted}
+          onClick={() => {
+            onSelectTimelineNode(event.relatedNodeId);
+          }}
+        >
+          <span className="run-timeline-event__header">
+            <span className={`timeline-category-indicator timeline-category-indicator--${event.category}`}>
+              <TimelineCategoryIcon category={event.category} />
+              <span>{TIMELINE_CATEGORY_LABELS[event.category]}</span>
+            </span>
+            <span className="meta-text">{formatTimelineTime(event.timestamp, hasHydrated)}</span>
+          </span>
+          <p>{event.summary}</p>
+        </button>
+      </li>
+    );
+  };
+
+  return (
+    <div className="page-grid run-detail-lifecycle-grid">
+      <Card title="Timeline" description="Latest run events">
+        {selectedNode ? (
+          <div className="run-timeline-filter">
+            <p className="meta-text">{`Filtered to ${selectedNode.nodeKey} (attempt ${selectedNode.attempt}).`}</p>
+            <ActionButton className="run-timeline-clear" onClick={onClearNodeFilter}>
+              Show all events
+            </ActionButton>
+          </div>
+        ) : null}
+
+        <ol className="page-stack run-timeline-list" aria-label="Run timeline">
+          {visibleTimeline.length > 0 ? (
+            <>
+              {visibleTimelinePartition.earlier.length > 0 ? (
+                <li>
+                  <details className="run-collapsible-history">
+                    <summary className="run-collapsible-history__summary">
+                      {`Show ${visibleTimelinePartition.earlier.length} earlier events`}
+                    </summary>
+                    <ol className="page-stack run-collapsible-history__list" aria-label="Earlier run timeline events">
+                      {visibleTimelinePartition.earlier.map((event) => renderTimelineEvent(event))}
+                    </ol>
+                  </details>
+                </li>
+              ) : null}
+              {visibleTimelinePartition.recent.map((event) => renderTimelineEvent(event))}
+            </>
+          ) : (
+            <li>
+              <p>{resolveEmptyTimelineLabel(filteredNodeId)}</p>
+            </li>
+          )}
+        </ol>
+      </Card>
+
+      <Panel title="Node status" description="Node lifecycle snapshot">
+        <ul className="entity-list run-node-status-list">
+          {detail.nodes.length > 0 ? (
+            detail.nodes.map((node) => {
+              const selected = filteredNodeId === node.id;
+
+              return (
+                <li key={node.id}>
+                  <ActionButton
+                    className={`run-node-filter${selected ? ' run-node-filter--selected' : ''}`}
+                    aria-pressed={selected}
+                    onClick={() => {
+                      onToggleNodeFilter(node.id);
+                    }}
+                  >
+                    {`${node.nodeKey} (attempt ${node.attempt})`}
+                  </ActionButton>
+                  <StatusBadge status={node.status} />
+                </li>
+              );
+            })
+          ) : (
+            <li>
+              <span>No run nodes have been materialized yet.</span>
+            </li>
+          )}
+        </ul>
+      </Panel>
+    </div>
+  );
+}
+
 export function RunDetailContent({
   initialDetail,
   repositories,
@@ -1960,6 +2773,8 @@ export function RunDetailContent({
   const [streamLastUpdatedAtMs, setStreamLastUpdatedAtMs] = useState<number>(() =>
     resolveInitialStreamLastUpdatedAtMs(initialDetail),
   );
+  const [pendingControlAction, setPendingControlAction] = useState<DashboardRunControlAction | null>(null);
+  const [actionFeedback, setActionFeedback] = useState<ActionFeedbackState>(null);
 
   const lastUpdatedAtRef = useRef<number>(lastUpdatedAtMs);
   const streamLastUpdatedAtRef = useRef<number>(streamLastUpdatedAtMs);
@@ -1972,23 +2787,29 @@ export function RunDetailContent({
   }, []);
 
   useEffect(() => {
-    setDetail(initialDetail);
-    setUpdateError(null);
-    setIsRefreshing(false);
-    setNextRetryAtMs(null);
-    setRetryCountdownSeconds(null);
-    setLastUpdatedAtMs(Date.now());
-    setChannelState(enableRealtime && isActiveRunStatus(initialDetail.run.status) ? 'live' : 'disabled');
-    setStreamTarget(resolveInitialAgentStreamTarget(initialDetail));
-    setStreamEvents([]);
-    setStreamBufferedEvents([]);
-    setStreamConnectionState('ended');
-    setStreamError(null);
-    setStreamNextRetryAtMs(null);
-    setStreamRetryCountdownSeconds(null);
-    setStreamAutoScroll(true);
-    setStreamLastUpdatedAtMs(Date.now());
-    streamLastSequenceRef.current = 0;
+    resetRunDetailStateFromInitialDetail({
+      initialDetail,
+      enableRealtime,
+      streamLastSequenceRef,
+      setDetail,
+      setUpdateError,
+      setIsRefreshing,
+      setNextRetryAtMs,
+      setRetryCountdownSeconds,
+      setLastUpdatedAtMs,
+      setChannelState,
+      setStreamTarget,
+      setStreamEvents,
+      setStreamBufferedEvents,
+      setStreamConnectionState,
+      setStreamError,
+      setStreamNextRetryAtMs,
+      setStreamRetryCountdownSeconds,
+      setStreamAutoScroll,
+      setStreamLastUpdatedAtMs,
+      setPendingControlAction,
+      setActionFeedback,
+    });
   }, [enableRealtime, initialDetail]);
 
   useEffect(() => {
@@ -2049,59 +2870,41 @@ export function RunDetailContent({
   }, [detail.run.id, streamTarget]);
 
   useEffect(() => {
-    if (!streamAutoScroll || streamBufferedEvents.length === 0) {
-      return;
-    }
-
-    setStreamEvents(previous => mergeAgentStreamEvents(previous, streamBufferedEvents));
-    setStreamBufferedEvents([]);
+    flushBufferedAgentStreamEvents({
+      streamAutoScroll,
+      streamBufferedEvents,
+      setStreamEvents,
+      setStreamBufferedEvents,
+    });
   }, [streamAutoScroll, streamBufferedEvents]);
 
   useEffect(() => {
-    if (!streamAutoScroll || streamEventListRef.current === null) {
-      return;
-    }
-
-    streamEventListRef.current.scrollTop = streamEventListRef.current.scrollHeight;
+    syncStreamEventListScroll({
+      streamAutoScroll,
+      streamEventListRef,
+    });
   }, [streamAutoScroll, streamEvents]);
 
   useEffect(() => {
-    if (nextRetryAtMs === null) {
-      setRetryCountdownSeconds(null);
-      return;
-    }
-
-    const updateCountdown = (): void => {
-      const remainingSeconds = Math.max(0, Math.ceil((nextRetryAtMs - Date.now()) / 1000));
-      setRetryCountdownSeconds(remainingSeconds);
-    };
-
-    updateCountdown();
-    const intervalId = globalThis.setInterval(updateCountdown, 250);
-
-    return () => {
-      clearInterval(intervalId);
-    };
+    return createRetryCountdownEffect({
+      retryAtMs: nextRetryAtMs,
+      setRetryCountdownSeconds,
+    });
   }, [nextRetryAtMs]);
 
   useEffect(() => {
-    if (streamNextRetryAtMs === null) {
-      setStreamRetryCountdownSeconds(null);
-      return;
-    }
-
-    const updateCountdown = (): void => {
-      const remainingSeconds = Math.max(0, Math.ceil((streamNextRetryAtMs - Date.now()) / 1000));
-      setStreamRetryCountdownSeconds(remainingSeconds);
-    };
-
-    updateCountdown();
-    const intervalId = globalThis.setInterval(updateCountdown, 250);
-
-    return () => {
-      clearInterval(intervalId);
-    };
+    return createRetryCountdownEffect({
+      retryAtMs: streamNextRetryAtMs,
+      setRetryCountdownSeconds: setStreamRetryCountdownSeconds,
+    });
   }, [streamNextRetryAtMs]);
+
+  useEffect(() => {
+    clearActionFeedbackOnStatusChange({
+      runStatus: detail.run.status,
+      setActionFeedback,
+    });
+  }, [detail.run.status]);
 
   const timeline = useMemo(() => buildTimeline(detail), [detail]);
   const repositoryContext = useMemo(
@@ -2111,8 +2914,8 @@ export function RunDetailContent({
   const pageSubtitle = detail.run.repository
     ? `${detail.run.tree.name} · ${detail.run.repository.name}`
     : detail.run.tree.name;
-  const primaryAction = useMemo(
-    () => resolvePrimaryAction(detail.run, detail.worktrees.length > 0),
+  const operatorActions = useMemo(
+    () => resolveOperatorActions(detail.run, detail.worktrees.length > 0),
     [detail.run, detail.worktrees.length],
   );
   const selectedNode = useMemo(
@@ -2137,63 +2940,55 @@ export function RunDetailContent({
     () => (streamTarget ? detail.nodes.find(node => node.id === streamTarget.runNodeId) ?? null : null),
     [detail.nodes, streamTarget],
   );
+  const primaryAction = operatorActions.primary;
+  const secondaryAction = operatorActions.secondary;
+  const actionHint = actionFeedback?.message ?? primaryAction.disabledReason ?? secondaryAction?.disabledReason ?? null;
+  const actionHintTone = actionFeedback?.tone ?? 'info';
+
   const toggleNodeFilter = (nodeId: number): void => {
-    const nextNodeId = filteredNodeId === nodeId ? null : nodeId;
-    setFilteredNodeId(nextNodeId);
-    setHighlightedNodeId(nextNodeId);
-
-    if (nextNodeId !== null) {
-      const node = detail.nodes.find(n => n.id === nextNodeId);
-      if (node) {
-        const canOpenStream = node.status === 'running' || node.status === 'completed' || node.status === 'failed';
-        if (!canOpenStream) {
-          if (streamTarget !== null) {
-            setStreamTarget(null);
-            setStreamAutoScroll(true);
-            setStreamBufferedEvents([]);
-          }
-          return;
-        }
-
-        const nextStreamTarget = toAgentStreamTarget(node);
-        const streamTargetChanged =
-          streamTarget === null ||
-          streamTarget.runNodeId !== nextStreamTarget.runNodeId ||
-          streamTarget.attempt !== nextStreamTarget.attempt ||
-          streamTarget.nodeKey !== nextStreamTarget.nodeKey;
-        if (streamTargetChanged) {
-          setStreamTarget(nextStreamTarget);
-          setStreamAutoScroll(true);
-          setStreamBufferedEvents([]);
-        }
-      }
-    }
+    toggleNodeFilterState({
+      nodeId,
+      filteredNodeId,
+      nodes: detail.nodes,
+      streamTarget,
+      setFilteredNodeId,
+      setHighlightedNodeId,
+      setStreamTarget,
+      setStreamAutoScroll,
+      setStreamBufferedEvents,
+    });
   };
 
-  const renderTimelineEvent = (event: TimelineItem) => {
-    const highlighted = highlightedNodeId !== null && event.relatedNodeId === highlightedNodeId;
+  const handleRunControlAction = async (action: DashboardRunControlAction): Promise<void> => {
+    if (pendingControlAction !== null) {
+      return;
+    }
 
-    return (
-      <li key={event.key}>
-        <button
-          type="button"
-          className={`run-timeline-event run-timeline-event--${event.category}${highlighted ? ' run-timeline-event--selected' : ''}`}
-          aria-pressed={highlighted}
-          onClick={() => {
-            setHighlightedNodeId(event.relatedNodeId);
-          }}
-        >
-          <span className="run-timeline-event__header">
-            <span className={`timeline-category-indicator timeline-category-indicator--${event.category}`}>
-              <TimelineCategoryIcon category={event.category} />
-              <span>{TIMELINE_CATEGORY_LABELS[event.category]}</span>
-            </span>
-            <span className="meta-text">{formatTimelineTime(event.timestamp, hasHydrated)}</span>
-          </span>
-          <p>{event.summary}</p>
-        </button>
-      </li>
-    );
+    setPendingControlAction(action);
+    setActionFeedback({
+      tone: 'info',
+      message: `Applying ${toActionVerb(action)} action...`,
+      runStatus: null,
+    });
+    await executeRunControlAction({
+      action,
+      runId: detail.run.id,
+      runStatus: detail.run.status,
+      enableRealtime,
+      setDetail,
+      setUpdateError,
+      setIsRefreshing,
+      setLastUpdatedAtMs,
+      setNextRetryAtMs,
+      setChannelState,
+      setActionFeedback,
+    });
+    setPendingControlAction(null);
+  };
+
+  const clearNodeFilter = (): void => {
+    setFilteredNodeId(null);
+    setHighlightedNodeId(null);
   };
 
   return (
@@ -2204,62 +2999,22 @@ export function RunDetailContent({
       </section>
 
       <div className="page-grid run-detail-priority-grid">
-        <Card
-          title="Operator focus"
-          description="Current run status, latest event, and next likely operator action."
-          className="run-operator-focus"
-        >
-          <ul className="entity-list run-operator-focus-list">
-            <li>
-              <span>Current status</span>
-              <StatusBadge status={detail.run.status} />
-            </li>
-            <li>
-              <span>Latest event</span>
-              {latestTimelineEvent ? (
-                <div className="run-operator-focus-list__value">
-                  <p>{latestTimelineEvent.summary}</p>
-                  <p className="meta-text">{formatTimelineTime(latestTimelineEvent.timestamp, hasHydrated)}</p>
-                </div>
-              ) : (
-                <span className="meta-text">No lifecycle events captured yet.</span>
-              )}
-            </li>
-            <li>
-              <span>Next action</span>
-              <span className="meta-text">{primaryAction.label}</span>
-            </li>
-          </ul>
-
-          <div className="action-row run-detail-primary-actions">
-            {primaryAction.href ? (
-              <ButtonLink href={primaryAction.href} tone="primary">
-                {primaryAction.label}
-              </ButtonLink>
-            ) : (
-              <ActionButton tone="primary" disabled aria-disabled="true" title={primaryAction.disabledReason ?? undefined}>
-                {primaryAction.label}
-              </ActionButton>
-            )}
-            <ButtonLink href="/runs">Back to Runs</ButtonLink>
-          </div>
-          {primaryAction.disabledReason ? <p className="meta-text run-action-feedback">{primaryAction.disabledReason}</p> : null}
-
-          <output className={`run-realtime-status run-realtime-status--${channelState}`} aria-live="polite">
-            <span className="run-realtime-status__badge">{realtimeLabel.badgeLabel}</span>
-            <span className="meta-text">{realtimeLabel.detail}</span>
-            <span className="meta-text">
-              {`Last updated ${formatLastUpdated(lastUpdatedAtMs, hasHydrated)}.`}
-              {isRefreshing ? ' Refreshing timeline...' : ''}
-            </span>
-          </output>
-
-          {updateError && (channelState === 'reconnecting' || channelState === 'stale') ? (
-            <output className="run-realtime-warning" aria-live="polite">
-              {`Update channel degraded: ${updateError}`}
-            </output>
-          ) : null}
-        </Card>
+        <RunOperatorFocusCard
+          detail={detail}
+          latestTimelineEvent={latestTimelineEvent}
+          hasHydrated={hasHydrated}
+          primaryAction={primaryAction}
+          secondaryAction={secondaryAction}
+          pendingControlAction={pendingControlAction}
+          actionHint={actionHint}
+          actionHintTone={actionHintTone}
+          channelState={channelState}
+          realtimeLabel={realtimeLabel}
+          lastUpdatedAtMs={lastUpdatedAtMs}
+          isRefreshing={isRefreshing}
+          updateError={updateError}
+          onRunControlAction={handleRunControlAction}
+        />
 
         <Panel title="Run summary" description="Workflow context and timestamps." className="run-detail-summary-panel">
           <ul className="entity-list run-detail-summary-list">
@@ -2287,77 +3042,18 @@ export function RunDetailContent({
         </Panel>
       </div>
 
-      <div className="page-grid run-detail-lifecycle-grid">
-        <Card title="Timeline" description="Latest run events">
-          {selectedNode ? (
-            <div className="run-timeline-filter">
-              <p className="meta-text">{`Filtered to ${selectedNode.nodeKey} (attempt ${selectedNode.attempt}).`}</p>
-              <ActionButton
-                className="run-timeline-clear"
-                onClick={() => {
-                  setFilteredNodeId(null);
-                  setHighlightedNodeId(null);
-                }}
-              >
-                Show all events
-              </ActionButton>
-            </div>
-          ) : null}
-
-          <ol className="page-stack run-timeline-list" aria-label="Run timeline">
-            {visibleTimeline.length > 0 ? (
-              <>
-                {visibleTimelinePartition.earlier.length > 0 ? (
-                  <li>
-                    <details className="run-collapsible-history">
-                      <summary className="run-collapsible-history__summary">
-                        {`Show ${visibleTimelinePartition.earlier.length} earlier events`}
-                      </summary>
-                      <ol className="page-stack run-collapsible-history__list" aria-label="Earlier run timeline events">
-                        {visibleTimelinePartition.earlier.map((event) => renderTimelineEvent(event))}
-                      </ol>
-                    </details>
-                  </li>
-                ) : null}
-                {visibleTimelinePartition.recent.map((event) => renderTimelineEvent(event))}
-              </>
-            ) : (
-              <li>
-                <p>{filteredNodeId === null ? 'No lifecycle events captured yet.' : 'No events match the selected node.'}</p>
-              </li>
-            )}
-          </ol>
-        </Card>
-
-        <Panel title="Node status" description="Node lifecycle snapshot">
-          <ul className="entity-list run-node-status-list">
-            {detail.nodes.length > 0 ? (
-              detail.nodes.map((node) => {
-                const selected = filteredNodeId === node.id;
-
-                return (
-                  <li key={node.id}>
-                    <ActionButton
-                      className={`run-node-filter${selected ? ' run-node-filter--selected' : ''}`}
-                      aria-pressed={selected}
-                      onClick={() => {
-                        toggleNodeFilter(node.id);
-                      }}
-                    >
-                      {`${node.nodeKey} (attempt ${node.attempt})`}
-                    </ActionButton>
-                    <StatusBadge status={node.status} />
-                  </li>
-                );
-              })
-            ) : (
-              <li>
-                <span>No run nodes have been materialized yet.</span>
-              </li>
-            )}
-          </ul>
-        </Panel>
-      </div>
+      <RunDetailLifecycleGrid
+        detail={detail}
+        selectedNode={selectedNode}
+        filteredNodeId={filteredNodeId}
+        highlightedNodeId={highlightedNodeId}
+        hasHydrated={hasHydrated}
+        visibleTimeline={visibleTimeline}
+        visibleTimelinePartition={visibleTimelinePartition}
+        onSelectTimelineNode={setHighlightedNodeId}
+        onClearNodeFilter={clearNodeFilter}
+        onToggleNodeFilter={toggleNodeFilter}
+      />
 
       <RunAgentStreamCard
         isTerminalRun={!isActiveRunStatus(detail.run.status)}

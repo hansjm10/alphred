@@ -223,6 +223,54 @@ function createStreamEvent(
   };
 }
 
+function createControlResult(overrides: Partial<Record<string, unknown>> = {}): Record<string, unknown> {
+  return {
+    action: 'pause',
+    outcome: 'applied',
+    workflowRunId: 412,
+    previousRunStatus: 'running',
+    runStatus: 'paused',
+    retriedRunNodeIds: [],
+    ...overrides,
+  };
+}
+
+function createFailedRunDetail(overrides: RunDetailOverrides = {}): DashboardRunDetail {
+  const { run: runOverrides, ...detailOverrides } = overrides;
+
+  return createRunDetail({
+    run: {
+      status: 'failed',
+      completedAt: '2026-02-18T00:10:00.000Z',
+      nodeSummary: {
+        pending: 0,
+        running: 0,
+        completed: 0,
+        failed: 1,
+        skipped: 0,
+        cancelled: 0,
+      },
+      ...runOverrides,
+    },
+    nodes: detailOverrides.nodes ?? [
+      {
+        id: 1,
+        treeNodeId: 1,
+        nodeKey: 'design',
+        sequenceIndex: 0,
+        attempt: 1,
+        status: 'failed',
+        startedAt: '2026-02-18T00:00:10.000Z',
+        completedAt: '2026-02-18T00:01:00.000Z',
+        latestArtifact: null,
+        latestRoutingDecision: null,
+        latestDiagnostics: null,
+      },
+    ],
+    ...detailOverrides,
+  });
+}
+
 class MockEventSource {
   static instances: MockEventSource[] = [];
 
@@ -382,7 +430,7 @@ describe('RunDetailContent realtime updates', () => {
       />,
     );
 
-    expect(screen.getByRole('button', { name: 'Pause' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Pause' })).toBeEnabled();
 
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledWith(
@@ -392,10 +440,628 @@ describe('RunDetailContent realtime updates', () => {
     }, { timeout: 2_000 });
 
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: 'Resume' })).toBeDisabled();
+      expect(screen.getByRole('button', { name: 'Resume' })).toBeEnabled();
     }, { timeout: 2_000 });
 
     expect(screen.getByText(/Live updates every 1s/)).toBeInTheDocument();
+  });
+
+  it('keeps pending start disabled while exposing cancel for pending runs', () => {
+    render(
+      <RunDetailContent
+        initialDetail={createRunDetail({
+          run: {
+            status: 'pending',
+            startedAt: null,
+            completedAt: null,
+          },
+        })}
+        repositories={[createRepository()]}
+        enableRealtime={false}
+      />,
+    );
+
+    expect(screen.getByRole('button', { name: 'Pending Start' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Cancel Run' })).toBeEnabled();
+    expect(screen.getByText('Run has not started yet.')).toBeInTheDocument();
+  });
+
+  it('shows retry as the failed-run primary action', () => {
+    render(
+      <RunDetailContent
+        initialDetail={createRunDetail({
+          run: {
+            status: 'failed',
+            completedAt: '2026-02-18T00:10:00.000Z',
+          },
+          nodes: [
+            {
+              id: 1,
+              treeNodeId: 1,
+              nodeKey: 'design',
+              sequenceIndex: 0,
+              attempt: 1,
+              status: 'failed',
+              startedAt: '2026-02-18T00:00:10.000Z',
+              completedAt: '2026-02-18T00:01:00.000Z',
+              latestArtifact: null,
+              latestRoutingDecision: null,
+              latestDiagnostics: null,
+            },
+          ],
+        })}
+        repositories={[createRepository()]}
+        enableRealtime={false}
+      />,
+    );
+
+    expect(screen.getByRole('button', { name: 'Retry Failed Node' })).toBeEnabled();
+    expect(screen.queryByRole('button', { name: 'Cancel Run' })).toBeNull();
+  });
+
+  it('applies pause control, refreshes detail, and shows in-flight and success feedback', async () => {
+    const pausedDetail = createRunDetail({
+      run: {
+        status: 'paused',
+      },
+    });
+    let resolvePauseActionResponse!: (response: Response) => void;
+    const pauseActionResponse = new Promise<Response>((resolve) => {
+      resolvePauseActionResponse = resolve;
+    });
+
+    fetchMock.mockImplementation((input, init) => {
+      const url = String(input);
+      if (url === '/api/dashboard/runs/412/actions/pause' && init?.method === 'POST') {
+        return pauseActionResponse;
+      }
+
+      if (url === '/api/dashboard/runs/412' && init?.method === 'GET') {
+        return Promise.resolve(createJsonResponse(pausedDetail));
+      }
+
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    });
+
+    render(
+      <RunDetailContent
+        initialDetail={createRunDetail()}
+        repositories={[createRepository()]}
+        enableRealtime={false}
+      />,
+    );
+
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('button', { name: 'Pause' }));
+
+    expect(screen.getByRole('button', { name: 'Pause...' })).toBeDisabled();
+    expect(screen.getByText('Applying pause action...')).toBeInTheDocument();
+
+    resolvePauseActionResponse(createJsonResponse(createControlResult()));
+
+    await waitFor(() => {
+      expect(screen.getByText('Run paused.')).toBeInTheDocument();
+    }, { timeout: 2_000 });
+    const successFeedback = screen.getByText('Run paused.');
+    expect(successFeedback).toHaveClass('run-action-feedback', 'run-action-feedback--success');
+    expect(successFeedback).not.toHaveClass('meta-text');
+
+    expect(screen.getByRole('button', { name: 'Resume' })).toBeEnabled();
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/dashboard/runs/412/actions/pause',
+      expect.objectContaining({ method: 'POST' }),
+    );
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/dashboard/runs/412',
+      expect.objectContaining({ method: 'GET' }),
+    );
+  });
+
+  it('surfaces lifecycle control API errors and leaves controls actionable', async () => {
+    fetchMock.mockImplementation((input, init) => {
+      const url = String(input);
+      if (url === '/api/dashboard/runs/412/actions/pause' && init?.method === 'POST') {
+        return Promise.resolve(
+          createJsonResponse(
+            {
+              error: {
+                message:
+                  'Cannot pause workflow run id=412 from status "completed". Expected status "running".',
+              },
+            },
+            409,
+          ),
+        );
+      }
+
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    });
+
+    render(
+      <RunDetailContent
+        initialDetail={createRunDetail()}
+        repositories={[createRepository()]}
+        enableRealtime={false}
+      />,
+    );
+
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('button', { name: 'Pause' }));
+
+    await waitFor(() => {
+      expect(
+        screen.getByText(
+          'Cannot pause workflow run id=412 from status "completed". Expected status "running".',
+        ),
+      ).toBeInTheDocument();
+    }, { timeout: 2_000 });
+    const errorFeedback = screen.getByText(
+      'Cannot pause workflow run id=412 from status "completed". Expected status "running".',
+    );
+    expect(errorFeedback).toHaveClass('run-action-feedback', 'run-action-feedback--error');
+    expect(errorFeedback).not.toHaveClass('meta-text');
+
+    expect(screen.getByRole('button', { name: 'Pause' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Cancel Run' })).toBeEnabled();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('restarts realtime polling when retry succeeds but immediate refresh fails', async () => {
+    const failedDetail = createRunDetail({
+      run: {
+        status: 'failed',
+        completedAt: '2026-02-18T00:10:00.000Z',
+        nodeSummary: {
+          pending: 0,
+          running: 0,
+          completed: 0,
+          failed: 1,
+          skipped: 0,
+          cancelled: 0,
+        },
+      },
+      nodes: [
+        {
+          id: 1,
+          treeNodeId: 1,
+          nodeKey: 'design',
+          sequenceIndex: 0,
+          attempt: 1,
+          status: 'failed',
+          startedAt: '2026-02-18T00:00:10.000Z',
+          completedAt: '2026-02-18T00:01:00.000Z',
+          latestArtifact: null,
+          latestRoutingDecision: null,
+          latestDiagnostics: null,
+        },
+      ],
+    });
+    const resumedDetail = createRunDetail({
+      run: {
+        status: 'running',
+        completedAt: null,
+      },
+      nodes: [
+        {
+          id: 1,
+          treeNodeId: 1,
+          nodeKey: 'design',
+          sequenceIndex: 0,
+          attempt: 2,
+          status: 'running',
+          startedAt: '2026-02-18T00:10:05.000Z',
+          completedAt: null,
+          latestArtifact: null,
+          latestRoutingDecision: null,
+          latestDiagnostics: null,
+        },
+      ],
+    });
+    let detailFetchCount = 0;
+
+    fetchMock.mockImplementation((input, init) => {
+      const url = String(input);
+      if (url === '/api/dashboard/runs/412/actions/retry' && init?.method === 'POST') {
+        return Promise.resolve(
+          createJsonResponse(
+            createControlResult({
+              action: 'retry',
+              previousRunStatus: 'failed',
+              runStatus: 'running',
+              retriedRunNodeIds: [1],
+            }),
+          ),
+        );
+      }
+
+      if (url === '/api/dashboard/runs/412' && init?.method === 'GET') {
+        detailFetchCount += 1;
+        if (detailFetchCount === 1) {
+          return Promise.reject(new Error('refresh down'));
+        }
+
+        return Promise.resolve(createJsonResponse(resumedDetail));
+      }
+
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    });
+
+    render(
+      <RunDetailContent
+        initialDetail={failedDetail}
+        repositories={[createRepository()]}
+        pollIntervalMs={50}
+      />,
+    );
+
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('button', { name: 'Retry Failed Node' }));
+
+    await waitFor(() => {
+      expect(screen.getByText(/Unable to refresh run timeline: refresh down/i)).toBeInTheDocument();
+    }, { timeout: 2_000 });
+
+    await waitFor(() => {
+      expect(detailFetchCount).toBeGreaterThan(1);
+    }, { timeout: 2_000 });
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Pause' })).toBeEnabled();
+    }, { timeout: 2_000 });
+  });
+
+  it.each([
+    {
+      name: 'cancel applied',
+      action: 'cancel',
+      actionButton: 'Cancel Run',
+      initialDetail: () => createRunDetail(),
+      controlResult: createControlResult({
+        action: 'cancel',
+        outcome: 'applied',
+        previousRunStatus: 'running',
+        runStatus: 'cancelled',
+      }),
+      refreshedDetail: () => createRunDetail({
+        run: {
+          status: 'cancelled',
+          completedAt: '2026-02-18T00:15:00.000Z',
+        },
+      }),
+      expectedMessage: 'Run cancelled.',
+      expectedPrimaryAction: 'Run Cancelled',
+    },
+    {
+      name: 'cancel noop',
+      action: 'cancel',
+      actionButton: 'Cancel Run',
+      initialDetail: () => createRunDetail(),
+      controlResult: createControlResult({
+        action: 'cancel',
+        outcome: 'noop',
+        previousRunStatus: 'running',
+        runStatus: 'cancelled',
+      }),
+      refreshedDetail: () => createRunDetail({
+        run: {
+          status: 'cancelled',
+          completedAt: '2026-02-18T00:15:00.000Z',
+        },
+      }),
+      expectedMessage: 'Run is already cancelled.',
+      expectedPrimaryAction: 'Run Cancelled',
+    },
+    {
+      name: 'resume applied',
+      action: 'resume',
+      actionButton: 'Resume',
+      initialDetail: () => createRunDetail({
+        run: {
+          status: 'paused',
+        },
+      }),
+      controlResult: createControlResult({
+        action: 'resume',
+        outcome: 'applied',
+        previousRunStatus: 'paused',
+        runStatus: 'running',
+      }),
+      refreshedDetail: () => createRunDetail({
+        run: {
+          status: 'running',
+        },
+      }),
+      expectedMessage: 'Run resumed.',
+      expectedPrimaryAction: 'Pause',
+    },
+    {
+      name: 'resume noop',
+      action: 'resume',
+      actionButton: 'Resume',
+      initialDetail: () => createRunDetail({
+        run: {
+          status: 'paused',
+        },
+      }),
+      controlResult: createControlResult({
+        action: 'resume',
+        outcome: 'noop',
+        previousRunStatus: 'paused',
+        runStatus: 'running',
+      }),
+      refreshedDetail: () => createRunDetail({
+        run: {
+          status: 'running',
+        },
+      }),
+      expectedMessage: 'Run is already running.',
+      expectedPrimaryAction: 'Pause',
+    },
+    {
+      name: 'pause noop',
+      action: 'pause',
+      actionButton: 'Pause',
+      initialDetail: () => createRunDetail(),
+      controlResult: createControlResult({
+        action: 'pause',
+        outcome: 'noop',
+        previousRunStatus: 'running',
+        runStatus: 'paused',
+      }),
+      refreshedDetail: () => createRunDetail({
+        run: {
+          status: 'paused',
+        },
+      }),
+      expectedMessage: 'Run is already paused.',
+      expectedPrimaryAction: 'Resume',
+    },
+    {
+      name: 'retry applied with empty retry list',
+      action: 'retry',
+      actionButton: 'Retry Failed Node',
+      initialDetail: () => createFailedRunDetail(),
+      controlResult: createControlResult({
+        action: 'retry',
+        outcome: 'applied',
+        previousRunStatus: 'failed',
+        runStatus: 'running',
+        retriedRunNodeIds: [],
+      }),
+      refreshedDetail: () => createRunDetail({
+        run: {
+          status: 'running',
+          completedAt: null,
+        },
+      }),
+      expectedMessage: 'Retry queued for failed nodes.',
+      expectedPrimaryAction: 'Pause',
+    },
+    {
+      name: 'retry noop',
+      action: 'retry',
+      actionButton: 'Retry Failed Node',
+      initialDetail: () => createFailedRunDetail(),
+      controlResult: createControlResult({
+        action: 'retry',
+        outcome: 'noop',
+        previousRunStatus: 'failed',
+        runStatus: 'failed',
+        retriedRunNodeIds: [],
+      }),
+      refreshedDetail: () => createFailedRunDetail(),
+      expectedMessage: 'No retryable failed nodes were queued.',
+      expectedPrimaryAction: 'Retry Failed Node',
+    },
+  ])('handles $name control feedback', async ({ action, actionButton, controlResult, expectedMessage, refreshedDetail, initialDetail, expectedPrimaryAction }) => {
+    fetchMock.mockImplementation((input, init) => {
+      const url = String(input);
+      if (url === `/api/dashboard/runs/412/actions/${action}` && init?.method === 'POST') {
+        return Promise.resolve(createJsonResponse(controlResult));
+      }
+
+      if (url === '/api/dashboard/runs/412' && init?.method === 'GET') {
+        return Promise.resolve(createJsonResponse(refreshedDetail()));
+      }
+
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    });
+
+    render(
+      <RunDetailContent
+        initialDetail={initialDetail()}
+        repositories={[createRepository()]}
+        enableRealtime={false}
+      />,
+    );
+
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('button', { name: actionButton }));
+
+    await waitFor(() => {
+      expect(screen.getByText(expectedMessage)).toBeInTheDocument();
+    }, { timeout: 2_000 });
+
+    const feedback = screen.getByText(expectedMessage);
+    expect(feedback).toHaveClass('run-action-feedback', 'run-action-feedback--success');
+    expect(screen.getByRole('button', { name: expectedPrimaryAction })).toBeInTheDocument();
+  });
+
+  it.each([
+    {
+      name: 'cancel',
+      action: 'cancel',
+      actionButton: 'Cancel Run',
+      initialDetail: () => createRunDetail(),
+      expectedPrefix: 'Unable to cancel run',
+    },
+    {
+      name: 'resume',
+      action: 'resume',
+      actionButton: 'Resume',
+      initialDetail: () => createRunDetail({
+        run: {
+          status: 'paused',
+        },
+      }),
+      expectedPrefix: 'Unable to resume run',
+    },
+    {
+      name: 'retry',
+      action: 'retry',
+      actionButton: 'Retry Failed Node',
+      initialDetail: () => createFailedRunDetail(),
+      expectedPrefix: 'Unable to retry failed node',
+    },
+  ])('uses stable API error fallback messaging for $name control failures', async ({ action, actionButton, initialDetail, expectedPrefix }) => {
+    fetchMock.mockImplementation((input, init) => {
+      const url = String(input);
+      if (url === `/api/dashboard/runs/412/actions/${action}` && init?.method === 'POST') {
+        return Promise.resolve(createJsonResponse({}, 500));
+      }
+
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    });
+
+    render(
+      <RunDetailContent
+        initialDetail={initialDetail()}
+        repositories={[createRepository()]}
+        enableRealtime={false}
+      />,
+    );
+
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('button', { name: actionButton }));
+
+    await waitFor(() => {
+      expect(screen.getByText(`${expectedPrefix} (HTTP 500).`)).toBeInTheDocument();
+    }, { timeout: 2_000 });
+    expect(screen.getByRole('button', { name: actionButton })).toBeEnabled();
+  });
+
+  it.each([
+    {
+      name: 'invalid object payload',
+      payload: createControlResult({
+        runStatus: 'mystery',
+      }),
+    },
+    {
+      name: 'non-object payload',
+      payload: null,
+    },
+  ])('reports malformed control responses for $name', async ({ payload }) => {
+    fetchMock.mockImplementation((input, init) => {
+      const url = String(input);
+      if (url === '/api/dashboard/runs/412/actions/pause' && init?.method === 'POST') {
+        return Promise.resolve(createJsonResponse(payload));
+      }
+
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    });
+
+    render(
+      <RunDetailContent
+        initialDetail={createRunDetail()}
+        repositories={[createRepository()]}
+        enableRealtime={false}
+      />,
+    );
+
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('button', { name: 'Pause' }));
+
+    await waitFor(() => {
+      expect(screen.getByText('Run action response was malformed.')).toBeInTheDocument();
+    }, { timeout: 2_000 });
+    expect(screen.getByRole('button', { name: 'Pause' })).toBeEnabled();
+  });
+
+  it('surfaces refresh HTTP errors after a successful lifecycle control action', async () => {
+    fetchMock.mockImplementation((input, init) => {
+      const url = String(input);
+      if (url === '/api/dashboard/runs/412/actions/pause' && init?.method === 'POST') {
+        return Promise.resolve(createJsonResponse(createControlResult()));
+      }
+
+      if (url === '/api/dashboard/runs/412' && init?.method === 'GET') {
+        return Promise.resolve(createJsonResponse({}, 503));
+      }
+
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    });
+
+    render(
+      <RunDetailContent
+        initialDetail={createRunDetail()}
+        repositories={[createRepository()]}
+        enableRealtime={false}
+      />,
+    );
+
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('button', { name: 'Pause' }));
+
+    await waitFor(() => {
+      expect(
+        screen.getByText(
+          'Run paused. Unable to refresh run timeline: Unable to refresh run timeline (HTTP 503).',
+        ),
+      ).toBeInTheDocument();
+    }, { timeout: 2_000 });
+    expect(screen.getByRole('button', { name: 'Resume' })).toBeEnabled();
+  });
+
+  it('clears action feedback when realtime updates move run status past that feedback state', async () => {
+    const pausedDetail = createRunDetail({
+      run: {
+        status: 'paused',
+      },
+    });
+    const runningDetail = createRunDetail({
+      run: {
+        status: 'running',
+      },
+    });
+    let detailFetchCount = 0;
+
+    fetchMock.mockImplementation((input, init) => {
+      const url = String(input);
+      if (url === '/api/dashboard/runs/412/actions/pause' && init?.method === 'POST') {
+        return Promise.resolve(createJsonResponse(createControlResult()));
+      }
+
+      if (url === '/api/dashboard/runs/412' && init?.method === 'GET') {
+        detailFetchCount += 1;
+        return Promise.resolve(createJsonResponse(detailFetchCount === 1 ? pausedDetail : runningDetail));
+      }
+
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    });
+
+    render(
+      <RunDetailContent
+        initialDetail={createRunDetail()}
+        repositories={[createRepository()]}
+        pollIntervalMs={1_000}
+      />,
+    );
+
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('button', { name: 'Pause' }));
+
+    await waitFor(() => {
+      expect(screen.getByText('Run paused.')).toBeInTheDocument();
+    }, { timeout: 2_000 });
+
+    await waitFor(() => {
+      expect(detailFetchCount).toBeGreaterThan(1);
+    }, { timeout: 2_000 });
+    await waitFor(() => {
+      expect(screen.queryByText('Run paused.')).toBeNull();
+    }, { timeout: 2_000 });
+    expect(screen.getByRole('button', { name: 'Pause' })).toBeEnabled();
   });
 
   it('shows reconnect state after transient failure and recovers on retry', async () => {
@@ -661,6 +1327,58 @@ describe('RunDetailContent realtime updates', () => {
     await waitFor(() => {
       expect(screen.getByText('buffered update')).toBeInTheDocument();
     });
+  });
+
+  it('deduplicates persisted stream snapshot events by sequence and keeps the latest entry', async () => {
+    vi.stubGlobal('EventSource', MockEventSource as unknown as typeof EventSource);
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/nodes/2/stream')) {
+        return createJsonResponse({
+          workflowRunId: 412,
+          runNodeId: 2,
+          attempt: 1,
+          nodeStatus: 'running',
+          ended: false,
+          latestSequence: 2,
+          events: [
+            createStreamEvent({
+              id: 300,
+              sequence: 1,
+              contentPreview: 'duplicate original',
+            }),
+            createStreamEvent({
+              id: 301,
+              sequence: 1,
+              contentPreview: 'duplicate replacement',
+            }),
+            createStreamEvent({
+              id: 302,
+              sequence: 2,
+              contentPreview: 'unique second event',
+            }),
+          ],
+        });
+      }
+
+      return createJsonResponse(createRunDetail());
+    });
+
+    render(
+      <RunDetailContent
+        initialDetail={createRunDetail()}
+        repositories={[createRepository()]}
+        enableRealtime={false}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText('duplicate replacement')).toBeInTheDocument();
+    });
+
+    expect(screen.queryByText('duplicate original')).toBeNull();
+    expect(screen.getAllByText('duplicate replacement')).toHaveLength(1);
+    expect(screen.getAllByText('unique second event')).toHaveLength(1);
   });
 
   it('does not restart stream when selecting the active node in the status panel', async () => {
@@ -1231,7 +1949,8 @@ describe('RunDetailContent realtime updates', () => {
     expect(within(focusCard!).getByText('Current status')).toBeInTheDocument();
     expect(within(focusCard!).getByText('Latest event')).toBeInTheDocument();
     expect(within(focusCard!).getByText('Next action')).toBeInTheDocument();
-    expect(within(focusCard!).getByRole('button', { name: 'Pause' })).toBeDisabled();
+    expect(within(focusCard!).getByRole('button', { name: 'Pause' })).toBeEnabled();
+    expect(within(focusCard!).getByRole('button', { name: 'Cancel Run' })).toBeEnabled();
     expect(within(focusCard!).getByText(/implement started \(attempt 1\)\./i)).toBeInTheDocument();
   });
 
