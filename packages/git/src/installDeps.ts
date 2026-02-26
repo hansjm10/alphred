@@ -221,8 +221,12 @@ export async function runInstallCommand(options: RunInstallCommandOptions): Prom
       }
 
       const signalSuffix = typeof signal === 'string' ? ` (signal: ${signal})` : '';
-      const exitCodeLabel =
-        typeof code === 'number' ? code.toString(10) : code === null ? 'null' : 'unknown';
+      let exitCodeLabel = 'unknown';
+      if (typeof code === 'number') {
+        exitCodeLabel = code.toString(10);
+      } else if (code === null) {
+        exitCodeLabel = 'null';
+      }
       settle(
         new Error(
           `Install command "${options.command.displayCommand}" failed with exit code ${exitCodeLabel}${signalSuffix}.`,
