@@ -361,11 +361,24 @@ export type DashboardCreateRepositoryResult = {
   repository: DashboardRepositoryState;
 };
 
+export type DashboardRunExecutionScope = 'full' | 'single_node';
+
+export type DashboardRunNodeSelector =
+  | {
+      type: 'next_runnable';
+    }
+  | {
+      type: 'node_key';
+      nodeKey: string;
+    };
+
 export type DashboardRunLaunchRequest = {
   treeKey: string;
   repositoryName?: string;
   branch?: string;
   executionMode?: 'async' | 'sync';
+  executionScope?: DashboardRunExecutionScope;
+  nodeSelector?: DashboardRunNodeSelector;
   cleanupWorktree?: boolean;
 };
 

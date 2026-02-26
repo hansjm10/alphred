@@ -443,6 +443,7 @@ describe('RunsPage', () => {
           repositoryName: 'demo-repo',
           branch: 'feature/runs-ui',
           executionMode: 'async',
+          executionScope: 'full',
         }),
       });
       expect(fetchMock).toHaveBeenNthCalledWith(2, '/api/dashboard/runs?limit=50', {
@@ -453,6 +454,83 @@ describe('RunsPage', () => {
     expect(await screen.findByText(/Run #600 accepted. Current status: running./)).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Open run detail' })).toHaveAttribute('href', '/runs/600');
     expect(screen.getByText('#600 Other Tree')).toBeInTheDocument();
+  });
+
+  it('launches a single-node run with node_key selector payload', async () => {
+    const fetchMock = vi.mocked(global.fetch);
+    fetchMock
+      .mockResolvedValueOnce(createJsonResponse({
+        workflowRunId: 612,
+        mode: 'async',
+        status: 'accepted',
+        runStatus: 'running',
+        executionOutcome: null,
+        executedNodes: null,
+      }, { status: 202 }))
+      .mockResolvedValueOnce(createJsonResponse({
+        runs: [createRunSummary({ id: 612, status: 'completed' })],
+      }));
+
+    const user = userEvent.setup();
+    render(
+      <RunsPageContent
+        runs={[createRunSummary({ id: 412, status: 'running' })]}
+        workflows={[createWorkflow(), createWorkflow({ id: 2, treeKey: 'other-tree', name: 'Other Tree' })]}
+        repositories={[createRepository({ name: 'demo-repo', cloneStatus: 'cloned' })]}
+        authGate={createAuthenticatedAuthGate()}
+        activeFilter="all"
+        activeRepositoryName={null}
+        activeWorkflowKey={null}
+        activeWindow="all"
+      />,
+    );
+
+    await user.selectOptions(screen.getByLabelText('Workflow'), 'other-tree');
+    await user.selectOptions(screen.getByLabelText('Execution scope'), 'single_node');
+    await user.selectOptions(screen.getByLabelText('Node selector'), 'node_key');
+    await user.type(screen.getByLabelText('Node key'), 'design');
+    await user.click(screen.getByRole('button', { name: 'Launch Run' }));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenNthCalledWith(1, '/api/dashboard/runs', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({
+          treeKey: 'other-tree',
+          repositoryName: undefined,
+          branch: undefined,
+          executionMode: 'async',
+          executionScope: 'single_node',
+          nodeSelector: {
+            type: 'node_key',
+            nodeKey: 'design',
+          },
+        }),
+      });
+    });
+  });
+
+  it('disables launch when single-node node_key selector is missing node key', async () => {
+    const user = userEvent.setup();
+    render(
+      <RunsPageContent
+        runs={[createRunSummary({ id: 412, status: 'running' })]}
+        workflows={[createWorkflow()]}
+        repositories={[createRepository({ name: 'demo-repo', cloneStatus: 'cloned' })]}
+        authGate={createAuthenticatedAuthGate()}
+        activeFilter="all"
+        activeRepositoryName={null}
+        activeWorkflowKey={null}
+        activeWindow="all"
+      />,
+    );
+
+    await user.selectOptions(screen.getByLabelText('Execution scope'), 'single_node');
+    await user.selectOptions(screen.getByLabelText('Node selector'), 'node_key');
+
+    expect(screen.getByRole('button', { name: 'Launch Run' })).toBeDisabled();
   });
 
   it('uses refreshed run status in launch accepted messaging', async () => {

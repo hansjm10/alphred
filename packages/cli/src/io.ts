@@ -37,7 +37,9 @@ export function printGeneralUsage(io: Pick<CliIo, 'stdout'>): void {
   io.stdout('Usage: alphred <command> [options]');
   io.stdout('');
   io.stdout('Commands:');
-  io.stdout('  run --tree <tree_key> [--repo <name|github:owner/repo|azure:org/project/repo>] [--branch <name>]');
+  io.stdout(
+    '  run --tree <tree_key> [--repo <name|github:owner/repo|azure:org/project/repo>] [--branch <name>] [--execution-scope <full|single_node>] [--node-selector <next_runnable|node_key>] [--node-key <node_key>]',
+  );
   io.stdout('                             Start and execute a workflow run');
   io.stdout('  run <cancel|pause|resume|retry> --run <run_id>');
   io.stdout('                             Control lifecycle state for an existing run');

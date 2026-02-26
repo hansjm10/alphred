@@ -8,7 +8,7 @@ import {
   type RunNodeStatus,
   type WorkflowRunStatus,
 } from '@alphred/db';
-import type { PhaseProviderResolver } from '@alphred/core';
+import type { PhaseProviderResolver, WorkflowExecutionScope, WorkflowRunNodeSelector } from '@alphred/core';
 import {
   WorktreeManager,
   createScmProvider as createGitScmProvider,
@@ -138,6 +138,8 @@ export type ParsedRunCommandInput =
       treeKey: string;
       repoInput: string | null;
       branchOverride: string | undefined;
+      executionScope: WorkflowExecutionScope;
+      nodeSelector: WorkflowRunNodeSelector | undefined;
     }
   | {
       ok: false;

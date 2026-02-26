@@ -37,7 +37,7 @@ export async function handleRunCommand(
   if (!parsedInput.ok) {
     return parsedInput.exitCode;
   }
-  const { treeKey, repoInput, branchOverride } = parsedInput;
+  const { treeKey, repoInput, branchOverride, executionScope, nodeSelector } = parsedInput;
 
   let db: AlphredDatabase | null = null;
   let runId: number | null = null;
@@ -63,12 +63,21 @@ export async function handleRunCommand(
       resolveProvider: dependencies.resolveProvider,
     });
 
-    const execution = await executor.executeRun({
-      workflowRunId: runId,
-      options: {
-        workingDirectory: runSetup.workingDirectory,
-      },
-    });
+    const execution =
+      executionScope === 'single_node'
+        ? await executor.executeSingleNode({
+            workflowRunId: runId,
+            options: {
+              workingDirectory: runSetup.workingDirectory,
+            },
+            nodeSelector,
+          })
+        : await executor.executeRun({
+            workflowRunId: runId,
+            options: {
+              workingDirectory: runSetup.workingDirectory,
+            },
+          });
 
     exitCode = summarizeRunExecution(execution, io);
   } catch (error) {

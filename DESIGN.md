@@ -25,6 +25,22 @@ Each phase:
 4. Collects streaming events and stores the final report
 5. Evaluates transitions to determine the next phase
 
+### Run Execution Scope
+
+Run launch supports two execution scopes:
+- `full` (default): existing workflow loop behavior (`executeRun`) continues until terminal run outcome or loop guard limits.
+- `single_node`: executes exactly one node attempt and then terminalizes the run immediately.
+
+Single-node selectors:
+- `next_runnable`: scheduler-faithful; executes the next claimable node.
+- `node_key`: targeted execution for a specific node key when the node is claimable.
+
+Single-node semantics:
+- Exactly one node attempt is executed (no immediate in-call retry loop).
+- Run status is terminalized deterministically after the attempt (`completed` on successful attempt, `failed` on failed attempt).
+- Persistence contracts are unchanged from full runs: artifacts, stream events, diagnostics, and routing decisions are written to the same tables.
+- Invalid single-node selections produce typed validation errors (`WORKFLOW_RUN_SINGLE_NODE_SELECTOR_NOT_FOUND`, `WORKFLOW_RUN_SINGLE_NODE_SELECTOR_NOT_EXECUTABLE`).
+
 ### State Machine
 
 **Run states:**

@@ -415,6 +415,11 @@ Request body (`DashboardRunLaunchRequest`):
   "repositoryName": "demo-repo",
   "branch": "feature/my-branch",
   "executionMode": "async",
+  "executionScope": "single_node",
+  "nodeSelector": {
+    "type": "node_key",
+    "nodeKey": "design"
+  },
   "cleanupWorktree": false
 }
 ```
@@ -424,6 +429,10 @@ Validation notes:
 - `repositoryName`, when provided, must be a non-empty string after trimming.
 - `branch`, when provided, must be a string.
 - `executionMode`, when provided, must be `"async"` or `"sync"`.
+- `executionScope`, when provided, must be `"full"` or `"single_node"` (default is `"full"`).
+- `nodeSelector`, when provided, requires `executionScope = "single_node"` and must include:
+  - `type = "next_runnable"`; or
+  - `type = "node_key"` with non-empty `nodeKey`.
 - `cleanupWorktree`, when provided, must be a boolean.
 - When `cleanupWorktree` is `true`, the service attempts worktree cleanup after workflow execution for both success and failure outcomes once execution starts.
 

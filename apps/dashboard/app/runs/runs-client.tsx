@@ -5,7 +5,9 @@ import { useRouter } from 'next/navigation';
 import { useEffect, useMemo, useState } from 'react';
 import type {
   DashboardRepositoryState,
+  DashboardRunExecutionScope,
   DashboardRunLaunchResult,
+  DashboardRunNodeSelector,
   DashboardRunSummary,
   DashboardWorkflowTreeSummary,
 } from '../../src/server/dashboard-contracts';
@@ -53,6 +55,8 @@ const LAUNCH_RESULT_RUN_STATUSES = new Set<DashboardRunLaunchResult['runStatus']
   'failed',
   'cancelled',
 ]);
+const RUN_EXECUTION_SCOPES: readonly DashboardRunExecutionScope[] = ['full', 'single_node'];
+const NODE_SELECTOR_TYPES: readonly DashboardRunNodeSelector['type'][] = ['next_runnable', 'node_key'];
 
 function resolveApiErrorMessage(status: number, payload: unknown, fallbackPrefix: string): string {
   if (
@@ -276,6 +280,9 @@ export function RunsPageContent({
   const [selectedTreeKey, setSelectedTreeKey] = useState<string>(workflows[0]?.treeKey ?? '');
   const [selectedRepositoryName, setSelectedRepositoryName] = useState<string>(activeRepositoryName ?? '');
   const [branch, setBranch] = useState<string>('');
+  const [executionScope, setExecutionScope] = useState<DashboardRunExecutionScope>('full');
+  const [nodeSelectorType, setNodeSelectorType] = useState<DashboardRunNodeSelector['type']>('next_runnable');
+  const [nodeKey, setNodeKey] = useState<string>('');
   const [isLaunching, setIsLaunching] = useState<boolean>(false);
   const [launchError, setLaunchError] = useState<string | null>(null);
   const [launchRefreshWarning, setLaunchRefreshWarning] = useState<string | null>(null);
@@ -290,7 +297,12 @@ export function RunsPageContent({
     repository: activeRepositoryName,
     window: activeWindow,
   });
-  const launchDisabled = isLaunching || launchBlockedReason !== null || selectedTreeKey.trim().length === 0;
+  const nodeSelectorRequiresNodeKey = executionScope === 'single_node' && nodeSelectorType === 'node_key';
+  const launchDisabled =
+    isLaunching ||
+    launchBlockedReason !== null ||
+    selectedTreeKey.trim().length === 0 ||
+    (nodeSelectorRequiresNodeKey && nodeKey.trim().length === 0);
   const launchButtonLabel = isLaunching ? 'Launching...' : 'Launch Run';
 
   const clonedRepositories = useMemo(
@@ -414,6 +426,20 @@ export function RunsPageContent({
     setIsLaunching(true);
 
     try {
+      let selectorPayload: DashboardRunNodeSelector | undefined;
+      if (executionScope === 'single_node') {
+        if (nodeSelectorType === 'node_key') {
+          selectorPayload = {
+            type: 'node_key',
+            nodeKey: nodeKey.trim(),
+          };
+        } else {
+          selectorPayload = {
+            type: 'next_runnable',
+          };
+        }
+      }
+
       const response = await fetch('/api/dashboard/runs', {
         method: 'POST',
         headers: {
@@ -424,6 +450,8 @@ export function RunsPageContent({
           repositoryName: selectedRepositoryName || undefined,
           branch: branch.trim() || undefined,
           executionMode: 'async',
+          executionScope,
+          nodeSelector: selectorPayload,
         }),
       });
       const payload = (await response.json().catch(() => null)) as unknown;
@@ -467,7 +495,7 @@ export function RunsPageContent({
     <div className="page-stack">
       <section className="page-heading">
         <h2>Run lifecycle</h2>
-        <p>Launch new runs in safe async mode and monitor lifecycle state from persisted data.</p>
+        <p>Launch full or single-node runs in async mode and monitor lifecycle state from persisted data.</p>
       </section>
 
       <div className="page-grid">
@@ -530,6 +558,61 @@ export function RunsPageContent({
               />
             </label>
 
+            <label className="run-launch-form__field" htmlFor="run-launch-execution-scope">
+              <span className="meta-text">Execution scope</span>
+              <select
+                id="run-launch-execution-scope"
+                value={executionScope}
+                disabled={launchBlockedReason !== null}
+                onChange={(event) => {
+                  const nextValue = event.currentTarget.value as DashboardRunExecutionScope;
+                  if (!RUN_EXECUTION_SCOPES.includes(nextValue)) {
+                    return;
+                  }
+                  setExecutionScope(nextValue);
+                }}
+              >
+                <option value="full">Full workflow</option>
+                <option value="single_node">Single node</option>
+              </select>
+            </label>
+
+            {executionScope === 'single_node' ? (
+              <label className="run-launch-form__field" htmlFor="run-launch-node-selector">
+                <span className="meta-text">Node selector</span>
+                <select
+                  id="run-launch-node-selector"
+                  value={nodeSelectorType}
+                  disabled={launchBlockedReason !== null}
+                  onChange={(event) => {
+                    const nextValue = event.currentTarget.value as DashboardRunNodeSelector['type'];
+                    if (!NODE_SELECTOR_TYPES.includes(nextValue)) {
+                      return;
+                    }
+                    setNodeSelectorType(nextValue);
+                  }}
+                >
+                  <option value="next_runnable">Next runnable</option>
+                  <option value="node_key">Node key</option>
+                </select>
+              </label>
+            ) : null}
+
+            {executionScope === 'single_node' && nodeSelectorType === 'node_key' ? (
+              <label className="run-launch-form__field" htmlFor="run-launch-node-key">
+                <span className="meta-text">Node key</span>
+                <input
+                  id="run-launch-node-key"
+                  value={nodeKey}
+                  disabled={launchBlockedReason !== null}
+                  onChange={(event) => {
+                    setNodeKey(event.currentTarget.value);
+                  }}
+                  placeholder="design"
+                />
+              </label>
+            ) : null}
+
             <div className="action-row">
               <ActionButton
                 tone="primary"
@@ -539,7 +622,11 @@ export function RunsPageContent({
               >
                 {launchButtonLabel}
               </ActionButton>
-              <span className="meta-text">Launch defaults to async mode.</span>
+              <span className="meta-text">
+                {executionScope === 'single_node'
+                  ? 'Launch runs one node attempt, then terminalizes the run.'
+                  : 'Launch defaults to async mode.'}
+              </span>
             </div>
           </form>
 

@@ -1,12 +1,18 @@
 export { createSqlWorkflowExecutor } from './executor.js';
 export {
+  WorkflowRunExecutionValidationError,
   WorkflowRunControlError,
+  type ExecuteSingleNodeRunParams,
   type ExecuteNextRunnableNodeParams,
   type ExecuteNextRunnableNodeResult,
   type ExecuteWorkflowRunParams,
   type ExecuteWorkflowRunResult,
+  type ValidateSingleNodeSelectionParams,
   type SqlWorkflowExecutor,
   type SqlWorkflowExecutorDependencies,
+  type WorkflowExecutionScope,
+  type WorkflowRunExecutionValidationErrorCode,
+  type WorkflowRunNodeSelector,
   type WorkflowRunControlAction,
   type WorkflowRunControlErrorCode,
   type WorkflowRunControlParams,

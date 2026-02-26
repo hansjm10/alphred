@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
-import { WorkflowRunControlError, createSqlWorkflowExecutor, createSqlWorkflowPlanner } from '@alphred/core';
+import {
+  WorkflowRunControlError,
+  WorkflowRunExecutionValidationError,
+  createSqlWorkflowExecutor,
+  createSqlWorkflowPlanner,
+} from '@alphred/core';
 import { and, eq } from 'drizzle-orm';
 import {
   createDatabase,
@@ -431,6 +436,110 @@ describe('createDashboardService', () => {
     expect(service.hasBackgroundExecution(result.workflowRunId)).toBe(false);
     expect(executeRun).toHaveBeenCalledTimes(1);
     expect(closeDatabase).toHaveBeenCalledTimes(2);
+  });
+
+  it('dispatches synchronous single-node launches to executeSingleNode', async () => {
+    const executeRun = vi.fn(async () => ({
+      finalStep: {
+        runStatus: 'completed',
+        outcome: 'completed',
+      },
+      executedNodes: 2,
+    }));
+    const executeSingleNode = vi.fn(async () => ({
+      finalStep: {
+        runStatus: 'completed',
+        outcome: 'run_terminal',
+      },
+      executedNodes: 1,
+    }));
+    const validateSingleNodeSelection = vi.fn(() => undefined);
+    const { db, dependencies } = createHarness({
+      createSqlWorkflowExecutor: () =>
+        ({
+          executeRun,
+          executeSingleNode,
+          validateSingleNodeSelection,
+        }) as unknown as ReturnType<DashboardServiceDependencies['createSqlWorkflowExecutor']>,
+    });
+    seedRunData(db);
+
+    const service = createDashboardService({ dependencies });
+    const result = await service.launchWorkflowRun({
+      treeKey: 'demo-tree',
+      executionMode: 'sync',
+      executionScope: 'single_node',
+      nodeSelector: {
+        type: 'node_key',
+        nodeKey: 'design',
+      },
+    });
+
+    expect(result.mode).toBe('sync');
+    expect(executeSingleNode).toHaveBeenCalledTimes(1);
+    expect(executeSingleNode).toHaveBeenCalledWith({
+      workflowRunId: result.workflowRunId,
+      options: {
+        workingDirectory: process.cwd(),
+      },
+      nodeSelector: {
+        type: 'node_key',
+        nodeKey: 'design',
+      },
+    });
+    expect(executeRun).not.toHaveBeenCalled();
+    expect(validateSingleNodeSelection).not.toHaveBeenCalled();
+  });
+
+  it('validates selector before enqueuing async single-node launches', async () => {
+    const executeRun = vi.fn(async () => ({
+      finalStep: {
+        runStatus: 'completed',
+        outcome: 'completed',
+      },
+      executedNodes: 2,
+    }));
+    const executeSingleNode = vi.fn(async () => ({
+      finalStep: {
+        runStatus: 'completed',
+        outcome: 'run_terminal',
+      },
+      executedNodes: 1,
+    }));
+    const validateSingleNodeSelection = vi.fn(() => undefined);
+    const { db, dependencies } = createHarness({
+      createSqlWorkflowExecutor: () =>
+        ({
+          executeRun,
+          executeSingleNode,
+          validateSingleNodeSelection,
+        }) as unknown as ReturnType<DashboardServiceDependencies['createSqlWorkflowExecutor']>,
+    });
+    seedRunData(db);
+
+    const service = createDashboardService({ dependencies });
+    const result = await service.launchWorkflowRun({
+      treeKey: 'demo-tree',
+      executionMode: 'async',
+      executionScope: 'single_node',
+      nodeSelector: {
+        type: 'next_runnable',
+      },
+    });
+
+    expect(result.mode).toBe('async');
+    expect(validateSingleNodeSelection).toHaveBeenCalledTimes(1);
+    expect(validateSingleNodeSelection).toHaveBeenCalledWith({
+      workflowRunId: result.workflowRunId,
+      nodeSelector: {
+        type: 'next_runnable',
+      },
+    });
+
+    await waitForBackgroundExecution(service, result.workflowRunId);
+
+    expect(executeSingleNode).toHaveBeenCalledTimes(1);
+    expect(executeRun).not.toHaveBeenCalled();
   });
 
   it('attempts cleanupWorktree for sync launches when execution fails', async () => {
@@ -2446,6 +2555,112 @@ describe('createDashboardService', () => {
         message: 'executionMode must be "async" or "sync".',
       });
     }
+  });
+
+  it('rejects invalid executionScope input when launching runs', () => {
+    const { dependencies } = createHarness();
+    const service = createDashboardService({ dependencies });
+
+    try {
+      service.launchWorkflowRun({
+        treeKey: 'demo-tree',
+        executionScope: 'partial' as unknown as 'full',
+      });
+      throw new Error('Expected launchWorkflowRun to throw for invalid executionScope input.');
+    } catch (error) {
+      expect(error).toMatchObject({
+        name: 'DashboardIntegrationError',
+        code: 'invalid_request',
+        status: 400,
+        message: 'executionScope must be "full" or "single_node".',
+      });
+    }
+  });
+
+  it('rejects nodeSelector when executionScope is not single_node', () => {
+    const { dependencies } = createHarness();
+    const service = createDashboardService({ dependencies });
+
+    try {
+      service.launchWorkflowRun({
+        treeKey: 'demo-tree',
+        nodeSelector: {
+          type: 'next_runnable',
+        },
+      });
+      throw new Error('Expected launchWorkflowRun to throw when nodeSelector is used outside single_node scope.');
+    } catch (error) {
+      expect(error).toMatchObject({
+        name: 'DashboardIntegrationError',
+        code: 'invalid_request',
+        status: 400,
+        message: 'nodeSelector requires executionScope "single_node".',
+      });
+    }
+  });
+
+  it('maps single-node selector validation failures to invalid_request errors', async () => {
+    const validateSingleNodeSelection = vi.fn(() => {
+      throw new WorkflowRunExecutionValidationError(
+        'WORKFLOW_RUN_SINGLE_NODE_SELECTOR_NOT_FOUND',
+        'Node selector "node_key" did not match any node for key "missing".',
+        {
+          workflowRunId: 1,
+          nodeSelector: {
+            type: 'node_key',
+            nodeKey: 'missing',
+          },
+        },
+      );
+    });
+    const executeRun = vi.fn(async () => ({
+      finalStep: {
+        runStatus: 'completed',
+        outcome: 'completed',
+      },
+      executedNodes: 3,
+    }));
+    const executeSingleNode = vi.fn(async () => ({
+      finalStep: {
+        runStatus: 'completed',
+        outcome: 'run_terminal',
+      },
+      executedNodes: 1,
+    }));
+    const { db, dependencies } = createHarness({
+      createSqlWorkflowExecutor: () =>
+        ({
+          executeRun,
+          executeSingleNode,
+          validateSingleNodeSelection,
+        }) as unknown as ReturnType<DashboardServiceDependencies['createSqlWorkflowExecutor']>,
+    });
+    seedRunData(db);
+    const service = createDashboardService({ dependencies });
+
+    await expect(
+      service.launchWorkflowRun({
+        treeKey: 'demo-tree',
+        executionMode: 'async',
+        executionScope: 'single_node',
+        nodeSelector: {
+          type: 'node_key',
+          nodeKey: 'missing',
+        },
+      }),
+    ).rejects.toMatchObject({
+      name: 'DashboardIntegrationError',
+      code: 'invalid_request',
+      status: 400,
+      message: 'Node selector "node_key" did not match any node for key "missing".',
+      details: {
+        code: 'WORKFLOW_RUN_SINGLE_NODE_SELECTOR_NOT_FOUND',
+        nodeSelector: {
+          type: 'node_key',
+          nodeKey: 'missing',
+        },
+      },
+    });
   });
 
   it('returns not_found when launching a repository-scoped run for a missing repository', async () => {

@@ -84,6 +84,7 @@ export type ClaimedNodeFailureParams = {
   failureEvents: ProviderEvent[];
   failureTokensUsed: number;
   error: unknown;
+  allowRetries: boolean;
 };
 
 export type NodeFailureReason = 'post_completion_failure' | 'retry_scheduled' | 'retry_limit_exceeded';
@@ -238,11 +239,11 @@ export function handleClaimedNodeFailure(
   node: RunNodeExecutionRow,
   params: ClaimedNodeFailureParams,
 ): ClaimedNodeFailure {
-  const { currentAttempt, contextManifest, failureEvents, failureTokensUsed, error } = params;
+  const { currentAttempt, contextManifest, failureEvents, failureTokensUsed, error, allowRetries } = params;
   const errorMessage = toErrorMessage(error);
   const persistedNodeStatus = loadRunNodeExecutionRowById(db, run.id, node.runNodeId).status;
   const latestRunStatus = loadWorkflowRunRow(db, run.id).status;
-  const retryEligible = persistedNodeStatus === 'running' && shouldRetryNodeAttempt(currentAttempt, node.maxRetries);
+  const retryEligible = allowRetries && persistedNodeStatus === 'running' && shouldRetryNodeAttempt(currentAttempt, node.maxRetries);
   const canRetryImmediately = retryEligible && latestRunStatus === 'running';
   const shouldDeferRetry = retryEligible && latestRunStatus === 'paused';
   const canRetry = canRetryImmediately || shouldDeferRetry;
@@ -355,9 +356,13 @@ export async function executeClaimedRunnableNode(
   edgeRows: EdgeRow[],
   options: ProviderRunOptions,
   runStatus: WorkflowRunStatus,
+  executionOptions: {
+    allowRetries?: boolean;
+  } = {},
 ): Promise<ExecuteNextRunnableNodeResult> {
   let currentRunStatus = runStatus;
   let currentAttempt = node.attempt;
+  const allowRetries = executionOptions.allowRetries ?? true;
 
   while (true) {
     const latestNodeAttemptsForContext = getLatestRunNodeAttempts(loadRunNodeExecutionRows(db, run.id));
@@ -425,6 +430,7 @@ export async function executeClaimedRunnableNode(
           failureEvents,
           failureTokensUsed,
           error,
+          allowRetries,
         },
       );
       if (failure.nextAttempt !== null) {

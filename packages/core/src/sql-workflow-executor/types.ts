@@ -56,6 +56,16 @@ export type RoutingDecisionSelection = {
 };
 
 export type TerminalWorkflowRunStatus = Extract<WorkflowRunStatus, 'completed' | 'failed' | 'cancelled'>;
+export type WorkflowExecutionScope = 'full' | 'single_node';
+
+export type WorkflowRunNodeSelector =
+  | {
+      type: 'next_runnable';
+    }
+  | {
+      type: 'node_key';
+      nodeKey: string;
+    };
 
 export type NextRunnableSelection = {
   nextRunnableNode: RunNodeExecutionRow | null;
@@ -213,6 +223,17 @@ export type ExecuteWorkflowRunParams = {
   maxSteps?: number;
 };
 
+export type ExecuteSingleNodeRunParams = {
+  workflowRunId: number;
+  options: ProviderRunOptions;
+  nodeSelector?: WorkflowRunNodeSelector;
+};
+
+export type ValidateSingleNodeSelectionParams = {
+  workflowRunId: number;
+  nodeSelector?: WorkflowRunNodeSelector;
+};
+
 export type ExecuteNextRunnableNodeParams = {
   workflowRunId: number;
   options: ProviderRunOptions;
@@ -249,6 +270,35 @@ export type ExecuteWorkflowRunResult = {
   executedNodes: number;
   finalStep: Exclude<ExecuteNextRunnableNodeResult, { outcome: 'executed' }>;
 };
+
+export type WorkflowRunExecutionValidationErrorCode =
+  | 'WORKFLOW_RUN_SINGLE_NODE_SELECTOR_NOT_FOUND'
+  | 'WORKFLOW_RUN_SINGLE_NODE_SELECTOR_NOT_EXECUTABLE';
+
+export class WorkflowRunExecutionValidationError extends Error {
+  readonly code: WorkflowRunExecutionValidationErrorCode;
+  readonly workflowRunId: number;
+  readonly nodeSelector: WorkflowRunNodeSelector;
+
+  constructor(
+    code: WorkflowRunExecutionValidationErrorCode,
+    message: string,
+    options: {
+      workflowRunId: number;
+      nodeSelector: WorkflowRunNodeSelector;
+      cause?: unknown;
+    },
+  ) {
+    super(message);
+    this.name = 'WorkflowRunExecutionValidationError';
+    this.code = code;
+    this.workflowRunId = options.workflowRunId;
+    this.nodeSelector = options.nodeSelector;
+    if (options.cause !== undefined) {
+      (this as Error & { cause?: unknown }).cause = options.cause;
+    }
+  }
+}
 
 export type WorkflowRunControlAction = 'cancel' | 'pause' | 'resume' | 'retry';
 
@@ -304,6 +354,8 @@ export type SqlWorkflowExecutorDependencies = {
 };
 
 export type SqlWorkflowExecutor = {
+  validateSingleNodeSelection(params: ValidateSingleNodeSelectionParams): void;
+  executeSingleNode(params: ExecuteSingleNodeRunParams): Promise<ExecuteWorkflowRunResult>;
   executeNextRunnableNode(params: ExecuteNextRunnableNodeParams): Promise<ExecuteNextRunnableNodeResult>;
   executeRun(params: ExecuteWorkflowRunParams): Promise<ExecuteWorkflowRunResult>;
   cancelRun(params: WorkflowRunControlParams): Promise<WorkflowRunControlResult>;

@@ -60,6 +60,71 @@ function parseLaunchRequest(payload: unknown): DashboardRunLaunchRequest {
     });
   }
 
+  const executionScopeValue = candidate.executionScope;
+  if (executionScopeValue !== undefined && executionScopeValue !== 'full' && executionScopeValue !== 'single_node') {
+    throw new DashboardIntegrationError('invalid_request', 'Field "executionScope" must be "full" or "single_node".', {
+      status: 400,
+    });
+  }
+
+  const nodeSelectorValue = candidate.nodeSelector;
+  let nodeSelector: DashboardRunLaunchRequest['nodeSelector'];
+  if (nodeSelectorValue !== undefined) {
+    if (typeof nodeSelectorValue !== 'object' || nodeSelectorValue === null) {
+      throw new DashboardIntegrationError('invalid_request', 'Field "nodeSelector" must be an object when provided.', {
+        status: 400,
+      });
+    }
+
+    if (executionScopeValue !== 'single_node') {
+      throw new DashboardIntegrationError(
+        'invalid_request',
+        'Field "nodeSelector" requires "executionScope" to be "single_node".',
+        {
+          status: 400,
+        },
+      );
+    }
+
+    const selectorCandidate = nodeSelectorValue as Record<string, unknown>;
+    const selectorTypeValue = selectorCandidate.type;
+    if (selectorTypeValue === 'next_runnable') {
+      nodeSelector = { type: 'next_runnable' };
+    } else if (selectorTypeValue === 'node_key') {
+      if (typeof selectorCandidate.nodeKey !== 'string') {
+        throw new DashboardIntegrationError(
+          'invalid_request',
+          'Field "nodeSelector.nodeKey" must be a string when nodeSelector.type is "node_key".',
+          {
+            status: 400,
+          },
+        );
+      }
+      const nodeKeyValue = selectorCandidate.nodeKey.trim();
+      if (nodeKeyValue.length === 0) {
+        throw new DashboardIntegrationError(
+          'invalid_request',
+          'Field "nodeSelector.nodeKey" cannot be empty when nodeSelector.type is "node_key".',
+          {
+            status: 400,
+          },
+        );
+      }
+      nodeSelector = {
+        type: 'node_key',
+        nodeKey: nodeKeyValue,
+      };
+    } else {
+      throw new DashboardIntegrationError(
+        'invalid_request',
+        'Field "nodeSelector.type" must be "next_runnable" or "node_key".',
+        {
+          status: 400,
+        },
+      );
+    }
+  }
+
   const cleanupWorktreeValue = candidate.cleanupWorktree;
   if (cleanupWorktreeValue !== undefined && typeof cleanupWorktreeValue !== 'boolean') {
     throw new DashboardIntegrationError('invalid_request', 'Field "cleanupWorktree" must be a boolean when provided.', {
@@ -72,6 +137,8 @@ function parseLaunchRequest(payload: unknown): DashboardRunLaunchRequest {
     repositoryName: repositoryNameValue,
     branch: branchValue,
     executionMode: executionModeValue,
+    executionScope: executionScopeValue,
+    nodeSelector,
     cleanupWorktree: cleanupWorktreeValue,
   };
 }

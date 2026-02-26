@@ -12,12 +12,18 @@ export {
 export { createSqlWorkflowPlanner, type SqlWorkflowPlanner } from './sqlWorkflowPlanner.js';
 export {
   createSqlWorkflowExecutor,
+  WorkflowRunExecutionValidationError,
   type SqlWorkflowExecutor,
   type SqlWorkflowExecutorDependencies,
+  type ExecuteSingleNodeRunParams,
   type ExecuteNextRunnableNodeParams,
   type ExecuteNextRunnableNodeResult,
   type ExecuteWorkflowRunParams,
   type ExecuteWorkflowRunResult,
+  type ValidateSingleNodeSelectionParams,
+  type WorkflowExecutionScope,
+  type WorkflowRunExecutionValidationErrorCode,
+  type WorkflowRunNodeSelector,
   type WorkflowRunControlAction,
   type WorkflowRunControlErrorCode,
   WorkflowRunControlError,

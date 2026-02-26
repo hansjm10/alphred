@@ -1,4 +1,4 @@
-import type { WorkflowRunControlAction } from '@alphred/core';
+import type { WorkflowRunControlAction, WorkflowRunNodeSelector } from '@alphred/core';
 import {
   repositorySyncStrategies,
   type RepositorySyncDetails,
@@ -379,7 +379,7 @@ export function parseRunCommandInput(rawArgs: readonly string[], io: CliIo): Par
     {
       commandName: 'run',
       usage: RUN_USAGE,
-      allowedOptions: ['tree', 'repo', 'branch'],
+      allowedOptions: ['tree', 'repo', 'branch', 'execution-scope', 'node-selector', 'node-key'],
     },
     io,
   );
@@ -423,10 +423,84 @@ export function parseRunCommandInput(rawArgs: readonly string[], io: CliIo): Par
     };
   }
 
+  const executionScopeOption = parsedOptions.options.get('execution-scope');
+  let executionScope: 'full' | 'single_node' = 'full';
+  if (executionScopeOption !== undefined) {
+    const normalizedScope = executionScopeOption.trim();
+    if (normalizedScope !== 'full' && normalizedScope !== 'single_node') {
+      return {
+        ok: false,
+        exitCode: usageError(io, 'Option "--execution-scope" must be "full" or "single_node".', RUN_USAGE),
+      };
+    }
+    executionScope = normalizedScope;
+  }
+
+  const nodeSelectorOption = parsedOptions.options.get('node-selector');
+  const nodeKeyOption = parsedOptions.options.get('node-key');
+  if (executionScope !== 'single_node' && nodeSelectorOption !== undefined) {
+    return {
+      ok: false,
+      exitCode: usageError(
+        io,
+        'Option "--node-selector" requires "--execution-scope single_node".',
+        RUN_USAGE,
+      ),
+    };
+  }
+  if (executionScope !== 'single_node' && nodeKeyOption !== undefined) {
+    return {
+      ok: false,
+      exitCode: usageError(io, 'Option "--node-key" requires "--execution-scope single_node".', RUN_USAGE),
+    };
+  }
+
+  let nodeSelector: WorkflowRunNodeSelector | undefined;
+  if (executionScope === 'single_node') {
+    const normalizedSelector = nodeSelectorOption?.trim();
+    const selectorType = normalizedSelector === undefined || normalizedSelector.length === 0 ? 'next_runnable' : normalizedSelector;
+    if (selectorType !== 'next_runnable' && selectorType !== 'node_key') {
+      return {
+        ok: false,
+        exitCode: usageError(io, 'Option "--node-selector" must be "next_runnable" or "node_key".', RUN_USAGE),
+      };
+    }
+
+    if (selectorType === 'node_key') {
+      const normalizedNodeKey = nodeKeyOption?.trim();
+      if (!normalizedNodeKey) {
+        return {
+          ok: false,
+          exitCode: usageError(io, 'Option "--node-key" is required when "--node-selector node_key" is used.', RUN_USAGE),
+        };
+      }
+
+      nodeSelector = {
+        type: 'node_key',
+        nodeKey: normalizedNodeKey,
+      };
+    } else {
+      if (nodeKeyOption !== undefined) {
+        return {
+          ok: false,
+          exitCode: usageError(io, 'Option "--node-key" requires "--node-selector node_key".', RUN_USAGE),
+        };
+      }
+
+      nodeSelector = {
+        type: 'next_runnable',
+      };
+    }
+  } else {
+    nodeSelector = undefined;
+  }
+
   return {
     ok: true,
     treeKey,
     repoInput: repoInput ?? null,
     branchOverride,
+    executionScope,
+    nodeSelector,
   };
 }

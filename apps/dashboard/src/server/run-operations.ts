@@ -1,5 +1,5 @@
 import { and, asc, desc, eq, sql } from 'drizzle-orm';
-import { WorkflowRunControlError, type PhaseProviderResolver } from '@alphred/core';
+import { WorkflowRunControlError, WorkflowRunExecutionValidationError, type PhaseProviderResolver } from '@alphred/core';
 import {
   getRepositoryByName,
   listRunWorktreesForRun,
@@ -124,6 +124,42 @@ export type RunOperations = {
   getBackgroundExecutionCount: () => number;
   hasBackgroundExecution: (runId: number) => boolean;
 };
+
+function normalizeLaunchNodeSelector(
+  executionScope: DashboardRunLaunchRequest['executionScope'],
+  nodeSelector: DashboardRunLaunchRequest['nodeSelector'],
+): DashboardRunLaunchRequest['nodeSelector'] {
+  if (nodeSelector === undefined) {
+    return undefined;
+  }
+
+  if (executionScope !== 'single_node') {
+    throw new DashboardIntegrationError('invalid_request', 'nodeSelector requires executionScope "single_node".', {
+      status: 400,
+    });
+  }
+
+  if (nodeSelector.type === 'next_runnable') {
+    return { type: 'next_runnable' };
+  }
+
+  if (nodeSelector.type === 'node_key') {
+    const normalizedNodeKey = nodeSelector.nodeKey.trim();
+    if (normalizedNodeKey.length === 0) {
+      throw new DashboardIntegrationError('invalid_request', 'nodeSelector.nodeKey cannot be empty.', {
+        status: 400,
+      });
+    }
+    return {
+      type: 'node_key',
+      nodeKey: normalizedNodeKey,
+    };
+  }
+
+  throw new DashboardIntegrationError('invalid_request', 'nodeSelector.type must be "next_runnable" or "node_key".', {
+    status: 400,
+  });
+}
 
 async function loadRunSummary(db: AlphredDatabase, runId: number): Promise<DashboardRunSummary> {
   const run = db
@@ -590,6 +626,14 @@ export function createRunOperations(params: {
         });
       }
 
+      const executionScope = request.executionScope ?? 'full';
+      if (executionScope !== 'full' && executionScope !== 'single_node') {
+        throw new DashboardIntegrationError('invalid_request', 'executionScope must be "full" or "single_node".', {
+          status: 400,
+        });
+      }
+      const nodeSelector = normalizeLaunchNodeSelector(executionScope, request.nodeSelector);
+
       return withDatabase(async db => {
         const planner = dependencies.createSqlWorkflowPlanner(db);
         const materializedRun = planner.materializeRun({ treeKey });
@@ -629,6 +673,8 @@ export function createRunOperations(params: {
               workingDirectory,
               worktreeManager,
               request.cleanupWorktree ?? false,
+              executionScope,
+              nodeSelector,
             );
 
             return {
@@ -641,11 +687,17 @@ export function createRunOperations(params: {
             };
           }
 
+          if (executionScope === 'single_node') {
+            backgroundExecution.validateSingleNodeSelection(db, runId, nodeSelector);
+          }
+
           backgroundExecution.enqueueBackgroundRunExecution({
             runId,
             workingDirectory,
             hasManagedWorktree: worktreeManager !== null,
             cleanupWorktree: request.cleanupWorktree ?? false,
+            executionScope,
+            nodeSelector,
           });
 
           return {
@@ -658,6 +710,16 @@ export function createRunOperations(params: {
           };
         } catch (error) {
           await backgroundExecution.markPendingRunCancelled(db, workflowRunId);
+          if (error instanceof WorkflowRunExecutionValidationError) {
+            throw new DashboardIntegrationError('invalid_request', error.message, {
+              status: 400,
+              details: {
+                code: error.code,
+                nodeSelector: error.nodeSelector,
+              },
+              cause: error,
+            });
+          }
           throw error;
         }
       });

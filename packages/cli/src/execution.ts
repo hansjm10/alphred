@@ -14,6 +14,7 @@ import {
   EXIT_NOT_FOUND,
   EXIT_RUNTIME_ERROR,
   EXIT_SUCCESS,
+  EXIT_USAGE_ERROR,
 } from './constants.js';
 import { hasErrorCode, toErrorMessage } from './io.js';
 import {
@@ -215,6 +216,14 @@ export function mapRunExecutionError(error: unknown, treeKey: string, io: Pick<C
   if (hasErrorCode(error, 'WORKFLOW_TREE_NOT_FOUND')) {
     io.stderr(`Workflow tree not found for key "${treeKey}".`);
     return EXIT_NOT_FOUND;
+  }
+
+  if (
+    hasErrorCode(error, 'WORKFLOW_RUN_SINGLE_NODE_SELECTOR_NOT_FOUND') ||
+    hasErrorCode(error, 'WORKFLOW_RUN_SINGLE_NODE_SELECTOR_NOT_EXECUTABLE')
+  ) {
+    io.stderr(toErrorMessage(error));
+    return EXIT_USAGE_ERROR;
   }
 
   io.stderr(`Failed to execute run: ${toErrorMessage(error)}`);
