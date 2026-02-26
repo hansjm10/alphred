@@ -347,6 +347,87 @@ async function resolvePostLaunchBannerState(
   }
 }
 
+async function fetchDashboardRuns(limit: number): Promise<readonly DashboardRunSummary[]> {
+  const response = await fetch(`/api/dashboard/runs?limit=${limit}`, { method: 'GET' });
+  const payload = (await response.json().catch(() => null)) as unknown;
+  if (!response.ok) {
+    throw new Error(resolveApiErrorMessage(response.status, payload, 'Unable to refresh run lifecycle state'));
+  }
+
+  if (
+    typeof payload !== 'object' ||
+    payload === null ||
+    !('runs' in payload) ||
+    !Array.isArray((payload as { runs?: unknown }).runs)
+  ) {
+    throw new Error('Run refresh response was malformed.');
+  }
+
+  return sortRunsForDashboard((payload as { runs: DashboardRunSummary[] }).runs);
+}
+
+function filterRunsForKpis(
+  runs: readonly DashboardRunSummary[],
+  activeWorkflowKey: string | null,
+  activeRepositoryName: string | null,
+  activeWindow: RunRouteTimeWindow,
+  nowMs: number,
+): readonly DashboardRunSummary[] {
+  return runs.filter((run) => {
+    if (activeWorkflowKey && run.tree.treeKey !== activeWorkflowKey) {
+      return false;
+    }
+
+    if (activeRepositoryName && run.repository?.name !== activeRepositoryName) {
+      return false;
+    }
+
+    return includesRunByWindow(run, activeWindow, nowMs);
+  });
+}
+
+function countFailureRuns24h(runs: readonly DashboardRunSummary[], nowMs: number): number {
+  const cutoff = nowMs - 24 * 60 * 60 * 1000;
+  return runs.filter((run) => {
+    if (run.status !== 'failed') {
+      return false;
+    }
+
+    const timestamp = resolveRunTimestampMs(run);
+    return timestamp !== null && timestamp >= cutoff;
+  }).length;
+}
+
+function selectExecutionScope(
+  value: string,
+  setExecutionScope: (scope: DashboardRunExecutionScope) => void,
+): void {
+  const nextValue = value as DashboardRunExecutionScope;
+  if (!RUN_EXECUTION_SCOPE_SET.has(nextValue)) {
+    return;
+  }
+  setExecutionScope(nextValue);
+}
+
+function selectNodeSelectorType(
+  value: string,
+  setNodeSelectorType: (type: DashboardRunNodeSelector['type']) => void,
+): void {
+  const nextValue = value as DashboardRunNodeSelector['type'];
+  if (!NODE_SELECTOR_TYPE_SET.has(nextValue)) {
+    return;
+  }
+  setNodeSelectorType(nextValue);
+}
+
+function navigateOnRunRowKey(event: { key: string; preventDefault: () => void }, onNavigate: () => void): void {
+  if (event.key !== 'Enter' && event.key !== ' ') {
+    return;
+  }
+  event.preventDefault();
+  onNavigate();
+}
+
 export function RunsPageContent({
   runs,
   workflows,
@@ -422,19 +503,10 @@ export function RunsPageContent({
     },
   ]), [activeRepositoryName, activeWindow, activeWorkflowKey]);
 
-  const filteredRunsForKpis = useMemo(() => {
-    return runState.filter((run) => {
-      if (activeWorkflowKey && run.tree.treeKey !== activeWorkflowKey) {
-        return false;
-      }
-
-      if (activeRepositoryName && run.repository?.name !== activeRepositoryName) {
-        return false;
-      }
-
-      return includesRunByWindow(run, activeWindow, nowMs);
-    });
-  }, [activeRepositoryName, activeWindow, activeWorkflowKey, nowMs, runState]);
+  const filteredRunsForKpis = useMemo(
+    () => filterRunsForKpis(runState, activeWorkflowKey, activeRepositoryName, activeWindow, nowMs),
+    [activeRepositoryName, activeWindow, activeWorkflowKey, nowMs, runState],
+  );
 
   const visibleRuns = useMemo(() => {
     return filteredRunsForKpis.filter((run) => includesRunByFilter(run, normalizedFilter));
@@ -445,17 +517,7 @@ export function RunsPageContent({
     [filteredRunsForKpis],
   );
 
-  const failureCount24h = useMemo(() => {
-    const cutoff = nowMs - 24 * 60 * 60 * 1000;
-    return filteredRunsForKpis.filter((run) => {
-      if (run.status !== 'failed') {
-        return false;
-      }
-
-      const timestamp = resolveRunTimestampMs(run);
-      return timestamp !== null && timestamp >= cutoff;
-    }).length;
-  }, [filteredRunsForKpis, nowMs]);
+  const failureCount24h = useMemo(() => countFailureRuns24h(filteredRunsForKpis, nowMs), [filteredRunsForKpis, nowMs]);
 
   const medianDurationLabel = useMemo(
     () => resolveMedianDurationLabel(filteredRunsForKpis),
@@ -477,22 +539,7 @@ export function RunsPageContent({
   }, [activeRepositoryName]);
 
   async function refreshRunState(): Promise<readonly DashboardRunSummary[]> {
-    const response = await fetch(`/api/dashboard/runs?limit=${DEFAULT_RUN_LIST_LIMIT}`, { method: 'GET' });
-    const payload = (await response.json().catch(() => null)) as unknown;
-    if (!response.ok) {
-      throw new Error(resolveApiErrorMessage(response.status, payload, 'Unable to refresh run lifecycle state'));
-    }
-
-    if (
-      typeof payload !== 'object' ||
-      payload === null ||
-      !('runs' in payload) ||
-      !Array.isArray((payload as { runs?: unknown }).runs)
-    ) {
-      throw new Error('Run refresh response was malformed.');
-    }
-
-    const refreshedRuns = sortRunsForDashboard((payload as { runs: DashboardRunSummary[] }).runs);
+    const refreshedRuns = await fetchDashboardRuns(DEFAULT_RUN_LIST_LIMIT);
     setRunState(refreshedRuns);
     return refreshedRuns;
   }
@@ -604,11 +651,7 @@ export function RunsPageContent({
                 value={executionScope}
                 disabled={launchBlockedReason !== null}
                 onChange={(event) => {
-                  const nextValue = event.currentTarget.value as DashboardRunExecutionScope;
-                  if (!RUN_EXECUTION_SCOPE_SET.has(nextValue)) {
-                    return;
-                  }
-                  setExecutionScope(nextValue);
+                  selectExecutionScope(event.currentTarget.value, setExecutionScope);
                 }}
               >
                 <option value="full">Full workflow</option>
@@ -624,11 +667,7 @@ export function RunsPageContent({
                   value={nodeSelectorType}
                   disabled={launchBlockedReason !== null}
                   onChange={(event) => {
-                    const nextValue = event.currentTarget.value as DashboardRunNodeSelector['type'];
-                    if (!NODE_SELECTOR_TYPE_SET.has(nextValue)) {
-                      return;
-                    }
-                    setNodeSelectorType(nextValue);
+                    selectNodeSelectorType(event.currentTarget.value, setNodeSelectorType);
                   }}
                 >
                   <option value="next_runnable">Next runnable</option>
@@ -827,16 +866,15 @@ export function RunsPageContent({
 	                    key={run.id}
 	                    className="runs-table__row"
 	                    tabIndex={0}
-	                    onClick={() => {
-	                      router.push(`/runs/${run.id}`);
-	                    }}
-	                    onKeyDown={(event) => {
-	                      if (event.key === 'Enter' || event.key === ' ') {
-	                        event.preventDefault();
-	                        router.push(`/runs/${run.id}`);
-	                      }
-	                    }}
-	                  >
+                    onClick={() => {
+                      router.push(`/runs/${run.id}`);
+                    }}
+                    onKeyDown={(event) => {
+                      navigateOnRunRowKey(event, () => {
+                        router.push(`/runs/${run.id}`);
+                      });
+                    }}
+                  >
 	                    <td>
 	                      <p>{`#${run.id} ${run.tree.name}`}</p>
 	                      <p className="meta-text">{run.tree.treeKey}</p>
