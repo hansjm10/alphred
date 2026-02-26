@@ -130,6 +130,20 @@ export function resolveFailureReason(persistedNodeStatus: RunNodeStatus, canRetr
   return 'retry_limit_exceeded';
 }
 
+type RetryState = {
+  canRetryImmediately: boolean;
+  canRetry: boolean;
+};
+
+function resolveRetryState(retryEligible: boolean, runStatus: WorkflowRunStatus): RetryState {
+  const canRetryImmediately = retryEligible && runStatus === 'running';
+
+  return {
+    canRetryImmediately,
+    canRetry: canRetryImmediately || (retryEligible && runStatus === 'paused'),
+  };
+}
+
 export type ResolvedErrorHandlerExecutionConfig = {
   provider: AgentProviderName;
   model: string;
@@ -506,14 +520,9 @@ export async function handleClaimedNodeFailure(
   const persistedNodeStatus = loadRunNodeExecutionRowById(db, run.id, node.runNodeId).status;
   let latestRunStatus = loadWorkflowRunRow(db, run.id).status;
   const retryEligible = allowRetries && persistedNodeStatus === 'running' && shouldRetryNodeAttempt(currentAttempt, node.maxRetries);
-  const canRetryImmediatelyAtFailure = retryEligible && latestRunStatus === 'running';
-  const shouldDeferRetryAtFailure = retryEligible && latestRunStatus === 'paused';
-  const canRetryAtFailure = canRetryImmediatelyAtFailure || shouldDeferRetryAtFailure;
-  let canRetryImmediately = canRetryImmediatelyAtFailure;
-  let shouldDeferRetry = shouldDeferRetryAtFailure;
-  let canRetry = canRetryAtFailure;
+  let retryState = resolveRetryState(retryEligible, latestRunStatus);
   const retriesRemaining = Math.max(node.maxRetries - currentAttempt, 0);
-  const failureReason = resolveFailureReason(persistedNodeStatus, canRetryAtFailure);
+  const failureReason = resolveFailureReason(persistedNodeStatus, retryState.canRetry);
 
   const artifactId = persistFailureArtifact(db, {
     workflowRunId: run.id,
@@ -542,7 +551,7 @@ export async function handleClaimedNodeFailure(
   }
 
   let errorHandlerDiagnostics: RunNodeErrorHandlerDiagnostics | undefined;
-  if (canRetryAtFailure) {
+  if (retryState.canRetry) {
     errorHandlerDiagnostics = await executeErrorHandlerForRetry(db, {
       run,
       node,
@@ -554,9 +563,7 @@ export async function handleClaimedNodeFailure(
       options,
     });
     latestRunStatus = loadWorkflowRunRow(db, run.id).status;
-    canRetryImmediately = retryEligible && latestRunStatus === 'running';
-    shouldDeferRetry = retryEligible && latestRunStatus === 'paused';
-    canRetry = canRetryImmediately || shouldDeferRetry;
+    retryState = resolveRetryState(retryEligible, latestRunStatus);
   } else if (retryEligible && isTerminalWorkflowRunStatus(latestRunStatus)) {
     errorHandlerDiagnostics = buildSkippedErrorHandlerDiagnostics(currentAttempt, null);
   }
@@ -578,9 +585,9 @@ export async function handleClaimedNodeFailure(
     errorHandler: errorHandlerDiagnostics,
   });
 
-  if (canRetry) {
+  if (retryState.canRetry) {
     const nextAttempt = currentAttempt + 1;
-    if (canRetryImmediately) {
+    if (retryState.canRetryImmediately) {
       transitionFailedRunNodeToRetryAttempt(db, {
         runNodeId: node.runNodeId,
         currentAttempt,
