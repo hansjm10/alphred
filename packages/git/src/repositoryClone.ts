@@ -221,6 +221,15 @@ type PullFetchedBranchResult = {
   conflictMessage: string | null;
 };
 
+type ExecutePullOnBranchParams = {
+  localPath: string;
+  normalizedBranch: string;
+  strategy: RepositorySyncStrategy;
+  environment: NodeJS.ProcessEnv;
+  previousBranch: string | undefined;
+  previousHeadRevision: string | undefined;
+};
+
 async function pullFetchedBranch(params: PullFetchedBranchParams): Promise<PullFetchedBranchResult> {
   const normalizedBranch = params.branch.trim();
   if (normalizedBranch.length === 0) {
@@ -255,19 +264,30 @@ async function pullFetchedBranch(params: PullFetchedBranchParams): Promise<PullF
   const previousHeadRevision = previousBranch === undefined
     ? await resolveCurrentHeadRevision(params.localPath, params.environment)
     : undefined;
+  return executePullOnBranch({
+    localPath: params.localPath,
+    normalizedBranch,
+    strategy: params.strategy,
+    environment: params.environment,
+    previousBranch,
+    previousHeadRevision,
+  });
+}
+
+async function executePullOnBranch(params: ExecutePullOnBranchParams): Promise<PullFetchedBranchResult> {
   const pullEnvironment = resolvePullEnvironment(params.strategy, params.environment);
   let switchedToTargetBranch = false;
 
   try {
-    if (previousBranch !== normalizedBranch) {
-      await runGitCommandWithOutput(['checkout', normalizedBranch], {
+    if (params.previousBranch !== params.normalizedBranch) {
+      await runGitCommandWithOutput(['checkout', params.normalizedBranch], {
         cwd: params.localPath,
         environment: params.environment,
       });
       switchedToTargetBranch = true;
     }
 
-    await runGitCommandWithOutput(resolvePullCommand(params.strategy, normalizedBranch), {
+    await runGitCommandWithOutput(resolvePullCommand(params.strategy, params.normalizedBranch), {
       cwd: params.localPath,
       environment: pullEnvironment,
     });
@@ -286,18 +306,10 @@ async function pullFetchedBranch(params: PullFetchedBranchParams): Promise<PullF
 
     return {
       status: 'conflicted',
-      conflictMessage: `Sync conflict on branch "${normalizedBranch}" with strategy "${params.strategy}": ${conflictSummary}`,
+      conflictMessage: `Sync conflict on branch "${params.normalizedBranch}" with strategy "${params.strategy}": ${conflictSummary}`,
     };
   } finally {
-    let restoreCommand: string[] | undefined;
-    if (previousBranch === undefined) {
-      if (previousHeadRevision !== undefined) {
-        restoreCommand = ['checkout', '--detach', previousHeadRevision];
-      }
-    } else {
-      restoreCommand = ['checkout', previousBranch];
-    }
-
+    const restoreCommand = resolveRestoreCommand(params.previousBranch, params.previousHeadRevision);
     if (switchedToTargetBranch && restoreCommand !== undefined) {
       await runGitCommandWithOutput(restoreCommand, {
         cwd: params.localPath,
@@ -305,6 +317,18 @@ async function pullFetchedBranch(params: PullFetchedBranchParams): Promise<PullF
       }).catch(() => undefined);
     }
   }
+}
+
+function resolveRestoreCommand(previousBranch: string | undefined, previousHeadRevision: string | undefined): string[] | undefined {
+  if (previousBranch !== undefined) {
+    return ['checkout', previousBranch];
+  }
+
+  if (previousHeadRevision === undefined) {
+    return undefined;
+  }
+
+  return ['checkout', '--detach', previousHeadRevision];
 }
 
 async function ensureLocalBranchExists(
