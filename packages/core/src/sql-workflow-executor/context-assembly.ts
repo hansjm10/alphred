@@ -12,7 +12,6 @@ import {
 import {
   buildRoutingSelection,
   loadLatestFailureArtifact,
-  loadLatestRetryFailureSummaryArtifact,
   loadRetryFailureSummaryArtifact,
   loadUpstreamArtifactSelectionByRunNodeId,
 } from './routing-selection.js';
@@ -161,8 +160,11 @@ function selectFailureRouteSourceNode(params: {
   }
 
   const triggeringSources = selectedFailureSources.filter(candidate => candidate.latestArtifactId > targetArtifactId);
-  const candidates = triggeringSources.length > 0 ? triggeringSources : selectedFailureSources;
-  candidates.sort((a, b) => {
+  if (triggeringSources.length === 0) {
+    return null;
+  }
+
+  triggeringSources.sort((a, b) => {
     if (a.latestArtifactId !== b.latestArtifactId) {
       return a.latestArtifactId > b.latestArtifactId ? -1 : 1;
     }
@@ -170,7 +172,7 @@ function selectFailureRouteSourceNode(params: {
     return compareUpstreamSourceOrder(a.sourceNode, b.sourceNode);
   });
 
-  return candidates[0]?.sourceNode ?? null;
+  return triggeringSources[0]?.sourceNode ?? null;
 }
 
 export function assembleUpstreamArtifactContext(
@@ -234,10 +236,12 @@ export function assembleUpstreamArtifactContext(
         runNodeId: failureRouteSourceNode.runNodeId,
       })
     : null;
-  const failureRouteRetrySummaryArtifact = failureRouteSourceNode
-    ? loadLatestRetryFailureSummaryArtifact(db, {
+  const failureRouteRetrySummaryArtifact = failureRouteSourceNode && failureRouteSourceNode.attempt > 1
+    ? loadRetryFailureSummaryArtifact(db, {
         workflowRunId: params.workflowRunId,
         runNodeId: failureRouteSourceNode.runNodeId,
+        sourceAttempt: failureRouteSourceNode.attempt - 1,
+        targetAttempt: failureRouteSourceNode.attempt,
       })
     : null;
   const failureRouteContextEntry =
