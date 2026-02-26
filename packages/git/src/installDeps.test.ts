@@ -258,6 +258,30 @@ describe('runInstallCommand', () => {
     await expect(runPromise).rejects.toThrow('Install command "pnpm install" failed with exit code 1.');
   });
 
+  it('includes signal in error message when process exits from a signal', async () => {
+    const childProcess = createFakeChildProcess();
+    const runPromise = runInstallCommand({
+      command: {
+        source: 'lockfile',
+        command: 'pnpm',
+        args: ['install'],
+        displayCommand: 'pnpm install',
+        shell: false,
+      },
+      cwd: '/tmp/worktree',
+      environment: {},
+      timeoutMs: 1000,
+      onOutput: () => undefined,
+      spawnCommand: () => childProcess,
+    });
+
+    childProcess.emit('close', null, 'SIGTERM');
+
+    await expect(runPromise).rejects.toThrow(
+      'Install command "pnpm install" failed with exit code null (signal: SIGTERM).',
+    );
+  });
+
   it('kills and rejects when install times out', async () => {
     vi.useFakeTimers();
     const childProcess = createFakeChildProcess();
