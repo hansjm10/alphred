@@ -23,6 +23,7 @@ import {
 import { markUnreachablePendingNodesAsSkipped } from './node-selection.js';
 import { mergeExecutionPermissions, normalizeRunNodeExecutionPermissions } from './permissions.js';
 import {
+  appendFailureRouteMetadataToArtifact,
   loadRunNodeExecutionRowById,
   loadRunNodeExecutionRows,
   loadWorkflowRunRow,
@@ -31,7 +32,11 @@ import {
   persistNoteArtifact,
   persistSuccessArtifact,
 } from './persistence.js';
-import { loadLatestArtifactsByRunNodeId, loadLatestRoutingDecisionsByRunNodeId } from './routing-selection.js';
+import {
+  buildRoutingSelection,
+  loadLatestArtifactsByRunNodeId,
+  loadLatestRoutingDecisionsByRunNodeId,
+} from './routing-selection.js';
 import {
   isTerminalWorkflowRunStatus,
   reactivateSelectedTargetNode,
@@ -47,9 +52,11 @@ import type {
   EdgeRow,
   ExecuteNextRunnableNodeResult,
   RunNodeErrorHandlerDiagnostics,
+  RunNodeFailureRouteDiagnostics,
   RunNodeExecutionRow,
   SqlWorkflowExecutorDependencies,
   StreamUsageState,
+  WorkflowExecutionScope,
   WorkflowRunRow,
 } from './types.js';
 
@@ -94,6 +101,8 @@ export type ClaimedNodeFailureParams = {
   failureTokensUsed: number;
   error: unknown;
   allowRetries: boolean;
+  edgeRows: EdgeRow[];
+  executionScope: WorkflowExecutionScope;
   dependencies: SqlWorkflowExecutorDependencies;
   options: ProviderRunOptions;
 };
@@ -128,6 +137,16 @@ export function resolveFailureReason(persistedNodeStatus: RunNodeStatus, canRetr
   }
 
   return 'retry_limit_exceeded';
+}
+
+function selectFailureRouteEdgeForSourceNode(edgeRows: EdgeRow[], sourceTreeNodeId: number): EdgeRow | null {
+  for (const edge of edgeRows) {
+    if (edge.sourceNodeId === sourceTreeNodeId && edge.routeOn === 'failure') {
+      return edge;
+    }
+  }
+
+  return null;
 }
 
 type RetryState = {
@@ -490,7 +509,18 @@ export function handleClaimedNodeSuccess(
     });
     markUnreachablePendingNodesAsSkipped(db, run.id, edgeRows);
     const latestAfterSuccess = getLatestRunNodeAttempts(loadRunNodeExecutionRows(db, run.id));
-    const targetRunStatus = resolveRunStatusFromNodes(latestAfterSuccess);
+    const latestRoutingDecisionsAfterSuccess = loadLatestRoutingDecisionsByRunNodeId(db, run.id);
+    const latestArtifactsAfterSuccess = loadLatestArtifactsByRunNodeId(db, run.id);
+    const routingSelectionAfterSuccess = buildRoutingSelection(
+      latestAfterSuccess,
+      edgeRows,
+      latestRoutingDecisionsAfterSuccess.latestByRunNodeId,
+      latestArtifactsAfterSuccess,
+    );
+    const targetRunStatus = resolveRunStatusFromNodes(
+      latestAfterSuccess,
+      routingSelectionAfterSuccess.handledFailedSourceNodeIds,
+    );
     runStatus = transitionRunToCurrentForExecutor(db, run.id, targetRunStatus);
   }
 
@@ -513,6 +543,8 @@ export async function handleClaimedNodeFailure(
     failureTokensUsed,
     error,
     allowRetries,
+    edgeRows,
+    executionScope,
     dependencies,
     options,
   } = params;
@@ -570,6 +602,28 @@ export async function handleClaimedNodeFailure(
 
   const persistedNode = loadRunNodeExecutionRowById(db, run.id, node.runNodeId);
   const diagnosticStatus: 'completed' | 'failed' = persistedNode.status === 'completed' ? 'completed' : 'failed';
+  const failureRouteEdge = retryState.canRetry ? null : selectFailureRouteEdgeForSourceNode(edgeRows, node.treeNodeId);
+  const failureRouteTargetNode = failureRouteEdge
+    ? getLatestRunNodeAttempts(loadRunNodeExecutionRows(db, run.id)).find(
+        latestNode => latestNode.treeNodeId === failureRouteEdge.targetNodeId,
+      ) ?? null
+    : null;
+  const failureRouteStatus: RunNodeFailureRouteDiagnostics['status'] | null =
+    retryState.canRetry
+      ? null
+      : (failureRouteEdge === null
+          ? 'no_route'
+          : (isTerminalWorkflowRunStatus(latestRunStatus) || executionScope === 'single_node' ? 'skipped_terminal' : 'selected'));
+  const failureRouteDiagnostics: RunNodeFailureRouteDiagnostics | undefined =
+    failureRouteStatus === null
+      ? undefined
+      : {
+          attempted: true,
+          selectedEdgeId: failureRouteEdge?.edgeId ?? null,
+          targetNodeId: failureRouteEdge?.targetNodeId ?? null,
+          targetNodeKey: failureRouteTargetNode?.nodeKey ?? null,
+          status: failureRouteStatus,
+        };
   persistRunNodeAttemptDiagnostics(db, {
     workflowRunId: run.id,
     node,
@@ -581,9 +635,16 @@ export async function handleClaimedNodeFailure(
     tokensUsed: failureTokensUsed,
     events: failureEvents,
     routingDecision: null,
+    failureRoute: failureRouteDiagnostics,
     error,
     errorHandler: errorHandlerDiagnostics,
   });
+  if (failureRouteDiagnostics) {
+    appendFailureRouteMetadataToArtifact(db, {
+      artifactId,
+      failureRoute: failureRouteDiagnostics,
+    });
+  }
 
   if (retryState.canRetry) {
     const nextAttempt = currentAttempt + 1;
@@ -626,6 +687,39 @@ export async function handleClaimedNodeFailure(
     };
   }
 
+  if (failureRouteDiagnostics?.status === 'selected' && failureRouteEdge) {
+    reactivateSelectedTargetNode(db, {
+      workflowRunId: run.id,
+      selectedEdgeId: failureRouteEdge.edgeId,
+      edgeRows,
+    });
+    markUnreachablePendingNodesAsSkipped(db, run.id, edgeRows);
+
+    const latestAfterFailureRoute = getLatestRunNodeAttempts(loadRunNodeExecutionRows(db, run.id));
+    const latestRoutingDecisionsAfterFailureRoute = loadLatestRoutingDecisionsByRunNodeId(db, run.id);
+    const latestArtifactsAfterFailureRoute = loadLatestArtifactsByRunNodeId(db, run.id);
+    const routingSelectionAfterFailureRoute = buildRoutingSelection(
+      latestAfterFailureRoute,
+      edgeRows,
+      latestRoutingDecisionsAfterFailureRoute.latestByRunNodeId,
+      latestArtifactsAfterFailureRoute,
+    );
+    const resolvedRunStatus = resolveRunStatusFromNodes(
+      latestAfterFailureRoute,
+      routingSelectionAfterFailureRoute.handledFailedSourceNodeIds,
+    );
+    const runStatus = transitionRunToCurrentForExecutor(db, run.id, resolvedRunStatus);
+    const runNodeStatus: 'completed' | 'failed' = persistedNode.status === 'completed' ? 'completed' : 'failed';
+
+    return {
+      artifactId,
+      runStatus,
+      runNodeStatus,
+      nextAttempt: null,
+      nextStepOutcome: null,
+    };
+  }
+
   const runStatus = transitionRunToCurrentForExecutor(db, run.id, 'failed');
   let runNodeStatus: 'completed' | 'failed' = 'failed';
   if (persistedNode.status === 'completed') {
@@ -650,6 +744,7 @@ export async function executeClaimedRunnableNode(
     edgeRows: EdgeRow[];
     options: ProviderRunOptions;
     runStatus: WorkflowRunStatus;
+    executionScope?: WorkflowExecutionScope;
     executionOptions?: {
       allowRetries?: boolean;
     };
@@ -663,6 +758,7 @@ export async function executeClaimedRunnableNode(
     edgeRows,
     options,
     runStatus,
+    executionScope = 'full',
     executionOptions = {},
   } = params;
   let currentRunStatus = runStatus;
@@ -737,6 +833,8 @@ export async function executeClaimedRunnableNode(
           failureTokensUsed,
           error,
           allowRetries,
+          edgeRows,
+          executionScope,
           dependencies,
           options,
         },

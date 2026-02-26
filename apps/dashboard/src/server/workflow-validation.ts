@@ -205,6 +205,7 @@ export function normalizeDraftTopologyKeys(
       ...edge,
       sourceNodeKey: edge.sourceNodeKey.trim(),
       targetNodeKey: edge.targetNodeKey.trim(),
+      routeOn: edge.routeOn === 'failure' ? 'failure' : 'success',
     })),
   };
 }
@@ -369,7 +370,7 @@ export function validateDraftTopology(
     }
   }
 
-  const prioritiesBySource = new Map<string, Set<number>>();
+  const prioritiesBySourceAndRoute = new Map<string, Set<number>>();
   for (const edge of normalizedTopology.edges) {
     if (!nodeKeys.has(edge.sourceNodeKey)) {
       errors.push({
@@ -390,15 +391,33 @@ export function validateDraftTopology(
         message: `Transition priority ${edge.priority} from "${edge.sourceNodeKey}" must be a non-negative integer.`,
       });
     } else {
-      const priorities = prioritiesBySource.get(edge.sourceNodeKey) ?? new Set<number>();
+      const priorityKey = `${edge.sourceNodeKey}:${edge.routeOn}`;
+      const priorities = prioritiesBySourceAndRoute.get(priorityKey) ?? new Set<number>();
       if (priorities.has(edge.priority)) {
         errors.push({
           code: 'duplicate_transition_priority',
-          message: `Duplicate transition priority ${edge.priority} from "${edge.sourceNodeKey}".`,
+          message: `Duplicate transition priority ${edge.priority} from "${edge.sourceNodeKey}" on route "${edge.routeOn}".`,
         });
       }
       priorities.add(edge.priority);
-      prioritiesBySource.set(edge.sourceNodeKey, priorities);
+      prioritiesBySourceAndRoute.set(priorityKey, priorities);
+    }
+
+    if (edge.routeOn === 'failure') {
+      if (!edge.auto) {
+        errors.push({
+          code: 'failure_route_must_be_auto',
+          message: `Failure transition ${edge.sourceNodeKey} → ${edge.targetNodeKey} must be auto.`,
+        });
+      }
+
+      if (edge.guardExpression !== null) {
+        errors.push({
+          code: 'failure_route_has_guard',
+          message: `Failure transition ${edge.sourceNodeKey} → ${edge.targetNodeKey} must not have a guard.`,
+        });
+      }
+      continue;
     }
 
     if (edge.auto) {
@@ -408,18 +427,16 @@ export function validateDraftTopology(
           message: `Auto transition ${edge.sourceNodeKey} → ${edge.targetNodeKey} must not have a guard.`,
         });
       }
-    } else {
-      if (edge.guardExpression === null) {
-        errors.push({
-          code: 'guard_missing',
-          message: `Guarded transition ${edge.sourceNodeKey} → ${edge.targetNodeKey} must include a guard definition.`,
-        });
-      } else if (!isGuardExpression(edge.guardExpression)) {
-        errors.push({
-          code: 'guard_invalid',
-          message: `Guard expression for ${edge.sourceNodeKey} → ${edge.targetNodeKey} must be parseable.`,
-        });
-      }
+    } else if (edge.guardExpression === null) {
+      errors.push({
+        code: 'guard_missing',
+        message: `Guarded transition ${edge.sourceNodeKey} → ${edge.targetNodeKey} must include a guard definition.`,
+      });
+    } else if (!isGuardExpression(edge.guardExpression)) {
+      errors.push({
+        code: 'guard_invalid',
+        message: `Guard expression for ${edge.sourceNodeKey} → ${edge.targetNodeKey} must be parseable.`,
+      });
     }
   }
 

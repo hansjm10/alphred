@@ -23,6 +23,7 @@ type RouteContext = {
 };
 
 const guardOperators = new Set(['==', '!=', '>', '<', '>=', '<=']);
+const edgeRouteOnValues = new Set(['success', 'failure']);
 const executionPermissionKeys = new Set([
   'approvalPolicy',
   'sandboxMode',
@@ -206,6 +207,21 @@ function parseDraftEdgeGuardExpression(value: unknown, index: number): GuardExpr
   }
 
   return value;
+}
+
+function parseDraftEdgeRouteOn(value: unknown, index: number): 'success' | 'failure' {
+  if (value === undefined || value === null) {
+    return 'success';
+  }
+
+  if (typeof value !== 'string' || !edgeRouteOnValues.has(value)) {
+    throw new DashboardIntegrationError('invalid_request', `Draft edge at index ${index} has an invalid routeOn mode.`, {
+      status: 400,
+      details: { field: `edges[${index}].routeOn` },
+    });
+  }
+
+  return value as 'success' | 'failure';
 }
 
 function parseDraftNodePosition(value: unknown, index: number): { x: number; y: number } | null {
@@ -392,10 +408,36 @@ function parseDraftEdge(raw: unknown, index: number): DashboardWorkflowDraftEdge
   }
 
   const guardExpression = parseDraftEdgeGuardExpression(raw.guardExpression, index);
+  const routeOn = parseDraftEdgeRouteOn(raw.routeOn, index);
+
+  if (routeOn === 'failure') {
+    if (raw.auto !== true) {
+      throw new DashboardIntegrationError(
+        'invalid_request',
+        `Draft edge at index ${index} with routeOn="failure" must set auto=true.`,
+        {
+          status: 400,
+          details: { field: `edges[${index}].auto` },
+        },
+      );
+    }
+
+    if (guardExpression !== null) {
+      throw new DashboardIntegrationError(
+        'invalid_request',
+        `Draft edge at index ${index} with routeOn="failure" must not include guardExpression.`,
+        {
+          status: 400,
+          details: { field: `edges[${index}].guardExpression` },
+        },
+      );
+    }
+  }
 
   return {
     sourceNodeKey: raw.sourceNodeKey,
     targetNodeKey: raw.targetNodeKey,
+    routeOn,
     priority: raw.priority,
     auto: raw.auto,
     guardExpression,

@@ -10,8 +10,22 @@ import { slugifyKey } from '../../workflows-shared';
 type FlowPoint = Readonly<{ x: number; y: number }>;
 type ReactFlowNodeData = DashboardWorkflowDraftNode & { label?: string };
 
-export function buildWorkflowEdgeId(sourceNodeKey: string, targetNodeKey: string, priority: number): string {
-  return `${sourceNodeKey}->${targetNodeKey}:${priority}`;
+function normalizeEdgeRouteOn(routeOn: DashboardWorkflowDraftEdge['routeOn']): 'success' | 'failure' {
+  return routeOn === 'failure' ? 'failure' : 'success';
+}
+
+export function buildWorkflowEdgeId(
+  sourceNodeKey: string,
+  targetNodeKey: string,
+  priority: number,
+  routeOn: DashboardWorkflowDraftEdge['routeOn'] = 'success',
+): string {
+  const normalizedRouteOn = normalizeEdgeRouteOn(routeOn);
+  if (normalizedRouteOn === 'success') {
+    return `${sourceNodeKey}->${targetNodeKey}:${priority}`;
+  }
+
+  return `${sourceNodeKey}->${targetNodeKey}:${normalizedRouteOn}:${priority}`;
 }
 
 export function toFlowPosition(instance: ReactFlowInstance, point: FlowPoint): FlowPoint | null {
@@ -35,9 +49,16 @@ export function slugifyNodeKey(value: string): string {
   return slugifyKey(value, 48);
 }
 
-export function nextPriorityForSource(edges: readonly DashboardWorkflowDraftEdge[], sourceNodeKey: string): number {
+export function nextPriorityForSource(
+  edges: readonly DashboardWorkflowDraftEdge[],
+  sourceNodeKey: string,
+  routeOn: DashboardWorkflowDraftEdge['routeOn'] = 'success',
+): number {
+  const normalizedRouteOn = normalizeEdgeRouteOn(routeOn);
   const priorities = edges
-    .filter(edge => edge.sourceNodeKey === sourceNodeKey)
+    .filter(
+      edge => edge.sourceNodeKey === sourceNodeKey && normalizeEdgeRouteOn(edge.routeOn) === normalizedRouteOn,
+    )
     .map(edge => edge.priority);
 
   if (priorities.length === 0) {
@@ -55,10 +76,20 @@ export function createConnectedDraftEdge(args: Readonly<{
   return {
     sourceNodeKey: args.sourceNodeKey,
     targetNodeKey: args.targetNodeKey,
-    priority: nextPriorityForSource(args.existingEdges, args.sourceNodeKey),
+    routeOn: 'success',
+    priority: nextPriorityForSource(args.existingEdges, args.sourceNodeKey, 'success'),
     auto: true,
     guardExpression: null,
   };
+}
+
+function buildEdgeLabel(edge: DashboardWorkflowDraftEdge): string {
+  const routeOn = normalizeEdgeRouteOn(edge.routeOn);
+  if (routeOn === 'failure') {
+    return `failure · ${edge.priority}`;
+  }
+
+  return edge.auto ? `auto · ${edge.priority}` : `guard · ${edge.priority}`;
 }
 
 export function buildReactFlowNodes(draft: DashboardWorkflowDraftTopology): Node[] {
@@ -72,10 +103,10 @@ export function buildReactFlowNodes(draft: DashboardWorkflowDraftTopology): Node
 
 export function buildReactFlowEdges(draft: DashboardWorkflowDraftTopology): Edge[] {
   return draft.edges.map(edge => ({
-    id: buildWorkflowEdgeId(edge.sourceNodeKey, edge.targetNodeKey, edge.priority),
+    id: buildWorkflowEdgeId(edge.sourceNodeKey, edge.targetNodeKey, edge.priority, edge.routeOn),
     source: edge.sourceNodeKey,
     target: edge.targetNodeKey,
-    label: edge.auto ? `auto · ${edge.priority}` : `guard · ${edge.priority}`,
+    label: buildEdgeLabel(edge),
     data: {
       ...edge,
     },
@@ -105,12 +136,14 @@ export function toReactFlowNodeData(node: DashboardWorkflowDraftNode): Dashboard
 
 export function mapEdgeFromReactFlow(edge: Edge): DashboardWorkflowDraftEdge {
   const data = edge.data as DashboardWorkflowDraftEdge;
+  const routeOn = normalizeEdgeRouteOn(data.routeOn);
   return {
     sourceNodeKey: edge.source,
     targetNodeKey: edge.target,
+    routeOn,
     priority: data.priority,
-    auto: data.auto,
-    guardExpression: data.auto ? null : (data.guardExpression ?? null),
+    auto: routeOn === 'failure' ? true : data.auto,
+    guardExpression: routeOn === 'failure' || data.auto ? null : (data.guardExpression ?? null),
   };
 }
 

@@ -308,6 +308,7 @@ export function createSqlWorkflowExecutor(
         edgeRows,
         options: params.options,
         runStatus,
+        executionScope: 'single_node',
         executionOptions: {
           allowRetries: false,
         },
@@ -365,7 +366,13 @@ export function createSqlWorkflowExecutor(
       const edgeRows = loadEdgeRows(db, initialRun.workflowTreeId);
       const routingDecisionSelection = loadLatestRoutingDecisionsByRunNodeId(db, initialRun.id);
       const latestArtifactsByRunNodeId = loadLatestArtifactsByRunNodeId(db, initialRun.id);
-      const { nextRunnableNode, latestNodeAttempts, hasNoRouteDecision, hasUnresolvedDecision } = selectNextRunnableNode(
+      const {
+        nextRunnableNode,
+        latestNodeAttempts,
+        handledFailedSourceNodeIds,
+        hasNoRouteDecision,
+        hasUnresolvedDecision,
+      } = selectNextRunnableNode(
         runNodeRows,
         edgeRows,
         routingDecisionSelection.latestByRunNodeId,
@@ -403,6 +410,7 @@ export function createSqlWorkflowExecutor(
           db,
           currentRun,
           latestNodeAttempts,
+          handledFailedSourceNodeIds,
           hasNoRouteDecision,
           hasUnresolvedDecision,
         );

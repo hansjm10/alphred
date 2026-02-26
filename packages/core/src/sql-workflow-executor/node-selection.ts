@@ -16,14 +16,28 @@ export function hasPotentialIncomingRoute(
       return false;
     }
 
+    if (sourceNode.status === 'pending' || sourceNode.status === 'running') {
+      return true;
+    }
+
     if (sourceNode.status === 'completed') {
+      if (edge.routeOn !== 'success') {
+        return false;
+      }
       if (unresolvedDecisionSourceNodeIds.has(edge.sourceNodeId)) {
         return true;
       }
       return selectedEdgeIdBySourceNodeId.get(edge.sourceNodeId) === edge.edgeId;
     }
 
-    return sourceNode.status === 'pending' || sourceNode.status === 'running' || sourceNode.status === 'failed';
+    if (sourceNode.status === 'failed') {
+      if (edge.routeOn !== 'failure') {
+        return false;
+      }
+      return selectedEdgeIdBySourceNodeId.get(edge.sourceNodeId) === edge.edgeId;
+    }
+
+    return false;
   });
 }
 
@@ -34,7 +48,15 @@ export function hasRunnableIncomingRoute(
 ): boolean {
   return incomingEdges.some((edge) => {
     const sourceNode = latestByTreeNodeId.get(edge.sourceNodeId);
-    if (sourceNode?.status !== 'completed') {
+    if (!sourceNode) {
+      return false;
+    }
+
+    if (edge.routeOn === 'success' && sourceNode.status !== 'completed') {
+      return false;
+    }
+
+    if (edge.routeOn === 'failure' && sourceNode.status !== 'failed') {
       return false;
     }
 
@@ -53,7 +75,15 @@ export function hasRevisitableIncomingRoute(
 
   return incomingEdges.some((edge) => {
     const sourceNode = latestByTreeNodeId.get(edge.sourceNodeId);
-    if (sourceNode?.status !== 'completed') {
+    if (!sourceNode) {
+      return false;
+    }
+
+    if (edge.routeOn === 'success' && sourceNode.status !== 'completed') {
+      return false;
+    }
+
+    if (edge.routeOn === 'failure' && sourceNode.status !== 'failed') {
       return false;
     }
 
@@ -115,6 +145,7 @@ export function selectNextRunnableNode(
   return {
     nextRunnableNode,
     latestNodeAttempts,
+    handledFailedSourceNodeIds: routingSelection.handledFailedSourceNodeIds,
     hasNoRouteDecision: routingSelection.hasNoRouteDecision,
     hasUnresolvedDecision: routingSelection.hasUnresolvedDecision,
   };

@@ -421,7 +421,8 @@ export function createWorkflowOperations(params: {
             if (edge.auto || edge.guardExpression === null) {
               continue;
             }
-            const key = `${edge.sourceNodeKey}->${edge.targetNodeKey}/priority-${edge.priority}`;
+            const routeOn = edge.routeOn === 'failure' ? 'failure' : 'success';
+            const key = `${routeOn}/${edge.sourceNodeKey}->${edge.targetNodeKey}/priority-${edge.priority}`;
             const inserted = tx
               .insert(guardDefinitions)
               .values({
@@ -449,7 +450,8 @@ export function createWorkflowOperations(params: {
               );
             }
 
-            const key = `${edge.sourceNodeKey}->${edge.targetNodeKey}/priority-${edge.priority}`;
+            const routeOn = edge.routeOn === 'failure' ? 'failure' : 'success';
+            const key = `${routeOn}/${edge.sourceNodeKey}->${edge.targetNodeKey}/priority-${edge.priority}`;
             if (!edge.auto && !guardDefinitionIdByKey.has(key)) {
               throw new DashboardIntegrationError(
                 'internal_error',
@@ -466,6 +468,7 @@ export function createWorkflowOperations(params: {
                 workflowTreeId: insertedTree.id,
                 sourceNodeId,
                 targetNodeId,
+                routeOn,
                 priority: edge.priority,
                 auto: edge.auto ? 1 : 0,
                 guardDefinitionId: edge.auto ? null : (guardDefinitionIdByKey.get(key) ?? null),

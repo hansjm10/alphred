@@ -119,13 +119,21 @@ function statusBadgeForSaveState(saveState: SaveState): { status: 'running' | 'c
   }
 }
 
+function normalizeEdgeRouteOn(routeOn: DashboardWorkflowDraftEdge['routeOn']): 'success' | 'failure' {
+  return routeOn === 'failure' ? 'failure' : 'success';
+}
+
 function toReactFlowEdge(edge: DashboardWorkflowDraftEdge): Edge {
+  const routeOn = normalizeEdgeRouteOn(edge.routeOn);
   return {
-    id: buildWorkflowEdgeId(edge.sourceNodeKey, edge.targetNodeKey, edge.priority),
+    id: buildWorkflowEdgeId(edge.sourceNodeKey, edge.targetNodeKey, edge.priority, routeOn),
     source: edge.sourceNodeKey,
     target: edge.targetNodeKey,
-    label: edge.auto ? `auto · ${edge.priority}` : `guard · ${edge.priority}`,
-    data: edge,
+    label: routeOn === 'failure' ? `failure · ${edge.priority}` : (edge.auto ? `auto · ${edge.priority}` : `guard · ${edge.priority}`),
+    data: {
+      ...edge,
+      routeOn,
+    },
   };
 }
 
@@ -286,13 +294,17 @@ function handleDuplicateEdgeFromContextMenu(args: Readonly<{
   const sourceData = sourceEdge.data as DashboardWorkflowDraftEdge;
   setEdges((current) => {
     const sourceEdges = current.map(mapEdgeFromReactFlow);
+    const sourceRouteOn = normalizeEdgeRouteOn(sourceData.routeOn);
     const priority = sourceEdges
-      .filter((edge) => edge.sourceNodeKey === sourceEdge.source)
+      .filter(
+        edge => edge.sourceNodeKey === sourceEdge.source && normalizeEdgeRouteOn(edge.routeOn) === sourceRouteOn,
+      )
       .reduce((maxValue, edge) => Math.max(maxValue, edge.priority), 90) + 10;
     const nextEdge: DashboardWorkflowDraftEdge = {
       ...sourceData,
       sourceNodeKey: sourceEdge.source,
       targetNodeKey: sourceEdge.target,
+      routeOn: sourceRouteOn,
       priority,
     };
     return [...current, toReactFlowEdge(nextEdge)];
@@ -607,8 +619,9 @@ function WorkflowEditorInspectorBody({
         edge={selectedEdge}
         onChange={(next) => {
           if (!selectedEdge) return;
-          const nextSelectedEdgeId = buildWorkflowEdgeId(selectedEdge.source, selectedEdge.target, next.priority);
-          const label = next.auto ? `auto · ${next.priority}` : `guard · ${next.priority}`;
+          const nextRouteOn = normalizeEdgeRouteOn(next.routeOn);
+          const nextSelectedEdgeId = buildWorkflowEdgeId(selectedEdge.source, selectedEdge.target, next.priority, nextRouteOn);
+          const label = nextRouteOn === 'failure' ? `failure · ${next.priority}` : (next.auto ? `auto · ${next.priority}` : `guard · ${next.priority}`);
           setEdges((current) =>
             current.map((edge) =>
               edge.id === selectedEdge.id
@@ -938,6 +951,11 @@ function isDraftNode(value: unknown): value is DashboardWorkflowDraftNode {
 
 function isDraftEdge(value: unknown): value is DashboardWorkflowDraftEdge {
   if (!isObjectRecord(value)) {
+    return false;
+  }
+
+  const routeOn = (value as { routeOn?: unknown }).routeOn;
+  if (routeOn !== undefined && routeOn !== 'success' && routeOn !== 'failure') {
     return false;
   }
 

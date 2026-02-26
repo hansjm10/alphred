@@ -23,6 +23,7 @@ export const executionWebSearchModes = new Set(providerWebSearchModes);
 export const CONTEXT_POLICY_VERSION = 1;
 export const MAX_UPSTREAM_ARTIFACTS = 4;
 export const MAX_CONTEXT_CHARS_TOTAL = 32_000;
+export const MAX_FAILURE_ROUTE_CONTEXT_CHARS = 6_000;
 export const MAX_RETRY_SUMMARY_CONTEXT_CHARS = 4_000;
 export const MAX_CHARS_PER_ARTIFACT = 12_000;
 export const MIN_REMAINING_CONTEXT_CHARS = 1_000;

@@ -286,23 +286,37 @@ export function migrateDatabase(db: AlphredDatabase): void {
     workflow_tree_id INTEGER NOT NULL REFERENCES workflow_trees(id) ON DELETE CASCADE,
     source_node_id INTEGER NOT NULL REFERENCES tree_nodes(id) ON DELETE CASCADE,
     target_node_id INTEGER NOT NULL REFERENCES tree_nodes(id) ON DELETE CASCADE,
+    route_on TEXT NOT NULL DEFAULT 'success',
     priority INTEGER NOT NULL,
     auto INTEGER NOT NULL DEFAULT 0,
     guard_definition_id INTEGER REFERENCES guard_definitions(id) ON DELETE RESTRICT,
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    CONSTRAINT tree_edges_route_on_ck
+      CHECK (route_on IN ('success', 'failure')),
     CONSTRAINT tree_edges_auto_bool_ck
       CHECK (auto IN (0, 1)),
     CONSTRAINT tree_edges_priority_ck
       CHECK (priority >= 0),
     CONSTRAINT tree_edges_transition_mode_ck
       CHECK (
-        (auto = 1 AND guard_definition_id IS NULL)
+        (
+          route_on = 'success'
+          AND (
+            (auto = 1 AND guard_definition_id IS NULL)
+            OR
+            (auto = 0 AND guard_definition_id IS NOT NULL)
+          )
+        )
         OR
-        (auto = 0 AND guard_definition_id IS NOT NULL)
+        (
+          route_on = 'failure'
+          AND auto = 1
+          AND guard_definition_id IS NULL
+        )
       )
   )`);
   tx.run(sql`CREATE UNIQUE INDEX IF NOT EXISTS tree_edges_source_priority_uq
-    ON tree_edges(source_node_id, priority)`);
+    ON tree_edges(source_node_id, route_on, priority)`);
   tx.run(sql`CREATE INDEX IF NOT EXISTS tree_edges_source_node_idx
     ON tree_edges(source_node_id)`);
   tx.run(sql`CREATE INDEX IF NOT EXISTS tree_edges_created_at_idx

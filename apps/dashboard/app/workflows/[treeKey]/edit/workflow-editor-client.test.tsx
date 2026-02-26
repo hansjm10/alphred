@@ -807,6 +807,7 @@ describe('WorkflowEditorPageContent', () => {
       {
         sourceNodeKey: 'design',
         targetNodeKey: 'implement',
+        routeOn: 'success',
         priority: 100,
         auto: true,
         guardExpression: null,
@@ -864,6 +865,7 @@ describe('WorkflowEditorPageContent', () => {
       {
         sourceNodeKey: 'design',
         targetNodeKey: 'agent',
+        routeOn: 'success',
         priority: 100,
         auto: true,
         guardExpression: null,
@@ -1080,6 +1082,7 @@ describe('WorkflowEditorPageContent', () => {
       {
         sourceNodeKey: 'design',
         targetNodeKey: 'implement',
+        routeOn: 'success',
         priority: 90,
         auto: true,
         guardExpression: null,
@@ -1087,6 +1090,7 @@ describe('WorkflowEditorPageContent', () => {
       {
         sourceNodeKey: 'design',
         targetNodeKey: 'implement',
+        routeOn: 'success',
         priority: 100,
         auto: true,
         guardExpression: null,
@@ -1231,6 +1235,7 @@ describe('WorkflowEditorPageContent', () => {
       {
         sourceNodeKey: 'design',
         targetNodeKey: 'implement',
+        routeOn: 'success',
         priority: 100,
         auto: false,
         guardExpression: { field: 'decision', operator: '==', value: 'blocked' },
@@ -1310,6 +1315,7 @@ describe('WorkflowEditorPageContent', () => {
       {
         sourceNodeKey: 'design',
         targetNodeKey: 'review',
+        routeOn: 'success',
         priority: 100,
         auto: false,
         guardExpression: {
@@ -2350,6 +2356,7 @@ describe('WorkflowEditorPageContent', () => {
       {
         sourceNodeKey: 'design',
         targetNodeKey: 'agent',
+        routeOn: 'success',
         priority: 100,
         auto: true,
         guardExpression: null,

@@ -136,6 +136,43 @@ export function serializeRetryFailureSummaryEnvelope(params: {
   return `${lines.join('\n')}\n${params.includedContent}\n<<<END>>>`;
 }
 
+export function serializeFailureRouteContextEnvelope(params: {
+  workflowRunId: number;
+  targetNodeKey: string;
+  sourceNodeKey: string;
+  sourceRunNodeId: number;
+  sourceAttempt: number;
+  failureArtifactId: number | null;
+  retrySummaryArtifactId: number | null;
+  createdAt: string;
+  includedContent: string;
+  truncation: ContextEnvelopeTruncation;
+}): string {
+  const lines = [
+    'ALPHRED_FAILURE_ROUTE_CONTEXT v1',
+    `policy_version: ${CONTEXT_POLICY_VERSION}`,
+    'untrusted_data: true',
+    `workflow_run_id: ${params.workflowRunId}`,
+    `target_node_key: ${params.targetNodeKey}`,
+    `source_node_key: ${params.sourceNodeKey}`,
+    `source_run_node_id: ${params.sourceRunNodeId}`,
+    `source_attempt: ${params.sourceAttempt}`,
+    `failure_artifact_id: ${params.failureArtifactId === null ? 'null' : String(params.failureArtifactId)}`,
+    `retry_summary_artifact_id: ${params.retrySummaryArtifactId === null ? 'null' : String(params.retrySummaryArtifactId)}`,
+    `created_at: ${params.createdAt}`,
+    'truncation:',
+    `  applied: ${params.truncation.applied ? 'true' : 'false'}`,
+    `  method: ${params.truncation.method}`,
+    `  original_chars: ${params.truncation.originalChars}`,
+    `  included_chars: ${params.truncation.includedChars}`,
+    `  dropped_chars: ${params.truncation.droppedChars}`,
+    'content:',
+    '<<<BEGIN>>>',
+  ];
+
+  return `${lines.join('\n')}\n${params.includedContent}\n<<<END>>>`;
+}
+
 export function compareNodeOrder(a: RunNodeExecutionRow, b: RunNodeExecutionRow): number {
   const bySequence = a.sequenceIndex - b.sequenceIndex;
   if (bySequence !== 0) {

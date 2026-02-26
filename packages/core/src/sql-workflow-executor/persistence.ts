@@ -11,10 +11,11 @@ import {
   type AlphredDatabase,
 } from '@alphred/db';
 import { selectFirstMatchingOutgoingEdge } from './routing-decisions.js';
-import { normalizeArtifactContentType, toRunNodeStatus, toWorkflowRunStatus } from './type-conversions.js';
+import { isRecord, normalizeArtifactContentType, toRunNodeStatus, toWorkflowRunStatus } from './type-conversions.js';
 import type {
   CompletedNodeRoutingOutcome,
   EdgeRow,
+  RunNodeFailureRouteDiagnostics,
   RouteDecisionSignal,
   RoutingDecisionType,
   RunNodeExecutionRow,
@@ -106,11 +107,12 @@ export function loadRunNodeExecutionRowById(
 }
 
 export function loadEdgeRows(db: AlphredDatabase, workflowTreeId: number): EdgeRow[] {
-  return db
+  const rows = db
     .select({
       edgeId: treeEdges.id,
       sourceNodeId: treeEdges.sourceNodeId,
       targetNodeId: treeEdges.targetNodeId,
+      routeOn: treeEdges.routeOn,
       priority: treeEdges.priority,
       auto: treeEdges.auto,
       guardExpression: guardDefinitions.expression,
@@ -118,8 +120,13 @@ export function loadEdgeRows(db: AlphredDatabase, workflowTreeId: number): EdgeR
     .from(treeEdges)
     .leftJoin(guardDefinitions, eq(treeEdges.guardDefinitionId, guardDefinitions.id))
     .where(eq(treeEdges.workflowTreeId, workflowTreeId))
-    .orderBy(asc(treeEdges.sourceNodeId), asc(treeEdges.priority), asc(treeEdges.targetNodeId), asc(treeEdges.id))
+    .orderBy(asc(treeEdges.sourceNodeId), asc(treeEdges.routeOn), asc(treeEdges.priority), asc(treeEdges.targetNodeId), asc(treeEdges.id))
     .all();
+
+  return rows.map(row => ({
+    ...row,
+    routeOn: row.routeOn === 'failure' ? 'failure' : 'success',
+  }));
 }
 
 export function persistRoutingDecision(
@@ -155,7 +162,9 @@ export function persistCompletedNodeRoutingDecision(
   },
 ): CompletedNodeRoutingOutcome {
   const decisionSignal = params.routingDecision;
-  const outgoingEdges = params.edgeRows.filter(edge => edge.sourceNodeId === params.treeNodeId);
+  const outgoingEdges = params.edgeRows.filter(
+    edge => edge.sourceNodeId === params.treeNodeId && edge.routeOn === 'success',
+  );
 
   if (outgoingEdges.length === 0) {
     if (!decisionSignal) {
@@ -275,6 +284,37 @@ export function persistFailureArtifact(
     .get();
 
   return artifact.id;
+}
+
+export function appendFailureRouteMetadataToArtifact(
+  db: AlphredDatabase,
+  params: {
+    artifactId: number;
+    failureRoute: RunNodeFailureRouteDiagnostics;
+  },
+): void {
+  const artifact = db
+    .select({
+      metadata: phaseArtifacts.metadata,
+    })
+    .from(phaseArtifacts)
+    .where(eq(phaseArtifacts.id, params.artifactId))
+    .get();
+
+  if (!artifact) {
+    throw new Error(`Failure artifact id=${params.artifactId} was not found.`);
+  }
+
+  const existingMetadata = isRecord(artifact.metadata) ? artifact.metadata : {};
+  db.update(phaseArtifacts)
+    .set({
+      metadata: {
+        ...existingMetadata,
+        failureRoute: params.failureRoute,
+      },
+    })
+    .where(eq(phaseArtifacts.id, params.artifactId))
+    .run();
 }
 
 export function persistNoteArtifact(
