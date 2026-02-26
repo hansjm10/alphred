@@ -35,6 +35,23 @@ test('validates tree-key format inline on workflow creation', async ({ page }) =
   await expect(page.getByRole('button', { name: 'Create and open builder' })).toBeEnabled();
 });
 
+test('creates a new workflow from the creation form and opens the builder', async ({ page }) => {
+  await page.goto('/workflows/new');
+
+  const uniqueSuffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const treeKey = `workflow-ui-e2e-${uniqueSuffix}`;
+  await page.getByRole('textbox', { name: 'Name' }).fill(`Workflow UI E2E ${uniqueSuffix}`);
+  await page.getByRole('textbox', { name: /^Tree key/ }).fill(treeKey);
+
+  await expect(page.getByText('Tree key is available.')).toBeVisible();
+  const createButton = page.getByRole('button', { name: 'Create and open builder' });
+  await expect(createButton).toBeEnabled();
+
+  await createButton.click();
+  await expect(page).toHaveURL(new RegExp(`/workflows/${treeKey}/edit(?:\\?.*)?$`));
+  await expect(page.getByRole('searchbox', { name: 'Search node templates' })).toBeVisible();
+});
+
 test('supports palette search and mobile inspector drawer behavior in the editor', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   const treeKey = await createDraftWorkflowTree(page);
