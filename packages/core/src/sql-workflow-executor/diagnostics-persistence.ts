@@ -9,7 +9,13 @@ import {
 } from './diagnostics-collection.js';
 import { MAX_DIAGNOSTIC_EVENT_CONTENT_CHARS } from './constants.js';
 import { truncateHeadTail } from './type-conversions.js';
-import type { ContextHandoffManifest, RouteDecisionSignal, RunNodeExecutionRow, StreamUsageState } from './types.js';
+import type {
+  ContextHandoffManifest,
+  RouteDecisionSignal,
+  RunNodeErrorHandlerDiagnostics,
+  RunNodeExecutionRow,
+  StreamUsageState,
+} from './types.js';
 
 export function resolveNextRunNodeStreamSequence(
   db: AlphredDatabase,
@@ -110,6 +116,7 @@ export function persistRunNodeAttemptDiagnostics(
     events: ProviderEvent[];
     routingDecision: RouteDecisionSignal | null;
     error: unknown;
+    errorHandler?: RunNodeErrorHandlerDiagnostics;
   },
 ): void {
   const diagnostics = buildDiagnosticsPayload(params);

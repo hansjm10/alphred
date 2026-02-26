@@ -60,6 +60,7 @@ export function loadRunNodeExecutionRows(db: AlphredDatabase, workflowRunId: num
       provider: treeNodes.provider,
       model: treeNodes.model,
       executionPermissions: treeNodes.executionPermissions,
+      errorHandlerConfig: treeNodes.errorHandlerConfig,
       prompt: promptTemplates.content,
       promptContentType: promptTemplates.contentType,
     })
@@ -85,6 +86,7 @@ export function loadRunNodeExecutionRows(db: AlphredDatabase, workflowRunId: num
     provider: row.provider,
     model: row.model,
     executionPermissions: row.executionPermissions,
+    errorHandlerConfig: row.errorHandlerConfig,
     prompt: row.prompt,
     promptContentType: row.promptContentType,
   }));
@@ -266,6 +268,32 @@ export function persistFailureArtifact(
       runNodeId: params.runNodeId,
       artifactType: 'log',
       contentType: 'text',
+      content: params.content,
+      metadata: params.metadata,
+    })
+    .returning({ id: phaseArtifacts.id })
+    .get();
+
+  return artifact.id;
+}
+
+export function persistNoteArtifact(
+  db: AlphredDatabase,
+  params: {
+    workflowRunId: number;
+    runNodeId: number;
+    content: string;
+    contentType: string | null;
+    metadata: Record<string, unknown>;
+  },
+): number {
+  const artifact = db
+    .insert(phaseArtifacts)
+    .values({
+      workflowRunId: params.workflowRunId,
+      runNodeId: params.runNodeId,
+      artifactType: 'note',
+      contentType: normalizeArtifactContentType(params.contentType),
       content: params.content,
       metadata: params.metadata,
     })

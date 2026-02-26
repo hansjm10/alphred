@@ -99,6 +99,43 @@ export function serializeContextEnvelope(params: {
   return `${lines.join('\n')}\n${params.entry.includedContent}\n<<<END>>>`;
 }
 
+export function serializeRetryFailureSummaryEnvelope(params: {
+  workflowRunId: number;
+  targetNodeKey: string;
+  sourceAttempt: number;
+  targetAttempt: number;
+  summaryArtifactId: number;
+  failureArtifactId: number | null;
+  createdAt: string;
+  includedContent: string;
+  sha256: string;
+  truncation: ContextEnvelopeTruncation;
+}): string {
+  const lines = [
+    'ALPHRED_RETRY_FAILURE_SUMMARY v1',
+    `policy_version: ${CONTEXT_POLICY_VERSION}`,
+    'untrusted_data: true',
+    `workflow_run_id: ${params.workflowRunId}`,
+    `target_node_key: ${params.targetNodeKey}`,
+    `source_attempt: ${params.sourceAttempt}`,
+    `target_attempt: ${params.targetAttempt}`,
+    `summary_artifact_id: ${params.summaryArtifactId}`,
+    `failure_artifact_id: ${params.failureArtifactId === null ? 'null' : String(params.failureArtifactId)}`,
+    `created_at: ${params.createdAt}`,
+    `sha256: ${params.sha256}`,
+    'truncation:',
+    `  applied: ${params.truncation.applied ? 'true' : 'false'}`,
+    `  method: ${params.truncation.method}`,
+    `  original_chars: ${params.truncation.originalChars}`,
+    `  included_chars: ${params.truncation.includedChars}`,
+    `  dropped_chars: ${params.truncation.droppedChars}`,
+    'content:',
+    '<<<BEGIN>>>',
+  ];
+
+  return `${lines.join('\n')}\n${params.includedContent}\n<<<END>>>`;
+}
+
 export function compareNodeOrder(a: RunNodeExecutionRow, b: RunNodeExecutionRow): number {
   const bySequence = a.sequenceIndex - b.sequenceIndex;
   if (bySequence !== 0) {

@@ -1,10 +1,12 @@
 import { and, asc, eq, inArray } from 'drizzle-orm';
 import { phaseArtifacts, routingDecisions, type AlphredDatabase } from '@alphred/db';
+import { ERROR_HANDLER_SUMMARY_METADATA_KIND } from './constants.js';
 import { readRoutingDecisionAttempt, selectFirstMatchingOutgoingEdge } from './routing-decisions.js';
-import { normalizeArtifactContentType, toRoutingDecisionType } from './type-conversions.js';
+import { isRecord, normalizeArtifactContentType, toRoutingDecisionType } from './type-conversions.js';
 import type {
   EdgeRow,
   LatestArtifact,
+  RetryFailureSummaryArtifact,
   RoutingDecisionRow,
   RoutingDecisionSelection,
   RoutingSelection,
@@ -44,6 +46,78 @@ export function loadLatestRoutingDecisionsByRunNodeId(
   return {
     latestByRunNodeId,
   };
+}
+
+function resolveIntegerMetadataValue(metadata: Record<string, unknown>, key: string): number | null {
+  const value = metadata[key];
+  if (!Number.isInteger(value) || (value as number) < 0) {
+    return null;
+  }
+
+  return value as number;
+}
+
+export function loadRetryFailureSummaryArtifact(
+  db: AlphredDatabase,
+  params: {
+    workflowRunId: number;
+    runNodeId: number;
+    sourceAttempt: number;
+    targetAttempt: number;
+  },
+): RetryFailureSummaryArtifact | null {
+  const rows = db
+    .select({
+      id: phaseArtifacts.id,
+      runNodeId: phaseArtifacts.runNodeId,
+      content: phaseArtifacts.content,
+      createdAt: phaseArtifacts.createdAt,
+      metadata: phaseArtifacts.metadata,
+    })
+    .from(phaseArtifacts)
+    .where(
+      and(
+        eq(phaseArtifacts.workflowRunId, params.workflowRunId),
+        eq(phaseArtifacts.runNodeId, params.runNodeId),
+        eq(phaseArtifacts.artifactType, 'note'),
+      ),
+    )
+    .orderBy(asc(phaseArtifacts.createdAt), asc(phaseArtifacts.id))
+    .all();
+
+  let latest: RetryFailureSummaryArtifact | null = null;
+  for (const row of rows) {
+    if (!isRecord(row.metadata)) {
+      continue;
+    }
+
+    if (row.metadata.kind !== ERROR_HANDLER_SUMMARY_METADATA_KIND) {
+      continue;
+    }
+
+    const sourceAttempt = resolveIntegerMetadataValue(row.metadata, 'sourceAttempt');
+    if (sourceAttempt !== params.sourceAttempt) {
+      continue;
+    }
+
+    const targetAttempt = resolveIntegerMetadataValue(row.metadata, 'targetAttempt');
+    if (targetAttempt !== params.targetAttempt) {
+      continue;
+    }
+
+    const failureArtifactId = resolveIntegerMetadataValue(row.metadata, 'failureArtifactId');
+    latest = {
+      id: row.id,
+      runNodeId: row.runNodeId,
+      sourceAttempt,
+      targetAttempt,
+      failureArtifactId,
+      content: row.content,
+      createdAt: row.createdAt,
+    };
+  }
+
+  return latest;
 }
 
 export function loadLatestArtifactsByRunNodeId(

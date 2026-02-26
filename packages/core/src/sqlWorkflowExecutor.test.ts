@@ -25,6 +25,7 @@ import {
   workflowRuns,
   workflowTrees,
 } from '@alphred/db';
+import { MAX_CONTEXT_CHARS_TOTAL } from './sql-workflow-executor/constants.js';
 import { createSqlWorkflowExecutor } from './sql-workflow-executor/index.js';
 
 const coreSourceDirectory = fileURLToPath(new URL('.', import.meta.url));
@@ -2069,7 +2070,7 @@ describe('createSqlWorkflowExecutor', () => {
       .orderBy(asc(phaseArtifacts.id))
       .all();
 
-    expect(artifacts).toHaveLength(2);
+    expect(artifacts).toHaveLength(3);
     expect(artifacts[0]).toEqual({
       artifactType: 'log',
       metadata: expect.objectContaining({
@@ -2079,6 +2080,14 @@ describe('createSqlWorkflowExecutor', () => {
       }),
     });
     expect(artifacts[1]).toEqual({
+      artifactType: 'note',
+      metadata: expect.objectContaining({
+        kind: 'error_handler_summary_v1',
+        sourceAttempt: 1,
+        targetAttempt: 2,
+      }),
+    });
+    expect(artifacts[2]).toEqual({
       artifactType: 'report',
       metadata: expect.objectContaining({
         attempt: 2,
@@ -2165,7 +2174,11 @@ describe('createSqlWorkflowExecutor', () => {
     let invocation = 0;
     const executor = createSqlWorkflowExecutor(db, {
       resolveProvider: () => ({
-        async *run(): AsyncIterable<ProviderEvent> {
+        async *run(prompt: string): AsyncIterable<ProviderEvent> {
+          if (prompt.startsWith('Analyze the following node execution failure.')) {
+            yield { type: 'result', content: 'retry-summary', timestamp: 25 };
+            return;
+          }
           invocation += 1;
           if (invocation <= 2) {
             throw new Error(`Attempt ${invocation} failed`);
@@ -2216,7 +2229,7 @@ describe('createSqlWorkflowExecutor', () => {
       .orderBy(asc(phaseArtifacts.id))
       .all();
 
-    expect(artifacts).toHaveLength(3);
+    expect(artifacts).toHaveLength(5);
     expect(artifacts[0]).toEqual({
       artifactType: 'log',
       metadata: expect.objectContaining({
@@ -2226,6 +2239,14 @@ describe('createSqlWorkflowExecutor', () => {
       }),
     });
     expect(artifacts[1]).toEqual({
+      artifactType: 'note',
+      metadata: expect.objectContaining({
+        kind: 'error_handler_summary_v1',
+        sourceAttempt: 1,
+        targetAttempt: 2,
+      }),
+    });
+    expect(artifacts[2]).toEqual({
       artifactType: 'log',
       metadata: expect.objectContaining({
         failureReason: 'retry_scheduled',
@@ -2233,7 +2254,15 @@ describe('createSqlWorkflowExecutor', () => {
         maxRetries: 2,
       }),
     });
-    expect(artifacts[2]).toEqual({
+    expect(artifacts[3]).toEqual({
+      artifactType: 'note',
+      metadata: expect.objectContaining({
+        kind: 'error_handler_summary_v1',
+        sourceAttempt: 2,
+        targetAttempt: 3,
+      }),
+    });
+    expect(artifacts[4]).toEqual({
       artifactType: 'report',
       metadata: expect.objectContaining({
         attempt: 3,
@@ -2241,6 +2270,336 @@ describe('createSqlWorkflowExecutor', () => {
         retriesUsed: 2,
       }),
     });
+  });
+
+  it('injects a prior-attempt failure summary into retry context by default', async () => {
+    const { db, runId } = seedSingleAgentRun('markdown', 1);
+    const nodeAttemptContexts: (string[] | undefined)[] = [];
+    const errorHandlerContexts: (string[] | undefined)[] = [];
+    let nodeAttempt = 0;
+
+    const executor = createSqlWorkflowExecutor(db, {
+      resolveProvider: () => ({
+        async *run(prompt: string, options: ProviderRunOptions): AsyncIterable<ProviderEvent> {
+          if (prompt.startsWith('Analyze the following node execution failure.')) {
+            errorHandlerContexts.push(options.context);
+            yield {
+              type: 'result',
+              content: 'Try a narrower approach and validate assumptions first.',
+              timestamp: 11,
+            };
+            return;
+          }
+
+          nodeAttempt += 1;
+          nodeAttemptContexts.push(options.context);
+          if (nodeAttempt === 1) {
+            throw new Error('first-attempt-failure');
+          }
+          yield {
+            type: 'result',
+            content: 'Recovered after retry summary',
+            timestamp: 20,
+          };
+        },
+      }),
+    });
+
+    const result = await executor.executeRun({
+      workflowRunId: runId,
+      options: {
+        workingDirectory: '/tmp/alphred-worktree',
+      },
+    });
+
+    expect(result.finalStep).toEqual({
+      outcome: 'run_terminal',
+      workflowRunId: runId,
+      runStatus: 'completed',
+    });
+    expect(errorHandlerContexts).toHaveLength(1);
+    expect(errorHandlerContexts[0]).toHaveLength(1);
+    expect(errorHandlerContexts[0]?.[0]).toContain('ALPHRED_RETRY_ERROR_HANDLER_INPUT v1');
+    expect(nodeAttemptContexts[0]).toBeUndefined();
+    expect(nodeAttemptContexts[1]).toHaveLength(1);
+    expect(nodeAttemptContexts[1]?.[0]).toContain('ALPHRED_RETRY_FAILURE_SUMMARY v1');
+    expect(nodeAttemptContexts[1]?.[0]).toContain('source_attempt: 1');
+    expect(nodeAttemptContexts[1]?.[0]).toContain('target_attempt: 2');
+    expect(nodeAttemptContexts[1]?.[0]).toContain('Try a narrower approach and validate assumptions first.');
+  });
+
+  it('skips error handler execution when tree_nodes.error_handler_config disables it', async () => {
+    const { db, runId, runNodeId } = seedSingleAgentRun('markdown', 1);
+    const runNode = db
+      .select({
+        treeNodeId: runNodes.treeNodeId,
+      })
+      .from(runNodes)
+      .where(eq(runNodes.id, runNodeId))
+      .get();
+    if (!runNode) {
+      throw new Error(`Expected run node id=${runNodeId} to exist.`);
+    }
+
+    db.update(treeNodes)
+      .set({
+        errorHandlerConfig: {
+          mode: 'disabled',
+        },
+      })
+      .where(eq(treeNodes.id, runNode.treeNodeId))
+      .run();
+
+    const contexts: (string[] | undefined)[] = [];
+    let invocationCount = 0;
+    const executor = createSqlWorkflowExecutor(db, {
+      resolveProvider: () => ({
+        async *run(_prompt: string, options: ProviderRunOptions): AsyncIterable<ProviderEvent> {
+          invocationCount += 1;
+          contexts.push(options.context);
+          if (invocationCount === 1) {
+            throw new Error('first-attempt-failure');
+          }
+          yield { type: 'result', content: 'recovered', timestamp: 20 };
+        },
+      }),
+    });
+
+    const result = await executor.executeRun({
+      workflowRunId: runId,
+      options: {
+        workingDirectory: '/tmp/alphred-worktree',
+      },
+    });
+
+    expect(result.finalStep).toEqual({
+      outcome: 'run_terminal',
+      workflowRunId: runId,
+      runStatus: 'completed',
+    });
+    expect(invocationCount).toBe(2);
+    expect(contexts[0]).toBeUndefined();
+    expect(contexts[1]).toBeUndefined();
+
+    const summaryArtifacts = db
+      .select({
+        artifactType: phaseArtifacts.artifactType,
+      })
+      .from(phaseArtifacts)
+      .where(and(eq(phaseArtifacts.runNodeId, runNodeId), eq(phaseArtifacts.artifactType, 'note')))
+      .all();
+    expect(summaryArtifacts).toHaveLength(0);
+  });
+
+  it('uses custom error handler provider, model, and prompt overrides when configured', async () => {
+    const { db, runId, runNodeId } = seedSingleAgentRun('markdown', 1);
+    const runNode = db
+      .select({
+        treeNodeId: runNodes.treeNodeId,
+      })
+      .from(runNodes)
+      .where(eq(runNodes.id, runNodeId))
+      .get();
+    if (!runNode) {
+      throw new Error(`Expected run node id=${runNodeId} to exist.`);
+    }
+
+    db.update(treeNodes)
+      .set({
+        errorHandlerConfig: {
+          mode: 'custom',
+          provider: 'claude',
+          model: 'claude-3-5-haiku-latest',
+          prompt: 'Custom retry-analysis prompt',
+          maxInputChars: 1200,
+        },
+      })
+      .where(eq(treeNodes.id, runNode.treeNodeId))
+      .run();
+
+    const nodeAttemptContexts: (string[] | undefined)[] = [];
+    const customHandlerCalls: { prompt: string; options: ProviderRunOptions }[] = [];
+    let codexAttempt = 0;
+    const executor = createSqlWorkflowExecutor(db, {
+      resolveProvider: (providerName) => {
+        if (providerName === 'codex') {
+          return {
+            async *run(_prompt: string, options: ProviderRunOptions): AsyncIterable<ProviderEvent> {
+              codexAttempt += 1;
+              nodeAttemptContexts.push(options.context);
+              if (codexAttempt === 1) {
+                throw new Error('first-attempt-failure');
+              }
+              yield { type: 'result', content: 'codex recovered', timestamp: 20 };
+            },
+          };
+        }
+
+        if (providerName === 'claude') {
+          return {
+            async *run(prompt: string, options: ProviderRunOptions): AsyncIterable<ProviderEvent> {
+              customHandlerCalls.push({ prompt, options });
+              yield { type: 'result', content: 'custom handler summary', timestamp: 12 };
+            },
+          };
+        }
+
+        throw new Error(`Unexpected provider ${providerName}.`);
+      },
+    });
+
+    const result = await executor.executeRun({
+      workflowRunId: runId,
+      options: {
+        workingDirectory: '/tmp/alphred-worktree',
+      },
+    });
+
+    expect(result.finalStep).toEqual({
+      outcome: 'run_terminal',
+      workflowRunId: runId,
+      runStatus: 'completed',
+    });
+    expect(customHandlerCalls).toHaveLength(1);
+    expect(customHandlerCalls[0]?.prompt).toBe('Custom retry-analysis prompt');
+    expect(customHandlerCalls[0]?.options.model).toBe('claude-3-5-haiku-latest');
+    expect(customHandlerCalls[0]?.options.context).toHaveLength(1);
+    expect(customHandlerCalls[0]?.options.context?.[0]).toContain('ALPHRED_RETRY_ERROR_HANDLER_INPUT v1');
+    expect(nodeAttemptContexts[1]).toHaveLength(1);
+    expect(nodeAttemptContexts[1]?.[0]).toContain('custom handler summary');
+
+    const summaryArtifact = db
+      .select({
+        metadata: phaseArtifacts.metadata,
+      })
+      .from(phaseArtifacts)
+      .where(and(eq(phaseArtifacts.runNodeId, runNodeId), eq(phaseArtifacts.artifactType, 'note')))
+      .get();
+    expect(summaryArtifact?.metadata).toEqual(
+      expect.objectContaining({
+        kind: 'error_handler_summary_v1',
+        errorHandler: expect.objectContaining({
+          provider: 'claude',
+          model: 'claude-3-5-haiku-latest',
+        }),
+      }),
+    );
+  });
+
+  it('continues retry execution when the error handler itself fails', async () => {
+    const { db, runId, runNodeId } = seedSingleAgentRun('markdown', 1);
+    const nodeAttemptContexts: (string[] | undefined)[] = [];
+    let nodeAttempt = 0;
+
+    const executor = createSqlWorkflowExecutor(db, {
+      resolveProvider: () => ({
+        async *run(prompt: string, options: ProviderRunOptions): AsyncIterable<ProviderEvent> {
+          if (prompt.startsWith('Analyze the following node execution failure.')) {
+            throw new Error('error-handler-failed sk-ABCDEF1234567890');
+          }
+
+          nodeAttempt += 1;
+          nodeAttemptContexts.push(options.context);
+          if (nodeAttempt === 1) {
+            throw new Error('primary-attempt-failed');
+          }
+          yield { type: 'result', content: 'recovered anyway', timestamp: 20 };
+        },
+      }),
+    });
+
+    const result = await executor.executeRun({
+      workflowRunId: runId,
+      options: {
+        workingDirectory: '/tmp/alphred-worktree',
+      },
+    });
+
+    expect(result.finalStep).toEqual({
+      outcome: 'run_terminal',
+      workflowRunId: runId,
+      runStatus: 'completed',
+    });
+    expect(nodeAttemptContexts[1]).toBeUndefined();
+
+    const summaryArtifacts = db
+      .select({
+        id: phaseArtifacts.id,
+      })
+      .from(phaseArtifacts)
+      .where(and(eq(phaseArtifacts.runNodeId, runNodeId), eq(phaseArtifacts.artifactType, 'note')))
+      .all();
+    expect(summaryArtifacts).toHaveLength(0);
+
+    const failureDiagnostics = db
+      .select({
+        diagnostics: runNodeDiagnostics.diagnostics,
+      })
+      .from(runNodeDiagnostics)
+      .where(and(eq(runNodeDiagnostics.runNodeId, runNodeId), eq(runNodeDiagnostics.attempt, 1)))
+      .get();
+    const payload = failureDiagnostics?.diagnostics as {
+      summary?: { redacted: boolean };
+      errorHandler?: Record<string, unknown>;
+    } | null;
+    expect(payload?.summary?.redacted).toBe(true);
+    expect(payload?.errorHandler).toEqual(
+      expect.objectContaining({
+        attempted: true,
+        status: 'failed',
+        sourceAttempt: 1,
+        targetAttempt: 2,
+        errorMessage: '[REDACTED]',
+      }),
+    );
+  });
+
+  it('includes only the immediately prior attempt summary on each retry', async () => {
+    const { db, runId } = seedSingleAgentRun('markdown', 2);
+    const nodeAttemptContexts: (string[] | undefined)[] = [];
+    let nodeAttempt = 0;
+
+    const executor = createSqlWorkflowExecutor(db, {
+      resolveProvider: () => ({
+        async *run(prompt: string, options: ProviderRunOptions): AsyncIterable<ProviderEvent> {
+          if (prompt.startsWith('Analyze the following node execution failure.')) {
+            const sourceAttemptMatch = options.context?.[0]?.match(/source_attempt:\s*(\d+)/);
+            const sourceAttempt = sourceAttemptMatch ? Number(sourceAttemptMatch[1]) : -1;
+            yield {
+              type: 'result',
+              content: `summary-for-attempt-${sourceAttempt}`,
+              timestamp: 12,
+            };
+            return;
+          }
+
+          nodeAttempt += 1;
+          nodeAttemptContexts.push(options.context);
+          if (nodeAttempt <= 2) {
+            throw new Error(`primary-attempt-${nodeAttempt}-failed`);
+          }
+          yield { type: 'result', content: 'third attempt succeeded', timestamp: 20 };
+        },
+      }),
+    });
+
+    const result = await executor.executeRun({
+      workflowRunId: runId,
+      options: {
+        workingDirectory: '/tmp/alphred-worktree',
+      },
+    });
+
+    expect(result.finalStep).toEqual({
+      outcome: 'run_terminal',
+      workflowRunId: runId,
+      runStatus: 'completed',
+    });
+    expect(nodeAttemptContexts[1]).toHaveLength(1);
+    expect(nodeAttemptContexts[2]).toHaveLength(1);
+    expect(nodeAttemptContexts[1]?.[0]).toContain('summary-for-attempt-1');
+    expect(nodeAttemptContexts[2]?.[0]).toContain('summary-for-attempt-2');
+    expect(nodeAttemptContexts[2]?.[0]).not.toContain('summary-for-attempt-1');
   });
 
   it('returns blocked when pending nodes exist but none are runnable', async () => {
@@ -5074,6 +5433,115 @@ describe('createSqlWorkflowExecutor', () => {
     );
   });
 
+  it('fails gracefully when retry error-handler setup hits malformed execution permissions', async () => {
+    const { db, runId, runNodeId } = seedSingleAgentRun('markdown', 1);
+    const runNode = db
+      .select({ treeNodeId: runNodes.treeNodeId })
+      .from(runNodes)
+      .where(eq(runNodes.id, runNodeId))
+      .get();
+    if (!runNode) {
+      throw new Error(`Expected run node id=${runNodeId} to exist.`);
+    }
+
+    db.update(treeNodes)
+      .set({
+        executionPermissions: { unsupported: true } as unknown as Record<string, unknown>,
+      })
+      .where(eq(treeNodes.id, runNode.treeNodeId))
+      .run();
+
+    const executor = createSqlWorkflowExecutor(db, {
+      resolveProvider: () =>
+        createProvider([
+          { type: 'result', content: 'ok', timestamp: 1 },
+        ]),
+    });
+
+    const result = await executor.executeRun({
+      workflowRunId: runId,
+      options: {
+        workingDirectory: '/tmp/alphred-worktree',
+      },
+    });
+
+    expect(result).toEqual({
+      workflowRunId: runId,
+      executedNodes: 1,
+      finalStep: {
+        outcome: 'run_terminal',
+        workflowRunId: runId,
+        runStatus: 'failed',
+      },
+    });
+
+    const persistedRunNode = db
+      .select({
+        status: runNodes.status,
+        attempt: runNodes.attempt,
+      })
+      .from(runNodes)
+      .where(eq(runNodes.id, runNodeId))
+      .get();
+    expect(persistedRunNode).toEqual({
+      status: 'failed',
+      attempt: 2,
+    });
+
+    const permissionsErrorMessage =
+      'Run node "design" execution permissions include unsupported field "unsupported".';
+    const artifacts = db
+      .select({
+        artifactType: phaseArtifacts.artifactType,
+        content: phaseArtifacts.content,
+        metadata: phaseArtifacts.metadata,
+      })
+      .from(phaseArtifacts)
+      .where(eq(phaseArtifacts.runNodeId, runNodeId))
+      .orderBy(asc(phaseArtifacts.id))
+      .all();
+
+    expect(artifacts).toHaveLength(2);
+    expect(artifacts[0]?.artifactType).toBe('log');
+    expect(artifacts[0]?.content).toContain(permissionsErrorMessage);
+    expect(artifacts[0]?.metadata).toEqual(
+      expect.objectContaining({
+        failureReason: 'retry_scheduled',
+        attempt: 1,
+        maxRetries: 1,
+      }),
+    );
+    expect(artifacts[1]?.artifactType).toBe('log');
+    expect(artifacts[1]?.content).toContain(permissionsErrorMessage);
+    expect(artifacts[1]?.metadata).toEqual(
+      expect.objectContaining({
+        failureReason: 'retry_limit_exceeded',
+        attempt: 2,
+        maxRetries: 1,
+      }),
+    );
+
+    const firstAttemptDiagnostics = db
+      .select({
+        diagnostics: runNodeDiagnostics.diagnostics,
+      })
+      .from(runNodeDiagnostics)
+      .where(and(eq(runNodeDiagnostics.runNodeId, runNodeId), eq(runNodeDiagnostics.attempt, 1)))
+      .get();
+    const diagnosticsPayload = firstAttemptDiagnostics?.diagnostics as {
+      errorHandler?: Record<string, unknown>;
+    } | null;
+    expect(diagnosticsPayload?.errorHandler).toEqual(
+      expect.objectContaining({
+        attempted: true,
+        status: 'failed',
+        sourceAttempt: 1,
+        targetAttempt: 2,
+        errorMessage: permissionsErrorMessage,
+      }),
+    );
+  });
+
   it('injects deterministic direct-predecessor report envelopes for linear downstream execution', async () => {
     const { db, runId } = seedBrainstormPickResearchRun();
     const capturedContexts: (string[] | undefined)[] = [];
@@ -5245,6 +5713,102 @@ describe('createSqlWorkflowExecutor', () => {
     expect((contextHandoff?.included_chars_total as number) <= 32_000).toBe(true);
     expect((contextHandoff?.dropped_artifact_ids as unknown[]).length).toBeGreaterThan(0);
     expect((contextHandoff?.truncated_artifact_ids as unknown[]).length).toBeGreaterThan(0);
+  });
+
+  it('does not reserve retry-summary budget when no retry summary artifact exists', async () => {
+    const { db, runId, runNodeIdByKey } = seedFiveSourceConvergingRun();
+    const targetRunNodeId = runNodeIdByKey.get('target');
+    if (!targetRunNodeId) {
+      throw new Error('Expected target run-node to be materialized.');
+    }
+
+    const targetRunNode = db
+      .select({
+        treeNodeId: runNodes.treeNodeId,
+      })
+      .from(runNodes)
+      .where(eq(runNodes.id, targetRunNodeId))
+      .get();
+    if (!targetRunNode) {
+      throw new Error(`Expected run node id=${targetRunNodeId} to exist.`);
+    }
+
+    db.update(treeNodes)
+      .set({
+        maxRetries: 1,
+        errorHandlerConfig: {
+          mode: 'disabled',
+        },
+      })
+      .where(eq(treeNodes.id, targetRunNode.treeNodeId))
+      .run();
+
+    const capturedContexts: (string[] | undefined)[] = [];
+    const oversizedReport = 'Y'.repeat(10_050);
+    let invocation = 0;
+
+    const executor = createSqlWorkflowExecutor(db, {
+      resolveProvider: () => ({
+        async *run(_prompt: string, options: ProviderRunOptions): AsyncIterable<ProviderEvent> {
+          invocation += 1;
+          capturedContexts.push(options.context);
+
+          if (invocation <= 5) {
+            yield { type: 'result', content: oversizedReport, timestamp: invocation * 10 };
+            return;
+          }
+
+          if (invocation === 6) {
+            throw new Error('target-attempt-1-failure');
+          }
+
+          yield { type: 'result', content: 'Recovered target output', timestamp: 70 };
+        },
+      }),
+    });
+
+    const result = await executor.executeRun({
+      workflowRunId: runId,
+      options: {
+        workingDirectory: '/tmp/alphred-worktree',
+      },
+    });
+
+    expect(result).toEqual({
+      workflowRunId: runId,
+      executedNodes: 6,
+      finalStep: {
+        outcome: 'run_terminal',
+        workflowRunId: runId,
+        runStatus: 'completed',
+      },
+    });
+    expect(invocation).toBe(7);
+    expect(capturedContexts[5]).toHaveLength(4);
+    expect(capturedContexts[6]).toHaveLength(4);
+    expect(capturedContexts[6]?.some(entry => entry.includes('ALPHRED_RETRY_FAILURE_SUMMARY v1'))).toBe(false);
+
+    const targetReportArtifact = db
+      .select({
+        metadata: phaseArtifacts.metadata,
+      })
+      .from(phaseArtifacts)
+      .where(and(eq(phaseArtifacts.runNodeId, targetRunNodeId), eq(phaseArtifacts.artifactType, 'report')))
+      .orderBy(asc(phaseArtifacts.id))
+      .get();
+
+    const contextHandoff = targetReportArtifact?.metadata as Record<string, unknown> | null;
+    expect(contextHandoff).toEqual(
+      expect.objectContaining({
+        context_policy_version: 1,
+        included_count: 4,
+        included_source_node_keys: ['source_a', 'source_b', 'source_c', 'source_d'],
+        included_chars_total: MAX_CONTEXT_CHARS_TOTAL,
+        retry_summary_included: false,
+        retry_summary_chars: 0,
+        retry_summary_artifact_id: null,
+      }),
+    );
   });
 
   it('persists context handoff metadata for failed downstream executions', async () => {
@@ -5568,7 +6132,11 @@ describe('createSqlWorkflowExecutor', () => {
     let invocation = 0;
     const executor = createSqlWorkflowExecutor(db, {
       resolveProvider: () => ({
-        async *run(): AsyncIterable<ProviderEvent> {
+        async *run(prompt: string): AsyncIterable<ProviderEvent> {
+          if (prompt.startsWith('Analyze the following node execution failure.')) {
+            yield { type: 'result', content: 'retry-summary', timestamp: 90 };
+            return;
+          }
           invocation += 1;
           if (invocation <= 2) {
             throw new Error(`Transient failure ${invocation}`);
@@ -6430,7 +6998,68 @@ describe('createSqlWorkflowExecutor', () => {
       workflowRunId: runId,
       runStatus: 'paused',
     });
-    expect(invocationCount).toBe(1);
+    expect(invocationCount).toBe(2);
+
+    const persistedRunNode = db
+      .select({
+        status: runNodes.status,
+        attempt: runNodes.attempt,
+        startedAt: runNodes.startedAt,
+        completedAt: runNodes.completedAt,
+      })
+      .from(runNodes)
+      .where(eq(runNodes.id, runNodeId))
+      .get();
+    expect(persistedRunNode).toBeDefined();
+    if (!persistedRunNode) {
+      throw new Error('Expected persisted run-node row.');
+    }
+
+    expect(persistedRunNode).toEqual({
+      status: 'pending',
+      attempt: 2,
+      startedAt: null,
+      completedAt: null,
+    });
+  });
+
+  it('halts immediate retry attempts when pause control is requested during retry error-handler execution', async () => {
+    const { db, runId, runNodeId } = seedSingleAgentRun('markdown', 1);
+    let nodeInvocationCount = 0;
+    let errorHandlerInvocationCount = 0;
+
+    const executor = createSqlWorkflowExecutor(db, {
+      resolveProvider: () => ({
+        async *run(prompt: string): AsyncIterable<ProviderEvent> {
+          if (prompt.startsWith('Analyze the following node execution failure.')) {
+            errorHandlerInvocationCount += 1;
+            await executor.pauseRun({
+              workflowRunId: runId,
+            });
+            yield { type: 'result', content: 'retry guidance', timestamp: 2 };
+            return;
+          }
+
+          nodeInvocationCount += 1;
+          throw new Error(`attempt-${nodeInvocationCount}-failed`);
+        },
+      }),
+    });
+
+    const result = await executor.executeRun({
+      workflowRunId: runId,
+      options: {
+        workingDirectory: '/tmp/alphred-worktree',
+      },
+    });
+
+    expect(result.finalStep).toEqual({
+      outcome: 'blocked',
+      workflowRunId: runId,
+      runStatus: 'paused',
+    });
+    expect(nodeInvocationCount).toBe(1);
+    expect(errorHandlerInvocationCount).toBe(1);
 
     const persistedRunNode = db
       .select({
@@ -6551,6 +7180,61 @@ describe('createSqlWorkflowExecutor', () => {
       runStatus: 'cancelled',
     });
     expect(invocationCount).toBe(1);
+
+    const persistedRunNode = db
+      .select({
+        status: runNodes.status,
+        attempt: runNodes.attempt,
+      })
+      .from(runNodes)
+      .where(eq(runNodes.id, runNodeId))
+      .get();
+    expect(persistedRunNode).toBeDefined();
+    if (!persistedRunNode) {
+      throw new Error('Expected persisted run-node row.');
+    }
+
+    expect(persistedRunNode.status).toBe('failed');
+    expect(persistedRunNode.attempt).toBe(1);
+  });
+
+  it('halts immediate retry attempts when cancel control is requested during retry error-handler execution', async () => {
+    const { db, runId, runNodeId } = seedSingleAgentRun('markdown', 1);
+    let nodeInvocationCount = 0;
+    let errorHandlerInvocationCount = 0;
+
+    const executor = createSqlWorkflowExecutor(db, {
+      resolveProvider: () => ({
+        async *run(prompt: string): AsyncIterable<ProviderEvent> {
+          if (prompt.startsWith('Analyze the following node execution failure.')) {
+            errorHandlerInvocationCount += 1;
+            await executor.cancelRun({
+              workflowRunId: runId,
+            });
+            yield { type: 'result', content: 'retry guidance', timestamp: 2 };
+            return;
+          }
+
+          nodeInvocationCount += 1;
+          throw new Error(`attempt-${nodeInvocationCount}-failed`);
+        },
+      }),
+    });
+
+    const result = await executor.executeRun({
+      workflowRunId: runId,
+      options: {
+        workingDirectory: '/tmp/alphred-worktree',
+      },
+    });
+
+    expect(result.finalStep).toEqual({
+      outcome: 'run_terminal',
+      workflowRunId: runId,
+      runStatus: 'cancelled',
+    });
+    expect(nodeInvocationCount).toBe(1);
+    expect(errorHandlerInvocationCount).toBe(1);
 
     const persistedRunNode = db
       .select({
