@@ -121,6 +121,58 @@ export function resolveIncludedContentForContextCandidate(
   };
 }
 
+function selectFailureRouteSourceNode(params: {
+  targetNode: RunNodeExecutionRow;
+  incomingEdges: EdgeRow[];
+  latestByTreeNodeId: Map<number, RunNodeExecutionRow>;
+  selectedEdgeIdBySourceNodeId: Map<number, number>;
+  latestArtifactsByRunNodeId: Map<number, LatestArtifact>;
+}): RunNodeExecutionRow | null {
+  const targetArtifactId =
+    params.latestArtifactsByRunNodeId.get(params.targetNode.runNodeId)?.id ?? Number.NEGATIVE_INFINITY;
+
+  const selectedFailureSources: {
+    sourceNode: RunNodeExecutionRow;
+    latestArtifactId: number;
+  }[] = [];
+  for (const edge of params.incomingEdges) {
+    if (edge.routeOn !== 'failure') {
+      continue;
+    }
+
+    if (params.selectedEdgeIdBySourceNodeId.get(edge.sourceNodeId) !== edge.edgeId) {
+      continue;
+    }
+
+    const sourceNode = params.latestByTreeNodeId.get(edge.sourceNodeId);
+    if (sourceNode?.status !== 'failed') {
+      continue;
+    }
+
+    const latestArtifactId = params.latestArtifactsByRunNodeId.get(sourceNode.runNodeId)?.id ?? Number.NEGATIVE_INFINITY;
+    selectedFailureSources.push({
+      sourceNode,
+      latestArtifactId,
+    });
+  }
+
+  if (selectedFailureSources.length === 0) {
+    return null;
+  }
+
+  const triggeringSources = selectedFailureSources.filter(candidate => candidate.latestArtifactId > targetArtifactId);
+  const candidates = triggeringSources.length > 0 ? triggeringSources : selectedFailureSources;
+  candidates.sort((a, b) => {
+    if (a.latestArtifactId !== b.latestArtifactId) {
+      return a.latestArtifactId > b.latestArtifactId ? -1 : 1;
+    }
+
+    return compareUpstreamSourceOrder(a.sourceNode, b.sourceNode);
+  });
+
+  return candidates[0]?.sourceNode ?? null;
+}
+
 export function assembleUpstreamArtifactContext(
   db: AlphredDatabase,
   params: {
@@ -169,22 +221,13 @@ export function assembleUpstreamArtifactContext(
     params.latestArtifactsByRunNodeId,
   );
   const incomingEdges = routingSelection.incomingEdgesByTargetNodeId.get(params.targetNode.treeNodeId) ?? [];
-  const selectedFailureEdge = incomingEdges.find((edge) => {
-    if (edge.routeOn !== 'failure') {
-      return false;
-    }
-
-    if (routingSelection.selectedEdgeIdBySourceNodeId.get(edge.sourceNodeId) !== edge.edgeId) {
-      return false;
-    }
-
-    const sourceNode = routingSelection.latestByTreeNodeId.get(edge.sourceNodeId);
-    return sourceNode?.status === 'failed';
-  }) ?? null;
-
-  const failureRouteSourceNode = selectedFailureEdge
-    ? (routingSelection.latestByTreeNodeId.get(selectedFailureEdge.sourceNodeId) ?? null)
-    : null;
+  const failureRouteSourceNode = selectFailureRouteSourceNode({
+    targetNode: params.targetNode,
+    incomingEdges,
+    latestByTreeNodeId: routingSelection.latestByTreeNodeId,
+    selectedEdgeIdBySourceNodeId: routingSelection.selectedEdgeIdBySourceNodeId,
+    latestArtifactsByRunNodeId: params.latestArtifactsByRunNodeId,
+  });
   const failureRouteFailureArtifact = failureRouteSourceNode
     ? loadLatestFailureArtifact(db, {
         workflowRunId: params.workflowRunId,

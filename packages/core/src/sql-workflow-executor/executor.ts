@@ -498,7 +498,7 @@ export function createSqlWorkflowExecutor(
         }
 
         executedNodes += 1;
-        if (runTerminalStatuses.has(stepResult.runStatus) || stepResult.runNodeStatus !== 'completed') {
+        if (runTerminalStatuses.has(stepResult.runStatus)) {
           const finalOutcome: ExecuteWorkflowRunResult['finalStep'] = {
             outcome: 'run_terminal',
             workflowRunId: params.workflowRunId,
