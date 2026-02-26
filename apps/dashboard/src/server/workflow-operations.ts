@@ -15,6 +15,7 @@ import type {
   DashboardDuplicateWorkflowResult,
   DashboardPublishWorkflowDraftRequest,
   DashboardWorkflowCatalogItem,
+  DashboardWorkflowNodeOption,
   DashboardWorkflowTreeKeyAvailability,
   DashboardWorkflowTreeSnapshot,
   DashboardWorkflowTreeSummary,
@@ -44,6 +45,7 @@ export type WorkflowOperations = {
     sourceTreeKeyRaw: string,
     request: DashboardDuplicateWorkflowRequest,
   ) => Promise<DashboardDuplicateWorkflowResult>;
+  listPublishedTreeNodes: (treeKeyRaw: string) => Promise<DashboardWorkflowNodeOption[]>;
   publishWorkflowDraft: (
     treeKeyRaw: string,
     version: number,
@@ -260,6 +262,40 @@ export function createWorkflowOperations(params: {
           versionNotes: record.versionNotes,
           ...topology,
         };
+      });
+    },
+
+    listPublishedTreeNodes(treeKeyRaw: string): Promise<DashboardWorkflowNodeOption[]> {
+      const treeKey = normalizeWorkflowTreeKey(treeKeyRaw);
+
+      return withDatabase(async db => {
+        const published = db
+          .select({ id: workflowTrees.id })
+          .from(workflowTrees)
+          .where(and(eq(workflowTrees.treeKey, treeKey), eq(workflowTrees.status, 'published')))
+          .orderBy(desc(workflowTrees.version), desc(workflowTrees.id))
+          .get();
+
+        if (!published) {
+          throw new DashboardIntegrationError('not_found', `Published workflow tree "${treeKey}" was not found.`, {
+            status: 404,
+          });
+        }
+
+        const rows = db
+          .select({
+            nodeKey: treeNodes.nodeKey,
+            displayName: treeNodes.displayName,
+          })
+          .from(treeNodes)
+          .where(eq(treeNodes.workflowTreeId, published.id))
+          .orderBy(asc(treeNodes.sequenceIndex), asc(treeNodes.nodeKey))
+          .all();
+
+        return rows.map(row => ({
+          nodeKey: row.nodeKey,
+          displayName: row.displayName ?? row.nodeKey,
+        }));
       });
     },
 

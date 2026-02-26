@@ -19,6 +19,11 @@ export type DashboardWorkflowTreeSummary = {
   description: string | null;
 };
 
+export type DashboardWorkflowNodeOption = {
+  nodeKey: string;
+  displayName: string;
+};
+
 export type DashboardWorkflowTreeStatus = 'draft' | 'published';
 
 export type DashboardWorkflowCatalogItem = {

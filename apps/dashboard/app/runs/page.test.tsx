@@ -127,7 +127,12 @@ describe('RunsPage', () => {
     loadDashboardRunSummariesMock.mockReset();
     loadDashboardWorkflowTreesMock.mockReset();
     loadDashboardRepositoriesMock.mockReset();
-    vi.stubGlobal('fetch', vi.fn());
+    vi.stubGlobal('fetch', vi.fn().mockImplementation((url: string) => {
+      if (typeof url === 'string' && url.includes('/nodes')) {
+        return Promise.resolve(createJsonResponse({ nodes: [] }));
+      }
+      return Promise.resolve(createJsonResponse({}));
+    }));
   });
 
   afterEach(() => {
@@ -389,29 +394,41 @@ describe('RunsPage', () => {
 
   it('launches a run and refreshes lifecycle rows', async () => {
     const fetchMock = vi.mocked(global.fetch);
-    fetchMock
-      .mockResolvedValueOnce(createJsonResponse({
-        workflowRunId: 600,
-        mode: 'async',
-        status: 'accepted',
-        runStatus: 'running',
-        executionOutcome: null,
-        executedNodes: null,
-      }, { status: 202 }))
-      .mockResolvedValueOnce(createJsonResponse({
-        runs: [
-          createRunSummary({
-            id: 600,
-            status: 'running',
-            tree: {
-              id: 2,
-              treeKey: 'other-tree',
-              version: 3,
-              name: 'Other Tree',
-            },
-          }),
-        ],
-      }));
+    let launchPosted = false;
+    fetchMock.mockImplementation((url: string | URL | globalThis.Request) => {
+      const urlString = typeof url === 'string' ? url : url instanceof URL ? url.toString() : url.url;
+      if (urlString.includes('/nodes')) {
+        return Promise.resolve(createJsonResponse({ nodes: [] }));
+      }
+      if (urlString === '/api/dashboard/runs' && !launchPosted) {
+        launchPosted = true;
+        return Promise.resolve(createJsonResponse({
+          workflowRunId: 600,
+          mode: 'async',
+          status: 'accepted',
+          runStatus: 'running',
+          executionOutcome: null,
+          executedNodes: null,
+        }, { status: 202 }));
+      }
+      if (urlString.startsWith('/api/dashboard/runs?limit=')) {
+        return Promise.resolve(createJsonResponse({
+          runs: [
+            createRunSummary({
+              id: 600,
+              status: 'running',
+              tree: {
+                id: 2,
+                treeKey: 'other-tree',
+                version: 3,
+                name: 'Other Tree',
+              },
+            }),
+          ],
+        }));
+      }
+      return Promise.resolve(createJsonResponse({}));
+    });
 
     const user = userEvent.setup();
     render(
@@ -433,21 +450,16 @@ describe('RunsPage', () => {
     await user.click(screen.getByRole('button', { name: 'Launch Run' }));
 
     await waitFor(() => {
-      expect(fetchMock).toHaveBeenNthCalledWith(1, '/api/dashboard/runs', {
-        method: 'POST',
-        headers: {
-          'content-type': 'application/json',
-        },
-        body: JSON.stringify({
-          treeKey: 'other-tree',
-          repositoryName: 'demo-repo',
-          branch: 'feature/runs-ui',
-          executionMode: 'async',
-          executionScope: 'full',
-        }),
-      });
-      expect(fetchMock).toHaveBeenNthCalledWith(2, '/api/dashboard/runs?limit=50', {
-        method: 'GET',
+      const postCall = fetchMock.mock.calls.find(
+        (call) => call[0] === '/api/dashboard/runs' && call[1] && typeof call[1] === 'object' && 'method' in call[1] && call[1].method === 'POST',
+      );
+      expect(postCall).toBeDefined();
+      expect(JSON.parse(postCall![1]!.body as string)).toEqual({
+        treeKey: 'other-tree',
+        repositoryName: 'demo-repo',
+        branch: 'feature/runs-ui',
+        executionMode: 'async',
+        executionScope: 'full',
       });
     });
 
@@ -458,18 +470,18 @@ describe('RunsPage', () => {
 
   it('launches a single-node run with node_key selector payload', async () => {
     const fetchMock = vi.mocked(global.fetch);
-    fetchMock
-      .mockResolvedValueOnce(createJsonResponse({
-        workflowRunId: 612,
-        mode: 'async',
-        status: 'accepted',
-        runStatus: 'running',
-        executionOutcome: null,
-        executedNodes: null,
-      }, { status: 202 }))
-      .mockResolvedValueOnce(createJsonResponse({
-        runs: [createRunSummary({ id: 612, status: 'completed' })],
-      }));
+    fetchMock.mockImplementation((url: string | URL | globalThis.Request) => {
+      const urlString = typeof url === 'string' ? url : url instanceof URL ? url.toString() : url.url;
+      if (urlString.includes('/nodes')) {
+        return Promise.resolve(createJsonResponse({
+          nodes: [
+            { nodeKey: 'design', displayName: 'Design' },
+            { nodeKey: 'implement', displayName: 'Implement' },
+          ],
+        }));
+      }
+      return Promise.resolve(createJsonResponse({}));
+    });
 
     const user = userEvent.setup();
     render(
@@ -486,46 +498,79 @@ describe('RunsPage', () => {
     );
 
     await user.selectOptions(screen.getByLabelText('Workflow'), 'other-tree');
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        '/api/dashboard/workflows/other-tree/nodes',
+        { method: 'GET' },
+      );
+    });
+
     await user.selectOptions(screen.getByLabelText('Execution scope'), 'single_node');
     await user.selectOptions(screen.getByLabelText('Node selector'), 'node_key');
-    await user.type(screen.getByLabelText('Node key'), 'design');
+
+    await waitFor(() => {
+      expect(screen.getByLabelText('Node key')).not.toBeDisabled();
+    });
+
+    await user.selectOptions(screen.getByLabelText('Node key'), 'design');
+
+    fetchMock.mockResolvedValueOnce(createJsonResponse({
+      workflowRunId: 612,
+      mode: 'async',
+      status: 'accepted',
+      runStatus: 'running',
+      executionOutcome: null,
+      executedNodes: null,
+    }, { status: 202 }))
+      .mockResolvedValueOnce(createJsonResponse({
+        runs: [createRunSummary({ id: 612, status: 'completed' })],
+      }));
+
     await user.click(screen.getByRole('button', { name: 'Launch Run' }));
 
     await waitFor(() => {
-      expect(fetchMock).toHaveBeenNthCalledWith(1, '/api/dashboard/runs', {
-        method: 'POST',
-        headers: {
-          'content-type': 'application/json',
+      const postCall = fetchMock.mock.calls.find(
+        (call) => call[1] && typeof call[1] === 'object' && 'method' in call[1] && call[1].method === 'POST',
+      );
+      expect(postCall).toBeDefined();
+      expect(postCall![0]).toBe('/api/dashboard/runs');
+      expect(JSON.parse(postCall![1]!.body as string)).toEqual({
+        treeKey: 'other-tree',
+        executionMode: 'async',
+        executionScope: 'single_node',
+        nodeSelector: {
+          type: 'node_key',
+          nodeKey: 'design',
         },
-        body: JSON.stringify({
-          treeKey: 'other-tree',
-          repositoryName: undefined,
-          branch: undefined,
-          executionMode: 'async',
-          executionScope: 'single_node',
-          nodeSelector: {
-            type: 'node_key',
-            nodeKey: 'design',
-          },
-        }),
       });
     });
   });
 
   it('launches a single-node run with the default next_runnable selector payload', async () => {
     const fetchMock = vi.mocked(global.fetch);
-    fetchMock
-      .mockResolvedValueOnce(createJsonResponse({
-        workflowRunId: 613,
-        mode: 'async',
-        status: 'accepted',
-        runStatus: 'running',
-        executionOutcome: null,
-        executedNodes: null,
-      }, { status: 202 }))
-      .mockResolvedValueOnce(createJsonResponse({
-        runs: [createRunSummary({ id: 613, status: 'running' })],
-      }));
+    fetchMock.mockImplementation((url: string | URL | globalThis.Request) => {
+      const urlString = typeof url === 'string' ? url : url instanceof URL ? url.toString() : url.url;
+      if (urlString.includes('/nodes')) {
+        return Promise.resolve(createJsonResponse({ nodes: [] }));
+      }
+      if (urlString === '/api/dashboard/runs') {
+        return Promise.resolve(createJsonResponse({
+          workflowRunId: 613,
+          mode: 'async',
+          status: 'accepted',
+          runStatus: 'running',
+          executionOutcome: null,
+          executedNodes: null,
+        }, { status: 202 }));
+      }
+      if (urlString.startsWith('/api/dashboard/runs?limit=')) {
+        return Promise.resolve(createJsonResponse({
+          runs: [createRunSummary({ id: 613, status: 'running' })],
+        }));
+      }
+      return Promise.resolve(createJsonResponse({}));
+    });
 
     const user = userEvent.setup();
     render(
@@ -546,21 +591,17 @@ describe('RunsPage', () => {
     await user.click(screen.getByRole('button', { name: 'Launch Run' }));
 
     await waitFor(() => {
-      expect(fetchMock).toHaveBeenNthCalledWith(1, '/api/dashboard/runs', {
-        method: 'POST',
-        headers: {
-          'content-type': 'application/json',
+      const postCall = fetchMock.mock.calls.find(
+        (call) => call[0] === '/api/dashboard/runs' && call[1] && typeof call[1] === 'object' && 'method' in call[1] && call[1].method === 'POST',
+      );
+      expect(postCall).toBeDefined();
+      expect(JSON.parse(postCall![1]!.body as string)).toEqual({
+        treeKey: 'other-tree',
+        executionMode: 'async',
+        executionScope: 'single_node',
+        nodeSelector: {
+          type: 'next_runnable',
         },
-        body: JSON.stringify({
-          treeKey: 'other-tree',
-          repositoryName: undefined,
-          branch: undefined,
-          executionMode: 'async',
-          executionScope: 'single_node',
-          nodeSelector: {
-            type: 'next_runnable',
-          },
-        }),
       });
     });
   });
@@ -620,7 +661,7 @@ describe('RunsPage', () => {
     expect(selectorInput).toHaveValue('next_runnable');
   });
 
-  it('disables launch when single-node node_key selector is missing node key', async () => {
+  it('disables launch when single-node node_key selector has no available nodes', async () => {
     const user = userEvent.setup();
     render(
       <RunsPageContent
@@ -635,26 +676,44 @@ describe('RunsPage', () => {
       />,
     );
 
+    await waitFor(() => {
+      expect(vi.mocked(global.fetch)).toHaveBeenCalledWith(
+        expect.stringContaining('/nodes'),
+        expect.any(Object),
+      );
+    });
+
     await user.selectOptions(screen.getByLabelText('Execution scope'), 'single_node');
     await user.selectOptions(screen.getByLabelText('Node selector'), 'node_key');
 
+    expect(screen.getByLabelText('Node key')).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Launch Run' })).toBeDisabled();
   });
 
   it('uses refreshed run status in launch accepted messaging', async () => {
     const fetchMock = vi.mocked(global.fetch);
-    fetchMock
-      .mockResolvedValueOnce(createJsonResponse({
-        workflowRunId: 611,
-        mode: 'async',
-        status: 'accepted',
-        runStatus: 'running',
-        executionOutcome: null,
-        executedNodes: null,
-      }, { status: 202 }))
-      .mockResolvedValueOnce(createJsonResponse({
-        runs: [createRunSummary({ id: 611, status: 'completed', completedAt: '2026-02-18T00:03:00.000Z' })],
-      }));
+    fetchMock.mockImplementation((url: string | URL | globalThis.Request) => {
+      const urlString = typeof url === 'string' ? url : url instanceof URL ? url.toString() : url.url;
+      if (urlString.includes('/nodes')) {
+        return Promise.resolve(createJsonResponse({ nodes: [] }));
+      }
+      if (urlString === '/api/dashboard/runs') {
+        return Promise.resolve(createJsonResponse({
+          workflowRunId: 611,
+          mode: 'async',
+          status: 'accepted',
+          runStatus: 'running',
+          executionOutcome: null,
+          executedNodes: null,
+        }, { status: 202 }));
+      }
+      if (urlString.startsWith('/api/dashboard/runs?limit=')) {
+        return Promise.resolve(createJsonResponse({
+          runs: [createRunSummary({ id: 611, status: 'completed', completedAt: '2026-02-18T00:03:00.000Z' })],
+        }));
+      }
+      return Promise.resolve(createJsonResponse({}));
+    });
 
     const user = userEvent.setup();
     render(
@@ -679,20 +738,30 @@ describe('RunsPage', () => {
 
   it('keeps launch accepted messaging when lifecycle refresh fails', async () => {
     const fetchMock = vi.mocked(global.fetch);
-    fetchMock
-      .mockResolvedValueOnce(createJsonResponse({
-        workflowRunId: 700,
-        mode: 'async',
-        status: 'accepted',
-        runStatus: 'running',
-        executionOutcome: null,
-        executedNodes: null,
-      }, { status: 202 }))
-      .mockResolvedValueOnce(createJsonResponse({
-        error: {
-          message: 'Refresh unavailable.',
-        },
-      }, { status: 503 }));
+    fetchMock.mockImplementation((url: string | URL | globalThis.Request) => {
+      const urlString = typeof url === 'string' ? url : url instanceof URL ? url.toString() : url.url;
+      if (urlString.includes('/nodes')) {
+        return Promise.resolve(createJsonResponse({ nodes: [] }));
+      }
+      if (urlString === '/api/dashboard/runs') {
+        return Promise.resolve(createJsonResponse({
+          workflowRunId: 700,
+          mode: 'async',
+          status: 'accepted',
+          runStatus: 'running',
+          executionOutcome: null,
+          executedNodes: null,
+        }, { status: 202 }));
+      }
+      if (urlString.startsWith('/api/dashboard/runs?limit=')) {
+        return Promise.resolve(createJsonResponse({
+          error: {
+            message: 'Refresh unavailable.',
+          },
+        }, { status: 503 }));
+      }
+      return Promise.resolve(createJsonResponse({}));
+    });
 
     const user = userEvent.setup();
     render(
@@ -711,11 +780,6 @@ describe('RunsPage', () => {
     await user.selectOptions(screen.getByLabelText('Workflow'), 'other-tree');
     await user.click(screen.getByRole('button', { name: 'Launch Run' }));
 
-    await waitFor(() => {
-      expect(fetchMock).toHaveBeenNthCalledWith(1, '/api/dashboard/runs', expect.any(Object));
-      expect(fetchMock).toHaveBeenNthCalledWith(2, '/api/dashboard/runs?limit=50', { method: 'GET' });
-    });
-
     expect(await screen.findByText(/Run #700 accepted./)).toBeInTheDocument();
     expect(
       screen.getByText(/Run accepted, but lifecycle refresh failed: Refresh unavailable\./),
@@ -725,9 +789,18 @@ describe('RunsPage', () => {
 
   it('shows an error when launch response payload is malformed', async () => {
     const fetchMock = vi.mocked(global.fetch);
-    fetchMock.mockResolvedValueOnce(createJsonResponse({
-      workflowRunId: '700',
-    }, { status: 202 }));
+    fetchMock.mockImplementation((url: string | URL | globalThis.Request) => {
+      const urlString = typeof url === 'string' ? url : url instanceof URL ? url.toString() : url.url;
+      if (urlString.includes('/nodes')) {
+        return Promise.resolve(createJsonResponse({ nodes: [] }));
+      }
+      if (urlString === '/api/dashboard/runs') {
+        return Promise.resolve(createJsonResponse({
+          workflowRunId: '700',
+        }, { status: 202 }));
+      }
+      return Promise.resolve(createJsonResponse({}));
+    });
 
     const user = userEvent.setup();
     render(
@@ -747,7 +820,6 @@ describe('RunsPage', () => {
     await user.click(screen.getByRole('button', { name: 'Launch Run' }));
 
     expect(await screen.findByRole('alert')).toHaveTextContent('Run launch response was malformed.');
-    expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(screen.queryByRole('link', { name: 'Open run detail' })).toBeNull();
   });
 

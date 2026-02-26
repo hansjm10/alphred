@@ -9,6 +9,7 @@ import type {
   DashboardRunLaunchResult,
   DashboardRunNodeSelector,
   DashboardRunSummary,
+  DashboardWorkflowNodeOption,
   DashboardWorkflowTreeSummary,
 } from '../../src/server/dashboard-contracts';
 import { AuthRemediation } from '../ui/auth-remediation';
@@ -366,6 +367,25 @@ async function fetchDashboardRuns(limit: number): Promise<readonly DashboardRunS
   return sortRunsForDashboard((payload as { runs: DashboardRunSummary[] }).runs);
 }
 
+async function fetchWorkflowNodes(treeKey: string): Promise<readonly DashboardWorkflowNodeOption[]> {
+  const response = await fetch(`/api/dashboard/workflows/${encodeURIComponent(treeKey)}/nodes`, { method: 'GET' });
+  const payload = (await response.json().catch(() => null)) as unknown;
+  if (!response.ok) {
+    return [];
+  }
+
+  if (
+    typeof payload !== 'object' ||
+    payload === null ||
+    !('nodes' in payload) ||
+    !Array.isArray((payload as { nodes?: unknown }).nodes)
+  ) {
+    return [];
+  }
+
+  return (payload as { nodes: DashboardWorkflowNodeOption[] }).nodes;
+}
+
 function filterRunsForKpis(
   runs: readonly DashboardRunSummary[],
   activeWorkflowKey: string | null,
@@ -439,6 +459,8 @@ type RunLaunchControlsProps = Readonly<{
   executionScope: DashboardRunExecutionScope;
   nodeSelectorType: DashboardRunNodeSelector['type'];
   nodeKey: string;
+  availableNodes: readonly DashboardWorkflowNodeOption[];
+  isLoadingNodes: boolean;
   launchDisabled: boolean;
   launchButtonLabel: string;
   launchError: string | null;
@@ -464,6 +486,8 @@ function RunLaunchControls({
   executionScope,
   nodeSelectorType,
   nodeKey,
+  availableNodes,
+  isLoadingNodes,
   launchDisabled,
   launchButtonLabel,
   launchError,
@@ -573,15 +597,26 @@ function RunLaunchControls({
           {executionScope === 'single_node' && nodeSelectorType === 'node_key' ? (
             <label className="run-launch-form__field" htmlFor="run-launch-node-key">
               <span className="meta-text">Node key</span>
-              <input
+              <select
                 id="run-launch-node-key"
                 value={nodeKey}
-                disabled={launchBlockedReason !== null}
+                disabled={launchBlockedReason !== null || isLoadingNodes || availableNodes.length === 0}
                 onChange={(event) => {
                   onNodeKeyChange(event.currentTarget.value);
                 }}
-                placeholder="design"
-              />
+              >
+                {isLoadingNodes ? (
+                  <option value="">Loading nodes...</option>
+                ) : availableNodes.length === 0 ? (
+                  <option value="">No nodes available</option>
+                ) : (
+                  availableNodes.map((node) => (
+                    <option key={node.nodeKey} value={node.nodeKey}>
+                      {node.displayName}
+                    </option>
+                  ))
+                )}
+              </select>
             </label>
           ) : null}
 
@@ -863,6 +898,8 @@ export function RunsPageContent({
   const [executionScope, setExecutionScope] = useState<DashboardRunExecutionScope>('full');
   const [nodeSelectorType, setNodeSelectorType] = useState<DashboardRunNodeSelector['type']>('next_runnable');
   const [nodeKey, setNodeKey] = useState<string>('');
+  const [availableNodes, setAvailableNodes] = useState<readonly DashboardWorkflowNodeOption[]>([]);
+  const [isLoadingNodes, setIsLoadingNodes] = useState<boolean>(false);
   const [isLaunching, setIsLaunching] = useState<boolean>(false);
   const [launchError, setLaunchError] = useState<string | null>(null);
   const [launchRefreshWarning, setLaunchRefreshWarning] = useState<string | null>(null);
@@ -950,6 +987,32 @@ export function RunsPageContent({
     setSelectedRepositoryName(activeRepositoryName ?? '');
   }, [activeRepositoryName]);
 
+  useEffect(() => {
+    if (selectedTreeKey.length === 0) {
+      setAvailableNodes([]);
+      setNodeKey('');
+      return;
+    }
+
+    let cancelled = false;
+    setIsLoadingNodes(true);
+    setAvailableNodes([]);
+    setNodeKey('');
+
+    void fetchWorkflowNodes(selectedTreeKey).then((nodes) => {
+      if (cancelled) {
+        return;
+      }
+      setAvailableNodes(nodes);
+      setNodeKey(nodes[0]?.nodeKey ?? '');
+      setIsLoadingNodes(false);
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedTreeKey]);
+
   async function refreshRunState(): Promise<readonly DashboardRunSummary[]> {
     const refreshedRuns = await fetchDashboardRuns(DEFAULT_RUN_LIST_LIMIT);
     setRunState(refreshedRuns);
@@ -1008,6 +1071,8 @@ export function RunsPageContent({
           executionScope={executionScope}
           nodeSelectorType={nodeSelectorType}
           nodeKey={nodeKey}
+          availableNodes={availableNodes}
+          isLoadingNodes={isLoadingNodes}
           launchDisabled={launchDisabled}
           launchButtonLabel={launchButtonLabel}
           launchError={launchError}
