@@ -194,6 +194,7 @@ export const treeNodes = sqliteTable(
     provider: text('provider'),
     model: text('model'),
     executionPermissions: text('execution_permissions', { mode: 'json' }),
+    errorHandlerConfig: text('error_handler_config', { mode: 'json' }),
     promptTemplateId: integer('prompt_template_id').references(() => promptTemplates.id, { onDelete: 'restrict' }),
     maxRetries: integer('max_retries').notNull().default(0),
     sequenceIndex: integer('sequence_index').notNull(),

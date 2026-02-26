@@ -168,6 +168,91 @@ describe('database schema hardening', () => {
     expect(columnNames).toContain('position_y');
     expect(columnNames).toContain('model');
     expect(columnNames).toContain('execution_permissions');
+    expect(columnNames).toContain('error_handler_config');
+  });
+
+  it('persists nullable and custom tree_nodes.error_handler_config payloads', () => {
+    const db = createDatabase(':memory:');
+    migrateDatabase(db);
+
+    const tree = db
+      .insert(workflowTrees)
+      .values({
+        treeKey: 'error_handler_config_tree',
+        version: 1,
+        name: 'Error Handler Config Tree',
+      })
+      .returning({ id: workflowTrees.id })
+      .get();
+
+    const promptTemplate = db
+      .insert(promptTemplates)
+      .values({
+        templateKey: 'error_handler_config_prompt',
+        version: 1,
+        content: 'Summarize retry failure context',
+        contentType: 'markdown',
+      })
+      .returning({ id: promptTemplates.id })
+      .get();
+
+    db.insert(treeNodes)
+      .values([
+        {
+          workflowTreeId: tree.id,
+          nodeKey: 'default-handler',
+          nodeType: 'agent',
+          provider: 'codex',
+          promptTemplateId: promptTemplate.id,
+          maxRetries: 1,
+          sequenceIndex: 1,
+          errorHandlerConfig: null,
+        },
+        {
+          workflowTreeId: tree.id,
+          nodeKey: 'custom-handler',
+          nodeType: 'agent',
+          provider: 'codex',
+          promptTemplateId: promptTemplate.id,
+          maxRetries: 1,
+          sequenceIndex: 2,
+          errorHandlerConfig: {
+            mode: 'custom',
+            prompt: 'Use a different strategy',
+            model: 'gpt-5-codex-mini',
+            provider: 'codex',
+            maxInputChars: 1200,
+          },
+        },
+      ])
+      .run();
+
+    const rows = db
+      .select({
+        nodeKey: treeNodes.nodeKey,
+        errorHandlerConfig: treeNodes.errorHandlerConfig,
+      })
+      .from(treeNodes)
+      .where(eq(treeNodes.workflowTreeId, tree.id))
+      .orderBy(treeNodes.sequenceIndex)
+      .all();
+
+    expect(rows).toEqual([
+      {
+        nodeKey: 'default-handler',
+        errorHandlerConfig: null,
+      },
+      {
+        nodeKey: 'custom-handler',
+        errorHandlerConfig: {
+          mode: 'custom',
+          prompt: 'Use a different strategy',
+          model: 'gpt-5-codex-mini',
+          provider: 'codex',
+          maxInputChars: 1200,
+        },
+      },
+    ]);
   });
 
   it('adds repositories.branch_template when migrating a legacy repositories table', () => {

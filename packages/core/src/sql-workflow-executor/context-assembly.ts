@@ -1,16 +1,23 @@
 import type { AlphredDatabase } from '@alphred/db';
 import {
+  MAX_ERROR_SUMMARY_CHARS,
   CONTEXT_POLICY_VERSION,
   MAX_CHARS_PER_ARTIFACT,
   MAX_CONTEXT_CHARS_TOTAL,
+  MAX_RETRY_SUMMARY_CONTEXT_CHARS,
   MAX_UPSTREAM_ARTIFACTS,
   MIN_REMAINING_CONTEXT_CHARS,
 } from './constants.js';
-import { buildRoutingSelection, loadUpstreamArtifactSelectionByRunNodeId } from './routing-selection.js';
+import {
+  buildRoutingSelection,
+  loadRetryFailureSummaryArtifact,
+  loadUpstreamArtifactSelectionByRunNodeId,
+} from './routing-selection.js';
 import {
   buildTruncationMetadata,
   compareUpstreamSourceOrder,
   hashContentSha256,
+  serializeRetryFailureSummaryEnvelope,
   serializeContextEnvelope,
   truncateHeadTail,
 } from './type-conversions.js';
@@ -111,6 +118,7 @@ export function assembleUpstreamArtifactContext(
   params: {
     workflowRunId: number;
     targetNode: RunNodeExecutionRow;
+    targetAttempt: number;
     latestNodeAttempts: RunNodeExecutionRow[];
     edgeRows: EdgeRow[];
     latestRoutingDecisionsByRunNodeId: Map<number, RoutingDecisionRow>;
@@ -148,7 +156,8 @@ export function assembleUpstreamArtifactContext(
 
   const includedEntries: ContextEnvelopeEntry[] = [];
   const droppedArtifactIds: number[] = [];
-  let remainingChars = MAX_CONTEXT_CHARS_TOTAL;
+  const retrySummaryBudget = params.targetAttempt > 1 ? MAX_RETRY_SUMMARY_CONTEXT_CHARS : 0;
+  let remainingChars = Math.max(MAX_CONTEXT_CHARS_TOTAL - retrySummaryBudget, 0);
   let budgetOverflow = false;
   for (const candidate of candidateEntries) {
     if (includedEntries.length >= MAX_UPSTREAM_ARTIFACTS) {
@@ -183,6 +192,45 @@ export function assembleUpstreamArtifactContext(
     }),
   );
 
+  let retrySummaryIncluded = false;
+  let retrySummaryArtifactId: number | null = null;
+  let retrySummarySourceAttempt: number | null = null;
+  let retrySummaryTargetAttempt: number | null = null;
+  let retrySummaryChars = 0;
+  let retrySummaryTruncated = false;
+  if (params.targetAttempt > 1) {
+    const retrySummary = loadRetryFailureSummaryArtifact(db, {
+      workflowRunId: params.workflowRunId,
+      runNodeId: params.targetNode.runNodeId,
+      sourceAttempt: params.targetAttempt - 1,
+      targetAttempt: params.targetAttempt,
+    });
+    if (retrySummary) {
+      const summaryCharLimit = Math.min(MAX_ERROR_SUMMARY_CHARS, MAX_RETRY_SUMMARY_CONTEXT_CHARS);
+      const includedSummaryContent = truncateHeadTail(retrySummary.content, summaryCharLimit);
+      const truncation = buildTruncationMetadata(retrySummary.content.length, includedSummaryContent.length);
+      const summaryEntry = serializeRetryFailureSummaryEnvelope({
+        workflowRunId: params.workflowRunId,
+        targetNodeKey: params.targetNode.nodeKey,
+        sourceAttempt: retrySummary.sourceAttempt,
+        targetAttempt: retrySummary.targetAttempt,
+        summaryArtifactId: retrySummary.id,
+        failureArtifactId: retrySummary.failureArtifactId,
+        createdAt: retrySummary.createdAt,
+        includedContent: includedSummaryContent,
+        sha256: hashContentSha256(retrySummary.content),
+        truncation,
+      });
+      contextEntries.push(summaryEntry);
+      retrySummaryIncluded = true;
+      retrySummaryArtifactId = retrySummary.id;
+      retrySummarySourceAttempt = retrySummary.sourceAttempt;
+      retrySummaryTargetAttempt = retrySummary.targetAttempt;
+      retrySummaryChars = truncation.includedChars;
+      retrySummaryTruncated = truncation.applied;
+    }
+  }
+
   const hasAnyArtifacts = directPredecessors.some(sourceNode =>
     artifactSelection.runNodeIdsWithAnyArtifacts.has(sourceNode.runNodeId),
   );
@@ -201,6 +249,12 @@ export function assembleUpstreamArtifactContext(
     no_eligible_artifact_types: hasAnyArtifacts && candidateEntries.length === 0,
     budget_overflow: budgetOverflow,
     dropped_artifact_ids: droppedArtifactIds,
+    retry_summary_included: retrySummaryIncluded,
+    retry_summary_artifact_id: retrySummaryArtifactId,
+    retry_summary_source_attempt: retrySummarySourceAttempt,
+    retry_summary_target_attempt: retrySummaryTargetAttempt,
+    retry_summary_chars: retrySummaryChars,
+    retry_summary_truncated: retrySummaryTruncated,
   };
 
   return {
@@ -223,5 +277,11 @@ export function createEmptyContextManifest(assemblyTimestamp = new Date().toISOS
     no_eligible_artifact_types: false,
     budget_overflow: false,
     dropped_artifact_ids: [],
+    retry_summary_included: false,
+    retry_summary_artifact_id: null,
+    retry_summary_source_attempt: null,
+    retry_summary_target_attempt: null,
+    retry_summary_chars: 0,
+    retry_summary_truncated: false,
   };
 }

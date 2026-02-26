@@ -1,5 +1,6 @@
 import type { RunNodeStatus, WorkflowRunStatus } from '@alphred/db';
 import type {
+  AgentProviderName,
   ProviderEventType,
   ProviderRunOptions,
   RoutingDecisionSignal,
@@ -21,9 +22,22 @@ export type RunNodeExecutionRow = {
   provider: string | null;
   model: string | null;
   executionPermissions: unknown;
+  errorHandlerConfig: unknown;
   prompt: string | null;
   promptContentType: string | null;
 };
+
+export type ErrorHandlerConfig =
+  | {
+      mode: 'disabled';
+    }
+  | {
+      mode: 'custom';
+      prompt?: string;
+      model?: string;
+      provider?: AgentProviderName;
+      maxInputChars?: number;
+    };
 
 export type WorkflowRunRow = {
   id: number;
@@ -101,6 +115,16 @@ export type UpstreamArtifactSelection = {
   runNodeIdsWithAnyArtifacts: Set<number>;
 };
 
+export type RetryFailureSummaryArtifact = {
+  id: number;
+  runNodeId: number;
+  sourceAttempt: number;
+  targetAttempt: number;
+  failureArtifactId: number | null;
+  content: string;
+  createdAt: string;
+};
+
 export type ContextEnvelopeTruncation = {
   applied: boolean;
   method: 'none' | 'head_tail';
@@ -138,6 +162,12 @@ export type ContextHandoffManifest = {
   no_eligible_artifact_types: boolean;
   budget_overflow: boolean;
   dropped_artifact_ids: number[];
+  retry_summary_included: boolean;
+  retry_summary_artifact_id: number | null;
+  retry_summary_source_attempt: number | null;
+  retry_summary_target_attempt: number | null;
+  retry_summary_chars: number;
+  retry_summary_truncated: boolean;
 };
 
 export type AssembledUpstreamContext = {
@@ -179,6 +209,19 @@ export type DiagnosticErrorDetails = {
   stackPreview: string | null;
 };
 
+export type RunNodeErrorHandlerDiagnostics = {
+  attempted: boolean;
+  status: 'completed' | 'failed' | 'skipped';
+  summaryArtifactId: number | null;
+  sourceAttempt: number;
+  targetAttempt: number | null;
+  provider: string | null;
+  model: string | null;
+  eventCount: number;
+  tokensUsed: number;
+  errorMessage: string | null;
+};
+
 export type RunNodeDiagnosticsPayload = {
   schemaVersion: 1;
   workflowRunId: number;
@@ -210,6 +253,7 @@ export type RunNodeDiagnosticsPayload = {
   toolEvents: DiagnosticToolEvent[];
   routingDecision: RouteDecisionSignal | null;
   error: DiagnosticErrorDetails | null;
+  errorHandler?: RunNodeErrorHandlerDiagnostics;
 };
 
 export type CompletedNodeRoutingOutcome = {

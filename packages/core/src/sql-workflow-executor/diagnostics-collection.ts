@@ -20,6 +20,7 @@ import type {
   DiagnosticToolEvent,
   DiagnosticUsageSnapshot,
   RouteDecisionSignal,
+  RunNodeErrorHandlerDiagnostics,
   RunNodeDiagnosticsPayload,
   RunNodeExecutionRow,
 } from './types.js';
@@ -403,6 +404,7 @@ export function buildDiagnosticsPayload(params: {
   events: ProviderEvent[];
   routingDecision: RouteDecisionSignal | null;
   error: unknown;
+  errorHandler?: RunNodeErrorHandlerDiagnostics;
 }): {
   payload: RunNodeDiagnosticsPayload;
   payloadChars: number;
@@ -454,6 +456,7 @@ export function buildDiagnosticsPayload(params: {
     toolEvents,
     routingDecision: params.routingDecision,
     error: errorDetails,
+    ...(params.errorHandler === undefined ? {} : { errorHandler: params.errorHandler }),
   });
 
   let payload = buildPayload();

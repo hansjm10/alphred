@@ -6,6 +6,13 @@ import type {
   ProviderRunOptions,
 } from '@alphred/shared';
 import { PhaseRunError, runPhase } from '../phaseRunner.js';
+import {
+  DEFAULT_ERROR_HANDLER_MODEL,
+  DEFAULT_ERROR_HANDLER_MODEL_BY_PROVIDER,
+  DEFAULT_ERROR_HANDLER_PROMPT,
+  ERROR_HANDLER_SUMMARY_METADATA_KIND,
+  MAX_ERROR_CONTEXT_CHARS,
+} from './constants.js';
 import { assembleUpstreamArtifactContext } from './context-assembly.js';
 import { toErrorMessage } from './diagnostics-collection.js';
 import {
@@ -21,6 +28,7 @@ import {
   loadWorkflowRunRow,
   persistCompletedNodeRoutingDecision,
   persistFailureArtifact,
+  persistNoteArtifact,
   persistSuccessArtifact,
 } from './persistence.js';
 import { loadLatestArtifactsByRunNodeId, loadLatestRoutingDecisionsByRunNodeId } from './routing-selection.js';
@@ -33,11 +41,12 @@ import {
   transitionFailedRunNodeToRetryAttempt,
   transitionRunToCurrentForExecutor,
 } from './transitions.js';
-import { getLatestRunNodeAttempts } from './type-conversions.js';
+import { getLatestRunNodeAttempts, hashContentSha256, isRecord, truncateHeadTail } from './type-conversions.js';
 import type {
   ContextHandoffManifest,
   EdgeRow,
   ExecuteNextRunnableNodeResult,
+  RunNodeErrorHandlerDiagnostics,
   RunNodeExecutionRow,
   SqlWorkflowExecutorDependencies,
   StreamUsageState,
@@ -85,6 +94,8 @@ export type ClaimedNodeFailureParams = {
   failureTokensUsed: number;
   error: unknown;
   allowRetries: boolean;
+  dependencies: SqlWorkflowExecutorDependencies;
+  options: ProviderRunOptions;
 };
 
 export type NodeFailureReason = 'post_completion_failure' | 'retry_scheduled' | 'retry_limit_exceeded';
@@ -119,6 +130,259 @@ export function resolveFailureReason(persistedNodeStatus: RunNodeStatus, canRetr
   return 'retry_limit_exceeded';
 }
 
+export type ResolvedErrorHandlerExecutionConfig = {
+  provider: AgentProviderName;
+  model: string;
+  prompt: string;
+  maxInputChars: number;
+};
+
+function isAgentProviderName(value: unknown): value is AgentProviderName {
+  return value === 'codex' || value === 'claude';
+}
+
+function toOptionalNonEmptyString(value: unknown): string | null {
+  if (typeof value !== 'string') {
+    return null;
+  }
+
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+function toOptionalPositiveInteger(value: unknown): number | null {
+  if (!Number.isInteger(value) || (value as number) <= 0) {
+    return null;
+  }
+
+  return value as number;
+}
+
+function resolveNodeProviderForErrorHandler(node: RunNodeExecutionRow): AgentProviderName {
+  if (isAgentProviderName(node.provider)) {
+    return node.provider;
+  }
+
+  return 'codex';
+}
+
+export function resolveErrorHandlerExecutionConfig(node: RunNodeExecutionRow): ResolvedErrorHandlerExecutionConfig | null {
+  const defaultProvider = resolveNodeProviderForErrorHandler(node);
+  const defaultModel = DEFAULT_ERROR_HANDLER_MODEL_BY_PROVIDER[defaultProvider] ?? DEFAULT_ERROR_HANDLER_MODEL;
+  const rawConfig = node.errorHandlerConfig;
+  if (!isRecord(rawConfig)) {
+    return {
+      provider: defaultProvider,
+      model: defaultModel,
+      prompt: DEFAULT_ERROR_HANDLER_PROMPT,
+      maxInputChars: MAX_ERROR_CONTEXT_CHARS,
+    };
+  }
+
+  const mode = rawConfig.mode;
+  if (mode === 'disabled') {
+    return null;
+  }
+
+  const customMode = mode === 'custom';
+  const provider =
+    customMode && isAgentProviderName(rawConfig.provider) ? rawConfig.provider : defaultProvider;
+  const model =
+    (customMode ? toOptionalNonEmptyString(rawConfig.model) : null) ??
+    DEFAULT_ERROR_HANDLER_MODEL_BY_PROVIDER[provider] ??
+    DEFAULT_ERROR_HANDLER_MODEL;
+  const prompt = (customMode ? toOptionalNonEmptyString(rawConfig.prompt) : null) ?? DEFAULT_ERROR_HANDLER_PROMPT;
+  const maxInputChars = (customMode ? toOptionalPositiveInteger(rawConfig.maxInputChars) : null) ?? MAX_ERROR_CONTEXT_CHARS;
+
+  return {
+    provider,
+    model,
+    prompt,
+    maxInputChars,
+  };
+}
+
+function extractPartialOutputFromFailureEvents(events: ProviderEvent[]): string | null {
+  for (const event of [...events].reverse()) {
+    if (event.type === 'result' && event.content.trim().length > 0) {
+      return event.content;
+    }
+  }
+
+  const trailingAssistantContents = events
+    .filter(event => event.type === 'assistant' && event.content.trim().length > 0)
+    .slice(-3)
+    .map(event => event.content);
+  if (trailingAssistantContents.length === 0) {
+    return null;
+  }
+
+  return trailingAssistantContents.join('\n\n');
+}
+
+function buildErrorHandlerInputContext(params: {
+  workflowRunId: number;
+  node: RunNodeExecutionRow;
+  currentAttempt: number;
+  failureArtifactId: number;
+  errorMessage: string;
+  failureEvents: ProviderEvent[];
+  maxInputChars: number;
+}): string {
+  const partialOutput = extractPartialOutputFromFailureEvents(params.failureEvents) ?? 'none';
+  const failureContext = [
+    'ALPHRED_RETRY_ERROR_HANDLER_INPUT v1',
+    `workflow_run_id: ${params.workflowRunId}`,
+    `node_key: ${params.node.nodeKey}`,
+    `source_attempt: ${params.currentAttempt}`,
+    `target_attempt: ${params.currentAttempt + 1}`,
+    `max_retries: ${params.node.maxRetries}`,
+    `node_provider: ${params.node.provider ?? 'unknown'}`,
+    `node_model: ${params.node.model ?? 'unknown'}`,
+    `failure_artifact_id: ${params.failureArtifactId}`,
+    'error_message:',
+    params.errorMessage,
+    'partial_output:',
+    partialOutput,
+    'node_prompt:',
+    params.node.prompt ?? '',
+  ].join('\n');
+
+  return truncateHeadTail(failureContext, params.maxInputChars);
+}
+
+function buildSkippedErrorHandlerDiagnostics(
+  sourceAttempt: number,
+  targetAttempt: number | null,
+): RunNodeErrorHandlerDiagnostics {
+  return {
+    attempted: false,
+    status: 'skipped',
+    summaryArtifactId: null,
+    sourceAttempt,
+    targetAttempt,
+    provider: null,
+    model: null,
+    eventCount: 0,
+    tokensUsed: 0,
+    errorMessage: null,
+  };
+}
+
+async function executeErrorHandlerForRetry(
+  db: AlphredDatabase,
+  params: {
+    run: WorkflowRunRow;
+    node: RunNodeExecutionRow;
+    currentAttempt: number;
+    failureArtifactId: number;
+    errorMessage: string;
+    failureEvents: ProviderEvent[];
+    dependencies: SqlWorkflowExecutorDependencies;
+    options: ProviderRunOptions;
+  },
+): Promise<RunNodeErrorHandlerDiagnostics> {
+  const config = resolveErrorHandlerExecutionConfig(params.node);
+  if (!config) {
+    return buildSkippedErrorHandlerDiagnostics(params.currentAttempt, params.currentAttempt + 1);
+  }
+
+  const contextEntry = buildErrorHandlerInputContext({
+    workflowRunId: params.run.id,
+    node: params.node,
+    currentAttempt: params.currentAttempt,
+    failureArtifactId: params.failureArtifactId,
+    errorMessage: params.errorMessage,
+    failureEvents: params.failureEvents,
+    maxInputChars: config.maxInputChars,
+  });
+  const phase: PhaseDefinition = {
+    name: `${params.node.nodeKey}::error_handler`,
+    type: 'agent',
+    provider: config.provider,
+    model: config.model,
+    prompt: config.prompt,
+    transitions: [],
+  };
+  const optionsWithContext: ProviderRunOptions = {
+    ...params.options,
+    context: [...(params.options.context ?? []), contextEntry],
+  };
+  const optionsWithExecutionPermissions = applyNodeExecutionPermissions(params.node, optionsWithContext);
+  const phaseOptions: ProviderRunOptions = {
+    ...optionsWithExecutionPermissions,
+    model: config.model,
+  };
+
+  try {
+    const result = await runPhase(phase, phaseOptions, {
+      resolveProvider: params.dependencies.resolveProvider,
+    });
+    const summaryArtifactId = persistNoteArtifact(db, {
+      workflowRunId: params.run.id,
+      runNodeId: params.node.runNodeId,
+      content: result.report,
+      contentType: 'text',
+      metadata: {
+        kind: ERROR_HANDLER_SUMMARY_METADATA_KIND,
+        sourceAttempt: params.currentAttempt,
+        targetAttempt: params.currentAttempt + 1,
+        failureArtifactId: params.failureArtifactId,
+        errorHandler: {
+          provider: config.provider,
+          model: config.model,
+          promptHash: hashContentSha256(config.prompt),
+          maxInputChars: config.maxInputChars,
+          eventCount: result.events.length,
+          tokensUsed: result.tokensUsed,
+        },
+      },
+    });
+
+    return {
+      attempted: true,
+      status: 'completed',
+      summaryArtifactId,
+      sourceAttempt: params.currentAttempt,
+      targetAttempt: params.currentAttempt + 1,
+      provider: config.provider,
+      model: config.model,
+      eventCount: result.events.length,
+      tokensUsed: result.tokensUsed,
+      errorMessage: null,
+    };
+  } catch (error) {
+    return {
+      attempted: true,
+      status: 'failed',
+      summaryArtifactId: null,
+      sourceAttempt: params.currentAttempt,
+      targetAttempt: params.currentAttempt + 1,
+      provider: config.provider,
+      model: config.model,
+      eventCount: error instanceof PhaseRunError ? error.events.length : 0,
+      tokensUsed: error instanceof PhaseRunError ? error.tokensUsed : 0,
+      errorMessage: toErrorMessage(error),
+    };
+  }
+}
+
+function applyNodeExecutionPermissions(
+  node: RunNodeExecutionRow,
+  options: ProviderRunOptions,
+): ProviderRunOptions {
+  const nodeExecutionPermissions = normalizeRunNodeExecutionPermissions(node.executionPermissions, node.nodeKey);
+  const mergedExecutionPermissions = mergeExecutionPermissions(options.executionPermissions, nodeExecutionPermissions);
+  if (mergedExecutionPermissions === undefined) {
+    return options;
+  }
+
+  return {
+    ...options,
+    executionPermissions: mergedExecutionPermissions,
+  };
+}
+
 export async function executeNodePhase(
   node: RunNodeExecutionRow,
   options: ProviderRunOptions,
@@ -134,18 +398,7 @@ export async function executeNodePhase(
           ...options,
           context: [...(options.context ?? []), ...upstreamContextEntries],
         };
-  const nodeExecutionPermissions = normalizeRunNodeExecutionPermissions(node.executionPermissions, node.nodeKey);
-  const mergedExecutionPermissions = mergeExecutionPermissions(
-    optionsWithContext.executionPermissions,
-    nodeExecutionPermissions,
-  );
-  const optionsWithExecutionPermissions =
-    mergedExecutionPermissions === undefined
-      ? optionsWithContext
-      : {
-          ...optionsWithContext,
-          executionPermissions: mergedExecutionPermissions,
-        };
+  const optionsWithExecutionPermissions = applyNodeExecutionPermissions(node, optionsWithContext);
   const phaseOptions = phase.model
     ? { ...optionsWithExecutionPermissions, model: phase.model }
     : optionsWithExecutionPermissions;
@@ -233,13 +486,22 @@ export function handleClaimedNodeSuccess(
   };
 }
 
-export function handleClaimedNodeFailure(
+export async function handleClaimedNodeFailure(
   db: AlphredDatabase,
   run: WorkflowRunRow,
   node: RunNodeExecutionRow,
   params: ClaimedNodeFailureParams,
-): ClaimedNodeFailure {
-  const { currentAttempt, contextManifest, failureEvents, failureTokensUsed, error, allowRetries } = params;
+): Promise<ClaimedNodeFailure> {
+  const {
+    currentAttempt,
+    contextManifest,
+    failureEvents,
+    failureTokensUsed,
+    error,
+    allowRetries,
+    dependencies,
+    options,
+  } = params;
   const errorMessage = toErrorMessage(error);
   const persistedNodeStatus = loadRunNodeExecutionRowById(db, run.id, node.runNodeId).status;
   const latestRunStatus = loadWorkflowRunRow(db, run.id).status;
@@ -276,6 +538,22 @@ export function handleClaimedNodeFailure(
     });
   }
 
+  let errorHandlerDiagnostics: RunNodeErrorHandlerDiagnostics | undefined;
+  if (canRetry) {
+    errorHandlerDiagnostics = await executeErrorHandlerForRetry(db, {
+      run,
+      node,
+      currentAttempt,
+      failureArtifactId: artifactId,
+      errorMessage,
+      failureEvents,
+      dependencies,
+      options,
+    });
+  } else if (retryEligible && isTerminalWorkflowRunStatus(latestRunStatus)) {
+    errorHandlerDiagnostics = buildSkippedErrorHandlerDiagnostics(currentAttempt, null);
+  }
+
   const persistedNode = loadRunNodeExecutionRowById(db, run.id, node.runNodeId);
   const diagnosticStatus: 'completed' | 'failed' = persistedNode.status === 'completed' ? 'completed' : 'failed';
   persistRunNodeAttemptDiagnostics(db, {
@@ -290,6 +568,7 @@ export function handleClaimedNodeFailure(
     events: failureEvents,
     routingDecision: null,
     error,
+    errorHandler: errorHandlerDiagnostics,
   });
 
   if (canRetry) {
@@ -383,6 +662,7 @@ export async function executeClaimedRunnableNode(
     const contextAssembly = assembleUpstreamArtifactContext(db, {
       workflowRunId: run.id,
       targetNode: node,
+      targetAttempt: currentAttempt,
       latestNodeAttempts: latestNodeAttemptsForContext,
       edgeRows,
       latestRoutingDecisionsByRunNodeId: latestRoutingDecisionsForContext.latestByRunNodeId,
@@ -432,7 +712,7 @@ export async function executeClaimedRunnableNode(
     } catch (error) {
       const failureEvents = error instanceof PhaseRunError ? error.events : [];
       const failureTokensUsed = error instanceof PhaseRunError ? error.tokensUsed : 0;
-      const failure = handleClaimedNodeFailure(
+      const failure = await handleClaimedNodeFailure(
         db,
         run,
         node,
@@ -443,6 +723,8 @@ export async function executeClaimedRunnableNode(
           failureTokensUsed,
           error,
           allowRetries,
+          dependencies,
+          options,
         },
       );
       if (failure.nextAttempt !== null) {
