@@ -303,6 +303,35 @@ export function toDiagnosticErrorDetails(error: unknown, state: DiagnosticsRedac
   };
 }
 
+function sanitizeAndTruncateDiagnosticsString(
+  value: string | null,
+  state: DiagnosticsRedactionState,
+): string | null {
+  if (value === null) {
+    return null;
+  }
+
+  const sanitized = sanitizeDiagnosticsString(value, state);
+  const truncated = truncateHeadTail(sanitized, MAX_DIAGNOSTIC_EVENT_CONTENT_CHARS);
+  if (truncated.length < sanitized.length) {
+    state.truncated = true;
+  }
+
+  return truncated;
+}
+
+function sanitizeErrorHandlerDiagnostics(
+  errorHandler: RunNodeErrorHandlerDiagnostics,
+  state: DiagnosticsRedactionState,
+): RunNodeErrorHandlerDiagnostics {
+  return {
+    ...errorHandler,
+    provider: sanitizeAndTruncateDiagnosticsString(errorHandler.provider, state),
+    model: sanitizeAndTruncateDiagnosticsString(errorHandler.model, state),
+    errorMessage: sanitizeAndTruncateDiagnosticsString(errorHandler.errorMessage, state),
+  };
+}
+
 export function buildDiagnosticEvents(
   events: ProviderEvent[],
   state: DiagnosticsRedactionState,
@@ -424,6 +453,8 @@ export function buildDiagnosticsPayload(params: {
   let droppedEventCount = eventBuild.droppedEventCount;
   let toolEvents = buildToolEventSummaries(retainedEvents);
   let errorDetails = params.error === null ? null : toDiagnosticErrorDetails(params.error, redactionState);
+  const sanitizedErrorHandler =
+    params.errorHandler === undefined ? undefined : sanitizeErrorHandlerDiagnostics(params.errorHandler, redactionState);
 
   const buildPayload = (): RunNodeDiagnosticsPayload => ({
     schemaVersion: RUN_NODE_DIAGNOSTICS_SCHEMA_VERSION,
@@ -456,7 +487,7 @@ export function buildDiagnosticsPayload(params: {
     toolEvents,
     routingDecision: params.routingDecision,
     error: errorDetails,
-    ...(params.errorHandler === undefined ? {} : { errorHandler: params.errorHandler }),
+    ...(sanitizedErrorHandler === undefined ? {} : { errorHandler: sanitizedErrorHandler }),
   });
 
   let payload = buildPayload();

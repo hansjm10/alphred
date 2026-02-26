@@ -2494,7 +2494,7 @@ describe('createSqlWorkflowExecutor', () => {
       resolveProvider: () => ({
         async *run(prompt: string, options: ProviderRunOptions): AsyncIterable<ProviderEvent> {
           if (prompt.startsWith('Analyze the following node execution failure.')) {
-            throw new Error('error-handler-failed');
+            throw new Error('error-handler-failed sk-ABCDEF1234567890');
           }
 
           nodeAttempt += 1;
@@ -2537,14 +2537,18 @@ describe('createSqlWorkflowExecutor', () => {
       .from(runNodeDiagnostics)
       .where(and(eq(runNodeDiagnostics.runNodeId, runNodeId), eq(runNodeDiagnostics.attempt, 1)))
       .get();
-    const payload = failureDiagnostics?.diagnostics as Record<string, unknown> | null;
+    const payload = failureDiagnostics?.diagnostics as {
+      summary?: { redacted: boolean };
+      errorHandler?: Record<string, unknown>;
+    } | null;
+    expect(payload?.summary?.redacted).toBe(true);
     expect(payload?.errorHandler).toEqual(
       expect.objectContaining({
         attempted: true,
         status: 'failed',
         sourceAttempt: 1,
         targetAttempt: 2,
-        errorMessage: 'error-handler-failed',
+        errorMessage: '[REDACTED]',
       }),
     );
   });
@@ -6813,6 +6817,67 @@ describe('createSqlWorkflowExecutor', () => {
     });
   });
 
+  it('halts immediate retry attempts when pause control is requested during retry error-handler execution', async () => {
+    const { db, runId, runNodeId } = seedSingleAgentRun('markdown', 1);
+    let nodeInvocationCount = 0;
+    let errorHandlerInvocationCount = 0;
+
+    const executor = createSqlWorkflowExecutor(db, {
+      resolveProvider: () => ({
+        async *run(prompt: string): AsyncIterable<ProviderEvent> {
+          if (prompt.startsWith('Analyze the following node execution failure.')) {
+            errorHandlerInvocationCount += 1;
+            await executor.pauseRun({
+              workflowRunId: runId,
+            });
+            yield { type: 'result', content: 'retry guidance', timestamp: 2 };
+            return;
+          }
+
+          nodeInvocationCount += 1;
+          throw new Error(`attempt-${nodeInvocationCount}-failed`);
+        },
+      }),
+    });
+
+    const result = await executor.executeRun({
+      workflowRunId: runId,
+      options: {
+        workingDirectory: '/tmp/alphred-worktree',
+      },
+    });
+
+    expect(result.finalStep).toEqual({
+      outcome: 'blocked',
+      workflowRunId: runId,
+      runStatus: 'paused',
+    });
+    expect(nodeInvocationCount).toBe(1);
+    expect(errorHandlerInvocationCount).toBe(1);
+
+    const persistedRunNode = db
+      .select({
+        status: runNodes.status,
+        attempt: runNodes.attempt,
+        startedAt: runNodes.startedAt,
+        completedAt: runNodes.completedAt,
+      })
+      .from(runNodes)
+      .where(eq(runNodes.id, runNodeId))
+      .get();
+    expect(persistedRunNode).toBeDefined();
+    if (!persistedRunNode) {
+      throw new Error('Expected persisted run-node row.');
+    }
+
+    expect(persistedRunNode).toEqual({
+      status: 'pending',
+      attempt: 2,
+      startedAt: null,
+      completedAt: null,
+    });
+  });
+
   it('keeps run cancelled when cancel control is requested during in-flight execution', async () => {
     const { db, runId, sourceRunNodeId, targetRunNodeId } = seedLinearAutoRun();
     let invocationCount = 0;
@@ -6909,6 +6974,61 @@ describe('createSqlWorkflowExecutor', () => {
       runStatus: 'cancelled',
     });
     expect(invocationCount).toBe(1);
+
+    const persistedRunNode = db
+      .select({
+        status: runNodes.status,
+        attempt: runNodes.attempt,
+      })
+      .from(runNodes)
+      .where(eq(runNodes.id, runNodeId))
+      .get();
+    expect(persistedRunNode).toBeDefined();
+    if (!persistedRunNode) {
+      throw new Error('Expected persisted run-node row.');
+    }
+
+    expect(persistedRunNode.status).toBe('failed');
+    expect(persistedRunNode.attempt).toBe(1);
+  });
+
+  it('halts immediate retry attempts when cancel control is requested during retry error-handler execution', async () => {
+    const { db, runId, runNodeId } = seedSingleAgentRun('markdown', 1);
+    let nodeInvocationCount = 0;
+    let errorHandlerInvocationCount = 0;
+
+    const executor = createSqlWorkflowExecutor(db, {
+      resolveProvider: () => ({
+        async *run(prompt: string): AsyncIterable<ProviderEvent> {
+          if (prompt.startsWith('Analyze the following node execution failure.')) {
+            errorHandlerInvocationCount += 1;
+            await executor.cancelRun({
+              workflowRunId: runId,
+            });
+            yield { type: 'result', content: 'retry guidance', timestamp: 2 };
+            return;
+          }
+
+          nodeInvocationCount += 1;
+          throw new Error(`attempt-${nodeInvocationCount}-failed`);
+        },
+      }),
+    });
+
+    const result = await executor.executeRun({
+      workflowRunId: runId,
+      options: {
+        workingDirectory: '/tmp/alphred-worktree',
+      },
+    });
+
+    expect(result.finalStep).toEqual({
+      outcome: 'run_terminal',
+      workflowRunId: runId,
+      runStatus: 'cancelled',
+    });
+    expect(nodeInvocationCount).toBe(1);
+    expect(errorHandlerInvocationCount).toBe(1);
 
     const persistedRunNode = db
       .select({

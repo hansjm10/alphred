@@ -504,13 +504,16 @@ export async function handleClaimedNodeFailure(
   } = params;
   const errorMessage = toErrorMessage(error);
   const persistedNodeStatus = loadRunNodeExecutionRowById(db, run.id, node.runNodeId).status;
-  const latestRunStatus = loadWorkflowRunRow(db, run.id).status;
+  let latestRunStatus = loadWorkflowRunRow(db, run.id).status;
   const retryEligible = allowRetries && persistedNodeStatus === 'running' && shouldRetryNodeAttempt(currentAttempt, node.maxRetries);
-  const canRetryImmediately = retryEligible && latestRunStatus === 'running';
-  const shouldDeferRetry = retryEligible && latestRunStatus === 'paused';
-  const canRetry = canRetryImmediately || shouldDeferRetry;
+  const canRetryImmediatelyAtFailure = retryEligible && latestRunStatus === 'running';
+  const shouldDeferRetryAtFailure = retryEligible && latestRunStatus === 'paused';
+  const canRetryAtFailure = canRetryImmediatelyAtFailure || shouldDeferRetryAtFailure;
+  let canRetryImmediately = canRetryImmediatelyAtFailure;
+  let shouldDeferRetry = shouldDeferRetryAtFailure;
+  let canRetry = canRetryAtFailure;
   const retriesRemaining = Math.max(node.maxRetries - currentAttempt, 0);
-  const failureReason = resolveFailureReason(persistedNodeStatus, canRetry);
+  const failureReason = resolveFailureReason(persistedNodeStatus, canRetryAtFailure);
 
   const artifactId = persistFailureArtifact(db, {
     workflowRunId: run.id,
@@ -539,7 +542,7 @@ export async function handleClaimedNodeFailure(
   }
 
   let errorHandlerDiagnostics: RunNodeErrorHandlerDiagnostics | undefined;
-  if (canRetry) {
+  if (canRetryAtFailure) {
     errorHandlerDiagnostics = await executeErrorHandlerForRetry(db, {
       run,
       node,
@@ -550,6 +553,10 @@ export async function handleClaimedNodeFailure(
       dependencies,
       options,
     });
+    latestRunStatus = loadWorkflowRunRow(db, run.id).status;
+    canRetryImmediately = retryEligible && latestRunStatus === 'running';
+    shouldDeferRetry = retryEligible && latestRunStatus === 'paused';
+    canRetry = canRetryImmediately || shouldDeferRetry;
   } else if (retryEligible && isTerminalWorkflowRunStatus(latestRunStatus)) {
     errorHandlerDiagnostics = buildSkippedErrorHandlerDiagnostics(currentAttempt, null);
   }
