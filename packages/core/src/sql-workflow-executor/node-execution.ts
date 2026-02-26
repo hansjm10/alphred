@@ -308,13 +308,13 @@ async function executeErrorHandlerForRetry(
     ...params.options,
     context: [...(params.options.context ?? []), contextEntry],
   };
-  const optionsWithExecutionPermissions = applyNodeExecutionPermissions(params.node, optionsWithContext);
-  const phaseOptions: ProviderRunOptions = {
-    ...optionsWithExecutionPermissions,
-    model: config.model,
-  };
 
   try {
+    const optionsWithExecutionPermissions = applyNodeExecutionPermissions(params.node, optionsWithContext);
+    const phaseOptions: ProviderRunOptions = {
+      ...optionsWithExecutionPermissions,
+      model: config.model,
+    };
     const result = await runPhase(phase, phaseOptions, {
       resolveProvider: params.dependencies.resolveProvider,
     });

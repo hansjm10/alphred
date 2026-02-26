@@ -5432,6 +5432,115 @@ describe('createSqlWorkflowExecutor', () => {
     );
   });
 
+  it('fails gracefully when retry error-handler setup hits malformed execution permissions', async () => {
+    const { db, runId, runNodeId } = seedSingleAgentRun('markdown', 1);
+    const runNode = db
+      .select({ treeNodeId: runNodes.treeNodeId })
+      .from(runNodes)
+      .where(eq(runNodes.id, runNodeId))
+      .get();
+    if (!runNode) {
+      throw new Error(`Expected run node id=${runNodeId} to exist.`);
+    }
+
+    db.update(treeNodes)
+      .set({
+        executionPermissions: { unsupported: true } as unknown as Record<string, unknown>,
+      })
+      .where(eq(treeNodes.id, runNode.treeNodeId))
+      .run();
+
+    const executor = createSqlWorkflowExecutor(db, {
+      resolveProvider: () =>
+        createProvider([
+          { type: 'result', content: 'ok', timestamp: 1 },
+        ]),
+    });
+
+    const result = await executor.executeRun({
+      workflowRunId: runId,
+      options: {
+        workingDirectory: '/tmp/alphred-worktree',
+      },
+    });
+
+    expect(result).toEqual({
+      workflowRunId: runId,
+      executedNodes: 1,
+      finalStep: {
+        outcome: 'run_terminal',
+        workflowRunId: runId,
+        runStatus: 'failed',
+      },
+    });
+
+    const persistedRunNode = db
+      .select({
+        status: runNodes.status,
+        attempt: runNodes.attempt,
+      })
+      .from(runNodes)
+      .where(eq(runNodes.id, runNodeId))
+      .get();
+    expect(persistedRunNode).toEqual({
+      status: 'failed',
+      attempt: 2,
+    });
+
+    const permissionsErrorMessage =
+      'Run node "design" execution permissions include unsupported field "unsupported".';
+    const artifacts = db
+      .select({
+        artifactType: phaseArtifacts.artifactType,
+        content: phaseArtifacts.content,
+        metadata: phaseArtifacts.metadata,
+      })
+      .from(phaseArtifacts)
+      .where(eq(phaseArtifacts.runNodeId, runNodeId))
+      .orderBy(asc(phaseArtifacts.id))
+      .all();
+
+    expect(artifacts).toHaveLength(2);
+    expect(artifacts[0]?.artifactType).toBe('log');
+    expect(artifacts[0]?.content).toContain(permissionsErrorMessage);
+    expect(artifacts[0]?.metadata).toEqual(
+      expect.objectContaining({
+        failureReason: 'retry_scheduled',
+        attempt: 1,
+        maxRetries: 1,
+      }),
+    );
+    expect(artifacts[1]?.artifactType).toBe('log');
+    expect(artifacts[1]?.content).toContain(permissionsErrorMessage);
+    expect(artifacts[1]?.metadata).toEqual(
+      expect.objectContaining({
+        failureReason: 'retry_limit_exceeded',
+        attempt: 2,
+        maxRetries: 1,
+      }),
+    );
+
+    const firstAttemptDiagnostics = db
+      .select({
+        diagnostics: runNodeDiagnostics.diagnostics,
+      })
+      .from(runNodeDiagnostics)
+      .where(and(eq(runNodeDiagnostics.runNodeId, runNodeId), eq(runNodeDiagnostics.attempt, 1)))
+      .get();
+    const diagnosticsPayload = firstAttemptDiagnostics?.diagnostics as {
+      errorHandler?: Record<string, unknown>;
+    } | null;
+    expect(diagnosticsPayload?.errorHandler).toEqual(
+      expect.objectContaining({
+        attempted: true,
+        status: 'failed',
+        sourceAttempt: 1,
+        targetAttempt: 2,
+        errorMessage: permissionsErrorMessage,
+      }),
+    );
+  });
+
   it('injects deterministic direct-predecessor report envelopes for linear downstream execution', async () => {
     const { db, runId } = seedBrainstormPickResearchRun();
     const capturedContexts: (string[] | undefined)[] = [];
