@@ -55,7 +55,7 @@ import {
   workflowRuns,
   workflowTrees,
 } from '@alphred/db';
-import { createSqlWorkflowExecutor } from './sqlWorkflowExecutor.js';
+import { createSqlWorkflowExecutor } from './sql-workflow-executor/index.js';
 
 function createProvider(events: ProviderEvent[]) {
   return {

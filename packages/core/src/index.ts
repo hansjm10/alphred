@@ -23,4 +23,4 @@ export {
   WorkflowRunControlError,
   type WorkflowRunControlParams,
   type WorkflowRunControlResult,
-} from './sqlWorkflowExecutor.js';
+} from './sql-workflow-executor/index.js';
