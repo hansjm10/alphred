@@ -55,8 +55,8 @@ const LAUNCH_RESULT_RUN_STATUSES = new Set<DashboardRunLaunchResult['runStatus']
   'failed',
   'cancelled',
 ]);
-const RUN_EXECUTION_SCOPES: readonly DashboardRunExecutionScope[] = ['full', 'single_node'];
-const NODE_SELECTOR_TYPES: readonly DashboardRunNodeSelector['type'][] = ['next_runnable', 'node_key'];
+const RUN_EXECUTION_SCOPE_SET = new Set<DashboardRunExecutionScope>(['full', 'single_node']);
+const NODE_SELECTOR_TYPE_SET = new Set<DashboardRunNodeSelector['type']>(['next_runnable', 'node_key']);
 
 function resolveApiErrorMessage(status: number, payload: unknown, fallbackPrefix: string): string {
   if (
@@ -265,6 +265,88 @@ function parseLaunchResult(payload: unknown): DashboardRunLaunchResult | null {
   };
 }
 
+function buildNodeSelectorPayload(
+  executionScope: DashboardRunExecutionScope,
+  nodeSelectorType: DashboardRunNodeSelector['type'],
+  nodeKey: string,
+): DashboardRunNodeSelector | undefined {
+  if (executionScope !== 'single_node') {
+    return undefined;
+  }
+
+  if (nodeSelectorType === 'node_key') {
+    return {
+      type: 'node_key',
+      nodeKey: nodeKey.trim(),
+    };
+  }
+
+  return {
+    type: 'next_runnable',
+  };
+}
+
+async function postLaunchRequest(params: {
+  selectedTreeKey: string;
+  selectedRepositoryName: string;
+  branch: string;
+  executionScope: DashboardRunExecutionScope;
+  nodeSelectorType: DashboardRunNodeSelector['type'];
+  nodeKey: string;
+}): Promise<DashboardRunLaunchResult> {
+  const selectorPayload = buildNodeSelectorPayload(params.executionScope, params.nodeSelectorType, params.nodeKey);
+  const response = await fetch('/api/dashboard/runs', {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify({
+      treeKey: params.selectedTreeKey,
+      repositoryName: params.selectedRepositoryName || undefined,
+      branch: params.branch.trim() || undefined,
+      executionMode: 'async',
+      executionScope: params.executionScope,
+      nodeSelector: selectorPayload,
+    }),
+  });
+  const payload = (await response.json().catch(() => null)) as unknown;
+  if (!response.ok) {
+    throw new Error(resolveApiErrorMessage(response.status, payload, 'Run launch failed'));
+  }
+
+  const parsedResult = parseLaunchResult(payload);
+  if (parsedResult === null) {
+    throw new Error('Run launch response was malformed.');
+  }
+  return parsedResult;
+}
+
+function toErrorMessage(error: unknown, fallback: string): string {
+  return error instanceof Error ? error.message : fallback;
+}
+
+async function resolvePostLaunchBannerState(
+  refreshRunState: () => Promise<readonly DashboardRunSummary[]>,
+  workflowRunId: number,
+): Promise<{ runStatus: DashboardRunSummary['status'] | null; launchRefreshWarning: string | null }> {
+  try {
+    const refreshedRuns = await refreshRunState();
+    const refreshedLaunchRun = refreshedRuns.find((run) => run.id === workflowRunId);
+    return {
+      runStatus: refreshedLaunchRun?.status ?? null,
+      launchRefreshWarning: null,
+    };
+  } catch (error) {
+    return {
+      runStatus: null,
+      launchRefreshWarning: `Run accepted, but lifecycle refresh failed: ${toErrorMessage(
+        error,
+        'Unable to refresh run lifecycle state.',
+      )}`,
+    };
+  }
+}
+
 export function RunsPageContent({
   runs,
   workflows,
@@ -426,66 +508,23 @@ export function RunsPageContent({
     setIsLaunching(true);
 
     try {
-      let selectorPayload: DashboardRunNodeSelector | undefined;
-      if (executionScope === 'single_node') {
-        if (nodeSelectorType === 'node_key') {
-          selectorPayload = {
-            type: 'node_key',
-            nodeKey: nodeKey.trim(),
-          };
-        } else {
-          selectorPayload = {
-            type: 'next_runnable',
-          };
-        }
-      }
-
-      const response = await fetch('/api/dashboard/runs', {
-        method: 'POST',
-        headers: {
-          'content-type': 'application/json',
-        },
-        body: JSON.stringify({
-          treeKey: selectedTreeKey,
-          repositoryName: selectedRepositoryName || undefined,
-          branch: branch.trim() || undefined,
-          executionMode: 'async',
-          executionScope,
-          nodeSelector: selectorPayload,
-        }),
+      const parsedResult = await postLaunchRequest({
+        selectedTreeKey,
+        selectedRepositoryName,
+        branch,
+        executionScope,
+        nodeSelectorType,
+        nodeKey,
       });
-      const payload = (await response.json().catch(() => null)) as unknown;
-      if (!response.ok) {
-        throw new Error(resolveApiErrorMessage(response.status, payload, 'Run launch failed'));
-      }
-
-      const parsedResult = parseLaunchResult(payload);
-      if (parsedResult === null) {
-        throw new Error('Run launch response was malformed.');
-      }
-
+      const postLaunchBanner = await resolvePostLaunchBannerState(refreshRunState, parsedResult.workflowRunId);
       setLaunchResult({
         workflowRunId: parsedResult.workflowRunId,
-        runStatus: null,
+        runStatus: postLaunchBanner.runStatus,
       });
-
-      try {
-        const refreshedRuns = await refreshRunState();
-        const refreshedLaunchRun = refreshedRuns.find((run) => run.id === parsedResult.workflowRunId);
-        if (refreshedLaunchRun) {
-          setLaunchResult({
-            workflowRunId: parsedResult.workflowRunId,
-            runStatus: refreshedLaunchRun.status,
-          });
-        }
-      } catch (error) {
-        const message = error instanceof Error ? error.message : 'Unable to refresh run lifecycle state.';
-        setLaunchRefreshWarning(`Run accepted, but lifecycle refresh failed: ${message}`);
-      }
+      setLaunchRefreshWarning(postLaunchBanner.launchRefreshWarning);
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Run launch failed.';
       setLaunchResult(null);
-      setLaunchError(message);
+      setLaunchError(toErrorMessage(error, 'Run launch failed.'));
     } finally {
       setIsLaunching(false);
     }
@@ -566,7 +605,7 @@ export function RunsPageContent({
                 disabled={launchBlockedReason !== null}
                 onChange={(event) => {
                   const nextValue = event.currentTarget.value as DashboardRunExecutionScope;
-                  if (!RUN_EXECUTION_SCOPES.includes(nextValue)) {
+                  if (!RUN_EXECUTION_SCOPE_SET.has(nextValue)) {
                     return;
                   }
                   setExecutionScope(nextValue);
@@ -586,7 +625,7 @@ export function RunsPageContent({
                   disabled={launchBlockedReason !== null}
                   onChange={(event) => {
                     const nextValue = event.currentTarget.value as DashboardRunNodeSelector['type'];
-                    if (!NODE_SELECTOR_TYPES.includes(nextValue)) {
+                    if (!NODE_SELECTOR_TYPE_SET.has(nextValue)) {
                       return;
                     }
                     setNodeSelectorType(nextValue);

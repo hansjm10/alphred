@@ -373,6 +373,111 @@ export function parseRepoAddConfig(options: ReadonlyMap<string, string>): {
   };
 }
 
+function runUsageFailure(io: Pick<CliIo, 'stderr'>, message: string): ParsedRunCommandInput {
+  return {
+    ok: false,
+    exitCode: usageError(io, message, RUN_USAGE),
+  };
+}
+
+function parseExecutionScopeOption(
+  options: ReadonlyMap<string, string>,
+  io: Pick<CliIo, 'stderr'>,
+):
+  | {
+      ok: true;
+      executionScope: 'full' | 'single_node';
+    }
+  | ParsedRunCommandInput {
+  const executionScopeOption = options.get('execution-scope');
+  if (executionScopeOption === undefined) {
+    return {
+      ok: true,
+      executionScope: 'full',
+    };
+  }
+
+  const normalizedScope = executionScopeOption.trim();
+  if (normalizedScope !== 'full' && normalizedScope !== 'single_node') {
+    return runUsageFailure(io, 'Option "--execution-scope" must be "full" or "single_node".');
+  }
+
+  return {
+    ok: true,
+    executionScope: normalizedScope,
+  };
+}
+
+function parseNodeSelectorOption(
+  options: ReadonlyMap<string, string>,
+  executionScope: 'full' | 'single_node',
+  io: Pick<CliIo, 'stderr'>,
+):
+  | {
+      ok: true;
+      nodeSelector: WorkflowRunNodeSelector | undefined;
+    }
+  | ParsedRunCommandInput {
+  const nodeSelectorOption = options.get('node-selector');
+  const nodeKeyOption = options.get('node-key');
+
+  if (executionScope !== 'single_node') {
+    if (nodeSelectorOption !== undefined) {
+      return runUsageFailure(
+        io,
+        'Option "--node-selector" requires "--execution-scope single_node".',
+      );
+    }
+
+    if (nodeKeyOption !== undefined) {
+      return runUsageFailure(io, 'Option "--node-key" requires "--execution-scope single_node".');
+    }
+
+    return {
+      ok: true,
+      nodeSelector: undefined,
+    };
+  }
+
+  const normalizedSelector = nodeSelectorOption?.trim();
+  const selectorType =
+    normalizedSelector === undefined || normalizedSelector.length === 0
+      ? 'next_runnable'
+      : normalizedSelector;
+  if (selectorType !== 'next_runnable' && selectorType !== 'node_key') {
+    return runUsageFailure(io, 'Option "--node-selector" must be "next_runnable" or "node_key".');
+  }
+
+  if (selectorType === 'node_key') {
+    const normalizedNodeKey = nodeKeyOption?.trim();
+    if (!normalizedNodeKey) {
+      return runUsageFailure(
+        io,
+        'Option "--node-key" is required when "--node-selector node_key" is used.',
+      );
+    }
+
+    return {
+      ok: true,
+      nodeSelector: {
+        type: 'node_key',
+        nodeKey: normalizedNodeKey,
+      },
+    };
+  }
+
+  if (nodeKeyOption !== undefined) {
+    return runUsageFailure(io, 'Option "--node-key" requires "--node-selector node_key".');
+  }
+
+  return {
+    ok: true,
+    nodeSelector: {
+      type: 'next_runnable',
+    },
+  };
+}
+
 export function parseRunCommandInput(rawArgs: readonly string[], io: CliIo): ParsedRunCommandInput {
   const parsedOptions = validateCommandOptions(
     rawArgs,
@@ -410,90 +515,24 @@ export function parseRunCommandInput(rawArgs: readonly string[], io: CliIo): Par
   const branchOption = parsedOptions.options.get('branch');
   const branchOverride = branchOption?.trim();
   if (branchOption !== undefined && branchOverride === '') {
-    return {
-      ok: false,
-      exitCode: usageError(io, 'Option "--branch" requires a value.', RUN_USAGE),
-    };
+    return runUsageFailure(io, 'Option "--branch" requires a value.');
   }
 
   if (branchOverride && !repoInput) {
-    return {
-      ok: false,
-      exitCode: usageError(io, 'Option "--branch" requires "--repo".', RUN_USAGE),
-    };
+    return runUsageFailure(io, 'Option "--branch" requires "--repo".');
   }
 
-  const executionScopeOption = parsedOptions.options.get('execution-scope');
-  let executionScope: 'full' | 'single_node' = 'full';
-  if (executionScopeOption !== undefined) {
-    const normalizedScope = executionScopeOption.trim();
-    if (normalizedScope !== 'full' && normalizedScope !== 'single_node') {
-      return {
-        ok: false,
-        exitCode: usageError(io, 'Option "--execution-scope" must be "full" or "single_node".', RUN_USAGE),
-      };
-    }
-    executionScope = normalizedScope;
+  const executionScopeResult = parseExecutionScopeOption(parsedOptions.options, io);
+  if (!executionScopeResult.ok) {
+    return executionScopeResult;
   }
+  const { executionScope } = executionScopeResult;
 
-  const nodeSelectorOption = parsedOptions.options.get('node-selector');
-  const nodeKeyOption = parsedOptions.options.get('node-key');
-  if (executionScope !== 'single_node' && nodeSelectorOption !== undefined) {
-    return {
-      ok: false,
-      exitCode: usageError(
-        io,
-        'Option "--node-selector" requires "--execution-scope single_node".',
-        RUN_USAGE,
-      ),
-    };
+  const nodeSelectorResult = parseNodeSelectorOption(parsedOptions.options, executionScope, io);
+  if (!nodeSelectorResult.ok) {
+    return nodeSelectorResult;
   }
-  if (executionScope !== 'single_node' && nodeKeyOption !== undefined) {
-    return {
-      ok: false,
-      exitCode: usageError(io, 'Option "--node-key" requires "--execution-scope single_node".', RUN_USAGE),
-    };
-  }
-
-  let nodeSelector: WorkflowRunNodeSelector | undefined;
-  if (executionScope === 'single_node') {
-    const normalizedSelector = nodeSelectorOption?.trim();
-    const selectorType = normalizedSelector === undefined || normalizedSelector.length === 0 ? 'next_runnable' : normalizedSelector;
-    if (selectorType !== 'next_runnable' && selectorType !== 'node_key') {
-      return {
-        ok: false,
-        exitCode: usageError(io, 'Option "--node-selector" must be "next_runnable" or "node_key".', RUN_USAGE),
-      };
-    }
-
-    if (selectorType === 'node_key') {
-      const normalizedNodeKey = nodeKeyOption?.trim();
-      if (!normalizedNodeKey) {
-        return {
-          ok: false,
-          exitCode: usageError(io, 'Option "--node-key" is required when "--node-selector node_key" is used.', RUN_USAGE),
-        };
-      }
-
-      nodeSelector = {
-        type: 'node_key',
-        nodeKey: normalizedNodeKey,
-      };
-    } else {
-      if (nodeKeyOption !== undefined) {
-        return {
-          ok: false,
-          exitCode: usageError(io, 'Option "--node-key" requires "--node-selector node_key".', RUN_USAGE),
-        };
-      }
-
-      nodeSelector = {
-        type: 'next_runnable',
-      };
-    }
-  } else {
-    nodeSelector = undefined;
-  }
+  const { nodeSelector } = nodeSelectorResult;
 
   return {
     ok: true,

@@ -349,17 +349,29 @@ export function handleClaimedNodeFailure(
 }
 
 export async function executeClaimedRunnableNode(
-  db: AlphredDatabase,
-  dependencies: SqlWorkflowExecutorDependencies,
-  run: WorkflowRunRow,
-  node: RunNodeExecutionRow,
-  edgeRows: EdgeRow[],
-  options: ProviderRunOptions,
-  runStatus: WorkflowRunStatus,
-  executionOptions: {
-    allowRetries?: boolean;
-  } = {},
+  params: {
+    db: AlphredDatabase;
+    dependencies: SqlWorkflowExecutorDependencies;
+    run: WorkflowRunRow;
+    node: RunNodeExecutionRow;
+    edgeRows: EdgeRow[];
+    options: ProviderRunOptions;
+    runStatus: WorkflowRunStatus;
+    executionOptions?: {
+      allowRetries?: boolean;
+    };
+  },
 ): Promise<ExecuteNextRunnableNodeResult> {
+  const {
+    db,
+    dependencies,
+    run,
+    node,
+    edgeRows,
+    options,
+    runStatus,
+    executionOptions = {},
+  } = params;
   let currentRunStatus = runStatus;
   let currentAttempt = node.attempt;
   const allowRetries = executionOptions.allowRetries ?? true;

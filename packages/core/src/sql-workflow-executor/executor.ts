@@ -86,12 +86,12 @@ function resolveSingleNodeTarget(params: {
       return params.nextRunnableNode;
     }
 
-    const reason =
-      params.hasNoRouteDecision
-        ? 'a prior node produced a no_route decision.'
-        : params.hasUnresolvedDecision
-          ? 'a prior node has an unresolved routing decision.'
-          : 'no runnable node is currently available.';
+    let reason = 'no runnable node is currently available.';
+    if (params.hasNoRouteDecision) {
+      reason = 'a prior node produced a no_route decision.';
+    } else if (params.hasUnresolvedDecision) {
+      reason = 'a prior node has an unresolved routing decision.';
+    }
 
     throwSingleNodeNotExecutableError(
       params.workflowRunId,
@@ -300,18 +300,18 @@ export function createSqlWorkflowExecutor(
       }
 
       const claimedNode = loadRunNodeExecutionRowById(db, currentRun.id, selectedNode.runNodeId);
-      const stepResult = await executeClaimedRunnableNode(
+      const stepResult = await executeClaimedRunnableNode({
         db,
         dependencies,
-        currentRun,
-        claimedNode,
+        run: currentRun,
+        node: claimedNode,
         edgeRows,
-        params.options,
+        options: params.options,
         runStatus,
-        {
+        executionOptions: {
           allowRetries: false,
         },
-      );
+      });
 
       if (stepResult.outcome !== 'executed') {
         await notifyRunTerminalTransition(dependencies, {
@@ -451,15 +451,15 @@ export function createSqlWorkflowExecutor(
       }
 
       const claimedNode = loadRunNodeExecutionRowById(db, currentRun.id, nextRunnableNode.runNodeId);
-      const result = await executeClaimedRunnableNode(
+      const result = await executeClaimedRunnableNode({
         db,
         dependencies,
-        currentRun,
-        claimedNode,
+        run: currentRun,
+        node: claimedNode,
         edgeRows,
-        params.options,
+        options: params.options,
         runStatus,
-      );
+      });
       await notifyRunTerminalTransition(dependencies, {
         workflowRunId: currentRun.id,
         previousRunStatus: resolveExecutionTerminalNotificationPreviousStatus(currentRun.status, result.runStatus),
