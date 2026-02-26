@@ -428,6 +428,423 @@ function navigateOnRunRowKey(event: { key: string; preventDefault: () => void },
   onNavigate();
 }
 
+type RunLaunchControlsProps = Readonly<{
+  workflows: readonly DashboardWorkflowTreeSummary[];
+  clonedRepositories: readonly DashboardRepositoryState[];
+  authGate: GitHubAuthGate;
+  launchBlockedReason: string | null;
+  selectedTreeKey: string;
+  selectedRepositoryName: string;
+  branch: string;
+  executionScope: DashboardRunExecutionScope;
+  nodeSelectorType: DashboardRunNodeSelector['type'];
+  nodeKey: string;
+  launchDisabled: boolean;
+  launchButtonLabel: string;
+  launchError: string | null;
+  launchRefreshWarning: string | null;
+  launchResult: LaunchBannerState | null;
+  onSelectTreeKey: (treeKey: string) => void;
+  onSelectRepositoryName: (repositoryName: string) => void;
+  onBranchChange: (branch: string) => void;
+  onExecutionScopeChange: (scope: string) => void;
+  onNodeSelectorTypeChange: (selectorType: string) => void;
+  onNodeKeyChange: (nodeKey: string) => void;
+  onLaunchRun: () => Promise<void>;
+}>;
+
+function RunLaunchControls({
+  workflows,
+  clonedRepositories,
+  authGate,
+  launchBlockedReason,
+  selectedTreeKey,
+  selectedRepositoryName,
+  branch,
+  executionScope,
+  nodeSelectorType,
+  nodeKey,
+  launchDisabled,
+  launchButtonLabel,
+  launchError,
+  launchRefreshWarning,
+  launchResult,
+  onSelectTreeKey,
+  onSelectRepositoryName,
+  onBranchChange,
+  onExecutionScopeChange,
+  onNodeSelectorTypeChange,
+  onNodeKeyChange,
+  onLaunchRun,
+}: RunLaunchControlsProps) {
+  return (
+    <>
+      <Card title="Launch run" description="Tree selection + repository context where applicable.">
+        <form
+          className="run-launch-form"
+          onSubmit={(event) => {
+            event.preventDefault();
+            void onLaunchRun();
+          }}
+        >
+          <label className="run-launch-form__field" htmlFor="run-launch-workflow">
+            <span className="meta-text">Workflow</span>
+            <select
+              id="run-launch-workflow"
+              value={selectedTreeKey}
+              disabled={launchBlockedReason !== null || workflows.length === 0}
+              onChange={(event) => {
+                onSelectTreeKey(event.currentTarget.value);
+              }}
+            >
+              {workflows.length === 0 ? <option value="">No workflows available</option> : null}
+              {workflows.map((workflow) => (
+                <option key={`${workflow.treeKey}-${workflow.id}`} value={workflow.treeKey}>
+                  {workflow.name}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <label className="run-launch-form__field" htmlFor="run-launch-repository">
+            <span className="meta-text">Repository context</span>
+            <select
+              id="run-launch-repository"
+              value={selectedRepositoryName}
+              disabled={launchBlockedReason !== null}
+              onChange={(event) => {
+                onSelectRepositoryName(event.currentTarget.value);
+              }}
+            >
+              <option value="">No repository context</option>
+              {clonedRepositories.map((repository) => (
+                <option key={repository.id} value={repository.name}>
+                  {repository.name}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <label className="run-launch-form__field" htmlFor="run-launch-branch">
+            <span className="meta-text">Branch (optional)</span>
+            <input
+              id="run-launch-branch"
+              value={branch}
+              disabled={launchBlockedReason !== null || selectedRepositoryName.length === 0}
+              onChange={(event) => {
+                onBranchChange(event.currentTarget.value);
+              }}
+              placeholder="feature/dashboard-run-control"
+            />
+          </label>
+
+          <label className="run-launch-form__field" htmlFor="run-launch-execution-scope">
+            <span className="meta-text">Execution scope</span>
+            <select
+              id="run-launch-execution-scope"
+              value={executionScope}
+              disabled={launchBlockedReason !== null}
+              onChange={(event) => {
+                onExecutionScopeChange(event.currentTarget.value);
+              }}
+            >
+              <option value="full">Full workflow</option>
+              <option value="single_node">Single node</option>
+            </select>
+          </label>
+
+          {executionScope === 'single_node' ? (
+            <label className="run-launch-form__field" htmlFor="run-launch-node-selector">
+              <span className="meta-text">Node selector</span>
+              <select
+                id="run-launch-node-selector"
+                value={nodeSelectorType}
+                disabled={launchBlockedReason !== null}
+                onChange={(event) => {
+                  onNodeSelectorTypeChange(event.currentTarget.value);
+                }}
+              >
+                <option value="next_runnable">Next runnable</option>
+                <option value="node_key">Node key</option>
+              </select>
+            </label>
+          ) : null}
+
+          {executionScope === 'single_node' && nodeSelectorType === 'node_key' ? (
+            <label className="run-launch-form__field" htmlFor="run-launch-node-key">
+              <span className="meta-text">Node key</span>
+              <input
+                id="run-launch-node-key"
+                value={nodeKey}
+                disabled={launchBlockedReason !== null}
+                onChange={(event) => {
+                  onNodeKeyChange(event.currentTarget.value);
+                }}
+                placeholder="design"
+              />
+            </label>
+          ) : null}
+
+          <div className="action-row">
+            <ActionButton tone="primary" type="submit" disabled={launchDisabled} aria-disabled={launchDisabled}>
+              {launchButtonLabel}
+            </ActionButton>
+            <span className="meta-text">
+              {executionScope === 'single_node'
+                ? 'Launch runs one node attempt, then terminalizes the run.'
+                : 'Launch defaults to async mode.'}
+            </span>
+          </div>
+        </form>
+
+        {launchBlockedReason ? <p className="meta-text">{launchBlockedReason}</p> : null}
+        {launchError ? (
+          <p className="run-launch-banner run-launch-banner--error" role="alert">
+            {launchError}
+          </p>
+        ) : null}
+        {launchResult ? (
+          <output className="run-launch-banner run-launch-banner--success" aria-live="polite">
+            {launchResult.runStatus === null
+              ? `Run #${launchResult.workflowRunId} accepted. `
+              : `Run #${launchResult.workflowRunId} accepted. Current status: ${launchResult.runStatus}. `}
+            <Link className="run-inline-link" href={`/runs/${launchResult.workflowRunId}`}>
+              Open run detail
+            </Link>
+            {launchRefreshWarning ? <span className="run-launch-banner__note">{` ${launchRefreshWarning}`}</span> : null}
+          </output>
+        ) : null}
+      </Card>
+
+      <Panel title="Launch readiness" description="Invalid actions are blocked and paired with remediation.">
+        <ul className="entity-list">
+          <li>
+            <span>GitHub auth</span>
+            <StatusBadge status={authGate.badge.status} label={authGate.badge.label} />
+          </li>
+          <li>
+            <span>Workflow trees</span>
+            <span className="meta-text">{workflows.length}</span>
+          </li>
+          <li>
+            <span>Launch-ready repos</span>
+            <span className="meta-text">{clonedRepositories.length}</span>
+          </li>
+        </ul>
+        <AuthRemediation
+          authGate={authGate}
+          context="Run launch is blocked until GitHub authentication is available."
+        />
+      </Panel>
+    </>
+  );
+}
+
+type RunsOverviewCardProps = Readonly<{
+  workflows: readonly DashboardWorkflowTreeSummary[];
+  clonedRepositories: readonly DashboardRepositoryState[];
+  normalizedFilter: RunRouteFilter;
+  activeRepositoryName: string | null;
+  activeWorkflowKey: string | null;
+  activeWindow: RunRouteTimeWindow;
+  hasActiveFilters: boolean;
+  runFilterTabs: readonly TabItem[];
+  activeHref: string;
+  visibleRuns: readonly DashboardRunSummary[];
+  activeRunCount: number;
+  failureCount24h: number;
+  medianDurationLabel: string;
+  onNavigate: (href: string) => void;
+}>;
+
+function RunsOverviewCard({
+  workflows,
+  clonedRepositories,
+  normalizedFilter,
+  activeRepositoryName,
+  activeWorkflowKey,
+  activeWindow,
+  hasActiveFilters,
+  runFilterTabs,
+  activeHref,
+  visibleRuns,
+  activeRunCount,
+  failureCount24h,
+  medianDurationLabel,
+  onNavigate,
+}: RunsOverviewCardProps) {
+  return (
+    <Card title="Runs" description="Filter run activity and open detail timelines.">
+      <section className="run-filter-bar" aria-label="Run filters">
+        <div className="run-filter-bar__fields">
+          <label className="run-filter-bar__field" htmlFor="runs-filter-workflow">
+            <span className="meta-text">Workflow filter</span>
+            <select
+              id="runs-filter-workflow"
+              value={activeWorkflowKey ?? ''}
+              onChange={(event) => {
+                const workflow = event.currentTarget.value.trim();
+                onNavigate(buildRunsListHref({
+                  status: normalizedFilter,
+                  workflow: workflow.length === 0 ? null : workflow,
+                  repository: activeRepositoryName,
+                  window: activeWindow,
+                }));
+              }}
+            >
+              <option value="">All workflows</option>
+              {workflows.map((workflow) => (
+                <option key={`${workflow.treeKey}-${workflow.id}`} value={workflow.treeKey}>
+                  {workflow.name}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <label className="run-filter-bar__field" htmlFor="runs-filter-repository">
+            <span className="meta-text">Repository filter</span>
+            <select
+              id="runs-filter-repository"
+              value={activeRepositoryName ?? ''}
+              onChange={(event) => {
+                const repository = event.currentTarget.value.trim();
+                onNavigate(buildRunsListHref({
+                  status: normalizedFilter,
+                  workflow: activeWorkflowKey,
+                  repository: repository.length === 0 ? null : repository,
+                  window: activeWindow,
+                }));
+              }}
+            >
+              <option value="">All repositories</option>
+              {clonedRepositories.map((repository) => (
+                <option key={repository.id} value={repository.name}>
+                  {repository.name}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <label className="run-filter-bar__field" htmlFor="runs-filter-window">
+            <span className="meta-text">Time window</span>
+            <select
+              id="runs-filter-window"
+              value={activeWindow}
+              onChange={(event) => {
+                onNavigate(buildRunsListHref({
+                  status: normalizedFilter,
+                  workflow: activeWorkflowKey,
+                  repository: activeRepositoryName,
+                  window: event.currentTarget.value as RunRouteTimeWindow,
+                }));
+              }}
+            >
+              <option value="all">All time</option>
+              <option value="24h">Last 24h</option>
+              <option value="7d">Last 7d</option>
+              <option value="30d">Last 30d</option>
+            </select>
+          </label>
+        </div>
+
+        {hasActiveFilters ? (
+          <div className="action-row">
+            <Link className="button-link button-link--secondary" href="/runs">
+              Clear Filters
+            </Link>
+          </div>
+        ) : null}
+      </section>
+
+      <Tabs items={runFilterTabs} activeHref={activeHref} ariaLabel="Run status filters" />
+
+      {visibleRuns.length === 0 ? (
+        <div className="page-stack">
+          <p>{hasActiveFilters ? 'No runs match these filters.' : 'No runs are available yet.'}</p>
+          {hasActiveFilters ? (
+            <div className="action-row">
+              <Link className="button-link button-link--secondary" href="/runs">
+                Clear Filters
+              </Link>
+            </div>
+          ) : null}
+        </div>
+      ) : (
+        <div className="runs-table-wrapper">
+          <table className="runs-table runs-table--clickable">
+            <thead>
+              <tr>
+                <th scope="col">Run</th>
+                <th scope="col">Repository</th>
+                <th scope="col">Status</th>
+                <th scope="col">Started</th>
+                <th scope="col">Completed</th>
+                <th scope="col">Node lifecycle</th>
+                <th scope="col">Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {visibleRuns.map((run) => (
+                <tr
+                  key={run.id}
+                  className="runs-table__row"
+                  tabIndex={0}
+                  onClick={() => {
+                    onNavigate(`/runs/${run.id}`);
+                  }}
+                  onKeyDown={(event) => {
+                    navigateOnRunRowKey(event, () => {
+                      onNavigate(`/runs/${run.id}`);
+                    });
+                  }}
+                >
+                  <td>
+                    <p>{`#${run.id} ${run.tree.name}`}</p>
+                    <p className="meta-text">{run.tree.treeKey}</p>
+                  </td>
+                  <td className="meta-text">{run.repository?.name ?? 'Not attached'}</td>
+                  <td>
+                    <StatusBadge status={run.status} />
+                  </td>
+                  <td className="meta-text">{normalizeDateTimeLabel(run.startedAt, 'Not started')}</td>
+                  <td className="meta-text">{normalizeDateTimeLabel(run.completedAt, 'In progress')}</td>
+                  <td className="meta-text">{formatNodeSummary(run)}</td>
+                  <td>
+                    <Link
+                      className="button-link button-link--secondary"
+                      href={`/runs/${run.id}`}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                      }}
+                    >
+                      Open
+                    </Link>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      <dl className="run-kpi-strip" aria-label="Run KPIs">
+        <div className="run-kpi-strip__item">
+          <dt>Active</dt>
+          <dd>{activeRunCount}</dd>
+        </div>
+        <div className="run-kpi-strip__item">
+          <dt>Failures (24h)</dt>
+          <dd>{failureCount24h}</dd>
+        </div>
+        <div className="run-kpi-strip__item">
+          <dt>Median duration</dt>
+          <dd>{medianDurationLabel}</dd>
+        </div>
+      </dl>
+    </Card>
+  );
+}
+
 export function RunsPageContent({
   runs,
   workflows,
@@ -518,12 +935,7 @@ export function RunsPageContent({
   );
 
   const failureCount24h = useMemo(() => countFailureRuns24h(filteredRunsForKpis, nowMs), [filteredRunsForKpis, nowMs]);
-
-  const medianDurationLabel = useMemo(
-    () => resolveMedianDurationLabel(filteredRunsForKpis),
-    [filteredRunsForKpis],
-  );
-
+  const medianDurationLabel = useMemo(() => resolveMedianDurationLabel(filteredRunsForKpis), [filteredRunsForKpis]);
   const hasActiveFilters =
     normalizedFilter !== 'all' ||
     activeWorkflowKey !== null ||
@@ -585,340 +997,54 @@ export function RunsPageContent({
       </section>
 
       <div className="page-grid">
-        <Card title="Launch run" description="Tree selection + repository context where applicable.">
-          <form
-            className="run-launch-form"
-            onSubmit={(event) => {
-              event.preventDefault();
-              void handleLaunchRun();
-            }}
-          >
-            <label className="run-launch-form__field" htmlFor="run-launch-workflow">
-              <span className="meta-text">Workflow</span>
-              <select
-                id="run-launch-workflow"
-                value={selectedTreeKey}
-                disabled={launchBlockedReason !== null || workflows.length === 0}
-                onChange={(event) => {
-                  setSelectedTreeKey(event.currentTarget.value);
-                }}
-              >
-                {workflows.length === 0 ? <option value="">No workflows available</option> : null}
-                {workflows.map((workflow) => (
-                  <option key={`${workflow.treeKey}-${workflow.id}`} value={workflow.treeKey}>
-                    {workflow.name}
-                  </option>
-                ))}
-              </select>
-            </label>
+        <RunLaunchControls
+          workflows={workflows}
+          clonedRepositories={clonedRepositories}
+          authGate={authGate}
+          launchBlockedReason={launchBlockedReason}
+          selectedTreeKey={selectedTreeKey}
+          selectedRepositoryName={selectedRepositoryName}
+          branch={branch}
+          executionScope={executionScope}
+          nodeSelectorType={nodeSelectorType}
+          nodeKey={nodeKey}
+          launchDisabled={launchDisabled}
+          launchButtonLabel={launchButtonLabel}
+          launchError={launchError}
+          launchRefreshWarning={launchRefreshWarning}
+          launchResult={launchResult}
+          onSelectTreeKey={setSelectedTreeKey}
+          onSelectRepositoryName={setSelectedRepositoryName}
+          onBranchChange={setBranch}
+          onExecutionScopeChange={(scope) => {
+            selectExecutionScope(scope, setExecutionScope);
+          }}
+          onNodeSelectorTypeChange={(selectorType) => {
+            selectNodeSelectorType(selectorType, setNodeSelectorType);
+          }}
+          onNodeKeyChange={setNodeKey}
+          onLaunchRun={handleLaunchRun}
+        />
+      </div>
 
-            <label className="run-launch-form__field" htmlFor="run-launch-repository">
-              <span className="meta-text">Repository context</span>
-              <select
-                id="run-launch-repository"
-                value={selectedRepositoryName}
-                disabled={launchBlockedReason !== null}
-                onChange={(event) => {
-                  setSelectedRepositoryName(event.currentTarget.value);
-                }}
-              >
-                <option value="">No repository context</option>
-                {clonedRepositories.map((repository) => (
-                  <option key={repository.id} value={repository.name}>
-                    {repository.name}
-                  </option>
-                ))}
-              </select>
-            </label>
-
-            <label className="run-launch-form__field" htmlFor="run-launch-branch">
-              <span className="meta-text">Branch (optional)</span>
-              <input
-                id="run-launch-branch"
-                value={branch}
-                disabled={launchBlockedReason !== null || selectedRepositoryName.length === 0}
-                onChange={(event) => {
-                  setBranch(event.currentTarget.value);
-                }}
-                placeholder="feature/dashboard-run-control"
-              />
-            </label>
-
-            <label className="run-launch-form__field" htmlFor="run-launch-execution-scope">
-              <span className="meta-text">Execution scope</span>
-              <select
-                id="run-launch-execution-scope"
-                value={executionScope}
-                disabled={launchBlockedReason !== null}
-                onChange={(event) => {
-                  selectExecutionScope(event.currentTarget.value, setExecutionScope);
-                }}
-              >
-                <option value="full">Full workflow</option>
-                <option value="single_node">Single node</option>
-              </select>
-            </label>
-
-            {executionScope === 'single_node' ? (
-              <label className="run-launch-form__field" htmlFor="run-launch-node-selector">
-                <span className="meta-text">Node selector</span>
-                <select
-                  id="run-launch-node-selector"
-                  value={nodeSelectorType}
-                  disabled={launchBlockedReason !== null}
-                  onChange={(event) => {
-                    selectNodeSelectorType(event.currentTarget.value, setNodeSelectorType);
-                  }}
-                >
-                  <option value="next_runnable">Next runnable</option>
-                  <option value="node_key">Node key</option>
-                </select>
-              </label>
-            ) : null}
-
-            {executionScope === 'single_node' && nodeSelectorType === 'node_key' ? (
-              <label className="run-launch-form__field" htmlFor="run-launch-node-key">
-                <span className="meta-text">Node key</span>
-                <input
-                  id="run-launch-node-key"
-                  value={nodeKey}
-                  disabled={launchBlockedReason !== null}
-                  onChange={(event) => {
-                    setNodeKey(event.currentTarget.value);
-                  }}
-                  placeholder="design"
-                />
-              </label>
-            ) : null}
-
-            <div className="action-row">
-              <ActionButton
-                tone="primary"
-                type="submit"
-                disabled={launchDisabled}
-                aria-disabled={launchDisabled}
-              >
-                {launchButtonLabel}
-              </ActionButton>
-              <span className="meta-text">
-                {executionScope === 'single_node'
-                  ? 'Launch runs one node attempt, then terminalizes the run.'
-                  : 'Launch defaults to async mode.'}
-              </span>
-            </div>
-          </form>
-
-          {launchBlockedReason ? <p className="meta-text">{launchBlockedReason}</p> : null}
-          {launchError ? (
-            <p className="run-launch-banner run-launch-banner--error" role="alert">
-              {launchError}
-            </p>
-          ) : null}
-          {launchResult ? (
-            <output className="run-launch-banner run-launch-banner--success" aria-live="polite">
-              {launchResult.runStatus === null
-                ? `Run #${launchResult.workflowRunId} accepted. `
-                : `Run #${launchResult.workflowRunId} accepted. Current status: ${launchResult.runStatus}. `}
-              <Link className="run-inline-link" href={`/runs/${launchResult.workflowRunId}`}>
-                Open run detail
-              </Link>
-              {launchRefreshWarning ? (
-                <span className="run-launch-banner__note">{` ${launchRefreshWarning}`}</span>
-              ) : null}
-            </output>
-          ) : null}
-        </Card>
-
-        <Panel title="Launch readiness" description="Invalid actions are blocked and paired with remediation.">
-          <ul className="entity-list">
-            <li>
-              <span>GitHub auth</span>
-              <StatusBadge status={authGate.badge.status} label={authGate.badge.label} />
-            </li>
-            <li>
-              <span>Workflow trees</span>
-              <span className="meta-text">{workflows.length}</span>
-            </li>
-            <li>
-              <span>Launch-ready repos</span>
-              <span className="meta-text">{clonedRepositories.length}</span>
-            </li>
-          </ul>
-          <AuthRemediation
-            authGate={authGate}
-            context="Run launch is blocked until GitHub authentication is available."
-          />
-        </Panel>
-	      </div>
-
-		      <Card title="Runs" description="Filter run activity and open detail timelines.">
-		        <section className="run-filter-bar" aria-label="Run filters">
-		          <div className="run-filter-bar__fields">
-		            <label className="run-filter-bar__field" htmlFor="runs-filter-workflow">
-		              <span className="meta-text">Workflow filter</span>
-		              <select
-	                id="runs-filter-workflow"
-	                value={activeWorkflowKey ?? ''}
-	                onChange={(event) => {
-	                  const workflow = event.currentTarget.value.trim();
-	                  router.push(buildRunsListHref({
-	                    status: normalizedFilter,
-	                    workflow: workflow.length === 0 ? null : workflow,
-	                    repository: activeRepositoryName,
-	                    window: activeWindow,
-	                  }));
-	                }}
-	              >
-	                <option value="">All workflows</option>
-	                {workflows.map((workflow) => (
-	                  <option key={`${workflow.treeKey}-${workflow.id}`} value={workflow.treeKey}>
-	                    {workflow.name}
-	                  </option>
-	                ))}
-	              </select>
-	            </label>
-
-	            <label className="run-filter-bar__field" htmlFor="runs-filter-repository">
-	              <span className="meta-text">Repository filter</span>
-	              <select
-	                id="runs-filter-repository"
-	                value={activeRepositoryName ?? ''}
-	                onChange={(event) => {
-	                  const repository = event.currentTarget.value.trim();
-	                  router.push(buildRunsListHref({
-	                    status: normalizedFilter,
-	                    workflow: activeWorkflowKey,
-	                    repository: repository.length === 0 ? null : repository,
-	                    window: activeWindow,
-	                  }));
-	                }}
-	              >
-	                <option value="">All repositories</option>
-	                {clonedRepositories.map((repository) => (
-	                  <option key={repository.id} value={repository.name}>
-	                    {repository.name}
-	                  </option>
-	                ))}
-	              </select>
-	            </label>
-
-	            <label className="run-filter-bar__field" htmlFor="runs-filter-window">
-	              <span className="meta-text">Time window</span>
-	              <select
-	                id="runs-filter-window"
-	                value={activeWindow}
-	                onChange={(event) => {
-	                  router.push(buildRunsListHref({
-	                    status: normalizedFilter,
-	                    workflow: activeWorkflowKey,
-	                    repository: activeRepositoryName,
-	                    window: event.currentTarget.value as RunRouteTimeWindow,
-	                  }));
-	                }}
-	              >
-	                <option value="all">All time</option>
-	                <option value="24h">Last 24h</option>
-	                <option value="7d">Last 7d</option>
-	                <option value="30d">Last 30d</option>
-	              </select>
-	            </label>
-	          </div>
-
-		          {hasActiveFilters ? (
-		            <div className="action-row">
-		              <Link className="button-link button-link--secondary" href="/runs">
-		                Clear Filters
-		              </Link>
-		            </div>
-		          ) : null}
-		        </section>
-
-	        <Tabs items={runFilterTabs} activeHref={activeHref} ariaLabel="Run status filters" />
-
-	        {visibleRuns.length === 0 ? (
-	          <div className="page-stack">
-	            <p>{hasActiveFilters ? 'No runs match these filters.' : 'No runs are available yet.'}</p>
-	            {hasActiveFilters ? (
-	              <div className="action-row">
-	                <Link className="button-link button-link--secondary" href="/runs">
-	                  Clear Filters
-	                </Link>
-	              </div>
-	            ) : null}
-	          </div>
-	        ) : (
-	          <div className="runs-table-wrapper">
-	            <table className="runs-table runs-table--clickable">
-	              <thead>
-	                <tr>
-	                  <th scope="col">Run</th>
-	                  <th scope="col">Repository</th>
-	                  <th scope="col">Status</th>
-                  <th scope="col">Started</th>
-                  <th scope="col">Completed</th>
-                  <th scope="col">Node lifecycle</th>
-                  <th scope="col">Actions</th>
-                </tr>
-	              </thead>
-	              <tbody>
-	                {visibleRuns.map((run) => (
-	                  <tr
-	                    key={run.id}
-	                    className="runs-table__row"
-	                    tabIndex={0}
-                    onClick={() => {
-                      router.push(`/runs/${run.id}`);
-                    }}
-                    onKeyDown={(event) => {
-                      navigateOnRunRowKey(event, () => {
-                        router.push(`/runs/${run.id}`);
-                      });
-                    }}
-                  >
-	                    <td>
-	                      <p>{`#${run.id} ${run.tree.name}`}</p>
-	                      <p className="meta-text">{run.tree.treeKey}</p>
-	                    </td>
-	                    <td className="meta-text">{run.repository?.name ?? 'Not attached'}</td>
-                    <td>
-                      <StatusBadge status={run.status} />
-                    </td>
-                    <td className="meta-text">{normalizeDateTimeLabel(run.startedAt, 'Not started')}</td>
-	                    <td className="meta-text">{normalizeDateTimeLabel(run.completedAt, 'In progress')}</td>
-	                    <td className="meta-text">{formatNodeSummary(run)}</td>
-	                    <td>
-	                      <Link
-	                        className="button-link button-link--secondary"
-	                        href={`/runs/${run.id}`}
-	                        onClick={(event) => {
-	                          event.stopPropagation();
-	                        }}
-	                      >
-	                        Open
-	                      </Link>
-	                    </td>
-	                  </tr>
-	                ))}
-	              </tbody>
-	            </table>
-	          </div>
-	        )}
-
-	        <dl className="run-kpi-strip" aria-label="Run KPIs">
-	          <div className="run-kpi-strip__item">
-	            <dt>Active</dt>
-	            <dd>{activeRunCount}</dd>
-	          </div>
-	          <div className="run-kpi-strip__item">
-	            <dt>Failures (24h)</dt>
-	            <dd>{failureCount24h}</dd>
-	          </div>
-	          <div className="run-kpi-strip__item">
-	            <dt>Median duration</dt>
-	            <dd>{medianDurationLabel}</dd>
-	          </div>
-	        </dl>
-	      </Card>
-	    </div>
-	  );
+      <RunsOverviewCard
+        workflows={workflows}
+        clonedRepositories={clonedRepositories}
+        normalizedFilter={normalizedFilter}
+        activeRepositoryName={activeRepositoryName}
+        activeWorkflowKey={activeWorkflowKey}
+        activeWindow={activeWindow}
+        hasActiveFilters={hasActiveFilters}
+        runFilterTabs={runFilterTabs}
+        activeHref={activeHref}
+        visibleRuns={visibleRuns}
+        activeRunCount={activeRunCount}
+        failureCount24h={failureCount24h}
+        medianDurationLabel={medianDurationLabel}
+        onNavigate={(href) => {
+          router.push(href);
+        }}
+      />
+    </div>
+  );
 }
