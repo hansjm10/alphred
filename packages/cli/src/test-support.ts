@@ -69,7 +69,7 @@ export function createDependencies(
       repository: {
         ...repository,
         cloneStatus: 'cloned',
-        localPath: repository.localPath ?? `/tmp/repos/${repository.provider}/${repository.remoteRef.replace(/\//g, '-')}`,
+        localPath: repository.localPath ?? `/tmp/repos/${repository.provider}/${repository.remoteRef.split('/').join('-')}`,
       },
       action: 'cloned',
     };
