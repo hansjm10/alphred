@@ -124,6 +124,13 @@ describe('CLI run/status commands', () => {
     expect(captured.stderr).toEqual([
       'Node selector "node_key" did not match any node for key "missing-node" in workflow run id=1.',
     ]);
+    expect(
+      db.select({
+        status: workflowRuns.status,
+      })
+        .from(workflowRuns)
+        .all()[0]?.status,
+    ).toBe('cancelled');
   });
 
   it('returns not-found exit code when running an unknown tree key', async () => {
