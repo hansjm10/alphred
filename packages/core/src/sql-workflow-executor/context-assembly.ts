@@ -154,9 +154,46 @@ export function assembleUpstreamArtifactContext(
     });
   }
 
+  const retrySummaryCandidate =
+    params.targetAttempt > 1
+      ? loadRetryFailureSummaryArtifact(db, {
+          workflowRunId: params.workflowRunId,
+          runNodeId: params.targetNode.runNodeId,
+          sourceAttempt: params.targetAttempt - 1,
+          targetAttempt: params.targetAttempt,
+        })
+      : null;
+  const retrySummaryEntry = retrySummaryCandidate
+    ? (() => {
+        const summaryCharLimit = Math.min(MAX_ERROR_SUMMARY_CHARS, MAX_RETRY_SUMMARY_CONTEXT_CHARS);
+        const includedSummaryContent = truncateHeadTail(retrySummaryCandidate.content, summaryCharLimit);
+        const truncation = buildTruncationMetadata(retrySummaryCandidate.content.length, includedSummaryContent.length);
+
+        return {
+          entry: serializeRetryFailureSummaryEnvelope({
+            workflowRunId: params.workflowRunId,
+            targetNodeKey: params.targetNode.nodeKey,
+            sourceAttempt: retrySummaryCandidate.sourceAttempt,
+            targetAttempt: retrySummaryCandidate.targetAttempt,
+            summaryArtifactId: retrySummaryCandidate.id,
+            failureArtifactId: retrySummaryCandidate.failureArtifactId,
+            createdAt: retrySummaryCandidate.createdAt,
+            includedContent: includedSummaryContent,
+            sha256: hashContentSha256(retrySummaryCandidate.content),
+            truncation,
+          }),
+          artifactId: retrySummaryCandidate.id,
+          sourceAttempt: retrySummaryCandidate.sourceAttempt,
+          targetAttempt: retrySummaryCandidate.targetAttempt,
+          includedChars: truncation.includedChars,
+          truncated: truncation.applied,
+        };
+      })()
+    : null;
+
   const includedEntries: ContextEnvelopeEntry[] = [];
   const droppedArtifactIds: number[] = [];
-  const retrySummaryBudget = params.targetAttempt > 1 ? MAX_RETRY_SUMMARY_CONTEXT_CHARS : 0;
+  const retrySummaryBudget = retrySummaryEntry?.includedChars ?? 0;
   let remainingChars = Math.max(MAX_CONTEXT_CHARS_TOTAL - retrySummaryBudget, 0);
   let budgetOverflow = false;
   for (const candidate of candidateEntries) {
@@ -198,37 +235,14 @@ export function assembleUpstreamArtifactContext(
   let retrySummaryTargetAttempt: number | null = null;
   let retrySummaryChars = 0;
   let retrySummaryTruncated = false;
-  if (params.targetAttempt > 1) {
-    const retrySummary = loadRetryFailureSummaryArtifact(db, {
-      workflowRunId: params.workflowRunId,
-      runNodeId: params.targetNode.runNodeId,
-      sourceAttempt: params.targetAttempt - 1,
-      targetAttempt: params.targetAttempt,
-    });
-    if (retrySummary) {
-      const summaryCharLimit = Math.min(MAX_ERROR_SUMMARY_CHARS, MAX_RETRY_SUMMARY_CONTEXT_CHARS);
-      const includedSummaryContent = truncateHeadTail(retrySummary.content, summaryCharLimit);
-      const truncation = buildTruncationMetadata(retrySummary.content.length, includedSummaryContent.length);
-      const summaryEntry = serializeRetryFailureSummaryEnvelope({
-        workflowRunId: params.workflowRunId,
-        targetNodeKey: params.targetNode.nodeKey,
-        sourceAttempt: retrySummary.sourceAttempt,
-        targetAttempt: retrySummary.targetAttempt,
-        summaryArtifactId: retrySummary.id,
-        failureArtifactId: retrySummary.failureArtifactId,
-        createdAt: retrySummary.createdAt,
-        includedContent: includedSummaryContent,
-        sha256: hashContentSha256(retrySummary.content),
-        truncation,
-      });
-      contextEntries.push(summaryEntry);
-      retrySummaryIncluded = true;
-      retrySummaryArtifactId = retrySummary.id;
-      retrySummarySourceAttempt = retrySummary.sourceAttempt;
-      retrySummaryTargetAttempt = retrySummary.targetAttempt;
-      retrySummaryChars = truncation.includedChars;
-      retrySummaryTruncated = truncation.applied;
-    }
+  if (retrySummaryEntry) {
+    contextEntries.push(retrySummaryEntry.entry);
+    retrySummaryIncluded = true;
+    retrySummaryArtifactId = retrySummaryEntry.artifactId;
+    retrySummarySourceAttempt = retrySummaryEntry.sourceAttempt;
+    retrySummaryTargetAttempt = retrySummaryEntry.targetAttempt;
+    retrySummaryChars = retrySummaryEntry.includedChars;
+    retrySummaryTruncated = retrySummaryEntry.truncated;
   }
 
   const hasAnyArtifacts = directPredecessors.some(sourceNode =>

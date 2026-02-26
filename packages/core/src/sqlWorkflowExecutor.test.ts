@@ -25,6 +25,7 @@ import {
   workflowRuns,
   workflowTrees,
 } from '@alphred/db';
+import { MAX_CONTEXT_CHARS_TOTAL } from './sql-workflow-executor/constants.js';
 import { createSqlWorkflowExecutor } from './sql-workflow-executor/index.js';
 
 const coreSourceDirectory = fileURLToPath(new URL('.', import.meta.url));
@@ -5712,6 +5713,102 @@ describe('createSqlWorkflowExecutor', () => {
     expect((contextHandoff?.included_chars_total as number) <= 32_000).toBe(true);
     expect((contextHandoff?.dropped_artifact_ids as unknown[]).length).toBeGreaterThan(0);
     expect((contextHandoff?.truncated_artifact_ids as unknown[]).length).toBeGreaterThan(0);
+  });
+
+  it('does not reserve retry-summary budget when no retry summary artifact exists', async () => {
+    const { db, runId, runNodeIdByKey } = seedFiveSourceConvergingRun();
+    const targetRunNodeId = runNodeIdByKey.get('target');
+    if (!targetRunNodeId) {
+      throw new Error('Expected target run-node to be materialized.');
+    }
+
+    const targetRunNode = db
+      .select({
+        treeNodeId: runNodes.treeNodeId,
+      })
+      .from(runNodes)
+      .where(eq(runNodes.id, targetRunNodeId))
+      .get();
+    if (!targetRunNode) {
+      throw new Error(`Expected run node id=${targetRunNodeId} to exist.`);
+    }
+
+    db.update(treeNodes)
+      .set({
+        maxRetries: 1,
+        errorHandlerConfig: {
+          mode: 'disabled',
+        },
+      })
+      .where(eq(treeNodes.id, targetRunNode.treeNodeId))
+      .run();
+
+    const capturedContexts: (string[] | undefined)[] = [];
+    const oversizedReport = 'Y'.repeat(10_050);
+    let invocation = 0;
+
+    const executor = createSqlWorkflowExecutor(db, {
+      resolveProvider: () => ({
+        async *run(_prompt: string, options: ProviderRunOptions): AsyncIterable<ProviderEvent> {
+          invocation += 1;
+          capturedContexts.push(options.context);
+
+          if (invocation <= 5) {
+            yield { type: 'result', content: oversizedReport, timestamp: invocation * 10 };
+            return;
+          }
+
+          if (invocation === 6) {
+            throw new Error('target-attempt-1-failure');
+          }
+
+          yield { type: 'result', content: 'Recovered target output', timestamp: 70 };
+        },
+      }),
+    });
+
+    const result = await executor.executeRun({
+      workflowRunId: runId,
+      options: {
+        workingDirectory: '/tmp/alphred-worktree',
+      },
+    });
+
+    expect(result).toEqual({
+      workflowRunId: runId,
+      executedNodes: 6,
+      finalStep: {
+        outcome: 'run_terminal',
+        workflowRunId: runId,
+        runStatus: 'completed',
+      },
+    });
+    expect(invocation).toBe(7);
+    expect(capturedContexts[5]).toHaveLength(4);
+    expect(capturedContexts[6]).toHaveLength(4);
+    expect(capturedContexts[6]?.some(entry => entry.includes('ALPHRED_RETRY_FAILURE_SUMMARY v1'))).toBe(false);
+
+    const targetReportArtifact = db
+      .select({
+        metadata: phaseArtifacts.metadata,
+      })
+      .from(phaseArtifacts)
+      .where(and(eq(phaseArtifacts.runNodeId, targetRunNodeId), eq(phaseArtifacts.artifactType, 'report')))
+      .orderBy(asc(phaseArtifacts.id))
+      .get();
+
+    const contextHandoff = targetReportArtifact?.metadata as Record<string, unknown> | null;
+    expect(contextHandoff).toEqual(
+      expect.objectContaining({
+        context_policy_version: 1,
+        included_count: 4,
+        included_source_node_keys: ['source_a', 'source_b', 'source_c', 'source_d'],
+        included_chars_total: MAX_CONTEXT_CHARS_TOTAL,
+        retry_summary_included: false,
+        retry_summary_chars: 0,
+        retry_summary_artifact_id: null,
+      }),
+    );
   });
 
   it('persists context handoff metadata for failed downstream executions', async () => {
