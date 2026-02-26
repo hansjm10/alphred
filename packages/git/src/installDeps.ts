@@ -122,18 +122,22 @@ type ResolveInstallCommandResult =
       timeoutMs: number;
     };
 
-export type SpawnInstallCommand = (params: {
-  command: string;
-  args: readonly string[];
-  cwd: string;
-  environment: NodeJS.ProcessEnv;
-  shell: boolean;
-}) => {
+type SpawnedInstallProcess = {
   stdout: NodeJS.ReadableStream | null;
   stderr: NodeJS.ReadableStream | null;
   kill: (signal?: NodeJS.Signals | number) => boolean;
   once: (event: 'error' | 'close', listener: (...args: unknown[]) => void) => void;
 };
+
+type SpawnInstallCommandParams = {
+  command: string;
+  args: readonly string[];
+  cwd: string;
+  environment: NodeJS.ProcessEnv;
+  shell: boolean;
+};
+
+export type SpawnInstallCommand = (params: SpawnInstallCommandParams) => SpawnedInstallProcess;
 
 type RunInstallCommandOptions = {
   command: ResolvedInstallCommand;
@@ -201,25 +205,16 @@ export async function runInstallCommand(options: RunInstallCommandOptions): Prom
     shell: options.command.shell,
   });
 
-  if (childProcess.stdout) {
-    childProcess.stdout.setEncoding('utf8');
-    childProcess.stdout.on('data', chunk => {
-      options.onOutput({
-        stream: 'stdout',
-        chunk: typeof chunk === 'string' ? chunk : String(chunk),
-      });
-    });
-  }
-
-  if (childProcess.stderr) {
-    childProcess.stderr.setEncoding('utf8');
-    childProcess.stderr.on('data', chunk => {
-      options.onOutput({
-        stream: 'stderr',
-        chunk: typeof chunk === 'string' ? chunk : String(chunk),
-      });
-    });
-  }
+  attachOutputStream({
+    stream: childProcess.stdout,
+    streamName: 'stdout',
+    onOutput: options.onOutput,
+  });
+  attachOutputStream({
+    stream: childProcess.stderr,
+    streamName: 'stderr',
+    onOutput: options.onOutput,
+  });
 
   await new Promise<void>((resolve, reject) => {
     let settled = false;
@@ -293,42 +288,33 @@ async function resolveInstallCommand(params: {
   fileExists: (path: string) => Promise<boolean>;
 }): Promise<ResolveInstallCommandResult> {
   if (params.skipInstall === true) {
-    return {
-      kind: 'skip',
-      reason: 'skip_option',
-    };
+    return createSkipResolution('skip_option');
   }
 
   if (shouldSkipInstallFromEnvironment(params.environment)) {
-    return {
-      kind: 'skip',
-      reason: 'skip_env',
-    };
+    return createSkipResolution('skip_env');
   }
 
   const override = params.environment[INSTALL_COMMAND_ENV_KEY]?.trim();
   const timeoutMs = resolveInstallTimeoutMs(params.timeoutMs, params.environment);
   if (override !== undefined && override.length > 0) {
-    return {
-      kind: 'run',
-      timeoutMs,
-      command: {
+    return createRunResolution(
+      {
         source: 'override',
         command: override,
         args: [],
         displayCommand: override,
         shell: true,
       },
-    };
+      timeoutMs,
+    );
   }
 
   for (const installCommand of lockfileInstallCommands) {
     for (const lockfile of installCommand.lockfiles) {
       if (await params.fileExists(join(params.worktreePath, lockfile))) {
-        return {
-          kind: 'run',
-          timeoutMs,
-          command: {
+        return createRunResolution(
+          {
             source: 'lockfile',
             command: installCommand.command,
             args: installCommand.args,
@@ -336,14 +322,30 @@ async function resolveInstallCommand(params: {
             shell: false,
             lockfile,
           },
-        };
+          timeoutMs,
+        );
       }
     }
   }
 
+  return createSkipResolution('no_lockfile');
+}
+
+function createSkipResolution(reason: SkipInstallReason): ResolveInstallCommandResult {
   return {
     kind: 'skip',
-    reason: 'no_lockfile',
+    reason,
+  };
+}
+
+function createRunResolution(
+  command: ResolvedInstallCommand,
+  timeoutMs: number,
+): ResolveInstallCommandResult {
+  return {
+    kind: 'run',
+    command,
+    timeoutMs,
   };
 }
 
@@ -381,18 +383,29 @@ async function defaultFileExists(path: string): Promise<boolean> {
   }
 }
 
-function defaultSpawnInstallCommand(params: {
-  command: string;
-  args: readonly string[];
-  cwd: string;
-  environment: NodeJS.ProcessEnv;
-  shell: boolean;
-}): {
-  stdout: NodeJS.ReadableStream | null;
-  stderr: NodeJS.ReadableStream | null;
-  kill: (signal?: NodeJS.Signals | number) => boolean;
-  once: (event: 'error' | 'close', listener: (...args: unknown[]) => void) => void;
-} {
+function attachOutputStream(params: {
+  stream: NodeJS.ReadableStream | null;
+  streamName: InstallOutput['stream'];
+  onOutput: (output: InstallOutput) => void;
+}): void {
+  if (!params.stream) {
+    return;
+  }
+
+  params.stream.setEncoding('utf8');
+  params.stream.on('data', chunk => {
+    params.onOutput({
+      stream: params.streamName,
+      chunk: toOutputChunk(chunk),
+    });
+  });
+}
+
+function toOutputChunk(chunk: unknown): string {
+  return typeof chunk === 'string' ? chunk : String(chunk);
+}
+
+function defaultSpawnInstallCommand(params: SpawnInstallCommandParams): SpawnedInstallProcess {
   return spawn(params.command, params.args, {
     cwd: params.cwd,
     env: params.environment,
