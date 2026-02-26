@@ -9,7 +9,7 @@ import type {
   DashboardRepositoryState,
   DashboardRunDetail,
   DashboardRunNodeStreamEvent,
-} from '../../../src/server/dashboard-contracts';
+} from '../../../../src/server/dashboard-contracts';
 import { RunDetailContent } from './run-detail-content';
 
 function createRepository(overrides: Partial<DashboardRepositoryState> = {}): DashboardRepositoryState {

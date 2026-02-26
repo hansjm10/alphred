@@ -3,7 +3,7 @@ import type { DashboardRepositoryState, DashboardRunDetail } from '../../../src/
 import { DashboardIntegrationError } from '../../../src/server/dashboard-errors';
 import { loadDashboardRepositories } from '../../repositories/load-dashboard-repositories';
 import { loadDashboardRunDetail } from '../load-dashboard-runs';
-import { RunDetailContent } from './run-detail-content';
+import { RunDetailContent } from './run-detail';
 
 type RunDetailPageProps = Readonly<{
   runDetail?: DashboardRunDetail;
