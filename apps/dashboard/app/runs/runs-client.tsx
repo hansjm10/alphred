@@ -440,6 +440,62 @@ function selectNodeSelectorType(
   setNodeSelectorType(nextValue);
 }
 
+function NodeKeySelectOptions({
+  isLoadingNodes,
+  availableNodes,
+}: Readonly<{
+  isLoadingNodes: boolean;
+  availableNodes: readonly DashboardWorkflowNodeOption[];
+}>) {
+  if (isLoadingNodes) {
+    return <option value="">Loading nodes...</option>;
+  }
+
+  if (availableNodes.length === 0) {
+    return <option value="">No nodes available</option>;
+  }
+
+  return availableNodes.map((node) => (
+    <option key={node.nodeKey} value={node.nodeKey}>
+      {node.displayName}
+    </option>
+  ));
+}
+
+function LaunchFeedback({
+  launchBlockedReason,
+  launchError,
+  launchResult,
+  launchRefreshWarning,
+}: Readonly<{
+  launchBlockedReason: string | null;
+  launchError: string | null;
+  launchResult: LaunchBannerState | null;
+  launchRefreshWarning: string | null;
+}>) {
+  return (
+    <>
+      {launchBlockedReason ? <p className="meta-text">{launchBlockedReason}</p> : null}
+      {launchError ? (
+        <p className="run-launch-banner run-launch-banner--error" role="alert">
+          {launchError}
+        </p>
+      ) : null}
+      {launchResult ? (
+        <output className="run-launch-banner run-launch-banner--success" aria-live="polite">
+          {launchResult.runStatus === null
+            ? `Run #${launchResult.workflowRunId} accepted. `
+            : `Run #${launchResult.workflowRunId} accepted. Current status: ${launchResult.runStatus}. `}
+          <Link className="run-inline-link" href={`/runs/${launchResult.workflowRunId}`}>
+            Open run detail
+          </Link>
+          {launchRefreshWarning ? <span className="run-launch-banner__note">{` ${launchRefreshWarning}`}</span> : null}
+        </output>
+      ) : null}
+    </>
+  );
+}
+
 function navigateOnRunRowKey(event: { key: string; preventDefault: () => void }, onNavigate: () => void): void {
   if (event.key !== 'Enter' && event.key !== ' ') {
     return;
@@ -605,17 +661,7 @@ function RunLaunchControls({
                   onNodeKeyChange(event.currentTarget.value);
                 }}
               >
-                {isLoadingNodes ? (
-                  <option value="">Loading nodes...</option>
-                ) : availableNodes.length === 0 ? (
-                  <option value="">No nodes available</option>
-                ) : (
-                  availableNodes.map((node) => (
-                    <option key={node.nodeKey} value={node.nodeKey}>
-                      {node.displayName}
-                    </option>
-                  ))
-                )}
+                <NodeKeySelectOptions isLoadingNodes={isLoadingNodes} availableNodes={availableNodes} />
               </select>
             </label>
           ) : null}
@@ -632,23 +678,12 @@ function RunLaunchControls({
           </div>
         </form>
 
-        {launchBlockedReason ? <p className="meta-text">{launchBlockedReason}</p> : null}
-        {launchError ? (
-          <p className="run-launch-banner run-launch-banner--error" role="alert">
-            {launchError}
-          </p>
-        ) : null}
-        {launchResult ? (
-          <output className="run-launch-banner run-launch-banner--success" aria-live="polite">
-            {launchResult.runStatus === null
-              ? `Run #${launchResult.workflowRunId} accepted. `
-              : `Run #${launchResult.workflowRunId} accepted. Current status: ${launchResult.runStatus}. `}
-            <Link className="run-inline-link" href={`/runs/${launchResult.workflowRunId}`}>
-              Open run detail
-            </Link>
-            {launchRefreshWarning ? <span className="run-launch-banner__note">{` ${launchRefreshWarning}`}</span> : null}
-          </output>
-        ) : null}
+        <LaunchFeedback
+          launchBlockedReason={launchBlockedReason}
+          launchError={launchError}
+          launchResult={launchResult}
+          launchRefreshWarning={launchRefreshWarning}
+        />
       </Card>
 
       <Panel title="Launch readiness" description="Invalid actions are blocked and paired with remediation.">
