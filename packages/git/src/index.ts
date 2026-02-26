@@ -1,4 +1,4 @@
-export { createWorktree, removeWorktree, listWorktrees, type WorktreeInfo, type CreateWorktreeParams } from './worktree.js';
+export { createWorktree, removeWorktree, deleteBranch, listWorktrees, type WorktreeInfo, type CreateWorktreeParams } from './worktree.js';
 export { WorktreeManager, type ManagedWorktree, type CreateRunWorktreeParams, type WorktreeManagerOptions } from './worktreeManager.js';
 export {
   DEFAULT_BRANCH_TEMPLATE,

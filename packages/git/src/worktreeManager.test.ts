@@ -312,12 +312,16 @@ describe('WorktreeManager', () => {
     const installDependencies = vi.fn(async () => {
       throw new Error('Install command "pnpm install" failed with exit code 1.');
     });
+    const removeWorktree = vi.fn(async () => undefined);
+    const deleteBranch = vi.fn(async () => undefined);
 
     const manager = new WorktreeManager(db, {
       worktreeBase: '/tmp/alphred/worktrees',
       ensureRepositoryClone,
       createWorktree,
       installDependencies,
+      removeWorktree,
+      deleteBranch,
     });
 
     await expect(
@@ -327,6 +331,14 @@ describe('WorktreeManager', () => {
         runId,
       }),
     ).rejects.toThrow('Install command "pnpm install" failed with exit code 1.');
+    expect(removeWorktree).toHaveBeenCalledWith(
+      '/tmp/alphred/repos/github/acme/frontend-install-failure',
+      '/tmp/alphred/worktrees/alphred-design-tree-install-failure',
+    );
+    expect(deleteBranch).toHaveBeenCalledWith(
+      '/tmp/alphred/repos/github/acme/frontend-install-failure',
+      'alphred/design_tree/install-failure',
+    );
     expect(listRunWorktreesForRun(db, runId, { status: 'active' })).toHaveLength(0);
   });
 

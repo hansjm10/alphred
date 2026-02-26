@@ -14,7 +14,7 @@ vi.mock('node:util', () => ({
   promisify: () => execFileAsyncMock,
 }));
 
-import { createWorktree, listWorktrees, removeWorktree } from './worktree.js';
+import { createWorktree, deleteBranch, listWorktrees, removeWorktree } from './worktree.js';
 
 describe('worktree types', () => {
   beforeEach(() => {
@@ -116,6 +116,18 @@ describe('worktree types', () => {
     expect(execFileAsyncMock).toHaveBeenCalledWith(
       'git',
       ['worktree', 'remove', '--force', '/tmp/worktrees/feature-cool-fix'],
+      { cwd: '/tmp/repo' },
+    );
+  });
+
+  it('deletes branches using git branch --delete --force', async () => {
+    execFileAsyncMock.mockResolvedValueOnce({ stdout: '', stderr: '' });
+
+    await deleteBranch('/tmp/repo', '  feature/cool-fix  ');
+
+    expect(execFileAsyncMock).toHaveBeenCalledWith(
+      'git',
+      ['branch', '--delete', '--force', 'feature/cool-fix'],
       { cwd: '/tmp/repo' },
     );
   });

@@ -80,6 +80,17 @@ export async function removeWorktree(repoDir: string, worktreePath: string): Pro
   });
 }
 
+export async function deleteBranch(repoDir: string, branch: string): Promise<void> {
+  const trimmedBranch = branch.trim();
+  if (trimmedBranch.length === 0) {
+    return;
+  }
+
+  await execFileAsync('git', ['branch', '--delete', '--force', trimmedBranch], {
+    cwd: repoDir,
+  });
+}
+
 export async function listWorktrees(repoDir: string): Promise<WorktreeInfo[]> {
   const { stdout } = await execFileAsync('git', ['worktree', 'list', '--porcelain'], {
     cwd: repoDir,
