@@ -15,6 +15,12 @@ import {
   type WorktreeInfo,
 } from './worktree.js';
 import {
+  installDependencies as defaultInstallDependencies,
+  type InstallDepsOptions,
+  type InstallDepsResult,
+  type InstallOutput,
+} from './installDeps.js';
+import {
   ensureRepositoryClone as defaultEnsureRepositoryClone,
   type EnsureRepositoryCloneResult,
 } from './repositoryClone.js';
@@ -37,11 +43,14 @@ export type CreateRunWorktreeParams = {
   branch?: string;
   branchTemplate?: string;
   baseBranch?: string;
+  skipInstall?: boolean;
 };
 
 export type WorktreeManagerOptions = {
   worktreeBase: string;
   environment?: NodeJS.ProcessEnv;
+  installTimeoutMs?: number;
+  onInstallOutput?: (output: InstallOutput) => void;
   createWorktree?: (
     repoDir: string,
     worktreeBase: string,
@@ -68,6 +77,7 @@ export type WorktreeManagerOptions = {
     };
     environment?: NodeJS.ProcessEnv;
   }) => Promise<EnsureRepositoryCloneResult>;
+  installDependencies?: (params: InstallDepsOptions) => Promise<InstallDepsResult>;
 };
 
 function toManagedWorktree(record: RunWorktreeRecord): ManagedWorktree {
@@ -89,6 +99,9 @@ export class WorktreeManager {
   private readonly createWorktree: NonNullable<WorktreeManagerOptions['createWorktree']>;
   private readonly removeWorktree: NonNullable<WorktreeManagerOptions['removeWorktree']>;
   private readonly ensureRepositoryClone: NonNullable<WorktreeManagerOptions['ensureRepositoryClone']>;
+  private readonly installDependencies: NonNullable<WorktreeManagerOptions['installDependencies']>;
+  private readonly installTimeoutMs: number | undefined;
+  private readonly onInstallOutput: ((output: InstallOutput) => void) | undefined;
 
   constructor(db: AlphredDatabase, options: WorktreeManagerOptions) {
     this.db = db;
@@ -97,6 +110,9 @@ export class WorktreeManager {
     this.createWorktree = options.createWorktree ?? defaultCreateWorktree;
     this.removeWorktree = options.removeWorktree ?? defaultRemoveWorktree;
     this.ensureRepositoryClone = options.ensureRepositoryClone ?? defaultEnsureRepositoryClone;
+    this.installDependencies = options.installDependencies ?? defaultInstallDependencies;
+    this.installTimeoutMs = options.installTimeoutMs;
+    this.onInstallOutput = options.onInstallOutput;
   }
 
   async createRunWorktree(params: CreateRunWorktreeParams): Promise<ManagedWorktree> {
@@ -142,6 +158,14 @@ export class WorktreeManager {
       this.worktreeBase,
       createParams,
     );
+
+    await this.installDependencies({
+      worktreePath: worktree.path,
+      environment: this.environment,
+      skipInstall: params.skipInstall,
+      timeoutMs: this.installTimeoutMs,
+      onOutput: this.onInstallOutput,
+    });
 
     const persisted = insertRunWorktree(this.db, {
       workflowRunId: params.runId,

@@ -68,11 +68,19 @@ describe('WorktreeManager', () => {
       branch: 'alphred/design_tree/1-implement',
       commit: 'abc123',
     }));
+    const installDependencies = vi.fn(async () => {
+      expect(listRunWorktreesForRun(db, runId, { status: 'active' })).toHaveLength(0);
+      return {
+        status: 'skipped' as const,
+        reason: 'no_lockfile' as const,
+      };
+    });
 
     const manager = new WorktreeManager(db, {
       worktreeBase: '/tmp/alphred/worktrees',
       ensureRepositoryClone,
       createWorktree,
+      installDependencies,
     });
 
     const created = await manager.createRunWorktree({
@@ -96,6 +104,13 @@ describe('WorktreeManager', () => {
         baseRef: 'main',
       },
     );
+    expect(installDependencies).toHaveBeenCalledWith({
+      worktreePath: '/tmp/alphred/worktrees/alphred-design-tree-1',
+      environment: process.env,
+      skipInstall: undefined,
+      timeoutMs: undefined,
+      onOutput: undefined,
+    });
     expect(created.runId).toBe(runId);
     expect(created.repositoryId).toBe(repository.id);
     expect(created.branch).toBe('alphred/design_tree/1-implement');
@@ -213,6 +228,106 @@ describe('WorktreeManager', () => {
         baseRef: 'master',
       },
     );
+  });
+
+  it('passes skipInstall through to dependency installation', async () => {
+    const db = createMigratedDb();
+    const runId = seedRun(db);
+    const repository = insertRepository(db, {
+      name: 'frontend-skip-install',
+      provider: 'github',
+      remoteUrl: 'https://github.com/acme/frontend-skip-install.git',
+      remoteRef: 'acme/frontend-skip-install',
+      defaultBranch: 'main',
+      localPath: '/tmp/alphred/repos/github/acme/frontend-skip-install',
+      cloneStatus: 'pending',
+    });
+
+    const ensureRepositoryClone = vi.fn(async () => ({
+      repository: {
+        ...repository,
+        localPath: '/tmp/alphred/repos/github/acme/frontend-skip-install',
+        cloneStatus: 'cloned' as const,
+      },
+      action: 'fetched' as const,
+    }));
+    const createWorktree = vi.fn(async () => ({
+      path: '/tmp/alphred/worktrees/alphred-design-tree-skip-install',
+      branch: 'alphred/design_tree/skip-install',
+      commit: 'abc123',
+    }));
+    const installDependencies = vi.fn(async () => ({
+      status: 'skipped' as const,
+      reason: 'skip_option' as const,
+    }));
+
+    const manager = new WorktreeManager(db, {
+      worktreeBase: '/tmp/alphred/worktrees',
+      ensureRepositoryClone,
+      createWorktree,
+      installDependencies,
+    });
+
+    await manager.createRunWorktree({
+      repoName: 'frontend-skip-install',
+      treeKey: 'design_tree',
+      runId,
+      skipInstall: true,
+    });
+
+    expect(installDependencies).toHaveBeenCalledWith(
+      expect.objectContaining({
+        worktreePath: '/tmp/alphred/worktrees/alphred-design-tree-skip-install',
+        skipInstall: true,
+      }),
+    );
+  });
+
+  it('fails creation and does not persist tracking rows when dependency installation fails', async () => {
+    const db = createMigratedDb();
+    const runId = seedRun(db);
+    const repository = insertRepository(db, {
+      name: 'frontend-install-failure',
+      provider: 'github',
+      remoteUrl: 'https://github.com/acme/frontend-install-failure.git',
+      remoteRef: 'acme/frontend-install-failure',
+      defaultBranch: 'main',
+      localPath: '/tmp/alphred/repos/github/acme/frontend-install-failure',
+      cloneStatus: 'pending',
+    });
+
+    const ensureRepositoryClone = vi.fn(async () => ({
+      repository: {
+        ...repository,
+        localPath: '/tmp/alphred/repos/github/acme/frontend-install-failure',
+        cloneStatus: 'cloned' as const,
+      },
+      action: 'fetched' as const,
+    }));
+    const createWorktree = vi.fn(async () => ({
+      path: '/tmp/alphred/worktrees/alphred-design-tree-install-failure',
+      branch: 'alphred/design_tree/install-failure',
+      commit: 'abc123',
+    }));
+    const installDependencies = vi.fn(async () => {
+      throw new Error('Install command "pnpm install" failed with exit code 1.');
+    });
+
+    const manager = new WorktreeManager(db, {
+      worktreeBase: '/tmp/alphred/worktrees',
+      ensureRepositoryClone,
+      createWorktree,
+      installDependencies,
+    });
+
+    await expect(
+      manager.createRunWorktree({
+        repoName: 'frontend-install-failure',
+        treeKey: 'design_tree',
+        runId,
+      }),
+    ).rejects.toThrow('Install command "pnpm install" failed with exit code 1.');
+    expect(listRunWorktreesForRun(db, runId, { status: 'active' })).toHaveLength(0);
   });
 
   it('cleanupRun removes all active worktrees and marks them removed', async () => {
