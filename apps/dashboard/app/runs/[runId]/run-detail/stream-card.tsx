@@ -45,6 +45,121 @@ export function StreamEventItems({ partition, renderEvent }: StreamEventItemsPro
   );
 }
 
+type ToggleStreamAutoScrollInput = Readonly<{
+  streamAutoScroll: boolean;
+  streamBufferedEvents: readonly DashboardRunNodeStreamEvent[];
+  setStreamAutoScroll: StateSetter<boolean>;
+  setStreamBufferedEvents: StateSetter<DashboardRunNodeStreamEvent[]>;
+  setStreamEvents: StateSetter<DashboardRunNodeStreamEvent[]>;
+}>;
+
+function toggleStreamAutoScroll({
+  streamAutoScroll,
+  streamBufferedEvents,
+  setStreamAutoScroll,
+  setStreamBufferedEvents,
+  setStreamEvents,
+}: ToggleStreamAutoScrollInput) {
+  if (streamAutoScroll) {
+    setStreamAutoScroll(false);
+    return;
+  }
+
+  setStreamAutoScroll(true);
+  setStreamEvents(previous => mergeAgentStreamEvents(previous, streamBufferedEvents));
+  setStreamBufferedEvents([]);
+}
+
+type TerminalStreamSummaryInput = Readonly<{
+  selectedStreamNode: DashboardRunDetail['nodes'][number] | null;
+  streamBufferedEvents: readonly DashboardRunNodeStreamEvent[];
+  streamEvents: readonly DashboardRunNodeStreamEvent[];
+}>;
+
+function formatTerminalStreamSummary({
+  selectedStreamNode,
+  streamBufferedEvents,
+  streamEvents,
+}: TerminalStreamSummaryInput): string {
+  const streamTargetLabel = selectedStreamNode
+    ? `${selectedStreamNode.nodeKey} (attempt ${selectedStreamNode.attempt})`
+    : 'no target selected';
+  const capturedEventCount = (
+    streamBufferedEvents.length === 0
+      ? streamEvents
+      : mergeAgentStreamEvents(streamEvents, streamBufferedEvents)
+  ).length;
+  const eventSuffix = capturedEventCount === 1 ? '' : 's';
+  const eventCountLabel = capturedEventCount > 0
+    ? `${capturedEventCount} event${eventSuffix} captured`
+    : 'no events captured';
+  return `Stream ended · ${streamTargetLabel} · ${eventCountLabel}`;
+}
+
+type SelectedStreamContentProps = Readonly<{
+  selectedStreamNode: DashboardRunDetail['nodes'][number];
+  agentStreamLabel: {
+    badgeLabel: string;
+    detail: string;
+  };
+  streamConnectionState: AgentStreamConnectionState;
+  streamLastUpdatedAtMs: number;
+  hasHydrated: boolean;
+  streamAutoScroll: boolean;
+  streamBufferedEvents: readonly DashboardRunNodeStreamEvent[];
+  streamError: string | null;
+  streamEventPartition: RecentPartition<DashboardRunNodeStreamEvent>;
+  streamEventListRef: { current: HTMLOListElement | null };
+  renderStreamEvent: (event: DashboardRunNodeStreamEvent) => ReactNode;
+  onToggleAutoScroll: () => void;
+}>;
+
+function SelectedStreamContent({
+  selectedStreamNode,
+  agentStreamLabel,
+  streamConnectionState,
+  streamLastUpdatedAtMs,
+  hasHydrated,
+  streamAutoScroll,
+  streamBufferedEvents,
+  streamError,
+  streamEventPartition,
+  streamEventListRef,
+  renderStreamEvent,
+  onToggleAutoScroll,
+}: SelectedStreamContentProps) {
+  return (
+    <>
+      <output className={`run-realtime-status run-realtime-status--${streamConnectionState}`} aria-live="polite">
+        <span className="run-realtime-status__badge">{agentStreamLabel.badgeLabel}</span>
+        <span className="meta-text">{agentStreamLabel.detail}</span>
+        <span className="meta-text">
+          {`Node ${selectedStreamNode.nodeKey} (attempt ${selectedStreamNode.attempt}) · last update ${formatLastUpdated(streamLastUpdatedAtMs, hasHydrated)}.`}
+        </span>
+      </output>
+
+      <div className="action-row run-agent-stream-controls">
+        <ActionButton onClick={onToggleAutoScroll}>
+          {streamAutoScroll ? 'Pause auto-scroll' : 'Resume auto-scroll'}
+        </ActionButton>
+        {streamBufferedEvents.length > 0 ? (
+          <span className="meta-text">{`${streamBufferedEvents.length} new events buffered.`}</span>
+        ) : null}
+      </div>
+
+      {streamError && (streamConnectionState === 'reconnecting' || streamConnectionState === 'stale') ? (
+        <output className="run-realtime-warning" aria-live="polite">
+          {`Agent stream degraded: ${streamError}`}
+        </output>
+      ) : null}
+
+      <ol ref={streamEventListRef} className="page-stack run-agent-stream-events" aria-label="Agent stream events">
+        <StreamEventItems partition={streamEventPartition} renderEvent={renderStreamEvent} />
+      </ol>
+    </>
+  );
+}
+
 type RunAgentStreamCardProps = Readonly<{
   isTerminalRun: boolean;
   selectedStreamNode: DashboardRunDetail['nodes'][number] | null;
@@ -110,78 +225,52 @@ export function RunAgentStreamCard({
   );
 
   const streamContent = selectedStreamNode ? (
-    <>
-      <output className={`run-realtime-status run-realtime-status--${streamConnectionState}`} aria-live="polite">
-        <span className="run-realtime-status__badge">{agentStreamLabel.badgeLabel}</span>
-        <span className="meta-text">{agentStreamLabel.detail}</span>
-        <span className="meta-text">
-          {`Node ${selectedStreamNode.nodeKey} (attempt ${selectedStreamNode.attempt}) · last update ${formatLastUpdated(streamLastUpdatedAtMs, hasHydrated)}.`}
-        </span>
-      </output>
-
-      <div className="action-row run-agent-stream-controls">
-        <ActionButton
-          onClick={() => {
-            if (streamAutoScroll) {
-              setStreamAutoScroll(false);
-              return;
-            }
-
-            setStreamAutoScroll(true);
-            setStreamEvents(previous => mergeAgentStreamEvents(previous, streamBufferedEvents));
-            setStreamBufferedEvents([]);
-          }}
-        >
-          {streamAutoScroll ? 'Pause auto-scroll' : 'Resume auto-scroll'}
-        </ActionButton>
-        {streamBufferedEvents.length > 0 ? (
-          <span className="meta-text">{`${streamBufferedEvents.length} new events buffered.`}</span>
-        ) : null}
-      </div>
-
-      {streamError && (streamConnectionState === 'reconnecting' || streamConnectionState === 'stale') ? (
-        <output className="run-realtime-warning" aria-live="polite">
-          {`Agent stream degraded: ${streamError}`}
-        </output>
-      ) : null}
-
-      <ol ref={streamEventListRef} className="page-stack run-agent-stream-events" aria-label="Agent stream events">
-        <StreamEventItems partition={streamEventPartition} renderEvent={renderStreamEvent} />
-      </ol>
-    </>
+    <SelectedStreamContent
+      selectedStreamNode={selectedStreamNode}
+      agentStreamLabel={agentStreamLabel}
+      streamConnectionState={streamConnectionState}
+      streamLastUpdatedAtMs={streamLastUpdatedAtMs}
+      hasHydrated={hasHydrated}
+      streamAutoScroll={streamAutoScroll}
+      streamBufferedEvents={streamBufferedEvents}
+      streamError={streamError}
+      streamEventPartition={streamEventPartition}
+      streamEventListRef={streamEventListRef}
+      renderStreamEvent={renderStreamEvent}
+      onToggleAutoScroll={() => {
+        toggleStreamAutoScroll({
+          streamAutoScroll,
+          streamBufferedEvents,
+          setStreamAutoScroll,
+          setStreamBufferedEvents,
+          setStreamEvents,
+        });
+      }}
+    />
   ) : (
     <p>Select a node from Node Status to open its agent stream.</p>
   );
 
-  if (isTerminalRun) {
-    const streamTargetLabel = selectedStreamNode
-      ? `${selectedStreamNode.nodeKey} (attempt ${selectedStreamNode.attempt})`
-      : 'no target selected';
-    const capturedEventCount = (
-      streamBufferedEvents.length === 0
-        ? streamEvents
-        : mergeAgentStreamEvents(streamEvents, streamBufferedEvents)
-    ).length;
-    const eventSuffix = capturedEventCount === 1 ? '' : 's';
-    const eventCountLabel = capturedEventCount > 0
-      ? `${capturedEventCount} event${eventSuffix} captured`
-      : 'no events captured';
-
+  if (!isTerminalRun) {
     return (
-      <Card title="Agent stream" description="Provider events for a selected node attempt.">
-        <details className="run-agent-stream-collapsed">
-          <summary className="run-agent-stream-collapsed__summary">
-            {`Stream ended · ${streamTargetLabel} · ${eventCountLabel}`}
-          </summary>
-          {streamContent}
-        </details>
+      <Card title="Agent stream" description="Live provider events for a selected node attempt.">
+        {streamContent}
       </Card>
     );
   }
 
+  const terminalStreamSummary = formatTerminalStreamSummary({
+    selectedStreamNode,
+    streamBufferedEvents,
+    streamEvents,
+  });
+
   return (
-    <Card title="Agent stream" description="Live provider events for a selected node attempt.">
-      {streamContent}
+    <Card title="Agent stream" description="Provider events for a selected node attempt.">
+      <details className="run-agent-stream-collapsed">
+        <summary className="run-agent-stream-collapsed__summary">{terminalStreamSummary}</summary>
+        {streamContent}
+      </details>
     </Card>
   );
 }
