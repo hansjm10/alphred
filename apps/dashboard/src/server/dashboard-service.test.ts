@@ -2599,6 +2599,55 @@ describe('createDashboardService', () => {
     }
   });
 
+  it('rejects empty nodeSelector.nodeKey values for single-node launches', () => {
+    const { dependencies } = createHarness();
+    const service = createDashboardService({ dependencies });
+
+    try {
+      service.launchWorkflowRun({
+        treeKey: 'demo-tree',
+        executionScope: 'single_node',
+        nodeSelector: {
+          type: 'node_key',
+          nodeKey: '   ',
+        },
+      });
+      throw new Error('Expected launchWorkflowRun to throw when nodeSelector.nodeKey is empty.');
+    } catch (error) {
+      expect(error).toMatchObject({
+        name: 'DashboardIntegrationError',
+        code: 'invalid_request',
+        status: 400,
+        message: 'nodeSelector.nodeKey cannot be empty.',
+      });
+    }
+  });
+
+  it('rejects unsupported nodeSelector types for single-node launches', () => {
+    const { dependencies } = createHarness();
+    const service = createDashboardService({ dependencies });
+
+    try {
+      service.launchWorkflowRun({
+        treeKey: 'demo-tree',
+        executionScope: 'single_node',
+        nodeSelector: {
+          type: 'unsupported',
+        } as unknown as {
+          type: 'next_runnable';
+        },
+      });
+      throw new Error('Expected launchWorkflowRun to throw when nodeSelector.type is unsupported.');
+    } catch (error) {
+      expect(error).toMatchObject({
+        name: 'DashboardIntegrationError',
+        code: 'invalid_request',
+        status: 400,
+        message: 'nodeSelector.type must be "next_runnable" or "node_key".',
+      });
+    }
+  });
+
   it('maps single-node selector validation failures to invalid_request errors', async () => {
     const validateSingleNodeSelection = vi.fn(() => {
       throw new WorkflowRunExecutionValidationError(

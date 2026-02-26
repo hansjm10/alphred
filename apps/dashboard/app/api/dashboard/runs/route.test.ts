@@ -166,6 +166,34 @@ describe('Route /api/dashboard/runs', () => {
       expect(response.status).toBe(202);
     });
 
+    it('parses single-node launch payloads with a next_runnable selector', async () => {
+      launchWorkflowRunMock.mockResolvedValue({
+        mode: 'async',
+        id: 13,
+      });
+
+      const response = await POST(createJsonRequest('http://localhost/api/dashboard/runs', {
+        treeKey: 'default',
+        executionScope: 'single_node',
+        nodeSelector: {
+          type: 'next_runnable',
+        },
+      }));
+
+      expect(launchWorkflowRunMock).toHaveBeenCalledWith({
+        treeKey: 'default',
+        repositoryName: undefined,
+        branch: undefined,
+        executionMode: undefined,
+        executionScope: 'single_node',
+        nodeSelector: {
+          type: 'next_runnable',
+        },
+        cleanupWorktree: undefined,
+      });
+      expect(response.status).toBe(202);
+    });
+
     it('returns 400 when request body is not an object', async () => {
       const response = await POST(createJsonRequest('http://localhost/api/dashboard/runs', null));
 
@@ -235,6 +263,11 @@ describe('Route /api/dashboard/runs', () => {
         title: 'nodeSelector requires single_node execution scope',
         payload: { treeKey: 'default', nodeSelector: { type: 'next_runnable' } },
         message: 'Field "nodeSelector" requires "executionScope" to be "single_node".',
+      },
+      {
+        title: 'nodeSelector must be an object',
+        payload: { treeKey: 'default', executionScope: 'single_node', nodeSelector: 'next_runnable' },
+        message: 'Field "nodeSelector" must be an object when provided.',
       },
       {
         title: 'nodeSelector type has an invalid value',

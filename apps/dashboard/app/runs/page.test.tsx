@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { ReactElement } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -510,6 +510,114 @@ describe('RunsPage', () => {
         }),
       });
     });
+  });
+
+  it('launches a single-node run with the default next_runnable selector payload', async () => {
+    const fetchMock = vi.mocked(global.fetch);
+    fetchMock
+      .mockResolvedValueOnce(createJsonResponse({
+        workflowRunId: 613,
+        mode: 'async',
+        status: 'accepted',
+        runStatus: 'running',
+        executionOutcome: null,
+        executedNodes: null,
+      }, { status: 202 }))
+      .mockResolvedValueOnce(createJsonResponse({
+        runs: [createRunSummary({ id: 613, status: 'running' })],
+      }));
+
+    const user = userEvent.setup();
+    render(
+      <RunsPageContent
+        runs={[createRunSummary({ id: 412, status: 'running' })]}
+        workflows={[createWorkflow(), createWorkflow({ id: 2, treeKey: 'other-tree', name: 'Other Tree' })]}
+        repositories={[createRepository({ name: 'demo-repo', cloneStatus: 'cloned' })]}
+        authGate={createAuthenticatedAuthGate()}
+        activeFilter="all"
+        activeRepositoryName={null}
+        activeWorkflowKey={null}
+        activeWindow="all"
+      />,
+    );
+
+    await user.selectOptions(screen.getByLabelText('Workflow'), 'other-tree');
+    await user.selectOptions(screen.getByLabelText('Execution scope'), 'single_node');
+    await user.click(screen.getByRole('button', { name: 'Launch Run' }));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenNthCalledWith(1, '/api/dashboard/runs', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({
+          treeKey: 'other-tree',
+          repositoryName: undefined,
+          branch: undefined,
+          executionMode: 'async',
+          executionScope: 'single_node',
+          nodeSelector: {
+            type: 'next_runnable',
+          },
+        }),
+      });
+    });
+  });
+
+  it('ignores unsupported execution scope values from DOM events', async () => {
+    const user = userEvent.setup();
+    render(
+      <RunsPageContent
+        runs={[createRunSummary({ id: 412, status: 'running' })]}
+        workflows={[createWorkflow()]}
+        repositories={[createRepository({ name: 'demo-repo', cloneStatus: 'cloned' })]}
+        authGate={createAuthenticatedAuthGate()}
+        activeFilter="all"
+        activeRepositoryName={null}
+        activeWorkflowKey={null}
+        activeWindow="all"
+      />,
+    );
+
+    const scopeSelect = screen.getByLabelText('Execution scope');
+    expect(scopeSelect).toHaveValue('full');
+
+    fireEvent.change(scopeSelect, {
+      target: { value: 'unsupported' },
+    });
+
+    expect(scopeSelect).toHaveValue('full');
+
+    await user.selectOptions(scopeSelect, 'single_node');
+    expect(scopeSelect).toHaveValue('single_node');
+  });
+
+  it('ignores unsupported node selector values from DOM events', async () => {
+    const user = userEvent.setup();
+    render(
+      <RunsPageContent
+        runs={[createRunSummary({ id: 412, status: 'running' })]}
+        workflows={[createWorkflow()]}
+        repositories={[createRepository({ name: 'demo-repo', cloneStatus: 'cloned' })]}
+        authGate={createAuthenticatedAuthGate()}
+        activeFilter="all"
+        activeRepositoryName={null}
+        activeWorkflowKey={null}
+        activeWindow="all"
+      />,
+    );
+
+    await user.selectOptions(screen.getByLabelText('Execution scope'), 'single_node');
+
+    const selectorInput = screen.getByLabelText('Node selector');
+    expect(selectorInput).toHaveValue('next_runnable');
+
+    fireEvent.change(selectorInput, {
+      target: { value: 'unsupported_selector' },
+    });
+
+    expect(selectorInput).toHaveValue('next_runnable');
   });
 
   it('disables launch when single-node node_key selector is missing node key', async () => {
