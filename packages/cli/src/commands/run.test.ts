@@ -50,6 +50,89 @@ describe('CLI run/status commands', () => {
     expect(persistedRun?.status).toBe('completed');
   });
 
+  it('executes one attempt when run uses single-node scope', async () => {
+    const db = createDatabase(':memory:');
+    migrateDatabase(db);
+    seedTwoNodeTree(db, 'design_tree');
+    const captured = createCapturedIo();
+
+    const exitCode = await main(['run', '--tree', 'design_tree', '--execution-scope', 'single_node'], {
+      dependencies: createDependencies(db, createSuccessfulProviderResolver()),
+      io: captured.io,
+    });
+
+    expect(exitCode).toBe(0);
+    expect(captured.stderr).toEqual([]);
+    expect(captured.stdout.some(line => line.includes('executed_nodes=1'))).toBe(true);
+
+    const persistedRun = db
+      .select({
+        status: workflowRuns.status,
+      })
+      .from(workflowRuns)
+      .all()[0];
+    expect(persistedRun?.status).toBe('completed');
+
+    const latestNodeStatuses = db
+      .select({
+        nodeKey: runNodes.nodeKey,
+        status: runNodes.status,
+        sequenceIndex: runNodes.sequenceIndex,
+      })
+      .from(runNodes)
+      .orderBy(runNodes.sequenceIndex)
+      .all();
+    expect(latestNodeStatuses).toEqual([
+      {
+        nodeKey: 'design',
+        status: 'completed',
+        sequenceIndex: 1,
+      },
+      {
+        nodeKey: 'review',
+        status: 'pending',
+        sequenceIndex: 2,
+      },
+    ]);
+  });
+
+  it('returns usage error when single-node node_key selector is invalid', async () => {
+    const db = createDatabase(':memory:');
+    migrateDatabase(db);
+    seedSingleNodeTree(db, 'design_tree');
+    const captured = createCapturedIo();
+
+    const exitCode = await main(
+      [
+        'run',
+        '--tree',
+        'design_tree',
+        '--execution-scope',
+        'single_node',
+        '--node-selector',
+        'node_key',
+        '--node-key',
+        'missing-node',
+      ],
+      {
+        dependencies: createDependencies(db, createSuccessfulProviderResolver()),
+        io: captured.io,
+      },
+    );
+
+    expect(exitCode).toBe(2);
+    expect(captured.stderr).toEqual([
+      'Node selector "node_key" did not match any node for key "missing-node" in workflow run id=1.',
+    ]);
+    expect(
+      db.select({
+        status: workflowRuns.status,
+      })
+        .from(workflowRuns)
+        .all()[0]?.status,
+    ).toBe('cancelled');
+  });
+
   it('returns not-found exit code when running an unknown tree key', async () => {
     const db = createDatabase(':memory:');
     migrateDatabase(db);
@@ -748,7 +831,8 @@ describe('CLI run/status commands', () => {
   });
 
   it('returns usage exit code for invalid run command inputs', async () => {
-    const runUsage = 'Usage: alphred run --tree <tree_key> [--repo <name|github:owner/repo|azure:org/project/repo>] [--branch <branch_name>]';
+    const runUsage =
+      'Usage: alphred run --tree <tree_key> [--repo <name|github:owner/repo|azure:org/project/repo>] [--branch <branch_name>] [--execution-scope <full|single_node>] [--node-selector <next_runnable|node_key>] [--node-key <node_key>]';
     const runPauseUsage = 'Usage: alphred run pause --run <run_id>';
     const cases: readonly {
       args: string[];
@@ -789,6 +873,40 @@ describe('CLI run/status commands', () => {
       {
         args: ['run', '--tree', 'design_tree', '--branch', 'fix/auth-bug'],
         stderr: ['Option "--branch" requires "--repo".', runUsage],
+      },
+      {
+        args: ['run', '--tree', 'design_tree', '--execution-scope', 'partial'],
+        stderr: ['Option "--execution-scope" must be "full" or "single_node".', runUsage],
+      },
+      {
+        args: ['run', '--tree', 'design_tree', '--node-selector', 'next_runnable'],
+        stderr: ['Option "--node-selector" requires "--execution-scope single_node".', runUsage],
+      },
+      {
+        args: ['run', '--tree', 'design_tree', '--node-key', 'design'],
+        stderr: ['Option "--node-key" requires "--execution-scope single_node".', runUsage],
+      },
+      {
+        args: ['run', '--tree', 'design_tree', '--execution-scope', 'single_node', '--node-selector', 'later'],
+        stderr: ['Option "--node-selector" must be "next_runnable" or "node_key".', runUsage],
+      },
+      {
+        args: ['run', '--tree', 'design_tree', '--execution-scope', 'single_node', '--node-selector', 'node_key'],
+        stderr: ['Option "--node-key" is required when "--node-selector node_key" is used.', runUsage],
+      },
+      {
+        args: [
+          'run',
+          '--tree',
+          'design_tree',
+          '--execution-scope',
+          'single_node',
+          '--node-selector',
+          'next_runnable',
+          '--node-key',
+          'design',
+        ],
+        stderr: ['Option "--node-key" requires "--node-selector node_key".', runUsage],
       },
       {
         args: ['run', 'pause'],

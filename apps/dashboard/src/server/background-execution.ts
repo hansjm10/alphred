@@ -1,5 +1,6 @@
 import {
   type PhaseProviderResolver,
+  type WorkflowRunNodeSelector,
 } from '@alphred/core';
 import {
   runWorktrees,
@@ -26,6 +27,20 @@ type BackgroundExecutionDependencies = {
       resolveProvider: PhaseProviderResolver;
     },
   ) => {
+    validateSingleNodeSelection: (params: { workflowRunId: number; nodeSelector?: WorkflowRunNodeSelector }) => void;
+    executeSingleNode: (params: {
+      workflowRunId: number;
+      options: {
+        workingDirectory: string;
+      };
+      nodeSelector?: WorkflowRunNodeSelector;
+    }) => Promise<{
+      finalStep: {
+        runStatus: string;
+        outcome: string;
+      };
+      executedNodes: number;
+    }>;
     executeRun: (params: {
       workflowRunId: number;
       options: {
@@ -57,11 +72,18 @@ export type BackgroundExecutionManager = {
     workingDirectory: string,
     worktreeManager: Pick<WorktreeManager, 'cleanupRun'> | null,
     cleanupWorktree: boolean,
+    executionScope?: 'full' | 'single_node',
+    nodeSelector?: WorkflowRunNodeSelector,
   ) => Promise<{
     runStatus: RunStatus;
     executionOutcome: string;
     executedNodes: number;
   }>;
+  validateSingleNodeSelection: (
+    db: AlphredDatabase,
+    runId: number,
+    nodeSelector?: WorkflowRunNodeSelector,
+  ) => void;
   markPendingRunCancelled: (db: AlphredDatabase, runId: number) => Promise<void>;
   resolveRunExecutionContext: (db: Pick<AlphredDatabase, 'select'>, runId: number) => RunExecutionContext;
   enqueueBackgroundRunExecution: (params: {
@@ -69,12 +91,16 @@ export type BackgroundExecutionManager = {
     workingDirectory: string;
     hasManagedWorktree: boolean;
     cleanupWorktree: boolean;
+    executionScope?: 'full' | 'single_node';
+    nodeSelector?: WorkflowRunNodeSelector;
   }) => boolean;
   ensureBackgroundRunExecution: (params: {
     runId: number;
     workingDirectory: string;
     hasManagedWorktree: boolean;
     cleanupWorktree: boolean;
+    executionScope?: 'full' | 'single_node';
+    nodeSelector?: WorkflowRunNodeSelector;
   }) => void;
   getBackgroundExecutionCount: () => number;
   hasBackgroundExecution: (runId: number) => boolean;
@@ -95,6 +121,8 @@ export function createBackgroundExecutionManager(params: {
     workingDirectory: string,
     worktreeManager: Pick<WorktreeManager, 'cleanupRun'> | null,
     cleanupWorktree: boolean,
+    executionScope: 'full' | 'single_node' = 'full',
+    nodeSelector?: WorkflowRunNodeSelector,
   ): Promise<{
     runStatus: RunStatus;
     executionOutcome: string;
@@ -107,12 +135,21 @@ export function createBackgroundExecutionManager(params: {
     let execution: Awaited<ReturnType<typeof executor.executeRun>> | undefined;
     let executionError: unknown = null;
     try {
-      execution = await executor.executeRun({
-        workflowRunId: runId,
-        options: {
-          workingDirectory,
-        },
-      });
+      execution =
+        executionScope === 'single_node'
+          ? await executor.executeSingleNode({
+              workflowRunId: runId,
+              options: {
+                workingDirectory,
+              },
+              nodeSelector,
+            })
+          : await executor.executeRun({
+              workflowRunId: runId,
+              options: {
+                workingDirectory,
+              },
+            });
     } catch (error) {
       executionError = error;
     }
@@ -145,6 +182,20 @@ export function createBackgroundExecutionManager(params: {
       executionOutcome: execution.finalStep.outcome,
       executedNodes: execution.executedNodes,
     };
+  }
+
+  function validateSingleNodeSelection(
+    db: AlphredDatabase,
+    runId: number,
+    nodeSelector?: WorkflowRunNodeSelector,
+  ): void {
+    const executor = dependencies.createSqlWorkflowExecutor(db, {
+      resolveProvider: dependencies.resolveProvider,
+    });
+    executor.validateSingleNodeSelection({
+      workflowRunId: runId,
+      nodeSelector,
+    });
   }
 
   async function markPendingRunCancelled(db: AlphredDatabase, runId: number): Promise<void> {
@@ -229,6 +280,8 @@ export function createBackgroundExecutionManager(params: {
     workingDirectory: string;
     hasManagedWorktree: boolean;
     cleanupWorktree: boolean;
+    executionScope?: 'full' | 'single_node';
+    nodeSelector?: WorkflowRunNodeSelector;
   }): boolean {
     if (backgroundRunExecutions.has(params.runId)) {
       return false;
@@ -244,6 +297,8 @@ export function createBackgroundExecutionManager(params: {
         params.workingDirectory,
         backgroundWorktreeManager,
         params.cleanupWorktree,
+        params.executionScope ?? 'full',
+        params.nodeSelector,
       );
     })
       .then(() => undefined)
@@ -310,6 +365,8 @@ export function createBackgroundExecutionManager(params: {
     workingDirectory: string;
     hasManagedWorktree: boolean;
     cleanupWorktree: boolean;
+    executionScope?: 'full' | 'single_node';
+    nodeSelector?: WorkflowRunNodeSelector;
   }): void {
     const didEnqueue = enqueueBackgroundRunExecution(params);
     if (didEnqueue) {
@@ -324,6 +381,7 @@ export function createBackgroundExecutionManager(params: {
 
   return {
     executeWorkflowRun,
+    validateSingleNodeSelection,
     markPendingRunCancelled,
     resolveRunExecutionContext,
     enqueueBackgroundRunExecution,

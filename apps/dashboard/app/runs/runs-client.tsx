@@ -5,8 +5,11 @@ import { useRouter } from 'next/navigation';
 import { useEffect, useMemo, useState } from 'react';
 import type {
   DashboardRepositoryState,
+  DashboardRunExecutionScope,
   DashboardRunLaunchResult,
+  DashboardRunNodeSelector,
   DashboardRunSummary,
+  DashboardWorkflowNodeOption,
   DashboardWorkflowTreeSummary,
 } from '../../src/server/dashboard-contracts';
 import { AuthRemediation } from '../ui/auth-remediation';
@@ -53,6 +56,8 @@ const LAUNCH_RESULT_RUN_STATUSES = new Set<DashboardRunLaunchResult['runStatus']
   'failed',
   'cancelled',
 ]);
+const RUN_EXECUTION_SCOPE_SET = new Set<DashboardRunExecutionScope>(['full', 'single_node']);
+const NODE_SELECTOR_TYPE_SET = new Set<DashboardRunNodeSelector['type']>(['next_runnable', 'node_key']);
 
 function resolveApiErrorMessage(status: number, payload: unknown, fallbackPrefix: string): string {
   if (
@@ -261,6 +266,655 @@ function parseLaunchResult(payload: unknown): DashboardRunLaunchResult | null {
   };
 }
 
+function buildNodeSelectorPayload(
+  executionScope: DashboardRunExecutionScope,
+  nodeSelectorType: DashboardRunNodeSelector['type'],
+  nodeKey: string,
+): DashboardRunNodeSelector | undefined {
+  if (executionScope !== 'single_node') {
+    return undefined;
+  }
+
+  if (nodeSelectorType === 'node_key') {
+    return {
+      type: 'node_key',
+      nodeKey: nodeKey.trim(),
+    };
+  }
+
+  return {
+    type: 'next_runnable',
+  };
+}
+
+async function postLaunchRequest(params: {
+  selectedTreeKey: string;
+  selectedRepositoryName: string;
+  branch: string;
+  executionScope: DashboardRunExecutionScope;
+  nodeSelectorType: DashboardRunNodeSelector['type'];
+  nodeKey: string;
+}): Promise<DashboardRunLaunchResult> {
+  const selectorPayload = buildNodeSelectorPayload(params.executionScope, params.nodeSelectorType, params.nodeKey);
+  const response = await fetch('/api/dashboard/runs', {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify({
+      treeKey: params.selectedTreeKey,
+      repositoryName: params.selectedRepositoryName || undefined,
+      branch: params.branch.trim() || undefined,
+      executionMode: 'async',
+      executionScope: params.executionScope,
+      nodeSelector: selectorPayload,
+    }),
+  });
+  const payload = (await response.json().catch(() => null)) as unknown;
+  if (!response.ok) {
+    throw new Error(resolveApiErrorMessage(response.status, payload, 'Run launch failed'));
+  }
+
+  const parsedResult = parseLaunchResult(payload);
+  if (parsedResult === null) {
+    throw new Error('Run launch response was malformed.');
+  }
+  return parsedResult;
+}
+
+function toErrorMessage(error: unknown, fallback: string): string {
+  return error instanceof Error ? error.message : fallback;
+}
+
+async function resolvePostLaunchBannerState(
+  refreshRunState: () => Promise<readonly DashboardRunSummary[]>,
+  workflowRunId: number,
+): Promise<{ runStatus: DashboardRunSummary['status'] | null; launchRefreshWarning: string | null }> {
+  try {
+    const refreshedRuns = await refreshRunState();
+    const refreshedLaunchRun = refreshedRuns.find((run) => run.id === workflowRunId);
+    return {
+      runStatus: refreshedLaunchRun?.status ?? null,
+      launchRefreshWarning: null,
+    };
+  } catch (error) {
+    return {
+      runStatus: null,
+      launchRefreshWarning: `Run accepted, but lifecycle refresh failed: ${toErrorMessage(
+        error,
+        'Unable to refresh run lifecycle state.',
+      )}`,
+    };
+  }
+}
+
+async function fetchDashboardRuns(limit: number): Promise<readonly DashboardRunSummary[]> {
+  const response = await fetch(`/api/dashboard/runs?limit=${limit}`, { method: 'GET' });
+  const payload = (await response.json().catch(() => null)) as unknown;
+  if (!response.ok) {
+    throw new Error(resolveApiErrorMessage(response.status, payload, 'Unable to refresh run lifecycle state'));
+  }
+
+  if (
+    typeof payload !== 'object' ||
+    payload === null ||
+    !('runs' in payload) ||
+    !Array.isArray((payload as { runs?: unknown }).runs)
+  ) {
+    throw new Error('Run refresh response was malformed.');
+  }
+
+  return sortRunsForDashboard((payload as { runs: DashboardRunSummary[] }).runs);
+}
+
+async function fetchWorkflowNodes(treeKey: string): Promise<readonly DashboardWorkflowNodeOption[]> {
+  const response = await fetch(`/api/dashboard/workflows/${encodeURIComponent(treeKey)}/nodes`, { method: 'GET' });
+  const payload = (await response.json().catch(() => null)) as unknown;
+  if (!response.ok) {
+    return [];
+  }
+
+  if (
+    typeof payload !== 'object' ||
+    payload === null ||
+    !('nodes' in payload) ||
+    !Array.isArray((payload as { nodes?: unknown }).nodes)
+  ) {
+    return [];
+  }
+
+  return (payload as { nodes: DashboardWorkflowNodeOption[] }).nodes;
+}
+
+function filterRunsForKpis(
+  runs: readonly DashboardRunSummary[],
+  activeWorkflowKey: string | null,
+  activeRepositoryName: string | null,
+  activeWindow: RunRouteTimeWindow,
+  nowMs: number,
+): readonly DashboardRunSummary[] {
+  return runs.filter((run) => {
+    if (activeWorkflowKey && run.tree.treeKey !== activeWorkflowKey) {
+      return false;
+    }
+
+    if (activeRepositoryName && run.repository?.name !== activeRepositoryName) {
+      return false;
+    }
+
+    return includesRunByWindow(run, activeWindow, nowMs);
+  });
+}
+
+function countFailureRuns24h(runs: readonly DashboardRunSummary[], nowMs: number): number {
+  const cutoff = nowMs - 24 * 60 * 60 * 1000;
+  return runs.filter((run) => {
+    if (run.status !== 'failed') {
+      return false;
+    }
+
+    const timestamp = resolveRunTimestampMs(run);
+    return timestamp !== null && timestamp >= cutoff;
+  }).length;
+}
+
+function selectExecutionScope(
+  value: string,
+  setExecutionScope: (scope: DashboardRunExecutionScope) => void,
+): void {
+  const nextValue = value as DashboardRunExecutionScope;
+  if (!RUN_EXECUTION_SCOPE_SET.has(nextValue)) {
+    return;
+  }
+  setExecutionScope(nextValue);
+}
+
+function selectNodeSelectorType(
+  value: string,
+  setNodeSelectorType: (type: DashboardRunNodeSelector['type']) => void,
+): void {
+  const nextValue = value as DashboardRunNodeSelector['type'];
+  if (!NODE_SELECTOR_TYPE_SET.has(nextValue)) {
+    return;
+  }
+  setNodeSelectorType(nextValue);
+}
+
+function NodeKeySelectOptions({
+  isLoadingNodes,
+  availableNodes,
+}: Readonly<{
+  isLoadingNodes: boolean;
+  availableNodes: readonly DashboardWorkflowNodeOption[];
+}>) {
+  if (isLoadingNodes) {
+    return <option value="">Loading nodes...</option>;
+  }
+
+  if (availableNodes.length === 0) {
+    return <option value="">No nodes available</option>;
+  }
+
+  return availableNodes.map((node) => (
+    <option key={node.nodeKey} value={node.nodeKey}>
+      {node.displayName}
+    </option>
+  ));
+}
+
+function LaunchFeedback({
+  launchBlockedReason,
+  launchError,
+  launchResult,
+  launchRefreshWarning,
+}: Readonly<{
+  launchBlockedReason: string | null;
+  launchError: string | null;
+  launchResult: LaunchBannerState | null;
+  launchRefreshWarning: string | null;
+}>) {
+  return (
+    <>
+      {launchBlockedReason ? <p className="meta-text">{launchBlockedReason}</p> : null}
+      {launchError ? (
+        <p className="run-launch-banner run-launch-banner--error" role="alert">
+          {launchError}
+        </p>
+      ) : null}
+      {launchResult ? (
+        <output className="run-launch-banner run-launch-banner--success" aria-live="polite">
+          {launchResult.runStatus === null
+            ? `Run #${launchResult.workflowRunId} accepted. `
+            : `Run #${launchResult.workflowRunId} accepted. Current status: ${launchResult.runStatus}. `}
+          <Link className="run-inline-link" href={`/runs/${launchResult.workflowRunId}`}>
+            Open run detail
+          </Link>
+          {launchRefreshWarning ? <span className="run-launch-banner__note">{` ${launchRefreshWarning}`}</span> : null}
+        </output>
+      ) : null}
+    </>
+  );
+}
+
+function navigateOnRunRowKey(event: { key: string; preventDefault: () => void }, onNavigate: () => void): void {
+  if (event.key !== 'Enter' && event.key !== ' ') {
+    return;
+  }
+  event.preventDefault();
+  onNavigate();
+}
+
+type RunLaunchControlsProps = Readonly<{
+  workflows: readonly DashboardWorkflowTreeSummary[];
+  clonedRepositories: readonly DashboardRepositoryState[];
+  authGate: GitHubAuthGate;
+  launchBlockedReason: string | null;
+  selectedTreeKey: string;
+  selectedRepositoryName: string;
+  branch: string;
+  executionScope: DashboardRunExecutionScope;
+  nodeSelectorType: DashboardRunNodeSelector['type'];
+  nodeKey: string;
+  availableNodes: readonly DashboardWorkflowNodeOption[];
+  isLoadingNodes: boolean;
+  launchDisabled: boolean;
+  launchButtonLabel: string;
+  launchError: string | null;
+  launchRefreshWarning: string | null;
+  launchResult: LaunchBannerState | null;
+  onSelectTreeKey: (treeKey: string) => void;
+  onSelectRepositoryName: (repositoryName: string) => void;
+  onBranchChange: (branch: string) => void;
+  onExecutionScopeChange: (scope: string) => void;
+  onNodeSelectorTypeChange: (selectorType: string) => void;
+  onNodeKeyChange: (nodeKey: string) => void;
+  onLaunchRun: () => Promise<void>;
+}>;
+
+function RunLaunchControls({
+  workflows,
+  clonedRepositories,
+  authGate,
+  launchBlockedReason,
+  selectedTreeKey,
+  selectedRepositoryName,
+  branch,
+  executionScope,
+  nodeSelectorType,
+  nodeKey,
+  availableNodes,
+  isLoadingNodes,
+  launchDisabled,
+  launchButtonLabel,
+  launchError,
+  launchRefreshWarning,
+  launchResult,
+  onSelectTreeKey,
+  onSelectRepositoryName,
+  onBranchChange,
+  onExecutionScopeChange,
+  onNodeSelectorTypeChange,
+  onNodeKeyChange,
+  onLaunchRun,
+}: RunLaunchControlsProps) {
+  return (
+    <>
+      <Card title="Launch run" description="Tree selection + repository context where applicable.">
+        <form
+          className="run-launch-form"
+          onSubmit={(event) => {
+            event.preventDefault();
+            void onLaunchRun();
+          }}
+        >
+          <label className="run-launch-form__field" htmlFor="run-launch-workflow">
+            <span className="meta-text">Workflow</span>
+            <select
+              id="run-launch-workflow"
+              value={selectedTreeKey}
+              disabled={launchBlockedReason !== null || workflows.length === 0}
+              onChange={(event) => {
+                onSelectTreeKey(event.currentTarget.value);
+              }}
+            >
+              {workflows.length === 0 ? <option value="">No workflows available</option> : null}
+              {workflows.map((workflow) => (
+                <option key={`${workflow.treeKey}-${workflow.id}`} value={workflow.treeKey}>
+                  {workflow.name}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <label className="run-launch-form__field" htmlFor="run-launch-repository">
+            <span className="meta-text">Repository context</span>
+            <select
+              id="run-launch-repository"
+              value={selectedRepositoryName}
+              disabled={launchBlockedReason !== null}
+              onChange={(event) => {
+                onSelectRepositoryName(event.currentTarget.value);
+              }}
+            >
+              <option value="">No repository context</option>
+              {clonedRepositories.map((repository) => (
+                <option key={repository.id} value={repository.name}>
+                  {repository.name}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <label className="run-launch-form__field" htmlFor="run-launch-branch">
+            <span className="meta-text">Branch (optional)</span>
+            <input
+              id="run-launch-branch"
+              value={branch}
+              disabled={launchBlockedReason !== null || selectedRepositoryName.length === 0}
+              onChange={(event) => {
+                onBranchChange(event.currentTarget.value);
+              }}
+              placeholder="feature/dashboard-run-control"
+            />
+          </label>
+
+          <label className="run-launch-form__field" htmlFor="run-launch-execution-scope">
+            <span className="meta-text">Execution scope</span>
+            <select
+              id="run-launch-execution-scope"
+              value={executionScope}
+              disabled={launchBlockedReason !== null}
+              onChange={(event) => {
+                onExecutionScopeChange(event.currentTarget.value);
+              }}
+            >
+              <option value="full">Full workflow</option>
+              <option value="single_node">Single node</option>
+            </select>
+          </label>
+
+          {executionScope === 'single_node' ? (
+            <label className="run-launch-form__field" htmlFor="run-launch-node-selector">
+              <span className="meta-text">Node selector</span>
+              <select
+                id="run-launch-node-selector"
+                value={nodeSelectorType}
+                disabled={launchBlockedReason !== null}
+                onChange={(event) => {
+                  onNodeSelectorTypeChange(event.currentTarget.value);
+                }}
+              >
+                <option value="next_runnable">Next runnable</option>
+                <option value="node_key">Node key</option>
+              </select>
+            </label>
+          ) : null}
+
+          {executionScope === 'single_node' && nodeSelectorType === 'node_key' ? (
+            <label className="run-launch-form__field" htmlFor="run-launch-node-key">
+              <span className="meta-text">Node key</span>
+              <select
+                id="run-launch-node-key"
+                value={nodeKey}
+                disabled={launchBlockedReason !== null || isLoadingNodes || availableNodes.length === 0}
+                onChange={(event) => {
+                  onNodeKeyChange(event.currentTarget.value);
+                }}
+              >
+                <NodeKeySelectOptions isLoadingNodes={isLoadingNodes} availableNodes={availableNodes} />
+              </select>
+            </label>
+          ) : null}
+
+          <div className="action-row">
+            <ActionButton tone="primary" type="submit" disabled={launchDisabled} aria-disabled={launchDisabled}>
+              {launchButtonLabel}
+            </ActionButton>
+            <span className="meta-text">
+              {executionScope === 'single_node'
+                ? 'Launch runs one node attempt, then terminalizes the run.'
+                : 'Launch defaults to async mode.'}
+            </span>
+          </div>
+        </form>
+
+        <LaunchFeedback
+          launchBlockedReason={launchBlockedReason}
+          launchError={launchError}
+          launchResult={launchResult}
+          launchRefreshWarning={launchRefreshWarning}
+        />
+      </Card>
+
+      <Panel title="Launch readiness" description="Invalid actions are blocked and paired with remediation.">
+        <ul className="entity-list">
+          <li>
+            <span>GitHub auth</span>
+            <StatusBadge status={authGate.badge.status} label={authGate.badge.label} />
+          </li>
+          <li>
+            <span>Workflow trees</span>
+            <span className="meta-text">{workflows.length}</span>
+          </li>
+          <li>
+            <span>Launch-ready repos</span>
+            <span className="meta-text">{clonedRepositories.length}</span>
+          </li>
+        </ul>
+        <AuthRemediation
+          authGate={authGate}
+          context="Run launch is blocked until GitHub authentication is available."
+        />
+      </Panel>
+    </>
+  );
+}
+
+type RunsOverviewCardProps = Readonly<{
+  workflows: readonly DashboardWorkflowTreeSummary[];
+  clonedRepositories: readonly DashboardRepositoryState[];
+  normalizedFilter: RunRouteFilter;
+  activeRepositoryName: string | null;
+  activeWorkflowKey: string | null;
+  activeWindow: RunRouteTimeWindow;
+  hasActiveFilters: boolean;
+  runFilterTabs: readonly TabItem[];
+  activeHref: string;
+  visibleRuns: readonly DashboardRunSummary[];
+  activeRunCount: number;
+  failureCount24h: number;
+  medianDurationLabel: string;
+  onNavigate: (href: string) => void;
+}>;
+
+function RunsOverviewCard({
+  workflows,
+  clonedRepositories,
+  normalizedFilter,
+  activeRepositoryName,
+  activeWorkflowKey,
+  activeWindow,
+  hasActiveFilters,
+  runFilterTabs,
+  activeHref,
+  visibleRuns,
+  activeRunCount,
+  failureCount24h,
+  medianDurationLabel,
+  onNavigate,
+}: RunsOverviewCardProps) {
+  return (
+    <Card title="Runs" description="Filter run activity and open detail timelines.">
+      <section className="run-filter-bar" aria-label="Run filters">
+        <div className="run-filter-bar__fields">
+          <label className="run-filter-bar__field" htmlFor="runs-filter-workflow">
+            <span className="meta-text">Workflow filter</span>
+            <select
+              id="runs-filter-workflow"
+              value={activeWorkflowKey ?? ''}
+              onChange={(event) => {
+                const workflow = event.currentTarget.value.trim();
+                onNavigate(buildRunsListHref({
+                  status: normalizedFilter,
+                  workflow: workflow.length === 0 ? null : workflow,
+                  repository: activeRepositoryName,
+                  window: activeWindow,
+                }));
+              }}
+            >
+              <option value="">All workflows</option>
+              {workflows.map((workflow) => (
+                <option key={`${workflow.treeKey}-${workflow.id}`} value={workflow.treeKey}>
+                  {workflow.name}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <label className="run-filter-bar__field" htmlFor="runs-filter-repository">
+            <span className="meta-text">Repository filter</span>
+            <select
+              id="runs-filter-repository"
+              value={activeRepositoryName ?? ''}
+              onChange={(event) => {
+                const repository = event.currentTarget.value.trim();
+                onNavigate(buildRunsListHref({
+                  status: normalizedFilter,
+                  workflow: activeWorkflowKey,
+                  repository: repository.length === 0 ? null : repository,
+                  window: activeWindow,
+                }));
+              }}
+            >
+              <option value="">All repositories</option>
+              {clonedRepositories.map((repository) => (
+                <option key={repository.id} value={repository.name}>
+                  {repository.name}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <label className="run-filter-bar__field" htmlFor="runs-filter-window">
+            <span className="meta-text">Time window</span>
+            <select
+              id="runs-filter-window"
+              value={activeWindow}
+              onChange={(event) => {
+                onNavigate(buildRunsListHref({
+                  status: normalizedFilter,
+                  workflow: activeWorkflowKey,
+                  repository: activeRepositoryName,
+                  window: event.currentTarget.value as RunRouteTimeWindow,
+                }));
+              }}
+            >
+              <option value="all">All time</option>
+              <option value="24h">Last 24h</option>
+              <option value="7d">Last 7d</option>
+              <option value="30d">Last 30d</option>
+            </select>
+          </label>
+        </div>
+
+        {hasActiveFilters ? (
+          <div className="action-row">
+            <Link className="button-link button-link--secondary" href="/runs">
+              Clear Filters
+            </Link>
+          </div>
+        ) : null}
+      </section>
+
+      <Tabs items={runFilterTabs} activeHref={activeHref} ariaLabel="Run status filters" />
+
+      {visibleRuns.length === 0 ? (
+        <div className="page-stack">
+          <p>{hasActiveFilters ? 'No runs match these filters.' : 'No runs are available yet.'}</p>
+          {hasActiveFilters ? (
+            <div className="action-row">
+              <Link className="button-link button-link--secondary" href="/runs">
+                Clear Filters
+              </Link>
+            </div>
+          ) : null}
+        </div>
+      ) : (
+        <div className="runs-table-wrapper">
+          <table className="runs-table runs-table--clickable">
+            <thead>
+              <tr>
+                <th scope="col">Run</th>
+                <th scope="col">Repository</th>
+                <th scope="col">Status</th>
+                <th scope="col">Started</th>
+                <th scope="col">Completed</th>
+                <th scope="col">Node lifecycle</th>
+                <th scope="col">Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {visibleRuns.map((run) => (
+                <tr
+                  key={run.id}
+                  className="runs-table__row"
+                  tabIndex={0}
+                  onClick={() => {
+                    onNavigate(`/runs/${run.id}`);
+                  }}
+                  onKeyDown={(event) => {
+                    navigateOnRunRowKey(event, () => {
+                      onNavigate(`/runs/${run.id}`);
+                    });
+                  }}
+                >
+                  <td>
+                    <p>{`#${run.id} ${run.tree.name}`}</p>
+                    <p className="meta-text">{run.tree.treeKey}</p>
+                  </td>
+                  <td className="meta-text">{run.repository?.name ?? 'Not attached'}</td>
+                  <td>
+                    <StatusBadge status={run.status} />
+                  </td>
+                  <td className="meta-text">{normalizeDateTimeLabel(run.startedAt, 'Not started')}</td>
+                  <td className="meta-text">{normalizeDateTimeLabel(run.completedAt, 'In progress')}</td>
+                  <td className="meta-text">{formatNodeSummary(run)}</td>
+                  <td>
+                    <Link
+                      className="button-link button-link--secondary"
+                      href={`/runs/${run.id}`}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                      }}
+                    >
+                      Open
+                    </Link>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      <dl className="run-kpi-strip" aria-label="Run KPIs">
+        <div className="run-kpi-strip__item">
+          <dt>Active</dt>
+          <dd>{activeRunCount}</dd>
+        </div>
+        <div className="run-kpi-strip__item">
+          <dt>Failures (24h)</dt>
+          <dd>{failureCount24h}</dd>
+        </div>
+        <div className="run-kpi-strip__item">
+          <dt>Median duration</dt>
+          <dd>{medianDurationLabel}</dd>
+        </div>
+      </dl>
+    </Card>
+  );
+}
+
 export function RunsPageContent({
   runs,
   workflows,
@@ -276,6 +930,11 @@ export function RunsPageContent({
   const [selectedTreeKey, setSelectedTreeKey] = useState<string>(workflows[0]?.treeKey ?? '');
   const [selectedRepositoryName, setSelectedRepositoryName] = useState<string>(activeRepositoryName ?? '');
   const [branch, setBranch] = useState<string>('');
+  const [executionScope, setExecutionScope] = useState<DashboardRunExecutionScope>('full');
+  const [nodeSelectorType, setNodeSelectorType] = useState<DashboardRunNodeSelector['type']>('next_runnable');
+  const [nodeKey, setNodeKey] = useState<string>('');
+  const [availableNodes, setAvailableNodes] = useState<readonly DashboardWorkflowNodeOption[]>([]);
+  const [isLoadingNodes, setIsLoadingNodes] = useState<boolean>(false);
   const [isLaunching, setIsLaunching] = useState<boolean>(false);
   const [launchError, setLaunchError] = useState<string | null>(null);
   const [launchRefreshWarning, setLaunchRefreshWarning] = useState<string | null>(null);
@@ -290,7 +949,12 @@ export function RunsPageContent({
     repository: activeRepositoryName,
     window: activeWindow,
   });
-  const launchDisabled = isLaunching || launchBlockedReason !== null || selectedTreeKey.trim().length === 0;
+  const nodeSelectorRequiresNodeKey = executionScope === 'single_node' && nodeSelectorType === 'node_key';
+  const launchDisabled =
+    isLaunching ||
+    launchBlockedReason !== null ||
+    selectedTreeKey.trim().length === 0 ||
+    (nodeSelectorRequiresNodeKey && nodeKey.trim().length === 0);
   const launchButtonLabel = isLaunching ? 'Launching...' : 'Launch Run';
 
   const clonedRepositories = useMemo(
@@ -328,19 +992,10 @@ export function RunsPageContent({
     },
   ]), [activeRepositoryName, activeWindow, activeWorkflowKey]);
 
-  const filteredRunsForKpis = useMemo(() => {
-    return runState.filter((run) => {
-      if (activeWorkflowKey && run.tree.treeKey !== activeWorkflowKey) {
-        return false;
-      }
-
-      if (activeRepositoryName && run.repository?.name !== activeRepositoryName) {
-        return false;
-      }
-
-      return includesRunByWindow(run, activeWindow, nowMs);
-    });
-  }, [activeRepositoryName, activeWindow, activeWorkflowKey, nowMs, runState]);
+  const filteredRunsForKpis = useMemo(
+    () => filterRunsForKpis(runState, activeWorkflowKey, activeRepositoryName, activeWindow, nowMs),
+    [activeRepositoryName, activeWindow, activeWorkflowKey, nowMs, runState],
+  );
 
   const visibleRuns = useMemo(() => {
     return filteredRunsForKpis.filter((run) => includesRunByFilter(run, normalizedFilter));
@@ -351,23 +1006,8 @@ export function RunsPageContent({
     [filteredRunsForKpis],
   );
 
-  const failureCount24h = useMemo(() => {
-    const cutoff = nowMs - 24 * 60 * 60 * 1000;
-    return filteredRunsForKpis.filter((run) => {
-      if (run.status !== 'failed') {
-        return false;
-      }
-
-      const timestamp = resolveRunTimestampMs(run);
-      return timestamp !== null && timestamp >= cutoff;
-    }).length;
-  }, [filteredRunsForKpis, nowMs]);
-
-  const medianDurationLabel = useMemo(
-    () => resolveMedianDurationLabel(filteredRunsForKpis),
-    [filteredRunsForKpis],
-  );
-
+  const failureCount24h = useMemo(() => countFailureRuns24h(filteredRunsForKpis, nowMs), [filteredRunsForKpis, nowMs]);
+  const medianDurationLabel = useMemo(() => resolveMedianDurationLabel(filteredRunsForKpis), [filteredRunsForKpis]);
   const hasActiveFilters =
     normalizedFilter !== 'all' ||
     activeWorkflowKey !== null ||
@@ -382,23 +1022,34 @@ export function RunsPageContent({
     setSelectedRepositoryName(activeRepositoryName ?? '');
   }, [activeRepositoryName]);
 
+  useEffect(() => {
+    if (selectedTreeKey.length === 0) {
+      setAvailableNodes([]);
+      setNodeKey('');
+      return;
+    }
+
+    let cancelled = false;
+    setIsLoadingNodes(true);
+    setAvailableNodes([]);
+    setNodeKey('');
+
+    void fetchWorkflowNodes(selectedTreeKey).then((nodes) => {
+      if (cancelled) {
+        return;
+      }
+      setAvailableNodes(nodes);
+      setNodeKey(nodes[0]?.nodeKey ?? '');
+      setIsLoadingNodes(false);
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedTreeKey]);
+
   async function refreshRunState(): Promise<readonly DashboardRunSummary[]> {
-    const response = await fetch(`/api/dashboard/runs?limit=${DEFAULT_RUN_LIST_LIMIT}`, { method: 'GET' });
-    const payload = (await response.json().catch(() => null)) as unknown;
-    if (!response.ok) {
-      throw new Error(resolveApiErrorMessage(response.status, payload, 'Unable to refresh run lifecycle state'));
-    }
-
-    if (
-      typeof payload !== 'object' ||
-      payload === null ||
-      !('runs' in payload) ||
-      !Array.isArray((payload as { runs?: unknown }).runs)
-    ) {
-      throw new Error('Run refresh response was malformed.');
-    }
-
-    const refreshedRuns = sortRunsForDashboard((payload as { runs: DashboardRunSummary[] }).runs);
+    const refreshedRuns = await fetchDashboardRuns(DEFAULT_RUN_LIST_LIMIT);
     setRunState(refreshedRuns);
     return refreshedRuns;
   }
@@ -414,50 +1065,23 @@ export function RunsPageContent({
     setIsLaunching(true);
 
     try {
-      const response = await fetch('/api/dashboard/runs', {
-        method: 'POST',
-        headers: {
-          'content-type': 'application/json',
-        },
-        body: JSON.stringify({
-          treeKey: selectedTreeKey,
-          repositoryName: selectedRepositoryName || undefined,
-          branch: branch.trim() || undefined,
-          executionMode: 'async',
-        }),
+      const parsedResult = await postLaunchRequest({
+        selectedTreeKey,
+        selectedRepositoryName,
+        branch,
+        executionScope,
+        nodeSelectorType,
+        nodeKey,
       });
-      const payload = (await response.json().catch(() => null)) as unknown;
-      if (!response.ok) {
-        throw new Error(resolveApiErrorMessage(response.status, payload, 'Run launch failed'));
-      }
-
-      const parsedResult = parseLaunchResult(payload);
-      if (parsedResult === null) {
-        throw new Error('Run launch response was malformed.');
-      }
-
+      const postLaunchBanner = await resolvePostLaunchBannerState(refreshRunState, parsedResult.workflowRunId);
       setLaunchResult({
         workflowRunId: parsedResult.workflowRunId,
-        runStatus: null,
+        runStatus: postLaunchBanner.runStatus,
       });
-
-      try {
-        const refreshedRuns = await refreshRunState();
-        const refreshedLaunchRun = refreshedRuns.find((run) => run.id === parsedResult.workflowRunId);
-        if (refreshedLaunchRun) {
-          setLaunchResult({
-            workflowRunId: parsedResult.workflowRunId,
-            runStatus: refreshedLaunchRun.status,
-          });
-        }
-      } catch (error) {
-        const message = error instanceof Error ? error.message : 'Unable to refresh run lifecycle state.';
-        setLaunchRefreshWarning(`Run accepted, but lifecycle refresh failed: ${message}`);
-      }
+      setLaunchRefreshWarning(postLaunchBanner.launchRefreshWarning);
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Run launch failed.';
       setLaunchResult(null);
-      setLaunchError(message);
+      setLaunchError(toErrorMessage(error, 'Run launch failed.'));
     } finally {
       setIsLaunching(false);
     }
@@ -467,294 +1091,60 @@ export function RunsPageContent({
     <div className="page-stack">
       <section className="page-heading">
         <h2>Run lifecycle</h2>
-        <p>Launch new runs in safe async mode and monitor lifecycle state from persisted data.</p>
+        <p>Launch full or single-node runs in async mode and monitor lifecycle state from persisted data.</p>
       </section>
 
       <div className="page-grid">
-        <Card title="Launch run" description="Tree selection + repository context where applicable.">
-          <form
-            className="run-launch-form"
-            onSubmit={(event) => {
-              event.preventDefault();
-              void handleLaunchRun();
-            }}
-          >
-            <label className="run-launch-form__field" htmlFor="run-launch-workflow">
-              <span className="meta-text">Workflow</span>
-              <select
-                id="run-launch-workflow"
-                value={selectedTreeKey}
-                disabled={launchBlockedReason !== null || workflows.length === 0}
-                onChange={(event) => {
-                  setSelectedTreeKey(event.currentTarget.value);
-                }}
-              >
-                {workflows.length === 0 ? <option value="">No workflows available</option> : null}
-                {workflows.map((workflow) => (
-                  <option key={`${workflow.treeKey}-${workflow.id}`} value={workflow.treeKey}>
-                    {workflow.name}
-                  </option>
-                ))}
-              </select>
-            </label>
+        <RunLaunchControls
+          workflows={workflows}
+          clonedRepositories={clonedRepositories}
+          authGate={authGate}
+          launchBlockedReason={launchBlockedReason}
+          selectedTreeKey={selectedTreeKey}
+          selectedRepositoryName={selectedRepositoryName}
+          branch={branch}
+          executionScope={executionScope}
+          nodeSelectorType={nodeSelectorType}
+          nodeKey={nodeKey}
+          availableNodes={availableNodes}
+          isLoadingNodes={isLoadingNodes}
+          launchDisabled={launchDisabled}
+          launchButtonLabel={launchButtonLabel}
+          launchError={launchError}
+          launchRefreshWarning={launchRefreshWarning}
+          launchResult={launchResult}
+          onSelectTreeKey={setSelectedTreeKey}
+          onSelectRepositoryName={setSelectedRepositoryName}
+          onBranchChange={setBranch}
+          onExecutionScopeChange={(scope) => {
+            selectExecutionScope(scope, setExecutionScope);
+          }}
+          onNodeSelectorTypeChange={(selectorType) => {
+            selectNodeSelectorType(selectorType, setNodeSelectorType);
+          }}
+          onNodeKeyChange={setNodeKey}
+          onLaunchRun={handleLaunchRun}
+        />
+      </div>
 
-            <label className="run-launch-form__field" htmlFor="run-launch-repository">
-              <span className="meta-text">Repository context</span>
-              <select
-                id="run-launch-repository"
-                value={selectedRepositoryName}
-                disabled={launchBlockedReason !== null}
-                onChange={(event) => {
-                  setSelectedRepositoryName(event.currentTarget.value);
-                }}
-              >
-                <option value="">No repository context</option>
-                {clonedRepositories.map((repository) => (
-                  <option key={repository.id} value={repository.name}>
-                    {repository.name}
-                  </option>
-                ))}
-              </select>
-            </label>
-
-            <label className="run-launch-form__field" htmlFor="run-launch-branch">
-              <span className="meta-text">Branch (optional)</span>
-              <input
-                id="run-launch-branch"
-                value={branch}
-                disabled={launchBlockedReason !== null || selectedRepositoryName.length === 0}
-                onChange={(event) => {
-                  setBranch(event.currentTarget.value);
-                }}
-                placeholder="feature/dashboard-run-control"
-              />
-            </label>
-
-            <div className="action-row">
-              <ActionButton
-                tone="primary"
-                type="submit"
-                disabled={launchDisabled}
-                aria-disabled={launchDisabled}
-              >
-                {launchButtonLabel}
-              </ActionButton>
-              <span className="meta-text">Launch defaults to async mode.</span>
-            </div>
-          </form>
-
-          {launchBlockedReason ? <p className="meta-text">{launchBlockedReason}</p> : null}
-          {launchError ? (
-            <p className="run-launch-banner run-launch-banner--error" role="alert">
-              {launchError}
-            </p>
-          ) : null}
-          {launchResult ? (
-            <output className="run-launch-banner run-launch-banner--success" aria-live="polite">
-              {launchResult.runStatus === null
-                ? `Run #${launchResult.workflowRunId} accepted. `
-                : `Run #${launchResult.workflowRunId} accepted. Current status: ${launchResult.runStatus}. `}
-              <Link className="run-inline-link" href={`/runs/${launchResult.workflowRunId}`}>
-                Open run detail
-              </Link>
-              {launchRefreshWarning ? (
-                <span className="run-launch-banner__note">{` ${launchRefreshWarning}`}</span>
-              ) : null}
-            </output>
-          ) : null}
-        </Card>
-
-        <Panel title="Launch readiness" description="Invalid actions are blocked and paired with remediation.">
-          <ul className="entity-list">
-            <li>
-              <span>GitHub auth</span>
-              <StatusBadge status={authGate.badge.status} label={authGate.badge.label} />
-            </li>
-            <li>
-              <span>Workflow trees</span>
-              <span className="meta-text">{workflows.length}</span>
-            </li>
-            <li>
-              <span>Launch-ready repos</span>
-              <span className="meta-text">{clonedRepositories.length}</span>
-            </li>
-          </ul>
-          <AuthRemediation
-            authGate={authGate}
-            context="Run launch is blocked until GitHub authentication is available."
-          />
-        </Panel>
-	      </div>
-
-		      <Card title="Runs" description="Filter run activity and open detail timelines.">
-		        <section className="run-filter-bar" aria-label="Run filters">
-		          <div className="run-filter-bar__fields">
-		            <label className="run-filter-bar__field" htmlFor="runs-filter-workflow">
-		              <span className="meta-text">Workflow filter</span>
-		              <select
-	                id="runs-filter-workflow"
-	                value={activeWorkflowKey ?? ''}
-	                onChange={(event) => {
-	                  const workflow = event.currentTarget.value.trim();
-	                  router.push(buildRunsListHref({
-	                    status: normalizedFilter,
-	                    workflow: workflow.length === 0 ? null : workflow,
-	                    repository: activeRepositoryName,
-	                    window: activeWindow,
-	                  }));
-	                }}
-	              >
-	                <option value="">All workflows</option>
-	                {workflows.map((workflow) => (
-	                  <option key={`${workflow.treeKey}-${workflow.id}`} value={workflow.treeKey}>
-	                    {workflow.name}
-	                  </option>
-	                ))}
-	              </select>
-	            </label>
-
-	            <label className="run-filter-bar__field" htmlFor="runs-filter-repository">
-	              <span className="meta-text">Repository filter</span>
-	              <select
-	                id="runs-filter-repository"
-	                value={activeRepositoryName ?? ''}
-	                onChange={(event) => {
-	                  const repository = event.currentTarget.value.trim();
-	                  router.push(buildRunsListHref({
-	                    status: normalizedFilter,
-	                    workflow: activeWorkflowKey,
-	                    repository: repository.length === 0 ? null : repository,
-	                    window: activeWindow,
-	                  }));
-	                }}
-	              >
-	                <option value="">All repositories</option>
-	                {clonedRepositories.map((repository) => (
-	                  <option key={repository.id} value={repository.name}>
-	                    {repository.name}
-	                  </option>
-	                ))}
-	              </select>
-	            </label>
-
-	            <label className="run-filter-bar__field" htmlFor="runs-filter-window">
-	              <span className="meta-text">Time window</span>
-	              <select
-	                id="runs-filter-window"
-	                value={activeWindow}
-	                onChange={(event) => {
-	                  router.push(buildRunsListHref({
-	                    status: normalizedFilter,
-	                    workflow: activeWorkflowKey,
-	                    repository: activeRepositoryName,
-	                    window: event.currentTarget.value as RunRouteTimeWindow,
-	                  }));
-	                }}
-	              >
-	                <option value="all">All time</option>
-	                <option value="24h">Last 24h</option>
-	                <option value="7d">Last 7d</option>
-	                <option value="30d">Last 30d</option>
-	              </select>
-	            </label>
-	          </div>
-
-		          {hasActiveFilters ? (
-		            <div className="action-row">
-		              <Link className="button-link button-link--secondary" href="/runs">
-		                Clear Filters
-		              </Link>
-		            </div>
-		          ) : null}
-		        </section>
-
-	        <Tabs items={runFilterTabs} activeHref={activeHref} ariaLabel="Run status filters" />
-
-	        {visibleRuns.length === 0 ? (
-	          <div className="page-stack">
-	            <p>{hasActiveFilters ? 'No runs match these filters.' : 'No runs are available yet.'}</p>
-	            {hasActiveFilters ? (
-	              <div className="action-row">
-	                <Link className="button-link button-link--secondary" href="/runs">
-	                  Clear Filters
-	                </Link>
-	              </div>
-	            ) : null}
-	          </div>
-	        ) : (
-	          <div className="runs-table-wrapper">
-	            <table className="runs-table runs-table--clickable">
-	              <thead>
-	                <tr>
-	                  <th scope="col">Run</th>
-	                  <th scope="col">Repository</th>
-	                  <th scope="col">Status</th>
-                  <th scope="col">Started</th>
-                  <th scope="col">Completed</th>
-                  <th scope="col">Node lifecycle</th>
-                  <th scope="col">Actions</th>
-                </tr>
-	              </thead>
-	              <tbody>
-	                {visibleRuns.map((run) => (
-	                  <tr
-	                    key={run.id}
-	                    className="runs-table__row"
-	                    tabIndex={0}
-	                    onClick={() => {
-	                      router.push(`/runs/${run.id}`);
-	                    }}
-	                    onKeyDown={(event) => {
-	                      if (event.key === 'Enter' || event.key === ' ') {
-	                        event.preventDefault();
-	                        router.push(`/runs/${run.id}`);
-	                      }
-	                    }}
-	                  >
-	                    <td>
-	                      <p>{`#${run.id} ${run.tree.name}`}</p>
-	                      <p className="meta-text">{run.tree.treeKey}</p>
-	                    </td>
-	                    <td className="meta-text">{run.repository?.name ?? 'Not attached'}</td>
-                    <td>
-                      <StatusBadge status={run.status} />
-                    </td>
-                    <td className="meta-text">{normalizeDateTimeLabel(run.startedAt, 'Not started')}</td>
-	                    <td className="meta-text">{normalizeDateTimeLabel(run.completedAt, 'In progress')}</td>
-	                    <td className="meta-text">{formatNodeSummary(run)}</td>
-	                    <td>
-	                      <Link
-	                        className="button-link button-link--secondary"
-	                        href={`/runs/${run.id}`}
-	                        onClick={(event) => {
-	                          event.stopPropagation();
-	                        }}
-	                      >
-	                        Open
-	                      </Link>
-	                    </td>
-	                  </tr>
-	                ))}
-	              </tbody>
-	            </table>
-	          </div>
-	        )}
-
-	        <dl className="run-kpi-strip" aria-label="Run KPIs">
-	          <div className="run-kpi-strip__item">
-	            <dt>Active</dt>
-	            <dd>{activeRunCount}</dd>
-	          </div>
-	          <div className="run-kpi-strip__item">
-	            <dt>Failures (24h)</dt>
-	            <dd>{failureCount24h}</dd>
-	          </div>
-	          <div className="run-kpi-strip__item">
-	            <dt>Median duration</dt>
-	            <dd>{medianDurationLabel}</dd>
-	          </div>
-	        </dl>
-	      </Card>
-	    </div>
-	  );
+      <RunsOverviewCard
+        workflows={workflows}
+        clonedRepositories={clonedRepositories}
+        normalizedFilter={normalizedFilter}
+        activeRepositoryName={activeRepositoryName}
+        activeWorkflowKey={activeWorkflowKey}
+        activeWindow={activeWindow}
+        hasActiveFilters={hasActiveFilters}
+        runFilterTabs={runFilterTabs}
+        activeHref={activeHref}
+        visibleRuns={visibleRuns}
+        activeRunCount={activeRunCount}
+        failureCount24h={failureCount24h}
+        medianDurationLabel={medianDurationLabel}
+        onNavigate={(href) => {
+          router.push(href);
+        }}
+      />
+    </div>
+  );
 }

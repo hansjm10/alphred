@@ -1,4 +1,4 @@
-import type { WorkflowRunControlAction } from '@alphred/core';
+import type { WorkflowRunControlAction, WorkflowRunNodeSelector } from '@alphred/core';
 import {
   repositorySyncStrategies,
   type RepositorySyncDetails,
@@ -373,13 +373,118 @@ export function parseRepoAddConfig(options: ReadonlyMap<string, string>): {
   };
 }
 
+function runUsageFailure(io: Pick<CliIo, 'stderr'>, message: string): ParsedRunCommandInput {
+  return {
+    ok: false,
+    exitCode: usageError(io, message, RUN_USAGE),
+  };
+}
+
+function parseExecutionScopeOption(
+  options: ReadonlyMap<string, string>,
+  io: Pick<CliIo, 'stderr'>,
+):
+  | {
+      ok: true;
+      executionScope: 'full' | 'single_node';
+    }
+  | ParsedRunCommandInput {
+  const executionScopeOption = options.get('execution-scope');
+  if (executionScopeOption === undefined) {
+    return {
+      ok: true,
+      executionScope: 'full',
+    };
+  }
+
+  const normalizedScope = executionScopeOption.trim();
+  if (normalizedScope !== 'full' && normalizedScope !== 'single_node') {
+    return runUsageFailure(io, 'Option "--execution-scope" must be "full" or "single_node".');
+  }
+
+  return {
+    ok: true,
+    executionScope: normalizedScope,
+  };
+}
+
+function parseNodeSelectorOption(
+  options: ReadonlyMap<string, string>,
+  executionScope: 'full' | 'single_node',
+  io: Pick<CliIo, 'stderr'>,
+):
+  | {
+      ok: true;
+      nodeSelector: WorkflowRunNodeSelector | undefined;
+    }
+  | ParsedRunCommandInput {
+  const nodeSelectorOption = options.get('node-selector');
+  const nodeKeyOption = options.get('node-key');
+
+  if (executionScope !== 'single_node') {
+    if (nodeSelectorOption !== undefined) {
+      return runUsageFailure(
+        io,
+        'Option "--node-selector" requires "--execution-scope single_node".',
+      );
+    }
+
+    if (nodeKeyOption !== undefined) {
+      return runUsageFailure(io, 'Option "--node-key" requires "--execution-scope single_node".');
+    }
+
+    return {
+      ok: true,
+      nodeSelector: undefined,
+    };
+  }
+
+  const normalizedSelector = nodeSelectorOption?.trim();
+  const selectorType =
+    normalizedSelector === undefined || normalizedSelector.length === 0
+      ? 'next_runnable'
+      : normalizedSelector;
+  if (selectorType !== 'next_runnable' && selectorType !== 'node_key') {
+    return runUsageFailure(io, 'Option "--node-selector" must be "next_runnable" or "node_key".');
+  }
+
+  if (selectorType === 'node_key') {
+    const normalizedNodeKey = nodeKeyOption?.trim();
+    if (!normalizedNodeKey) {
+      return runUsageFailure(
+        io,
+        'Option "--node-key" is required when "--node-selector node_key" is used.',
+      );
+    }
+
+    return {
+      ok: true,
+      nodeSelector: {
+        type: 'node_key',
+        nodeKey: normalizedNodeKey,
+      },
+    };
+  }
+
+  if (nodeKeyOption !== undefined) {
+    return runUsageFailure(io, 'Option "--node-key" requires "--node-selector node_key".');
+  }
+
+  return {
+    ok: true,
+    nodeSelector: {
+      type: 'next_runnable',
+    },
+  };
+}
+
 export function parseRunCommandInput(rawArgs: readonly string[], io: CliIo): ParsedRunCommandInput {
   const parsedOptions = validateCommandOptions(
     rawArgs,
     {
       commandName: 'run',
       usage: RUN_USAGE,
-      allowedOptions: ['tree', 'repo', 'branch'],
+      allowedOptions: ['tree', 'repo', 'branch', 'execution-scope', 'node-selector', 'node-key'],
     },
     io,
   );
@@ -410,23 +515,31 @@ export function parseRunCommandInput(rawArgs: readonly string[], io: CliIo): Par
   const branchOption = parsedOptions.options.get('branch');
   const branchOverride = branchOption?.trim();
   if (branchOption !== undefined && branchOverride === '') {
-    return {
-      ok: false,
-      exitCode: usageError(io, 'Option "--branch" requires a value.', RUN_USAGE),
-    };
+    return runUsageFailure(io, 'Option "--branch" requires a value.');
   }
 
   if (branchOverride && !repoInput) {
-    return {
-      ok: false,
-      exitCode: usageError(io, 'Option "--branch" requires "--repo".', RUN_USAGE),
-    };
+    return runUsageFailure(io, 'Option "--branch" requires "--repo".');
   }
+
+  const executionScopeResult = parseExecutionScopeOption(parsedOptions.options, io);
+  if (!executionScopeResult.ok) {
+    return executionScopeResult;
+  }
+  const { executionScope } = executionScopeResult;
+
+  const nodeSelectorResult = parseNodeSelectorOption(parsedOptions.options, executionScope, io);
+  if (!nodeSelectorResult.ok) {
+    return nodeSelectorResult;
+  }
+  const { nodeSelector } = nodeSelectorResult;
 
   return {
     ok: true,
     treeKey,
     repoInput: repoInput ?? null,
     branchOverride,
+    executionScope,
+    nodeSelector,
   };
 }

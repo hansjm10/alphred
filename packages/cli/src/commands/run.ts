@@ -37,12 +37,11 @@ export async function handleRunCommand(
   if (!parsedInput.ok) {
     return parsedInput.exitCode;
   }
-  const { treeKey, repoInput, branchOverride } = parsedInput;
+  const { treeKey, repoInput, branchOverride, executionScope, nodeSelector } = parsedInput;
 
   let db: AlphredDatabase | null = null;
   let runId: number | null = null;
   let worktreeManager: RunWorktreeManager | null = null;
-  let setupCompleted = false;
   let exitCode: ExitCode = EXIT_SUCCESS;
 
   try {
@@ -57,22 +56,30 @@ export async function handleRunCommand(
     runId = materializeRun(treeKey, db, io);
     const runSetup = await setupRunExecution(runId, treeKey, resolvedRepo, branchOverride, worktreeManager, io);
     worktreeManager = runSetup.worktreeManager;
-    setupCompleted = true;
 
     const executor = createSqlWorkflowExecutor(db, {
       resolveProvider: dependencies.resolveProvider,
     });
 
-    const execution = await executor.executeRun({
-      workflowRunId: runId,
-      options: {
-        workingDirectory: runSetup.workingDirectory,
-      },
-    });
+    const execution =
+      executionScope === 'single_node'
+        ? await executor.executeSingleNode({
+            workflowRunId: runId,
+            options: {
+              workingDirectory: runSetup.workingDirectory,
+            },
+            nodeSelector,
+          })
+        : await executor.executeRun({
+            workflowRunId: runId,
+            options: {
+              workingDirectory: runSetup.workingDirectory,
+            },
+          });
 
     exitCode = summarizeRunExecution(execution, io);
   } catch (error) {
-    if (db && runId !== null && !setupCompleted) {
+    if (db && runId !== null) {
       cancelPendingRunAfterSetupFailure(db, runId, io);
     }
 

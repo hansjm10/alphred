@@ -107,6 +107,8 @@ describe('Route /api/dashboard/runs', () => {
         repositoryName: undefined,
         branch: undefined,
         executionMode: 'sync',
+        executionScope: undefined,
+        nodeSelector: undefined,
         cleanupWorktree: undefined,
       });
       expect(response.status).toBe(200);
@@ -132,6 +134,64 @@ describe('Route /api/dashboard/runs', () => {
         mode: 'async',
         id: 9,
       });
+    });
+
+    it('parses single-node launch payloads with node selectors', async () => {
+      launchWorkflowRunMock.mockResolvedValue({
+        mode: 'async',
+        id: 12,
+      });
+
+      const response = await POST(createJsonRequest('http://localhost/api/dashboard/runs', {
+        treeKey: 'default',
+        executionScope: 'single_node',
+        nodeSelector: {
+          type: 'node_key',
+          nodeKey: 'design',
+        },
+      }));
+
+      expect(launchWorkflowRunMock).toHaveBeenCalledWith({
+        treeKey: 'default',
+        repositoryName: undefined,
+        branch: undefined,
+        executionMode: undefined,
+        executionScope: 'single_node',
+        nodeSelector: {
+          type: 'node_key',
+          nodeKey: 'design',
+        },
+        cleanupWorktree: undefined,
+      });
+      expect(response.status).toBe(202);
+    });
+
+    it('parses single-node launch payloads with a next_runnable selector', async () => {
+      launchWorkflowRunMock.mockResolvedValue({
+        mode: 'async',
+        id: 13,
+      });
+
+      const response = await POST(createJsonRequest('http://localhost/api/dashboard/runs', {
+        treeKey: 'default',
+        executionScope: 'single_node',
+        nodeSelector: {
+          type: 'next_runnable',
+        },
+      }));
+
+      expect(launchWorkflowRunMock).toHaveBeenCalledWith({
+        treeKey: 'default',
+        repositoryName: undefined,
+        branch: undefined,
+        executionMode: undefined,
+        executionScope: 'single_node',
+        nodeSelector: {
+          type: 'next_runnable',
+        },
+        cleanupWorktree: undefined,
+      });
+      expect(response.status).toBe(202);
     });
 
     it('returns 400 when request body is not an object', async () => {
@@ -193,6 +253,40 @@ describe('Route /api/dashboard/runs', () => {
         title: 'cleanupWorktree has an invalid type',
         payload: { treeKey: 'default', cleanupWorktree: 'yes' },
         message: 'Field "cleanupWorktree" must be a boolean when provided.',
+      },
+      {
+        title: 'executionScope has an invalid value',
+        payload: { treeKey: 'default', executionScope: 'partial' },
+        message: 'Field "executionScope" must be "full" or "single_node".',
+      },
+      {
+        title: 'nodeSelector requires single_node execution scope',
+        payload: { treeKey: 'default', nodeSelector: { type: 'next_runnable' } },
+        message: 'Field "nodeSelector" requires "executionScope" to be "single_node".',
+      },
+      {
+        title: 'nodeSelector must be an object',
+        payload: { treeKey: 'default', executionScope: 'single_node', nodeSelector: 'next_runnable' },
+        message: 'Field "nodeSelector" must be an object when provided.',
+      },
+      {
+        title: 'nodeSelector type has an invalid value',
+        payload: { treeKey: 'default', executionScope: 'single_node', nodeSelector: { type: 'later' } },
+        message: 'Field "nodeSelector.type" must be "next_runnable" or "node_key".',
+      },
+      {
+        title: 'nodeSelector node_key requires nodeKey',
+        payload: { treeKey: 'default', executionScope: 'single_node', nodeSelector: { type: 'node_key' } },
+        message: 'Field "nodeSelector.nodeKey" must be a string when nodeSelector.type is "node_key".',
+      },
+      {
+        title: 'nodeSelector node_key cannot be empty',
+        payload: {
+          treeKey: 'default',
+          executionScope: 'single_node',
+          nodeSelector: { type: 'node_key', nodeKey: '   ' },
+        },
+        message: 'Field "nodeSelector.nodeKey" cannot be empty when nodeSelector.type is "node_key".',
       },
     ])('returns 400 when $title', async ({ payload, message }) => {
       const response = await POST(createJsonRequest('http://localhost/api/dashboard/runs', payload));

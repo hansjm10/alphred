@@ -6889,6 +6889,397 @@ describe('createSqlWorkflowExecutor', () => {
     }
   });
 
+  it('executeSingleNode executes next_runnable once and terminalizes the run', async () => {
+    const { db, runId, sourceRunNodeId, targetRunNodeId } = seedLinearAutoRun();
+    const executor = createSqlWorkflowExecutor(db, {
+      resolveProvider: () =>
+        createProvider([
+          {
+            type: 'result',
+            content: 'single node completed',
+            timestamp: 1,
+          },
+        ]),
+    });
+
+    const result = await executor.executeSingleNode({
+      workflowRunId: runId,
+      options: {
+        workingDirectory: '/tmp/alphred',
+      },
+    });
+
+    expect(result.executedNodes).toBe(1);
+    expect(result.finalStep).toMatchObject({
+      outcome: 'run_terminal',
+      workflowRunId: runId,
+      runStatus: 'completed',
+    });
+
+    const run = db
+      .select({
+        status: workflowRuns.status,
+      })
+      .from(workflowRuns)
+      .where(eq(workflowRuns.id, runId))
+      .get();
+    expect(run?.status).toBe('completed');
+
+    const sourceNode = db
+      .select({
+        status: runNodes.status,
+      })
+      .from(runNodes)
+      .where(eq(runNodes.id, sourceRunNodeId))
+      .get();
+    const targetNode = db
+      .select({
+        status: runNodes.status,
+      })
+      .from(runNodes)
+      .where(eq(runNodes.id, targetRunNodeId))
+      .get();
+    expect(sourceNode?.status).toBe('completed');
+    expect(targetNode?.status).toBe('pending');
+  });
+
+  it('executeSingleNode supports node_key targeted execution', async () => {
+    const { db, runId, sourceRunNodeId, targetRunNodeId } = seedLinearAutoRun();
+    const executor = createSqlWorkflowExecutor(db, {
+      resolveProvider: () =>
+        createProvider([
+          {
+            type: 'result',
+            content: 'target node completed',
+            timestamp: 1,
+          },
+        ]),
+    });
+
+    const result = await executor.executeSingleNode({
+      workflowRunId: runId,
+      options: {
+        workingDirectory: '/tmp/alphred',
+      },
+      nodeSelector: {
+        type: 'node_key',
+        nodeKey: 'target',
+      },
+    });
+
+    expect(result.executedNodes).toBe(1);
+    expect(result.finalStep).toMatchObject({
+      outcome: 'run_terminal',
+      workflowRunId: runId,
+      runStatus: 'completed',
+    });
+
+    const sourceNode = db
+      .select({
+        status: runNodes.status,
+      })
+      .from(runNodes)
+      .where(eq(runNodes.id, sourceRunNodeId))
+      .get();
+    const targetNode = db
+      .select({
+        status: runNodes.status,
+      })
+      .from(runNodes)
+      .where(eq(runNodes.id, targetRunNodeId))
+      .get();
+    expect(sourceNode?.status).toBe('pending');
+    expect(targetNode?.status).toBe('completed');
+  });
+
+  it('executeSingleNode performs exactly one failed attempt even when maxRetries is configured', async () => {
+    const { db, runId, runNodeId } = seedSingleAgentRun('markdown', 3);
+    const executor = createSqlWorkflowExecutor(db, {
+      resolveProvider: () => ({
+        run(): AsyncIterable<ProviderEvent> {
+          return {
+            [Symbol.asyncIterator](): AsyncIterator<ProviderEvent> {
+              throw new Error('single-node failure');
+            },
+          };
+        },
+      }),
+    });
+
+    const result = await executor.executeSingleNode({
+      workflowRunId: runId,
+      options: {
+        workingDirectory: '/tmp/alphred',
+      },
+    });
+
+    expect(result.executedNodes).toBe(1);
+    expect(result.finalStep).toMatchObject({
+      outcome: 'run_terminal',
+      workflowRunId: runId,
+      runStatus: 'failed',
+    });
+
+    const node = db
+      .select({
+        status: runNodes.status,
+        attempt: runNodes.attempt,
+      })
+      .from(runNodes)
+      .where(eq(runNodes.id, runNodeId))
+      .get();
+    expect(node).toMatchObject({
+      status: 'failed',
+      attempt: 1,
+    });
+  });
+
+  it('executeSingleNode returns typed validation errors for missing node_key selectors', async () => {
+    const { db, runId } = seedSingleAgentRun();
+    const executor = createSqlWorkflowExecutor(db, {
+      resolveProvider: () => createProvider([]),
+    });
+
+    await expect(
+      executor.executeSingleNode({
+        workflowRunId: runId,
+        options: {
+          workingDirectory: '/tmp/alphred',
+        },
+        nodeSelector: {
+          type: 'node_key',
+          nodeKey: 'missing',
+        },
+      }),
+    ).rejects.toMatchObject({
+      name: 'WorkflowRunExecutionValidationError',
+      code: 'WORKFLOW_RUN_SINGLE_NODE_SELECTOR_NOT_FOUND',
+      workflowRunId: runId,
+      nodeSelector: {
+        type: 'node_key',
+        nodeKey: 'missing',
+      },
+    });
+
+    const run = db
+      .select({
+        status: workflowRuns.status,
+      })
+      .from(workflowRuns)
+      .where(eq(workflowRuns.id, runId))
+      .get();
+    expect(run?.status).toBe('pending');
+  });
+
+  it('validateSingleNodeSelection accepts trimmed node_key selectors that map to pending nodes', () => {
+    const { db, runId } = seedSingleAgentRun();
+    const executor = createSqlWorkflowExecutor(db, {
+      resolveProvider: () => createProvider([]),
+    });
+
+    expect(() =>
+      executor.validateSingleNodeSelection({
+        workflowRunId: runId,
+        nodeSelector: {
+          type: 'node_key',
+          nodeKey: ' design ',
+        },
+      }),
+    ).not.toThrow();
+  });
+
+  it('validateSingleNodeSelection rejects terminal runs', () => {
+    const { db, runId } = seedSingleAgentRun();
+    transitionWorkflowRunStatus(db, {
+      workflowRunId: runId,
+      expectedFrom: 'pending',
+      to: 'running',
+      occurredAt: '2026-01-01T00:00:00.000Z',
+    });
+    transitionWorkflowRunStatus(db, {
+      workflowRunId: runId,
+      expectedFrom: 'running',
+      to: 'completed',
+      occurredAt: '2026-01-01T00:01:00.000Z',
+    });
+
+    const executor = createSqlWorkflowExecutor(db, {
+      resolveProvider: () => createProvider([]),
+    });
+
+    try {
+      executor.validateSingleNodeSelection({ workflowRunId: runId });
+      throw new Error('Expected validateSingleNodeSelection to reject terminal runs.');
+    } catch (error) {
+      expect(error).toMatchObject({
+        name: 'WorkflowRunExecutionValidationError',
+        code: 'WORKFLOW_RUN_SINGLE_NODE_SELECTOR_NOT_EXECUTABLE',
+        workflowRunId: runId,
+      });
+      expect(String((error as Error).message)).toContain('already terminal');
+    }
+  });
+
+  it('validateSingleNodeSelection rejects paused runs', () => {
+    const { db, runId } = seedSingleAgentRun();
+    transitionWorkflowRunStatus(db, {
+      workflowRunId: runId,
+      expectedFrom: 'pending',
+      to: 'running',
+      occurredAt: '2026-01-01T00:00:00.000Z',
+    });
+    transitionWorkflowRunStatus(db, {
+      workflowRunId: runId,
+      expectedFrom: 'running',
+      to: 'paused',
+      occurredAt: '2026-01-01T00:01:00.000Z',
+    });
+
+    const executor = createSqlWorkflowExecutor(db, {
+      resolveProvider: () => createProvider([]),
+    });
+
+    try {
+      executor.validateSingleNodeSelection({ workflowRunId: runId });
+      throw new Error('Expected validateSingleNodeSelection to reject paused runs.');
+    } catch (error) {
+      expect(error).toMatchObject({
+        name: 'WorkflowRunExecutionValidationError',
+        code: 'WORKFLOW_RUN_SINGLE_NODE_SELECTOR_NOT_EXECUTABLE',
+        workflowRunId: runId,
+      });
+      expect(String((error as Error).message)).toContain('is paused and cannot execute a single node');
+    }
+  });
+
+  it('validateSingleNodeSelection rejects empty node_key selectors', () => {
+    const { db, runId } = seedSingleAgentRun();
+    const executor = createSqlWorkflowExecutor(db, {
+      resolveProvider: () => createProvider([]),
+    });
+
+    try {
+      executor.validateSingleNodeSelection({
+        workflowRunId: runId,
+        nodeSelector: {
+          type: 'node_key',
+          nodeKey: '   ',
+        },
+      });
+      throw new Error('Expected validateSingleNodeSelection to reject empty node_key selectors.');
+    } catch (error) {
+      expect(error).toMatchObject({
+        name: 'WorkflowRunExecutionValidationError',
+        code: 'WORKFLOW_RUN_SINGLE_NODE_SELECTOR_NOT_EXECUTABLE',
+        workflowRunId: runId,
+      });
+      expect(String((error as Error).message)).toContain('requires a non-empty "nodeKey" value');
+    }
+  });
+
+  it('validateSingleNodeSelection rejects unsupported selector types', () => {
+    const { db, runId } = seedSingleAgentRun();
+    const executor = createSqlWorkflowExecutor(db, {
+      resolveProvider: () => createProvider([]),
+    });
+
+    try {
+      executor.validateSingleNodeSelection({
+        workflowRunId: runId,
+        nodeSelector: {
+          type: 'unsupported',
+        } as unknown as {
+          type: 'next_runnable';
+        },
+      });
+      throw new Error('Expected validateSingleNodeSelection to reject unsupported selector types.');
+    } catch (error) {
+      expect(error).toMatchObject({
+        name: 'WorkflowRunExecutionValidationError',
+        code: 'WORKFLOW_RUN_SINGLE_NODE_SELECTOR_NOT_EXECUTABLE',
+        workflowRunId: runId,
+      });
+      expect(String((error as Error).message)).toContain('Unsupported node selector type "unsupported"');
+    }
+  });
+
+  it('validateSingleNodeSelection rejects node_key selectors targeting non-executable node states', () => {
+    const { db, runId, runNodeId } = seedSingleAgentRun();
+    transitionWorkflowRunStatus(db, {
+      workflowRunId: runId,
+      expectedFrom: 'pending',
+      to: 'running',
+      occurredAt: '2026-01-01T00:00:00.000Z',
+    });
+    transitionRunNodeStatus(db, {
+      runNodeId,
+      expectedFrom: 'pending',
+      to: 'running',
+      occurredAt: '2026-01-01T00:01:00.000Z',
+    });
+
+    const executor = createSqlWorkflowExecutor(db, {
+      resolveProvider: () => createProvider([]),
+    });
+
+    try {
+      executor.validateSingleNodeSelection({
+        workflowRunId: runId,
+        nodeSelector: {
+          type: 'node_key',
+          nodeKey: 'design',
+        },
+      });
+      throw new Error('Expected validateSingleNodeSelection to reject node_key selectors for non-executable node states.');
+    } catch (error) {
+      expect(error).toMatchObject({
+        name: 'WorkflowRunExecutionValidationError',
+        code: 'WORKFLOW_RUN_SINGLE_NODE_SELECTOR_NOT_EXECUTABLE',
+        workflowRunId: runId,
+      });
+      expect(String((error as Error).message)).toContain('expected status "pending" or "completed" but found "running"');
+    }
+  });
+
+  it('executeSingleNode returns immediately when run is already terminal', async () => {
+    const { db, runId } = seedSingleAgentRun();
+    transitionWorkflowRunStatus(db, {
+      workflowRunId: runId,
+      expectedFrom: 'pending',
+      to: 'running',
+      occurredAt: '2026-01-01T00:00:00.000Z',
+    });
+    transitionWorkflowRunStatus(db, {
+      workflowRunId: runId,
+      expectedFrom: 'running',
+      to: 'cancelled',
+      occurredAt: '2026-01-01T00:01:00.000Z',
+    });
+
+    const resolveProvider = vi.fn(() => createProvider([]));
+    const executor = createSqlWorkflowExecutor(db, {
+      resolveProvider,
+    });
+
+    const result = await executor.executeSingleNode({
+      workflowRunId: runId,
+      options: {
+        workingDirectory: '/tmp/alphred',
+      },
+    });
+
+    expect(result).toMatchObject({
+      workflowRunId: runId,
+      executedNodes: 0,
+      finalStep: {
+        outcome: 'run_terminal',
+        workflowRunId: runId,
+        runStatus: 'cancelled',
+      },
+    });
+    expect(resolveProvider).not.toHaveBeenCalled();
+  });
+
   it('retries retry-control precondition conflicts and keeps retried node ids unique per run node', async () => {
     const { db, runId, firstRunNodeId, secondRunNodeId } = seedTwoRootAgentRun();
     transitionWorkflowRunStatus(db, {
