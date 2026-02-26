@@ -11,9 +11,16 @@ import {
 import type { RepositoryConfig } from '@alphred/shared';
 import {
   createWorktree as defaultCreateWorktree,
+  deleteBranch as defaultDeleteBranch,
   removeWorktree as defaultRemoveWorktree,
   type WorktreeInfo,
 } from './worktree.js';
+import {
+  installDependencies as defaultInstallDependencies,
+  type InstallDepsOptions,
+  type InstallDepsResult,
+  type InstallOutput,
+} from './installDeps.js';
 import {
   ensureRepositoryClone as defaultEnsureRepositoryClone,
   type EnsureRepositoryCloneResult,
@@ -37,11 +44,14 @@ export type CreateRunWorktreeParams = {
   branch?: string;
   branchTemplate?: string;
   baseBranch?: string;
+  skipInstall?: boolean;
 };
 
 export type WorktreeManagerOptions = {
   worktreeBase: string;
   environment?: NodeJS.ProcessEnv;
+  installTimeoutMs?: number;
+  onInstallOutput?: (output: InstallOutput) => void;
   createWorktree?: (
     repoDir: string,
     worktreeBase: string,
@@ -57,6 +67,7 @@ export type WorktreeManagerOptions = {
     },
   ) => Promise<WorktreeInfo>;
   removeWorktree?: (repoDir: string, worktreePath: string) => Promise<void>;
+  deleteBranch?: (repoDir: string, branch: string) => Promise<void>;
   ensureRepositoryClone?: (params: {
     db: AlphredDatabase;
     repository: {
@@ -68,6 +79,7 @@ export type WorktreeManagerOptions = {
     };
     environment?: NodeJS.ProcessEnv;
   }) => Promise<EnsureRepositoryCloneResult>;
+  installDependencies?: (params: InstallDepsOptions) => Promise<InstallDepsResult>;
 };
 
 function toManagedWorktree(record: RunWorktreeRecord): ManagedWorktree {
@@ -88,7 +100,11 @@ export class WorktreeManager {
   private readonly environment: NodeJS.ProcessEnv;
   private readonly createWorktree: NonNullable<WorktreeManagerOptions['createWorktree']>;
   private readonly removeWorktree: NonNullable<WorktreeManagerOptions['removeWorktree']>;
+  private readonly deleteBranch: NonNullable<WorktreeManagerOptions['deleteBranch']>;
   private readonly ensureRepositoryClone: NonNullable<WorktreeManagerOptions['ensureRepositoryClone']>;
+  private readonly installDependencies: NonNullable<WorktreeManagerOptions['installDependencies']>;
+  private readonly installTimeoutMs: number | undefined;
+  private readonly onInstallOutput: ((output: InstallOutput) => void) | undefined;
 
   constructor(db: AlphredDatabase, options: WorktreeManagerOptions) {
     this.db = db;
@@ -96,7 +112,11 @@ export class WorktreeManager {
     this.environment = options.environment ?? process.env;
     this.createWorktree = options.createWorktree ?? defaultCreateWorktree;
     this.removeWorktree = options.removeWorktree ?? defaultRemoveWorktree;
+    this.deleteBranch = options.deleteBranch ?? defaultDeleteBranch;
     this.ensureRepositoryClone = options.ensureRepositoryClone ?? defaultEnsureRepositoryClone;
+    this.installDependencies = options.installDependencies ?? defaultInstallDependencies;
+    this.installTimeoutMs = options.installTimeoutMs;
+    this.onInstallOutput = options.onInstallOutput;
   }
 
   async createRunWorktree(params: CreateRunWorktreeParams): Promise<ManagedWorktree> {
@@ -142,6 +162,39 @@ export class WorktreeManager {
       this.worktreeBase,
       createParams,
     );
+
+    try {
+      await this.installDependencies({
+        worktreePath: worktree.path,
+        environment: this.environment,
+        skipInstall: params.skipInstall,
+        timeoutMs: this.installTimeoutMs,
+        onOutput: this.onInstallOutput,
+      });
+    } catch (installError) {
+      const rollbackErrors: unknown[] = [];
+
+      try {
+        await this.removeWorktree(clonedRepository.localPath, worktree.path);
+      } catch (removeError) {
+        rollbackErrors.push(removeError);
+      }
+
+      try {
+        await this.deleteBranch(clonedRepository.localPath, worktree.branch);
+      } catch (deleteError) {
+        rollbackErrors.push(deleteError);
+      }
+
+      if (rollbackErrors.length > 0) {
+        throw new AggregateError(
+          [installError, ...rollbackErrors],
+          `Dependency installation failed for worktree "${worktree.path}", and rollback cleanup failed.`,
+        );
+      }
+
+      throw installError;
+    }
 
     const persisted = insertRunWorktree(this.db, {
       workflowRunId: params.runId,

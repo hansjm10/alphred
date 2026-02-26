@@ -5,6 +5,7 @@ describe('git index exports', () => {
   it('re-exports worktree helpers and scm provider utilities', () => {
     expect(typeof git.createWorktree).toBe('function');
     expect(typeof git.removeWorktree).toBe('function');
+    expect(typeof git.deleteBranch).toBe('function');
     expect(typeof git.listWorktrees).toBe('function');
     expect(typeof git.WorktreeManager).toBe('function');
     expect(typeof git.generateBranchName).toBe('function');
