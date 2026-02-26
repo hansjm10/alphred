@@ -12,77 +12,29 @@ type InstallLockfileCommand = {
   lockfiles: readonly string[];
   command: string;
   args: readonly string[];
-  displayCommand: string;
 };
 
-const lockfileInstallCommands: readonly InstallLockfileCommand[] = [
-  {
-    lockfiles: ['pnpm-lock.yaml'],
-    command: 'pnpm',
-    args: ['install'],
-    displayCommand: 'pnpm install',
-  },
-  {
-    lockfiles: ['bun.lockb', 'bun.lock'],
-    command: 'bun',
-    args: ['install'],
-    displayCommand: 'bun install',
-  },
-  {
-    lockfiles: ['yarn.lock'],
-    command: 'yarn',
-    args: ['install'],
-    displayCommand: 'yarn install',
-  },
-  {
-    lockfiles: ['package-lock.json'],
-    command: 'npm',
-    args: ['install'],
-    displayCommand: 'npm install',
-  },
-  {
-    lockfiles: ['uv.lock'],
-    command: 'uv',
-    args: ['sync'],
-    displayCommand: 'uv sync',
-  },
-  {
-    lockfiles: ['poetry.lock'],
-    command: 'poetry',
-    args: ['install'],
-    displayCommand: 'poetry install',
-  },
-  {
-    lockfiles: ['Pipfile.lock'],
-    command: 'pipenv',
-    args: ['install'],
-    displayCommand: 'pipenv install',
-  },
-  {
-    lockfiles: ['requirements.txt'],
-    command: 'pip',
-    args: ['install', '-r', 'requirements.txt'],
-    displayCommand: 'pip install -r requirements.txt',
-  },
-  {
-    lockfiles: ['Gemfile.lock'],
-    command: 'bundle',
-    args: ['install'],
-    displayCommand: 'bundle install',
-  },
-  {
-    lockfiles: ['go.sum'],
-    command: 'go',
-    args: ['mod', 'download'],
-    displayCommand: 'go mod download',
-  },
-  {
-    lockfiles: ['Cargo.lock'],
-    command: 'cargo',
-    args: ['fetch'],
-    displayCommand: 'cargo fetch',
-  },
+type InstallLockfileCommandDefinition = readonly [
+  lockfiles: readonly string[],
+  command: string,
+  args?: readonly string[],
 ];
+
+const defaultInstallCommandArgs = ['install'] as const;
+
+const lockfileInstallCommands = createLockfileInstallCommands([
+  [['pnpm-lock.yaml'], 'pnpm'],
+  [['bun.lockb', 'bun.lock'], 'bun'],
+  [['yarn.lock'], 'yarn'],
+  [['package-lock.json'], 'npm'],
+  [['uv.lock'], 'uv', ['sync']],
+  [['poetry.lock'], 'poetry'],
+  [['Pipfile.lock'], 'pipenv'],
+  [['requirements.txt'], 'pip', ['install', '-r', 'requirements.txt']],
+  [['Gemfile.lock'], 'bundle'],
+  [['go.sum'], 'go', ['mod', 'download']],
+  [['Cargo.lock'], 'cargo', ['fetch']],
+]);
 
 export type InstallOutput = {
   stream: 'stdout' | 'stderr';
@@ -318,7 +270,7 @@ async function resolveInstallCommand(params: {
             source: 'lockfile',
             command: installCommand.command,
             args: installCommand.args,
-            displayCommand: installCommand.displayCommand,
+            displayCommand: formatInstallCommand(installCommand.command, installCommand.args),
             shell: false,
             lockfile,
           },
@@ -372,6 +324,20 @@ function parsePositiveInteger(value: number | string, label: string): number {
     throw new Error(`${label} must be a positive integer.`);
   }
   return numeric;
+}
+
+function createLockfileInstallCommands(
+  definitions: readonly InstallLockfileCommandDefinition[],
+): readonly InstallLockfileCommand[] {
+  return definitions.map(([lockfiles, command, args]) => ({
+    lockfiles,
+    command,
+    args: args ?? defaultInstallCommandArgs,
+  }));
+}
+
+function formatInstallCommand(command: string, args: readonly string[]): string {
+  return args.length === 0 ? command : `${command} ${args.join(' ')}`;
 }
 
 async function defaultFileExists(path: string): Promise<boolean> {
