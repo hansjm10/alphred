@@ -1,6 +1,7 @@
 import { Card } from '../../../ui/primitives';
 import type { DashboardRunDetail } from '../../../../src/server/dashboard-contracts';
 import { ExpandablePreview } from './expandable-preview';
+import { RUN_DETAIL_SECTION_IDS } from './section-navigation.js';
 import { partitionByRecency } from './timeline';
 import { RUN_OBSERVABILITY_RECENT_ENTRY_COUNT } from './types';
 
@@ -64,7 +65,7 @@ export function RunObservabilityCard({ detail }: RunObservabilityCardProps) {
   };
 
   return (
-    <Card title="Observability">
+    <Card title="Observability" headingId={RUN_DETAIL_SECTION_IDS.observability}>
       <section className="run-observability-section">
         <p className="meta-text">Artifacts</p>
         {detail.artifacts.length === 0 ? <p>No artifacts captured yet.</p> : null}
@@ -138,4 +139,3 @@ export function RunObservabilityCard({ detail }: RunObservabilityCardProps) {
     </Card>
   );
 }
-

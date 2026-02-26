@@ -2,7 +2,7 @@
 
 import { render, screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
-import { StatusBadge, Tabs, type TabItem } from './primitives';
+import { Card, StatusBadge, Tabs, type TabItem } from './primitives';
 
 const ITEMS: readonly TabItem[] = [
   { href: '/runs', label: 'All Runs' },
@@ -34,5 +34,11 @@ describe('primitives', () => {
 
     expect(screen.getByRole('link', { name: 'All Runs' })).toHaveAttribute('aria-current', 'page');
     expect(screen.getByRole('link', { name: 'Running' })).not.toHaveAttribute('aria-current');
+  });
+
+  it('applies heading IDs to card titles when provided', () => {
+    render(<Card title="Run timeline" headingId="timeline-heading-id" />);
+
+    expect(screen.getByRole('heading', { level: 3, name: 'Run timeline' })).toHaveAttribute('id', 'timeline-heading-id');
   });
 });

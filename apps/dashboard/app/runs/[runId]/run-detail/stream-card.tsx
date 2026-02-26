@@ -4,6 +4,7 @@ import type { ReactNode } from 'react';
 import { ExpandablePreview } from './expandable-preview';
 import { formatLastUpdated, formatStreamTimestamp } from './formatting';
 import { mergeAgentStreamEvents } from './realtime';
+import { RUN_DETAIL_SECTION_IDS } from './section-navigation.js';
 import { partitionByRecency } from './timeline';
 import {
   RUN_AGENT_STREAM_RECENT_EVENT_COUNT,
@@ -253,7 +254,11 @@ export function RunAgentStreamCard({
 
   if (!isTerminalRun) {
     return (
-      <Card title="Agent stream" description="Live provider events for a selected node attempt.">
+      <Card
+        title="Agent stream"
+        description="Live provider events for a selected node attempt."
+        headingId={RUN_DETAIL_SECTION_IDS.stream}
+      >
         {streamContent}
       </Card>
     );
@@ -266,7 +271,11 @@ export function RunAgentStreamCard({
   });
 
   return (
-    <Card title="Agent stream" description="Provider events for a selected node attempt.">
+    <Card
+      title="Agent stream"
+      description="Provider events for a selected node attempt."
+      headingId={RUN_DETAIL_SECTION_IDS.stream}
+    >
       <details className="run-agent-stream-collapsed">
         <summary className="run-agent-stream-collapsed__summary">{terminalStreamSummary}</summary>
         {streamContent}

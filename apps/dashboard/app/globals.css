@@ -31,6 +31,8 @@
   --shadow-md: 0 10px 24px rgba(15, 23, 42, 0.08);
   --motion-fast: 150ms;
   --motion-medium: 240ms;
+  --run-detail-sticky-offset: 88px;
+  --run-detail-scroll-margin-top: 152px;
 }
 
 * {
@@ -45,6 +47,10 @@ body {
   font-family: var(--font-body);
   line-height: 1.5;
   min-height: 100vh;
+}
+
+html {
+  scroll-behavior: smooth;
 }
 
 a {
@@ -256,6 +262,10 @@ output {
   font: 600 20px/28px var(--font-display);
 }
 
+.surface-header h3[id] {
+  scroll-margin-top: var(--run-detail-scroll-margin-top);
+}
+
 .surface-header p {
   color: var(--text-secondary);
   font-size: 14px;
@@ -349,6 +359,7 @@ output {
 .button-link:focus-visible,
 .shell-nav-link:focus-visible,
 .tabs__link:focus-visible,
+.run-detail-section-nav__link:focus-visible,
 .run-timeline-event:focus-visible {
   outline: 2px solid var(--accent-active);
   outline-offset: 2px;
@@ -698,6 +709,48 @@ output {
 
 .run-detail-priority-grid {
   align-items: start;
+}
+
+.run-detail-section-nav {
+  background: color-mix(in srgb, var(--bg-surface) 92%, transparent);
+  border: 1px solid color-mix(in srgb, var(--border-default) 85%, transparent);
+  border-radius: var(--radius-pill);
+  backdrop-filter: blur(4px);
+  overflow-x: auto;
+  position: sticky;
+  top: var(--run-detail-sticky-offset);
+  z-index: 4;
+}
+
+.run-detail-section-nav ul {
+  align-items: center;
+  display: flex;
+  gap: 6px;
+  list-style: none;
+  min-width: max-content;
+  padding: 6px;
+}
+
+.run-detail-section-nav__link {
+  border: 1px solid transparent;
+  border-radius: var(--radius-pill);
+  color: var(--text-secondary);
+  display: inline-flex;
+  font: 600 13px/18px var(--font-display);
+  padding: 7px 12px;
+  text-decoration: none;
+  transition: background-color var(--motion-fast), border-color var(--motion-fast), color var(--motion-fast);
+}
+
+.run-detail-section-nav__link:hover {
+  background: color-mix(in srgb, var(--accent-active) 8%, var(--bg-surface));
+  color: var(--text-primary);
+}
+
+.run-detail-section-nav__link--active {
+  background: color-mix(in srgb, var(--accent-active) 11%, var(--bg-surface));
+  border-color: color-mix(in srgb, var(--accent-active) 42%, var(--border-default));
+  color: var(--accent-active);
 }
 
 .run-operator-focus-list {
@@ -1783,6 +1836,12 @@ output {
   margin-left: 18px;
 }
 
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+}
+
 @media (max-width: 960px) {
   .workflow-new-grid {
     grid-template-columns: minmax(0, 1fr);
@@ -1843,6 +1902,11 @@ output {
 }
 
 @media (max-width: 960px) {
+  :root {
+    --run-detail-sticky-offset: 116px;
+    --run-detail-scroll-margin-top: 180px;
+  }
+
   .dashboard-shell {
     grid-template-columns: minmax(0, 1fr);
     grid-template-rows: auto minmax(0, 1fr);
@@ -1879,6 +1943,10 @@ output {
 
   .run-detail-priority-grid {
     gap: var(--space-2);
+  }
+
+  .run-detail-section-nav {
+    border-radius: var(--radius-sm);
   }
 
   .run-detail-primary-actions {

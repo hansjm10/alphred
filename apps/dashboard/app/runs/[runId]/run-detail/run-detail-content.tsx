@@ -44,6 +44,38 @@ import {
   type RealtimeChannelState,
   type RunDetailContentProps,
 } from './types';
+import { RUN_DETAIL_SECTION_NAV_ITEMS, type RunDetailSectionId } from './section-navigation.js';
+
+function resolveSectionIdFromHash(hash: string): RunDetailSectionId | null {
+  const rawSectionId = hash.startsWith('#') ? hash.slice(1) : hash;
+
+  for (const section of RUN_DETAIL_SECTION_NAV_ITEMS) {
+    if (section.id === rawSectionId) {
+      return section.id;
+    }
+  }
+
+  return null;
+}
+
+function resolveActiveSectionFromRatios(
+  intersectionRatios: ReadonlyMap<RunDetailSectionId, number>,
+): RunDetailSectionId | null {
+  let nextSectionId: RunDetailSectionId | null = null;
+  let bestRatio = Number.NEGATIVE_INFINITY;
+
+  for (const section of RUN_DETAIL_SECTION_NAV_ITEMS) {
+    const ratio = intersectionRatios.get(section.id);
+    if (ratio === undefined || ratio <= bestRatio) {
+      continue;
+    }
+
+    nextSectionId = section.id;
+    bestRatio = ratio;
+  }
+
+  return nextSectionId;
+}
 
 export function RunDetailContent({
   initialDetail,
@@ -78,12 +110,16 @@ export function RunDetailContent({
   );
   const [pendingControlAction, setPendingControlAction] = useState<DashboardRunControlAction | null>(null);
   const [actionFeedback, setActionFeedback] = useState<ActionFeedbackState>(null);
+  const [activeSectionId, setActiveSectionId] = useState<RunDetailSectionId>(
+    RUN_DETAIL_SECTION_NAV_ITEMS[0].id,
+  );
 
   const lastUpdatedAtRef = useRef<number>(lastUpdatedAtMs);
   const streamLastUpdatedAtRef = useRef<number>(streamLastUpdatedAtMs);
   const streamLastSequenceRef = useRef<number>(0);
   const streamEventListRef = useRef<HTMLOListElement | null>(null);
   const streamAutoScrollRef = useRef<boolean>(streamAutoScroll);
+  const sectionIntersectionRatiosRef = useRef<Map<RunDetailSectionId, number>>(new Map());
 
   useEffect(() => {
     setHasHydrated(true);
@@ -209,6 +245,78 @@ export function RunDetailContent({
     });
   }, [detail.run.status]);
 
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+
+    const syncSectionFromHash = (): void => {
+      const sectionId = resolveSectionIdFromHash(window.location.hash);
+      if (sectionId) {
+        setActiveSectionId(sectionId);
+      }
+    };
+
+    syncSectionFromHash();
+    window.addEventListener('hashchange', syncSectionFromHash);
+
+    return () => {
+      window.removeEventListener('hashchange', syncSectionFromHash);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || typeof IntersectionObserver === 'undefined') {
+      return;
+    }
+
+    const sectionElements = RUN_DETAIL_SECTION_NAV_ITEMS
+      .map((section) => document.getElementById(section.id))
+      .filter((section): section is HTMLElement => section !== null);
+
+    if (sectionElements.length === 0) {
+      return;
+    }
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          const sectionId = resolveSectionIdFromHash((entry.target as HTMLElement).id);
+          if (!sectionId) {
+            continue;
+          }
+
+          if (entry.isIntersecting) {
+            sectionIntersectionRatiosRef.current.set(sectionId, entry.intersectionRatio);
+            continue;
+          }
+
+          sectionIntersectionRatiosRef.current.delete(sectionId);
+        }
+
+        const nextSectionId = resolveActiveSectionFromRatios(sectionIntersectionRatiosRef.current);
+        if (!nextSectionId) {
+          return;
+        }
+
+        setActiveSectionId((previous) => (previous === nextSectionId ? previous : nextSectionId));
+      },
+      {
+        rootMargin: '-30% 0px -55% 0px',
+        threshold: [0.1, 0.25, 0.5, 0.75],
+      },
+    );
+
+    for (const sectionElement of sectionElements) {
+      observer.observe(sectionElement);
+    }
+
+    return () => {
+      observer.disconnect();
+      sectionIntersectionRatiosRef.current.clear();
+    };
+  }, [detail.run.id]);
+
   const timeline = useMemo(() => buildTimeline(detail), [detail]);
   const repositoryContext = useMemo(
     () => resolveRepositoryContext(detail, repositories),
@@ -300,6 +408,29 @@ export function RunDetailContent({
         <h2>{`Run #${detail.run.id}`}</h2>
         <p>{pageSubtitle}</p>
       </section>
+
+      <nav aria-label="Run detail sections" className="run-detail-section-nav">
+        <ul>
+          {RUN_DETAIL_SECTION_NAV_ITEMS.map((section) => {
+            const active = section.id === activeSectionId;
+
+            return (
+              <li key={section.id}>
+                <a
+                  href={`#${section.id}`}
+                  className={`run-detail-section-nav__link${active ? ' run-detail-section-nav__link--active' : ''}`}
+                  aria-current={active ? 'location' : undefined}
+                  onClick={() => {
+                    setActiveSectionId(section.id);
+                  }}
+                >
+                  {section.label}
+                </a>
+              </li>
+            );
+          })}
+        </ul>
+      </nav>
 
       <div className="page-grid run-detail-priority-grid">
         <RunOperatorFocusCard

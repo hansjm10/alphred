@@ -1,5 +1,6 @@
 import { ActionButton, Card, Panel, StatusBadge } from '../../../ui/primitives';
 import { formatTimelineTime } from './formatting';
+import { RUN_DETAIL_SECTION_IDS } from './section-navigation.js';
 import { TIMELINE_CATEGORY_LABELS } from './timeline';
 import { TimelineCategoryIcon } from './timeline-icon';
 import type { RunDetailLifecycleGridProps, TimelineItem } from './types';
@@ -48,7 +49,11 @@ export function RunDetailLifecycleGrid({
 
   return (
     <div className="page-grid run-detail-lifecycle-grid">
-      <Card title="Timeline" description="Latest run events">
+      <Card
+        title="Timeline"
+        description="Latest run events"
+        headingId={RUN_DETAIL_SECTION_IDS.timeline}
+      >
         {selectedNode ? (
           <div className="run-timeline-filter">
             <p className="meta-text">{`Filtered to ${selectedNode.nodeKey} (attempt ${selectedNode.attempt}).`}</p>

@@ -331,13 +331,78 @@ class MockEventSource {
   }
 }
 
+type MockIntersectionEntry = Readonly<{
+  target: Element;
+  isIntersecting: boolean;
+  intersectionRatio: number;
+}>;
+
+class MockIntersectionObserver implements IntersectionObserver {
+  static instances: MockIntersectionObserver[] = [];
+
+  readonly root: Element | Document | null = null;
+  readonly rootMargin: string;
+  readonly thresholds: readonly number[];
+
+  private readonly callback: IntersectionObserverCallback;
+  private readonly targets = new Set<Element>();
+
+  constructor(callback: IntersectionObserverCallback, options: IntersectionObserverInit = {}) {
+    this.callback = callback;
+    this.rootMargin = options.rootMargin ?? '0px';
+    const rawThreshold = options.threshold;
+    if (Array.isArray(rawThreshold)) {
+      this.thresholds = rawThreshold;
+    } else if (typeof rawThreshold === 'number') {
+      this.thresholds = [rawThreshold];
+    } else {
+      this.thresholds = [0];
+    }
+    MockIntersectionObserver.instances.push(this);
+  }
+
+  disconnect(): void {
+    this.targets.clear();
+  }
+
+  observe(target: Element): void {
+    this.targets.add(target);
+  }
+
+  takeRecords(): IntersectionObserverEntry[] {
+    return [];
+  }
+
+  unobserve(target: Element): void {
+    this.targets.delete(target);
+  }
+
+  emit(entries: readonly MockIntersectionEntry[]): void {
+    const emittedEntries = entries
+      .filter((entry) => this.targets.has(entry.target))
+      .map((entry) => ({
+        time: Date.now(),
+        target: entry.target,
+        isIntersecting: entry.isIntersecting,
+        intersectionRatio: entry.intersectionRatio,
+        boundingClientRect: entry.target.getBoundingClientRect(),
+        intersectionRect: entry.target.getBoundingClientRect(),
+        rootBounds: null,
+      }) as IntersectionObserverEntry);
+
+    this.callback(emittedEntries, this);
+  }
+}
+
 describe('RunDetailContent realtime updates', () => {
   const fetchMock = vi.fn();
 
   beforeEach(() => {
     fetchMock.mockReset();
     MockEventSource.instances = [];
+    MockIntersectionObserver.instances = [];
     vi.stubGlobal('fetch', fetchMock);
+    vi.stubGlobal('IntersectionObserver', MockIntersectionObserver as unknown as typeof IntersectionObserver);
   });
 
   afterEach(() => {
@@ -1851,6 +1916,83 @@ describe('RunDetailContent realtime updates', () => {
 
     expect(lifecycleGrid).not.toBeNull();
     expect(lifecycleGrid).toHaveClass('run-detail-lifecycle-grid');
+  });
+
+  it('renders section jump navigation with anchor targets for major run sections', () => {
+    render(
+      <RunDetailContent
+        initialDetail={createRunDetail()}
+        repositories={[createRepository()]}
+        enableRealtime={false}
+      />,
+    );
+
+    const sectionNav = screen.getByRole('navigation', { name: 'Run detail sections' });
+
+    expect(within(sectionNav).getByRole('link', { name: 'Focus' })).toHaveAttribute('href', '#run-detail-focus');
+    expect(within(sectionNav).getByRole('link', { name: 'Timeline' })).toHaveAttribute('href', '#run-detail-timeline');
+    expect(within(sectionNav).getByRole('link', { name: 'Stream' })).toHaveAttribute('href', '#run-detail-stream');
+    expect(within(sectionNav).getByRole('link', { name: 'Observability' })).toHaveAttribute(
+      'href',
+      '#run-detail-observability',
+    );
+
+    expect(screen.getByRole('heading', { level: 3, name: 'Operator focus' })).toHaveAttribute('id', 'run-detail-focus');
+    expect(screen.getByRole('heading', { level: 3, name: 'Timeline' })).toHaveAttribute('id', 'run-detail-timeline');
+    expect(screen.getByRole('heading', { level: 3, name: 'Agent stream' })).toHaveAttribute('id', 'run-detail-stream');
+    expect(screen.getByRole('heading', { level: 3, name: 'Observability' })).toHaveAttribute(
+      'id',
+      'run-detail-observability',
+    );
+  });
+
+  it('updates the active section link from scroll-spy intersection events', async () => {
+    render(
+      <RunDetailContent
+        initialDetail={createRunDetail()}
+        repositories={[createRepository()]}
+        enableRealtime={false}
+      />,
+    );
+
+    const sectionNav = screen.getByRole('navigation', { name: 'Run detail sections' });
+    const focusLink = within(sectionNav).getByRole('link', { name: 'Focus' });
+    const timelineLink = within(sectionNav).getByRole('link', { name: 'Timeline' });
+    const streamLink = within(sectionNav).getByRole('link', { name: 'Stream' });
+    const observer = MockIntersectionObserver.instances[0];
+
+    expect(observer).toBeDefined();
+    expect(focusLink).toHaveAttribute('aria-current', 'location');
+    expect(timelineLink).not.toHaveAttribute('aria-current');
+
+    const timelineHeading = screen.getByRole('heading', { level: 3, name: 'Timeline' });
+    const streamHeading = screen.getByRole('heading', { level: 3, name: 'Agent stream' });
+
+    await act(async () => {
+      observer?.emit([
+        {
+          target: timelineHeading,
+          isIntersecting: true,
+          intersectionRatio: 0.72,
+        },
+      ]);
+    });
+
+    expect(timelineLink).toHaveAttribute('aria-current', 'location');
+    expect(focusLink).not.toHaveAttribute('aria-current');
+
+    await act(async () => {
+      observer?.emit([
+        {
+          target: streamHeading,
+          isIntersecting: true,
+          intersectionRatio: 0.81,
+        },
+      ]);
+    });
+
+    expect(streamLink).toHaveAttribute('aria-current', 'location');
+    expect(timelineLink).not.toHaveAttribute('aria-current');
   });
 
   it('adds an expand affordance for long artifact previews', async () => {
