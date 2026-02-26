@@ -329,9 +329,26 @@ export type DashboardGitHubAuthStatus = {
   error: string | null;
 };
 
+export type DashboardRepositorySyncStrategy = 'ff-only' | 'merge' | 'rebase';
+export type DashboardRepositorySyncMode = 'fetch' | 'pull';
+export type DashboardRepositorySyncStatus = 'fetched' | 'up_to_date' | 'updated' | 'conflicted';
+
+export type DashboardRepositorySyncDetails = {
+  mode: DashboardRepositorySyncMode;
+  strategy: DashboardRepositorySyncStrategy | null;
+  branch: string | null;
+  status: DashboardRepositorySyncStatus;
+  conflictMessage: string | null;
+};
+
+export type DashboardRepositorySyncRequest = {
+  strategy?: DashboardRepositorySyncStrategy;
+};
+
 export type DashboardRepositorySyncResult = {
   action: 'cloned' | 'fetched';
   repository: DashboardRepositoryState;
+  sync: DashboardRepositorySyncDetails;
 };
 
 export type DashboardCreateRepositoryRequest = {

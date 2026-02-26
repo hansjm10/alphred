@@ -46,6 +46,7 @@ auth validation.
   - `deriveSandboxRepoPath(provider, remoteRef)` deterministically maps refs to sandbox paths.
 - Registry clone orchestration:
   - `ensureRepositoryClone(...)` integrates with the repository registry (`@alphred/db`), clones or fetches existing clones, and keeps `clone_status` / `local_path` in sync.
+  - Optional sync mode supports branch update strategies (`ff-only`, `merge`, `rebase`) after fetch and reports structured sync outcomes (`fetched`, `up_to_date`, `updated`, `conflicted`).
 - Branch naming templates:
   - `generateConfiguredBranchName(context, template?)` resolves template precedence:
     explicit template -> `ALPHRED_BRANCH_TEMPLATE` -> default `alphred/{tree-key}/{run-id}`.

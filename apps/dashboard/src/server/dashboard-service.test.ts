@@ -2167,6 +2167,13 @@ describe('createDashboardService', () => {
         localPath: '/tmp/repos/demo-repo',
         cloneStatus: 'cloned',
       } satisfies RepositoryConfig,
+      sync: {
+        mode: 'pull' as const,
+        strategy: 'ff-only' as const,
+        branch: 'main',
+        status: 'updated' as const,
+        conflictMessage: null,
+      },
     }));
 
     const { db, dependencies } = createHarness({
@@ -2180,8 +2187,111 @@ describe('createDashboardService', () => {
 
     expect(result.action).toBe('fetched');
     expect(result.repository.cloneStatus).toBe('cloned');
+    expect(result.sync.status).toBe('updated');
+    expect(result.sync.strategy).toBe('ff-only');
     expect(checkAuth).toHaveBeenCalledTimes(1);
     expect(ensureRepositoryCloneMock).toHaveBeenCalledTimes(1);
+    expect(ensureRepositoryCloneMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sync: {
+          mode: 'pull',
+          strategy: 'ff-only',
+        },
+      }),
+    );
+  });
+
+  it('falls back to fetched sync details when clone sync metadata is absent', async () => {
+    const checkAuth = vi.fn(async () => ({
+      authenticated: true,
+      user: 'sync-user',
+      scopes: ['repo'],
+    } satisfies AuthStatus));
+
+    const ensureRepositoryCloneMock: DashboardServiceDependencies['ensureRepositoryClone'] = vi.fn(async () => ({
+      action: 'fetched' as const,
+      repository: {
+        id: 1,
+        name: 'demo-repo',
+        provider: 'github',
+        remoteUrl: 'https://github.com/octocat/demo-repo.git',
+        remoteRef: 'octocat/demo-repo',
+        defaultBranch: 'main',
+        branchTemplate: null,
+        localPath: '/tmp/repos/demo-repo',
+        cloneStatus: 'cloned',
+      } satisfies RepositoryConfig,
+    }));
+
+    const { db, dependencies } = createHarness({
+      createScmProvider: () => ({ checkAuth }),
+      ensureRepositoryClone: ensureRepositoryCloneMock,
+    });
+    seedRunData(db);
+
+    const service = createDashboardService({ dependencies });
+    const result = await service.syncRepository('demo-repo');
+
+    expect(result.sync).toEqual({
+      mode: 'fetch',
+      strategy: null,
+      branch: 'main',
+      status: 'fetched',
+      conflictMessage: null,
+    });
+  });
+
+  it('supports rebase sync strategy and surfaces conflict outcomes as 409 errors', async () => {
+    const checkAuth = vi.fn(async () => ({
+      authenticated: true,
+      user: 'sync-user',
+      scopes: ['repo'],
+    } satisfies AuthStatus));
+
+    const ensureRepositoryCloneMock: DashboardServiceDependencies['ensureRepositoryClone'] = vi.fn(async () => ({
+      action: 'fetched' as const,
+      repository: {
+        id: 1,
+        name: 'demo-repo',
+        provider: 'github',
+        remoteUrl: 'https://github.com/octocat/demo-repo.git',
+        remoteRef: 'octocat/demo-repo',
+        defaultBranch: 'main',
+        branchTemplate: null,
+        localPath: '/tmp/repos/demo-repo',
+        cloneStatus: 'cloned',
+      } satisfies RepositoryConfig,
+      sync: {
+        mode: 'pull' as const,
+        strategy: 'rebase' as const,
+        branch: 'main',
+        status: 'conflicted' as const,
+        conflictMessage: 'Sync conflict on branch "main" with strategy "rebase": could not apply 1234',
+      },
+    }));
+
+    const { db, dependencies } = createHarness({
+      createScmProvider: () => ({ checkAuth }),
+      ensureRepositoryClone: ensureRepositoryCloneMock,
+    });
+    seedRunData(db);
+
+    const service = createDashboardService({ dependencies });
+
+    await expect(service.syncRepository('demo-repo', { strategy: 'rebase' })).rejects.toMatchObject({
+      name: 'DashboardIntegrationError',
+      code: 'conflict',
+      status: 409,
+      message: 'Sync conflict on branch "main" with strategy "rebase": could not apply 1234',
+    });
+    expect(ensureRepositoryCloneMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sync: {
+          mode: 'pull',
+          strategy: 'rebase',
+        },
+      }),
+    );
   });
 
   it('creates github repositories through the shared db schema', async () => {

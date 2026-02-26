@@ -21,7 +21,16 @@ describe('git index exports', () => {
     expect(typeof git.AzureDevOpsScmProvider).toBe('function');
     expect(typeof git.ensureRepositoryClone).toBe('function');
     expect(typeof git.fetchRepository).toBe('function');
+    expect(Array.isArray(git.repositorySyncModes)).toBe(true);
+    expect(Array.isArray(git.repositorySyncStrategies)).toBe(true);
+    expect(Array.isArray(git.repositorySyncStatuses)).toBe(true);
     expect(typeof git.resolveSandboxDir).toBe('function');
     expect(typeof git.deriveSandboxRepoPath).toBe('function');
+  });
+
+  it('exports unique sync enum values without duplicates', () => {
+    expect(new Set(git.repositorySyncModes).size).toBe(git.repositorySyncModes.length);
+    expect(new Set(git.repositorySyncStrategies).size).toBe(git.repositorySyncStrategies.length);
+    expect(new Set(git.repositorySyncStatuses).size).toBe(git.repositorySyncStatuses.length);
   });
 });

@@ -636,7 +636,7 @@ export function RepositoriesPageContent({
       }));
       setSyncBanner({
         tone: 'success',
-        message: `${result.repository.name} sync completed (${result.action}).`,
+        message: `${result.repository.name} sync completed (${result.action}, ${result.sync.status}).`,
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Repository sync failed.';

@@ -1401,6 +1401,13 @@ describe('CLI repo commands', () => {
           localPath: '/tmp/alphred/repos/github/acme/frontend',
         },
         action: 'cloned' as const,
+        sync: {
+          mode: 'pull' as const,
+          strategy: 'ff-only' as const,
+          branch: 'main',
+          status: 'updated' as const,
+          conflictMessage: null,
+        },
       };
     });
     const createScmProviderMock = vi.fn((_config: ScmProviderConfig) => ({
@@ -1424,7 +1431,176 @@ describe('CLI repo commands', () => {
       repo: 'acme/frontend',
     });
     expect(ensureRepositoryCloneMock).toHaveBeenCalledTimes(1);
+    expect(ensureRepositoryCloneMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sync: {
+          mode: 'pull',
+          strategy: 'ff-only',
+        },
+      }),
+    );
     expect(captured.stdout.some(line => line.includes('Repository "frontend" cloned'))).toBe(true);
+    expect(captured.stdout).toContain('Sync status: updated (mode=pull, strategy=ff-only, branch=main).');
+  });
+
+  it('accepts an explicit sync strategy for repo sync', async () => {
+    const db = createDatabase(':memory:');
+    migrateDatabase(db);
+    insertRepository(db, {
+      name: 'frontend',
+      provider: 'github',
+      remoteUrl: 'https://github.com/acme/frontend.git',
+      remoteRef: 'acme/frontend',
+      cloneStatus: 'pending',
+      localPath: null,
+    });
+
+    const ensureRepositoryCloneMock = vi.fn(async () => {
+      const repository = getRepositoryByName(db, 'frontend');
+      if (!repository) {
+        throw new Error('Expected repository row.');
+      }
+
+      return {
+        repository: {
+          ...repository,
+          cloneStatus: 'cloned' as const,
+          localPath: '/tmp/alphred/repos/github/acme/frontend',
+        },
+        action: 'fetched' as const,
+        sync: {
+          mode: 'pull' as const,
+          strategy: 'rebase' as const,
+          branch: 'main',
+          status: 'up_to_date' as const,
+          conflictMessage: null,
+        },
+      };
+    });
+
+    const captured = createCapturedIo();
+
+    const exitCode = await main(['repo', 'sync', 'frontend', '--strategy', 'rebase'], {
+      dependencies: createDependencies(db, createUnusedProviderResolver(), {
+        ensureRepositoryClone: ensureRepositoryCloneMock,
+      }),
+      io: captured.io,
+    });
+
+    expect(exitCode).toBe(0);
+    expect(ensureRepositoryCloneMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sync: {
+          mode: 'pull',
+          strategy: 'rebase',
+        },
+      }),
+    );
+    expect(captured.stdout).toContain('Sync status: up_to_date (mode=pull, strategy=rebase, branch=main).');
+  });
+
+  it('prints an unavailable sync summary when repository sync metadata is missing', async () => {
+    const db = createDatabase(':memory:');
+    migrateDatabase(db);
+    insertRepository(db, {
+      name: 'frontend',
+      provider: 'github',
+      remoteUrl: 'https://github.com/acme/frontend.git',
+      remoteRef: 'acme/frontend',
+      cloneStatus: 'pending',
+      localPath: null,
+    });
+
+    const ensureRepositoryCloneMock = vi.fn(async () => {
+      const repository = getRepositoryByName(db, 'frontend');
+      if (!repository) {
+        throw new Error('Expected repository row.');
+      }
+
+      return {
+        repository: {
+          ...repository,
+          cloneStatus: 'cloned' as const,
+          localPath: '/tmp/alphred/repos/github/acme/frontend',
+        },
+        action: 'fetched' as const,
+      };
+    });
+
+    const captured = createCapturedIo();
+
+    const exitCode = await main(['repo', 'sync', 'frontend'], {
+      dependencies: createDependencies(db, createUnusedProviderResolver(), {
+        ensureRepositoryClone: ensureRepositoryCloneMock,
+      }),
+      io: captured.io,
+    });
+
+    expect(exitCode).toBe(0);
+    expect(captured.stdout).toContain('Sync status unavailable.');
+  });
+
+  it('fails with usage error when repo sync strategy is invalid', async () => {
+    const db = createDatabase(':memory:');
+    migrateDatabase(db);
+    const captured = createCapturedIo();
+
+    const exitCode = await main(['repo', 'sync', 'frontend', '--strategy', 'invalid'], {
+      dependencies: createDependencies(db, createUnusedProviderResolver()),
+      io: captured.io,
+    });
+
+    expect(exitCode).toBe(2);
+    expect(captured.stderr).toEqual([
+      'Option "--strategy" must be one of: ff-only, merge, rebase.',
+      'Usage: alphred repo sync <name> [--strategy <ff-only|merge|rebase>]',
+    ]);
+  });
+
+  it('returns runtime error when sync reports conflicts', async () => {
+    const db = createDatabase(':memory:');
+    migrateDatabase(db);
+    insertRepository(db, {
+      name: 'frontend',
+      provider: 'github',
+      remoteUrl: 'https://github.com/acme/frontend.git',
+      remoteRef: 'acme/frontend',
+      cloneStatus: 'cloned',
+      localPath: '/tmp/alphred/repos/github/acme/frontend',
+    });
+
+    const ensureRepositoryCloneMock = vi.fn(async () => {
+      const repository = getRepositoryByName(db, 'frontend');
+      if (!repository) {
+        throw new Error('Expected repository row.');
+      }
+
+      return {
+        repository,
+        action: 'fetched' as const,
+        sync: {
+          mode: 'pull' as const,
+          strategy: 'ff-only' as const,
+          branch: 'main',
+          status: 'conflicted' as const,
+          conflictMessage: 'Sync conflict on branch "main" with strategy "ff-only": Not possible to fast-forward, aborting.',
+        },
+      };
+    });
+
+    const captured = createCapturedIo();
+    const exitCode = await main(['repo', 'sync', 'frontend'], {
+      dependencies: createDependencies(db, createUnusedProviderResolver(), {
+        ensureRepositoryClone: ensureRepositoryCloneMock,
+      }),
+      io: captured.io,
+    });
+
+    expect(exitCode).toBe(4);
+    expect(captured.stderr).toEqual([
+      'Sync conflict on branch "main" with strategy "ff-only": Not possible to fast-forward, aborting.',
+      'Repository "frontend" remains at "/tmp/alphred/repos/github/acme/frontend".',
+    ]);
   });
 
   it('fails repo sync pre-flight when scm auth is missing', async () => {
@@ -1502,7 +1678,10 @@ describe('CLI repo commands', () => {
       },
       {
         args: ['repo', 'sync', 'frontend', '--force=yes'],
-        stderr: ['Unknown option for "repo sync": --force', 'Usage: alphred repo sync <name>'],
+        stderr: [
+          'Unknown option for "repo sync": --force',
+          'Usage: alphred repo sync <name> [--strategy <ff-only|merge|rebase>]',
+        ],
       },
     ];
 

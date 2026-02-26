@@ -36,6 +36,8 @@ import {
   createScmProvider,
   ensureRepositoryClone,
   resolveSandboxDir,
+  type RepositorySyncDetails,
+  type RepositorySyncStrategy,
   type ScmProviderConfig,
 } from '@alphred/git';
 import {
@@ -57,6 +59,8 @@ import type {
   DashboardNodeStatus,
   DashboardNodeStatusSummary,
   DashboardRepositoryState,
+  DashboardRepositorySyncDetails,
+  DashboardRepositorySyncRequest,
   DashboardRepositorySyncResult,
   DashboardRoutingDecisionSnapshot,
   DashboardRunDetail,
@@ -345,6 +349,29 @@ function toRepositoryState(repository: RepositoryConfig): DashboardRepositorySta
     branchTemplate: repository.branchTemplate,
     cloneStatus: repository.cloneStatus,
     localPath: repository.localPath,
+  };
+}
+
+function toRepositorySyncDetails(
+  sync: RepositorySyncDetails | undefined,
+  fallbackBranch: string,
+): DashboardRepositorySyncDetails {
+  if (!sync) {
+    return {
+      mode: 'fetch',
+      strategy: null,
+      branch: fallbackBranch,
+      status: 'fetched',
+      conflictMessage: null,
+    };
+  }
+
+  return {
+    mode: sync.mode,
+    strategy: sync.strategy,
+    branch: sync.branch,
+    status: sync.status,
+    conflictMessage: sync.conflictMessage,
   };
 }
 
@@ -3191,13 +3218,14 @@ export function createDashboardService(options: {
       });
     },
 
-    syncRepository(repositoryName: string): Promise<DashboardRepositorySyncResult> {
+    syncRepository(repositoryName: string, request: DashboardRepositorySyncRequest = {}): Promise<DashboardRepositorySyncResult> {
       const trimmedRepositoryName = repositoryName.trim();
       if (trimmedRepositoryName.length === 0) {
         throw new DashboardIntegrationError('invalid_request', 'Repository name cannot be empty.', {
           status: 400,
         });
       }
+      const strategy: RepositorySyncStrategy = request.strategy ?? 'ff-only';
 
       return withDatabase(async db => {
         const repository = getRepositoryByName(db, trimmedRepositoryName);
@@ -3219,11 +3247,30 @@ export function createDashboardService(options: {
             defaultBranch: repository.defaultBranch,
           },
           environment,
+          sync: {
+            mode: 'pull',
+            strategy,
+          },
         });
+        const syncDetails = toRepositorySyncDetails(cloned.sync, cloned.repository.defaultBranch);
+        if (syncDetails.status === 'conflicted') {
+          throw new DashboardIntegrationError(
+            'conflict',
+            syncDetails.conflictMessage ?? 'Repository sync encountered conflicts.',
+            {
+              status: 409,
+              details: {
+                strategy,
+                branch: syncDetails.branch,
+              },
+            },
+          );
+        }
 
         return {
           action: cloned.action,
           repository: toRepositoryState(cloned.repository),
+          sync: syncDetails,
         };
       });
     },

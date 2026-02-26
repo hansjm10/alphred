@@ -26,6 +26,31 @@ const WINDOWS_GIT_EXECUTABLE_CANDIDATES = [
   String.raw`C:\Program Files\Git\cmd\git.exe`,
   String.raw`C:\Program Files\Git\bin\git.exe`,
 ];
+const DEFAULT_SYNC_COMMITTER_NAME = 'Alphred Sync';
+const DEFAULT_SYNC_COMMITTER_EMAIL = 'alphred-sync@localhost';
+
+export const repositorySyncModes = ['fetch', 'pull'] as const;
+export type RepositorySyncMode = (typeof repositorySyncModes)[number];
+
+export const repositorySyncStrategies = ['ff-only', 'merge', 'rebase'] as const;
+export type RepositorySyncStrategy = (typeof repositorySyncStrategies)[number];
+
+export const repositorySyncStatuses = ['fetched', 'up_to_date', 'updated', 'conflicted'] as const;
+export type RepositorySyncStatus = (typeof repositorySyncStatuses)[number];
+
+export type RepositorySyncDetails = {
+  mode: RepositorySyncMode;
+  strategy: RepositorySyncStrategy | null;
+  branch: string | null;
+  status: RepositorySyncStatus;
+  conflictMessage: string | null;
+};
+
+type EnsureRepositorySyncOptions = {
+  mode?: RepositorySyncMode;
+  strategy?: RepositorySyncStrategy;
+  branch?: string;
+};
 
 export type EnsureRepositoryCloneParams = {
   db: AlphredDatabase;
@@ -37,6 +62,7 @@ export type EnsureRepositoryCloneParams = {
     environment: NodeJS.ProcessEnv,
     context: FetchRepositoryContext,
   ) => Promise<void>;
+  sync?: EnsureRepositorySyncOptions;
 };
 
 export type FetchRepositoryContext = {
@@ -52,11 +78,13 @@ type InsertRepositoryInput = Pick<
 export type EnsureRepositoryCloneResult = {
   repository: RepositoryConfig;
   action: 'cloned' | 'fetched';
+  sync?: RepositorySyncDetails;
 };
 
 export async function ensureRepositoryClone(params: EnsureRepositoryCloneParams): Promise<EnsureRepositoryCloneResult> {
   const environment = params.environment ?? process.env;
   const fetchAll = params.fetchAll ?? fetchRepository;
+  const syncOptions = resolveSyncOptions(params.sync);
   validateRepositoryInput(params.repository);
 
   const repository = getOrCreateRepository(params.db, params.repository);
@@ -76,6 +104,12 @@ export async function ensureRepositoryClone(params: EnsureRepositoryCloneParams)
 
     await fetchAll(localPath, environment, fetchContext);
     const defaultBranch = await resolveRepositoryDefaultBranch(localPath, repository.defaultBranch, environment);
+    const sync = await resolveFetchedSyncDetails({
+      localPath,
+      defaultBranch,
+      syncOptions,
+      environment,
+    });
     const updated = updateRepositoryCloneStatus(params.db, {
       repositoryId: repository.id,
       cloneStatus: 'cloned',
@@ -86,6 +120,7 @@ export async function ensureRepositoryClone(params: EnsureRepositoryCloneParams)
     return {
       repository: updated,
       action: 'fetched',
+      sync,
     };
   }
 
@@ -105,6 +140,13 @@ export async function ensureRepositoryClone(params: EnsureRepositoryCloneParams)
     return {
       repository: updated,
       action: 'cloned',
+      sync: {
+        mode: 'fetch',
+        strategy: null,
+        branch: defaultBranch,
+        status: 'updated',
+        conflictMessage: null,
+      },
     };
   } catch (error) {
     await rm(localPath, { recursive: true, force: true }).catch(() => undefined);
@@ -115,6 +157,407 @@ export async function ensureRepositoryClone(params: EnsureRepositoryCloneParams)
     });
     throw error;
   }
+}
+
+type ResolvedSyncOptions = {
+  mode: RepositorySyncMode;
+  strategy: RepositorySyncStrategy;
+  branch: string | undefined;
+};
+
+type ResolveFetchedSyncDetailsParams = {
+  localPath: string;
+  defaultBranch: string;
+  syncOptions: ResolvedSyncOptions;
+  environment: NodeJS.ProcessEnv;
+};
+
+function resolveSyncOptions(syncOptions: EnsureRepositorySyncOptions | undefined): ResolvedSyncOptions {
+  const branch = syncOptions?.branch?.trim();
+  return {
+    mode: syncOptions?.mode ?? 'fetch',
+    strategy: syncOptions?.strategy ?? 'ff-only',
+    branch: branch && branch.length > 0 ? branch : undefined,
+  };
+}
+
+async function resolveFetchedSyncDetails(params: ResolveFetchedSyncDetailsParams): Promise<RepositorySyncDetails> {
+  if (params.syncOptions.mode === 'fetch') {
+    return {
+      mode: 'fetch',
+      strategy: null,
+      branch: params.defaultBranch,
+      status: 'fetched',
+      conflictMessage: null,
+    };
+  }
+
+  const targetBranch = params.syncOptions.branch ?? params.defaultBranch;
+  const pullResult = await pullFetchedBranch({
+    localPath: params.localPath,
+    branch: targetBranch,
+    strategy: params.syncOptions.strategy,
+    environment: params.environment,
+  });
+
+  return {
+    mode: 'pull',
+    strategy: params.syncOptions.strategy,
+    branch: targetBranch,
+    status: pullResult.status,
+    conflictMessage: pullResult.conflictMessage,
+  };
+}
+
+type PullFetchedBranchParams = {
+  localPath: string;
+  branch: string;
+  strategy: RepositorySyncStrategy;
+  environment: NodeJS.ProcessEnv;
+};
+
+type PullFetchedBranchResult = {
+  status: Extract<RepositorySyncStatus, 'up_to_date' | 'updated' | 'conflicted'>;
+  conflictMessage: string | null;
+};
+
+type ExecutePullOnBranchParams = {
+  localPath: string;
+  normalizedBranch: string;
+  strategy: RepositorySyncStrategy;
+  environment: NodeJS.ProcessEnv;
+  previousBranch: string | undefined;
+  previousHeadRevision: string | undefined;
+};
+
+async function pullFetchedBranch(params: PullFetchedBranchParams): Promise<PullFetchedBranchResult> {
+  const normalizedBranch = params.branch.trim();
+  if (normalizedBranch.length === 0) {
+    return {
+      status: 'up_to_date',
+      conflictMessage: null,
+    };
+  }
+
+  const hasRemoteBranch = await hasGitRef(
+    params.localPath,
+    `refs/remotes/origin/${normalizedBranch}`,
+    params.environment,
+  );
+  if (!hasRemoteBranch) {
+    return {
+      status: 'up_to_date',
+      conflictMessage: null,
+    };
+  }
+
+  const createdLocalBranch = await ensureLocalBranchExists(params.localPath, normalizedBranch, params.environment);
+  const divergence = await resolveBranchDivergence(params.localPath, normalizedBranch, params.environment);
+  if (divergence.behind === 0) {
+    return {
+      status: createdLocalBranch ? 'updated' : 'up_to_date',
+      conflictMessage: null,
+    };
+  }
+
+  const previousBranch = await resolveCurrentBranch(params.localPath, params.environment);
+  const previousHeadRevision = previousBranch === undefined
+    ? await resolveCurrentHeadRevision(params.localPath, params.environment)
+    : undefined;
+  return executePullOnBranch({
+    localPath: params.localPath,
+    normalizedBranch,
+    strategy: params.strategy,
+    environment: params.environment,
+    previousBranch,
+    previousHeadRevision,
+  });
+}
+
+async function executePullOnBranch(params: ExecutePullOnBranchParams): Promise<PullFetchedBranchResult> {
+  const pullEnvironment = resolvePullEnvironment(params.strategy, params.environment);
+  let switchedToTargetBranch = false;
+
+  try {
+    if (params.previousBranch !== params.normalizedBranch) {
+      await runGitCommandWithOutput(['checkout', params.normalizedBranch], {
+        cwd: params.localPath,
+        environment: params.environment,
+      });
+      switchedToTargetBranch = true;
+    }
+
+    await runGitCommandWithOutput(resolvePullCommand(params.strategy, params.normalizedBranch), {
+      cwd: params.localPath,
+      environment: pullEnvironment,
+    });
+
+    return {
+      status: 'updated',
+      conflictMessage: null,
+    };
+  } catch (error) {
+    if (!isSyncConflictError(error)) {
+      throw error;
+    }
+
+    await abortSyncIfNeeded(params.localPath, params.strategy, pullEnvironment);
+    const conflictSummary = extractSyncConflictSummary(error);
+
+    return {
+      status: 'conflicted',
+      conflictMessage: `Sync conflict on branch "${params.normalizedBranch}" with strategy "${params.strategy}": ${conflictSummary}`,
+    };
+  } finally {
+    const restoreCommand = resolveRestoreCommand(params.previousBranch, params.previousHeadRevision);
+    if (switchedToTargetBranch && restoreCommand !== undefined) {
+      await runGitCommandWithOutput(restoreCommand, {
+        cwd: params.localPath,
+        environment: params.environment,
+      }).catch(() => undefined);
+    }
+  }
+}
+
+function resolveRestoreCommand(previousBranch: string | undefined, previousHeadRevision: string | undefined): string[] | undefined {
+  if (previousBranch !== undefined) {
+    return ['checkout', previousBranch];
+  }
+
+  if (previousHeadRevision === undefined) {
+    return undefined;
+  }
+
+  return ['checkout', '--detach', previousHeadRevision];
+}
+
+async function ensureLocalBranchExists(
+  localPath: string,
+  branch: string,
+  environment: NodeJS.ProcessEnv,
+): Promise<boolean> {
+  if (await hasGitRef(localPath, `refs/heads/${branch}`, environment)) {
+    return false;
+  }
+
+  await runGitCommandWithOutput(['branch', '--track', branch, `origin/${branch}`], {
+    cwd: localPath,
+    environment,
+  });
+  return true;
+}
+
+async function hasGitRef(
+  localPath: string,
+  refName: string,
+  environment: NodeJS.ProcessEnv,
+): Promise<boolean> {
+  try {
+    await runGitCommandWithOutput(['show-ref', '--verify', '--quiet', refName], {
+      cwd: localPath,
+      environment,
+    });
+    return true;
+  } catch (error) {
+    if (isExecErrorCode(error, 1)) {
+      return false;
+    }
+
+    throw error;
+  }
+}
+
+async function resolveCurrentBranch(
+  localPath: string,
+  environment: NodeJS.ProcessEnv,
+): Promise<string | undefined> {
+  try {
+    const { stdout } = await runGitCommandWithOutput(['symbolic-ref', '--quiet', '--short', 'HEAD'], {
+      cwd: localPath,
+      environment,
+    });
+    const trimmed = stdout.trim();
+    return trimmed.length > 0 ? trimmed : undefined;
+  } catch (error) {
+    if (isExecErrorCode(error, 1)) {
+      return undefined;
+    }
+
+    throw error;
+  }
+}
+
+async function resolveCurrentHeadRevision(
+  localPath: string,
+  environment: NodeJS.ProcessEnv,
+): Promise<string | undefined> {
+  try {
+    const { stdout } = await runGitCommandWithOutput(['rev-parse', '--verify', '--quiet', 'HEAD'], {
+      cwd: localPath,
+      environment,
+    });
+    const trimmed = stdout.trim();
+    return trimmed.length > 0 ? trimmed : undefined;
+  } catch (error) {
+    if (isExecErrorCode(error, 1)) {
+      return undefined;
+    }
+
+    throw error;
+  }
+}
+
+async function resolveBranchDivergence(
+  localPath: string,
+  branch: string,
+  environment: NodeJS.ProcessEnv,
+): Promise<{ ahead: number; behind: number }> {
+  const { stdout } = await runGitCommandWithOutput(
+    ['rev-list', '--left-right', '--count', `refs/heads/${branch}...refs/remotes/origin/${branch}`],
+    {
+      cwd: localPath,
+      environment,
+    },
+  );
+  const [aheadValue, behindValue] = stdout.trim().split(/\s+/);
+  const ahead = Number.parseInt(aheadValue ?? '', 10);
+  const behind = Number.parseInt(behindValue ?? '', 10);
+  if (!Number.isInteger(ahead) || ahead < 0 || !Number.isInteger(behind) || behind < 0) {
+    throw new Error(`Unable to determine branch divergence for "${branch}".`);
+  }
+
+  return {
+    ahead,
+    behind,
+  };
+}
+
+function resolvePullCommand(strategy: RepositorySyncStrategy, branch: string): string[] {
+  const targetRef = `origin/${branch}`;
+  if (strategy === 'ff-only') {
+    return ['merge', '--ff-only', targetRef];
+  }
+
+  if (strategy === 'merge') {
+    return ['merge', '--no-edit', targetRef];
+  }
+
+  return ['rebase', targetRef];
+}
+
+function resolvePullEnvironment(
+  strategy: RepositorySyncStrategy,
+  environment: NodeJS.ProcessEnv,
+): NodeJS.ProcessEnv {
+  if (strategy === 'ff-only') {
+    return environment;
+  }
+
+  const committerName = resolveIdentityValue(environment.GIT_COMMITTER_NAME)
+    ?? resolveIdentityValue(environment.GIT_AUTHOR_NAME)
+    ?? DEFAULT_SYNC_COMMITTER_NAME;
+  const committerEmail = resolveIdentityValue(environment.GIT_COMMITTER_EMAIL)
+    ?? resolveIdentityValue(environment.GIT_AUTHOR_EMAIL)
+    ?? DEFAULT_SYNC_COMMITTER_EMAIL;
+  const authorName = resolveIdentityValue(environment.GIT_AUTHOR_NAME) ?? committerName;
+  const authorEmail = resolveIdentityValue(environment.GIT_AUTHOR_EMAIL) ?? committerEmail;
+
+  return {
+    ...environment,
+    GIT_COMMITTER_NAME: committerName,
+    GIT_COMMITTER_EMAIL: committerEmail,
+    GIT_AUTHOR_NAME: authorName,
+    GIT_AUTHOR_EMAIL: authorEmail,
+  };
+}
+
+function resolveIdentityValue(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  if (trimmed === undefined || trimmed.length === 0) {
+    return undefined;
+  }
+
+  return trimmed;
+}
+
+async function abortSyncIfNeeded(
+  localPath: string,
+  strategy: RepositorySyncStrategy,
+  environment: NodeJS.ProcessEnv,
+): Promise<void> {
+  if (strategy === 'rebase') {
+    await runGitCommandWithOutput(['rebase', '--abort'], {
+      cwd: localPath,
+      environment,
+    }).catch(() => undefined);
+    return;
+  }
+
+  if (strategy === 'merge') {
+    await runGitCommandWithOutput(['merge', '--abort'], {
+      cwd: localPath,
+      environment,
+    }).catch(() => undefined);
+  }
+}
+
+function isSyncConflictError(error: unknown): boolean {
+  const output = readGitErrorOutput(error).toLowerCase();
+  return (
+    output.includes('conflict')
+    || output.includes('automatic merge failed')
+    || output.includes('could not apply')
+    || output.includes('not possible to fast-forward')
+    || output.includes('already checked out at')
+    || output.includes('please commit your changes or stash them')
+    || output.includes('would be overwritten by merge')
+    || output.includes('would be overwritten by checkout')
+    || output.includes('cannot rebase')
+  );
+}
+
+function extractSyncConflictSummary(error: unknown): string {
+  const output = readGitErrorOutput(error);
+  for (const line of output.split('\n')) {
+    const trimmed = line.trim();
+    if (trimmed.length === 0) {
+      continue;
+    }
+
+    if (
+      /conflict/i.test(trimmed)
+      || /could not apply/i.test(trimmed)
+      || /automatic merge failed/i.test(trimmed)
+      || /fast-forward/i.test(trimmed)
+      || /already checked out/i.test(trimmed)
+      || /stash/i.test(trimmed)
+      || /overwritten/i.test(trimmed)
+    ) {
+      return trimmed;
+    }
+  }
+
+  return 'Git reported a repository sync conflict.';
+}
+
+function readGitErrorOutput(error: unknown): string {
+  if (typeof error !== 'object' || error === null) {
+    return String(error);
+  }
+
+  const errorRecord = error as { stdout?: unknown; stderr?: unknown; message?: unknown };
+  const stdout = toErrorText(errorRecord.stdout);
+  const stderr = toErrorText(errorRecord.stderr);
+  const message = typeof errorRecord.message === 'string' ? errorRecord.message : '';
+  return [stdout, stderr, message].filter(part => part.length > 0).join('\n');
+}
+
+function isExecErrorCode(error: unknown, expectedCode: number): boolean {
+  if (typeof error !== 'object' || error === null) {
+    return false;
+  }
+
+  return (error as { code?: unknown }).code === expectedCode;
 }
 
 async function resolveRepositoryDefaultBranch(
@@ -204,7 +647,7 @@ export async function fetchRepository(
   context?: FetchRepositoryContext,
 ): Promise<void> {
   const authConfig = resolveGitFetchAuthConfig(context, environment);
-  await runGitCommand([...authConfig, 'fetch', '--all'], {
+  await runGitCommand([...authConfig, 'fetch', '--all', '--prune', '--tags'], {
     cwd: localPath,
     environment,
   });
@@ -237,6 +680,25 @@ async function runGitCommand(
       );
     });
   });
+}
+
+async function runGitCommandWithOutput(
+  args: string[],
+  options: {
+    cwd?: string;
+    environment?: NodeJS.ProcessEnv;
+  },
+): Promise<{ stdout: string; stderr: string }> {
+  const gitExecutable = await resolveGitExecutable(options.environment);
+  const result = await execFileAsync(gitExecutable, args, {
+    cwd: options.cwd,
+    env: options.environment,
+  });
+
+  return {
+    stdout: toErrorText(result.stdout),
+    stderr: toErrorText(result.stderr),
+  };
 }
 
 async function resolveGitExecutable(environment: NodeJS.ProcessEnv = process.env): Promise<string> {
