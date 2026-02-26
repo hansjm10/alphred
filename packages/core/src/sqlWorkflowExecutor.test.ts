@@ -436,6 +436,140 @@ function seedFailureRoutingRun(params: {
   };
 }
 
+function seedFailureRouteWithPreFailedRemediationTargetRun() {
+  const db = createDatabase(':memory:');
+  migrateDatabase(db);
+
+  const tree = db
+    .insert(workflowTrees)
+    .values({
+      treeKey: 'failure_route_with_prefailed_target_tree',
+      version: 1,
+      name: 'Failure Route With Prefailed Target Tree',
+    })
+    .returning({ id: workflowTrees.id })
+    .get();
+
+  const prompt = db
+    .insert(promptTemplates)
+    .values({
+      templateKey: 'failure_route_with_prefailed_target_prompt',
+      version: 1,
+      content: 'Handle failure routing edge cases',
+      contentType: 'markdown',
+    })
+    .returning({ id: promptTemplates.id })
+    .get();
+
+  const sourceNode = db
+    .insert(treeNodes)
+    .values({
+      workflowTreeId: tree.id,
+      nodeKey: 'source',
+      nodeType: 'agent',
+      provider: 'codex',
+      promptTemplateId: prompt.id,
+      maxRetries: 0,
+      sequenceIndex: 10,
+    })
+    .returning({ id: treeNodes.id })
+    .get();
+
+  const remediationNode = db
+    .insert(treeNodes)
+    .values({
+      workflowTreeId: tree.id,
+      nodeKey: 'remediation',
+      nodeType: 'agent',
+      provider: 'codex',
+      promptTemplateId: prompt.id,
+      sequenceIndex: 20,
+    })
+    .returning({ id: treeNodes.id })
+    .get();
+
+  const fallbackNode = db
+    .insert(treeNodes)
+    .values({
+      workflowTreeId: tree.id,
+      nodeKey: 'fallback',
+      nodeType: 'agent',
+      provider: 'codex',
+      promptTemplateId: prompt.id,
+      sequenceIndex: 30,
+    })
+    .returning({ id: treeNodes.id })
+    .get();
+
+  db.insert(treeEdges)
+    .values([
+      {
+        workflowTreeId: tree.id,
+        sourceNodeId: sourceNode.id,
+        targetNodeId: remediationNode.id,
+        routeOn: 'failure',
+        priority: 0,
+        auto: 1,
+      },
+      {
+        workflowTreeId: tree.id,
+        sourceNodeId: remediationNode.id,
+        targetNodeId: fallbackNode.id,
+        routeOn: 'failure',
+        priority: 0,
+        auto: 1,
+      },
+    ])
+    .run();
+
+  const materialized = materializeWorkflowRunFromTree(db, { treeKey: 'failure_route_with_prefailed_target_tree' });
+  const runNodeRows = db
+    .select({
+      id: runNodes.id,
+      nodeKey: runNodes.nodeKey,
+    })
+    .from(runNodes)
+    .where(eq(runNodes.workflowRunId, materialized.run.id))
+    .all();
+  const runNodeIdByKey = new Map(runNodeRows.map(row => [row.nodeKey, row.id]));
+
+  const sourceRunNodeId = runNodeIdByKey.get('source');
+  const remediationRunNodeId = runNodeIdByKey.get('remediation');
+  const fallbackRunNodeId = runNodeIdByKey.get('fallback');
+  if (!sourceRunNodeId || !remediationRunNodeId || !fallbackRunNodeId) {
+    throw new Error('Expected source, remediation, and fallback run-nodes to be materialized.');
+  }
+
+  transitionRunNodeStatus(db, {
+    runNodeId: remediationRunNodeId,
+    expectedFrom: 'pending',
+    to: 'running',
+  });
+  transitionRunNodeStatus(db, {
+    runNodeId: remediationRunNodeId,
+    expectedFrom: 'running',
+    to: 'failed',
+  });
+  transitionRunNodeStatus(db, {
+    runNodeId: fallbackRunNodeId,
+    expectedFrom: 'pending',
+    to: 'running',
+  });
+  transitionRunNodeStatus(db, {
+    runNodeId: fallbackRunNodeId,
+    expectedFrom: 'running',
+    to: 'completed',
+  });
+
+  return {
+    db,
+    runId: materialized.run.id,
+    sourceRunNodeId,
+    remediationRunNodeId,
+    fallbackRunNodeId,
+  };
+}
+
 function seedConvergingFailureRouteContextRun() {
   const db = createDatabase(':memory:');
   migrateDatabase(db);
@@ -2555,6 +2689,73 @@ describe('createSqlWorkflowExecutor', () => {
         failure_route_source_run_node_id: sourceRunNodeId,
         failure_route_retry_summary_artifact_id: null,
       }),
+    );
+  });
+
+  it('keeps run failed when failure routing selects a pre-failed target', async () => {
+    const {
+      db,
+      runId,
+      sourceRunNodeId,
+      remediationRunNodeId,
+      fallbackRunNodeId,
+    } = seedFailureRouteWithPreFailedRemediationTargetRun();
+
+    let invocation = 0;
+    const executor = createSqlWorkflowExecutor(db, {
+      resolveProvider: () => ({
+        async *run(): AsyncIterable<ProviderEvent> {
+          invocation += 1;
+          if (invocation === 1) {
+            throw new Error('source-fails-after-remediation-is-already-failed');
+          }
+
+          yield { type: 'result', content: 'unexpected-extra-run', timestamp: 2 };
+        },
+      }),
+    });
+
+    const firstStep = await executor.executeNextRunnableNode({
+      workflowRunId: runId,
+      options: {
+        workingDirectory: '/tmp/alphred-worktree',
+      },
+    });
+
+    expect(firstStep).toEqual({
+      workflowRunId: runId,
+      outcome: 'executed',
+      runNodeId: sourceRunNodeId,
+      nodeKey: 'source',
+      runNodeStatus: 'failed',
+      runStatus: 'failed',
+      artifactId: expect.any(Number),
+    });
+    expect(invocation).toBe(1);
+
+    const persistedRun = db
+      .select({
+        status: workflowRuns.status,
+      })
+      .from(workflowRuns)
+      .where(eq(workflowRuns.id, runId))
+      .get();
+    expect(persistedRun?.status).toBe('failed');
+
+    const persistedNodes = db
+      .select({
+        runNodeId: runNodes.id,
+        status: runNodes.status,
+      })
+      .from(runNodes)
+      .where(eq(runNodes.workflowRunId, runId))
+      .all();
+    expect(persistedNodes).toEqual(
+      expect.arrayContaining([
+        { runNodeId: sourceRunNodeId, status: 'failed' },
+        { runNodeId: remediationRunNodeId, status: 'failed' },
+        { runNodeId: fallbackRunNodeId, status: 'completed' },
+      ]),
     );
   });
 

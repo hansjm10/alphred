@@ -375,6 +375,14 @@ function selectFirstFailureOutgoingEdge(outgoingEdges: EdgeRow[]): EdgeRow | nul
   return null;
 }
 
+function isExecutableFailureRouteTarget(node: RunNodeExecutionRow | undefined): boolean {
+  if (!node) {
+    return false;
+  }
+
+  return node.status === 'pending' || node.status === 'running' || node.status === 'completed';
+}
+
 export function buildRoutingSelection(
   latestNodeAttempts: RunNodeExecutionRow[],
   edges: EdgeRow[],
@@ -399,7 +407,10 @@ export function buildRoutingSelection(
       const selectedFailureEdge = selectFirstFailureOutgoingEdge(outgoingEdges);
       if (selectedFailureEdge) {
         selectedEdgeIdBySourceNodeId.set(sourceNode.treeNodeId, selectedFailureEdge.edgeId);
-        handledFailedSourceNodeIds.add(sourceNode.treeNodeId);
+        const targetNode = latestByTreeNodeId.get(selectedFailureEdge.targetNodeId);
+        if (isExecutableFailureRouteTarget(targetNode)) {
+          handledFailedSourceNodeIds.add(sourceNode.treeNodeId);
+        }
       }
       continue;
     }
