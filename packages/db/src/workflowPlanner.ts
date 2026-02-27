@@ -3,6 +3,7 @@ import type { AlphredDatabase } from './connection.js';
 import {
   guardDefinitions,
   promptTemplates,
+  runNodeEdges,
   runNodes,
   treeEdges,
   treeNodes,
@@ -39,9 +40,13 @@ export type PlannedGuardDefinition = {
 export type PlannedTreeNode = {
   id: number;
   nodeKey: string;
+  nodeRole: string;
   nodeType: string;
   provider: string | null;
   model: string | null;
+  executionPermissions: unknown;
+  errorHandlerConfig: unknown;
+  maxChildren: number;
   maxRetries: number;
   sequenceIndex: number;
   promptTemplate: PlannedPromptTemplate | null;
@@ -286,8 +291,12 @@ export function loadWorkflowTreeTopology(
       nodeId: treeNodes.id,
       nodeKey: treeNodes.nodeKey,
       nodeType: treeNodes.nodeType,
+      nodeRole: treeNodes.nodeRole,
       provider: treeNodes.provider,
       model: treeNodes.model,
+      executionPermissions: treeNodes.executionPermissions,
+      errorHandlerConfig: treeNodes.errorHandlerConfig,
+      maxChildren: treeNodes.maxChildren,
       maxRetries: treeNodes.maxRetries,
       sequenceIndex: treeNodes.sequenceIndex,
       promptTemplateId: promptTemplates.id,
@@ -307,8 +316,12 @@ export function loadWorkflowTreeTopology(
       id: row.nodeId,
       nodeKey: row.nodeKey,
       nodeType: row.nodeType,
+      nodeRole: row.nodeRole,
       provider: row.provider,
       model: row.model,
+      executionPermissions: row.executionPermissions,
+      errorHandlerConfig: row.errorHandlerConfig,
+      maxChildren: row.maxChildren,
       maxRetries: row.maxRetries,
       sequenceIndex: row.sequenceIndex,
       promptTemplate:
@@ -409,6 +422,20 @@ export function materializeWorkflowRunFromTree(
             workflowRunId: run.id,
             treeNodeId: node.id,
             nodeKey: node.nodeKey,
+            nodeRole: node.nodeRole,
+            nodeType: node.nodeType,
+            provider: node.provider,
+            model: node.model,
+            prompt: node.promptTemplate?.content ?? null,
+            promptContentType: node.promptTemplate?.contentType ?? 'markdown',
+            executionPermissions: node.executionPermissions ?? null,
+            errorHandlerConfig: node.errorHandlerConfig ?? null,
+            maxChildren: node.maxChildren,
+            maxRetries: node.maxRetries,
+            spawnerNodeId: null,
+            joinNodeId: null,
+            lineageDepth: 0,
+            sequencePath: String(node.sequenceIndex),
             status: 'pending',
             sequenceIndex: node.sequenceIndex,
             attempt: 1,
@@ -430,6 +457,35 @@ export function materializeWorkflowRunFromTree(
       .where(eq(runNodes.workflowRunId, run.id))
       .orderBy(asc(runNodes.sequenceIndex), asc(runNodes.nodeKey), asc(runNodes.id))
       .all();
+
+    if (persistedRunNodes.length > 0 && topology.edges.length > 0) {
+      const runNodeIdByTreeNodeId = new Map<number, number>(persistedRunNodes.map(node => [node.treeNodeId, node.id]));
+      tx
+        .insert(runNodeEdges)
+        .values(
+          topology.edges.map(edge => {
+            const sourceRunNodeId = runNodeIdByTreeNodeId.get(edge.sourceNodeId);
+            const targetRunNodeId = runNodeIdByTreeNodeId.get(edge.targetNodeId);
+            if (!sourceRunNodeId || !targetRunNodeId) {
+              throw new Error(
+                `Failed to materialize runtime edges for workflow run id=${run.id}: missing source/target run node for tree edge id=${edge.id}.`,
+              );
+            }
+
+            return {
+              workflowRunId: run.id,
+              sourceRunNodeId,
+              targetRunNodeId,
+              routeOn: edge.routeOn,
+              auto: edge.auto ? 1 : 0,
+              guardExpression: edge.guardDefinition?.expression ?? null,
+              priority: edge.priority,
+              edgeKind: 'tree',
+            };
+          }),
+        )
+        .run();
+    }
 
     const initialRunnableNodeKeys = topology.initialRunnableNodeKeys;
     const initialRunnableNodeKeySet = new Set(initialRunnableNodeKeys);

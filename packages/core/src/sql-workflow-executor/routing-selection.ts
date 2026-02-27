@@ -411,10 +411,10 @@ function applyFailedSourceNodeSelection(params: {
     return;
   }
 
-  selectionState.selectedEdgeIdBySourceNodeId.set(sourceNode.treeNodeId, selectedFailureEdge.edgeId);
+  selectionState.selectedEdgeIdBySourceNodeId.set(sourceNode.runNodeId, selectedFailureEdge.edgeId);
   const targetNode = latestByTreeNodeId.get(selectedFailureEdge.targetNodeId);
   if (isExecutableFailureRouteTarget(targetNode)) {
-    selectionState.handledFailedSourceNodeIds.add(sourceNode.treeNodeId);
+    selectionState.handledFailedSourceNodeIds.add(sourceNode.runNodeId);
   }
 }
 
@@ -441,7 +441,7 @@ function applyCompletedSourceNodeSelection(params: {
   );
 
   if (routing.selectedEdgeId !== null) {
-    selectionState.selectedEdgeIdBySourceNodeId.set(sourceNode.treeNodeId, routing.selectedEdgeId);
+    selectionState.selectedEdgeIdBySourceNodeId.set(sourceNode.runNodeId, routing.selectedEdgeId);
   }
 
   if (routing.hasNoRouteDecision) {
@@ -449,7 +449,7 @@ function applyCompletedSourceNodeSelection(params: {
   }
 
   if (routing.hasUnresolvedDecision) {
-    selectionState.unresolvedDecisionSourceNodeIds.add(sourceNode.treeNodeId);
+    selectionState.unresolvedDecisionSourceNodeIds.add(sourceNode.runNodeId);
   }
 }
 
@@ -459,7 +459,7 @@ export function buildRoutingSelection(
   latestRoutingDecisionsByRunNodeId: Map<number, RoutingDecisionRow>,
   latestArtifactsByRunNodeId: Map<number, LatestArtifact>,
 ): RoutingSelection {
-  const latestByTreeNodeId = new Map<number, RunNodeExecutionRow>(latestNodeAttempts.map(row => [row.treeNodeId, row]));
+  const latestByTreeNodeId = new Map<number, RunNodeExecutionRow>(latestNodeAttempts.map(row => [row.runNodeId, row]));
   const incomingEdgesByTargetNodeId = new Map<number, EdgeRow[]>();
   const outgoingEdgesBySourceNodeId = new Map<number, EdgeRow[]>();
   for (const edge of edges) {
@@ -469,7 +469,7 @@ export function buildRoutingSelection(
 
   const selectionState = createRoutingSelectionMutationState();
   for (const sourceNode of latestNodeAttempts) {
-    const outgoingEdges = outgoingEdgesBySourceNodeId.get(sourceNode.treeNodeId) ?? [];
+    const outgoingEdges = outgoingEdgesBySourceNodeId.get(sourceNode.runNodeId) ?? [];
     if (sourceNode.status === 'failed') {
       applyFailedSourceNodeSelection({
         sourceNode,

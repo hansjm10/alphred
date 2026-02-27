@@ -70,6 +70,7 @@ function createRunDetail(overrides: RunDetailOverrides = {}): DashboardRunDetail
       ...overrides.run,
     },
     nodes: overrides.nodes ?? [],
+    fanOutGroups: overrides.fanOutGroups ?? [],
     artifacts: overrides.artifacts ?? [],
     routingDecisions: overrides.routingDecisions ?? [],
     diagnostics: overrides.diagnostics ?? [],

@@ -6,6 +6,7 @@ import {
   phaseArtifacts,
   repositories as repositoryTable,
   runNodeDiagnostics,
+  runJoinBarriers,
   runNodeStreamEvents,
   routingDecisions,
   runNodes,
@@ -22,6 +23,7 @@ import type {
   DashboardRunDetail,
   DashboardRunLaunchRequest,
   DashboardRunLaunchResult,
+  DashboardFanOutGroupSnapshot,
   DashboardRunNodeDiagnosticsSnapshot,
   DashboardRunNodeSnapshot,
   DashboardRunSummary,
@@ -204,6 +206,11 @@ async function loadRunSummary(db: AlphredDatabase, runId: number): Promise<Dashb
     .select({
       id: runNodes.id,
       nodeKey: runNodes.nodeKey,
+      nodeRole: runNodes.nodeRole,
+      spawnerNodeId: runNodes.spawnerNodeId,
+      joinNodeId: runNodes.joinNodeId,
+      lineageDepth: runNodes.lineageDepth,
+      sequencePath: runNodes.sequencePath,
       attempt: runNodes.attempt,
       sequenceIndex: runNodes.sequenceIndex,
       treeNodeId: runNodes.treeNodeId,
@@ -305,6 +312,11 @@ export function createRunOperations(params: {
           .select({
             id: runNodes.id,
             nodeKey: runNodes.nodeKey,
+            nodeRole: runNodes.nodeRole,
+            spawnerNodeId: runNodes.spawnerNodeId,
+            joinNodeId: runNodes.joinNodeId,
+            lineageDepth: runNodes.lineageDepth,
+            sequencePath: runNodes.sequencePath,
             attempt: runNodes.attempt,
             sequenceIndex: runNodes.sequenceIndex,
             treeNodeId: runNodes.treeNodeId,
@@ -318,6 +330,21 @@ export function createRunOperations(params: {
           .all();
 
         const latestNodes = selectLatestNodeAttempts(runNodeRows);
+        const fanOutBarrierRows = db
+          .select({
+            spawnerNodeId: runJoinBarriers.spawnerRunNodeId,
+            joinNodeId: runJoinBarriers.joinRunNodeId,
+            spawnSourceArtifactId: runJoinBarriers.spawnSourceArtifactId,
+            expectedChildren: runJoinBarriers.expectedChildren,
+            terminalChildren: runJoinBarriers.terminalChildren,
+            completedChildren: runJoinBarriers.completedChildren,
+            failedChildren: runJoinBarriers.failedChildren,
+            status: runJoinBarriers.status,
+          })
+          .from(runJoinBarriers)
+          .where(eq(runJoinBarriers.workflowRunId, runId))
+          .orderBy(asc(runJoinBarriers.id))
+          .all();
 
         const recentArtifacts = db
           .select({
@@ -398,6 +425,19 @@ export function createRunOperations(params: {
           latestRoutingDecision: latestDecisionByRunNodeId.get(node.id) ?? null,
           latestDiagnostics: latestDiagnosticsByRunNodeId.get(node.id) ?? null,
         }));
+        const fanOutGroups: DashboardFanOutGroupSnapshot[] = fanOutBarrierRows.map(row => ({
+          spawnerNodeId: row.spawnerNodeId,
+          joinNodeId: row.joinNodeId,
+          spawnSourceArtifactId: row.spawnSourceArtifactId,
+          expectedChildren: row.expectedChildren,
+          terminalChildren: row.terminalChildren,
+          completedChildren: row.completedChildren,
+          failedChildren: row.failedChildren,
+          status: row.status as DashboardFanOutGroupSnapshot['status'],
+          childNodeIds: nodes
+            .filter(node => node.spawnerNodeId === row.spawnerNodeId && node.joinNodeId === row.joinNodeId)
+            .map(node => node.id),
+        }));
 
         const allRunWorktrees = db
           .select({
@@ -419,6 +459,7 @@ export function createRunOperations(params: {
         return {
           run: summary,
           nodes,
+          fanOutGroups,
           artifacts: recentArtifacts.map(createArtifactSnapshot),
           routingDecisions: recentDecisions.map(createRoutingDecisionSnapshot),
           diagnostics: recentDiagnosticsSnapshots,

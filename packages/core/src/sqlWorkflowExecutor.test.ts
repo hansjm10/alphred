@@ -20,6 +20,7 @@ import {
   phaseArtifacts,
   promptTemplates,
   runNodeDiagnostics,
+  runNodeEdges,
   runNodeStreamEvents,
   runNodes,
   routingDecisions,
@@ -3452,24 +3453,13 @@ describe('createSqlWorkflowExecutor', () => {
 
   it('skips error handler execution when tree_nodes.error_handler_config disables it', async () => {
     const { db, runId, runNodeId } = seedSingleAgentRun('markdown', 1);
-    const runNode = db
-      .select({
-        treeNodeId: runNodes.treeNodeId,
-      })
-      .from(runNodes)
-      .where(eq(runNodes.id, runNodeId))
-      .get();
-    if (!runNode) {
-      throw new Error(`Expected run node id=${runNodeId} to exist.`);
-    }
-
-    db.update(treeNodes)
+    db.update(runNodes)
       .set({
         errorHandlerConfig: {
           mode: 'disabled',
         },
       })
-      .where(eq(treeNodes.id, runNode.treeNodeId))
+      .where(eq(runNodes.id, runNodeId))
       .run();
 
     const contexts: (string[] | undefined)[] = [];
@@ -3515,18 +3505,7 @@ describe('createSqlWorkflowExecutor', () => {
 
   it('uses custom error handler provider, model, and prompt overrides when configured', async () => {
     const { db, runId, runNodeId } = seedSingleAgentRun('markdown', 1);
-    const runNode = db
-      .select({
-        treeNodeId: runNodes.treeNodeId,
-      })
-      .from(runNodes)
-      .where(eq(runNodes.id, runNodeId))
-      .get();
-    if (!runNode) {
-      throw new Error(`Expected run node id=${runNodeId} to exist.`);
-    }
-
-    db.update(treeNodes)
+    db.update(runNodes)
       .set({
         errorHandlerConfig: {
           mode: 'custom',
@@ -3536,7 +3515,7 @@ describe('createSqlWorkflowExecutor', () => {
           maxInputChars: 1200,
         },
       })
-      .where(eq(treeNodes.id, runNode.treeNodeId))
+      .where(eq(runNodes.id, runNodeId))
       .run();
 
     const nodeAttemptContexts: (string[] | undefined)[] = [];
@@ -4848,13 +4827,31 @@ describe('createSqlWorkflowExecutor', () => {
 
   it('fails execution when guarded-edge expressions are invalid', async () => {
     const { db, runId, reviewRunNodeId } = seedDecisionRoutingRun();
-    db.update(guardDefinitions)
+    const guardedEdge = db
+      .select({ id: runNodeEdges.id })
+      .from(runNodeEdges)
+      .where(
+        and(
+          eq(runNodeEdges.workflowRunId, runId),
+          eq(runNodeEdges.sourceRunNodeId, reviewRunNodeId),
+          eq(runNodeEdges.routeOn, 'success'),
+          eq(runNodeEdges.priority, 0),
+          eq(runNodeEdges.edgeKind, 'tree'),
+        ),
+      )
+      .get();
+    if (!guardedEdge) {
+      throw new Error('Expected guarded run edge for decision-routing review node.');
+    }
+
+    db.update(runNodeEdges)
       .set({
-        expression: {
+        guardExpression: {
           logic: 'and',
           conditions: 'invalid',
         },
       })
+      .where(eq(runNodeEdges.id, guardedEdge.id))
       .run();
 
     const resolveProvider = vi.fn(() => ({
@@ -4997,21 +4994,29 @@ describe('createSqlWorkflowExecutor', () => {
     const { db, runId, reviewRunNodeId, reviseRunNodeId } = seedDecisionRoutingRun();
     const fallbackEdge = db
       .select({
-        id: treeEdges.id,
+        id: runNodeEdges.id,
       })
-      .from(treeEdges)
-      .where(eq(treeEdges.priority, 1))
+      .from(runNodeEdges)
+      .where(
+        and(
+          eq(runNodeEdges.workflowRunId, runId),
+          eq(runNodeEdges.sourceRunNodeId, reviewRunNodeId),
+          eq(runNodeEdges.routeOn, 'success'),
+          eq(runNodeEdges.priority, 1),
+          eq(runNodeEdges.edgeKind, 'tree'),
+        ),
+      )
       .get();
     if (!fallbackEdge) {
       throw new Error('Expected fallback edge row.');
     }
 
-    db.update(treeEdges)
+    db.update(runNodeEdges)
       .set({
         auto: 1,
-        guardDefinitionId: null,
+        guardExpression: null,
       })
-      .where(eq(treeEdges.id, fallbackEdge.id))
+      .where(eq(runNodeEdges.id, fallbackEdge.id))
       .run();
 
     let runInvocation = 0;
@@ -6513,16 +6518,7 @@ describe('createSqlWorkflowExecutor', () => {
 
   it('merges node execution permissions into provider run options', async () => {
     const { db, runId, runNodeId } = seedSingleAgentRun();
-    const runNode = db
-      .select({ treeNodeId: runNodes.treeNodeId })
-      .from(runNodes)
-      .where(eq(runNodes.id, runNodeId))
-      .get();
-    if (!runNode) {
-      throw new Error(`Expected run node id=${runNodeId} to exist.`);
-    }
-
-    db.update(treeNodes)
+    db.update(runNodes)
       .set({
         executionPermissions: {
           approvalPolicy: 'on-request',
@@ -6531,7 +6527,7 @@ describe('createSqlWorkflowExecutor', () => {
           webSearchMode: 'cached',
         },
       })
-      .where(eq(treeNodes.id, runNode.treeNodeId))
+      .where(eq(runNodes.id, runNodeId))
       .run();
 
     let capturedOptions: ProviderRunOptions | undefined;
@@ -6566,22 +6562,13 @@ describe('createSqlWorkflowExecutor', () => {
 
   it('prefers node-level network access execution permissions over run options', async () => {
     const { db, runId, runNodeId } = seedSingleAgentRun();
-    const runNode = db
-      .select({ treeNodeId: runNodes.treeNodeId })
-      .from(runNodes)
-      .where(eq(runNodes.id, runNodeId))
-      .get();
-    if (!runNode) {
-      throw new Error(`Expected run node id=${runNodeId} to exist.`);
-    }
-
-    db.update(treeNodes)
+    db.update(runNodes)
       .set({
         executionPermissions: {
           networkAccessEnabled: true,
         },
       })
-      .where(eq(treeNodes.id, runNode.treeNodeId))
+      .where(eq(runNodes.id, runNodeId))
       .run();
 
     let capturedOptions: ProviderRunOptions | undefined;
@@ -6657,20 +6644,11 @@ describe('createSqlWorkflowExecutor', () => {
     },
   ])('fails when node execution permissions are malformed: $name', async ({ payload, message }) => {
     const { db, runId, runNodeId } = seedSingleAgentRun();
-    const runNode = db
-      .select({ treeNodeId: runNodes.treeNodeId })
-      .from(runNodes)
-      .where(eq(runNodes.id, runNodeId))
-      .get();
-    if (!runNode) {
-      throw new Error(`Expected run node id=${runNodeId} to exist.`);
-    }
-
-    db.update(treeNodes)
+    db.update(runNodes)
       .set({
         executionPermissions: payload as unknown as Record<string, unknown>,
       })
-      .where(eq(treeNodes.id, runNode.treeNodeId))
+      .where(eq(runNodes.id, runNodeId))
       .run();
 
     const executor = createSqlWorkflowExecutor(db, {
@@ -6718,20 +6696,11 @@ describe('createSqlWorkflowExecutor', () => {
 
   it('fails gracefully when retry error-handler setup hits malformed execution permissions', async () => {
     const { db, runId, runNodeId } = seedSingleAgentRun('markdown', 1);
-    const runNode = db
-      .select({ treeNodeId: runNodes.treeNodeId })
-      .from(runNodes)
-      .where(eq(runNodes.id, runNodeId))
-      .get();
-    if (!runNode) {
-      throw new Error(`Expected run node id=${runNodeId} to exist.`);
-    }
-
-    db.update(treeNodes)
+    db.update(runNodes)
       .set({
         executionPermissions: { unsupported: true } as unknown as Record<string, unknown>,
       })
-      .where(eq(treeNodes.id, runNode.treeNodeId))
+      .where(eq(runNodes.id, runNodeId))
       .run();
 
     const executor = createSqlWorkflowExecutor(db, {
@@ -7005,25 +6974,14 @@ describe('createSqlWorkflowExecutor', () => {
       throw new Error('Expected target run-node to be materialized.');
     }
 
-    const targetRunNode = db
-      .select({
-        treeNodeId: runNodes.treeNodeId,
-      })
-      .from(runNodes)
-      .where(eq(runNodes.id, targetRunNodeId))
-      .get();
-    if (!targetRunNode) {
-      throw new Error(`Expected run node id=${targetRunNodeId} to exist.`);
-    }
-
-    db.update(treeNodes)
+    db.update(runNodes)
       .set({
         maxRetries: 1,
         errorHandlerConfig: {
           mode: 'disabled',
         },
       })
-      .where(eq(treeNodes.id, targetRunNode.treeNodeId))
+      .where(eq(runNodes.id, targetRunNodeId))
       .run();
 
     const capturedContexts: (string[] | undefined)[] = [];

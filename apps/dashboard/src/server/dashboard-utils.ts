@@ -10,6 +10,16 @@ import { DashboardIntegrationError } from './dashboard-errors';
 
 export type RunStatus = DashboardRunSummary['status'];
 
+function parseDashboardNodeRole(value: string): DashboardRunNodeSnapshot['nodeRole'] {
+  if (value === 'standard' || value === 'spawner' || value === 'join') {
+    return value;
+  }
+
+  throw new DashboardIntegrationError('internal_error', `Unsupported run node role "${value}".`, {
+    status: 500,
+  });
+}
+
 export function resolveDatabasePath(environment: NodeJS.ProcessEnv, cwd: string): string {
   const configuredPath = environment.ALPHRED_DB_PATH?.trim();
   if (configuredPath && configuredPath.length > 0) {
@@ -40,6 +50,11 @@ export function selectLatestNodeAttempts(
   nodes: readonly {
     id: number;
     nodeKey: string;
+    nodeRole: string;
+    spawnerNodeId: number | null;
+    joinNodeId: number | null;
+    lineageDepth: number;
+    sequencePath: string | null;
     attempt: number;
     sequenceIndex: number;
     treeNodeId: number;
@@ -73,6 +88,11 @@ export function selectLatestNodeAttempts(
       id: node.id,
       treeNodeId: node.treeNodeId,
       nodeKey: node.nodeKey,
+      nodeRole: parseDashboardNodeRole(node.nodeRole),
+      spawnerNodeId: node.spawnerNodeId,
+      joinNodeId: node.joinNodeId,
+      lineageDepth: node.lineageDepth,
+      sequencePath: node.sequencePath,
       sequenceIndex: node.sequenceIndex,
       attempt: node.attempt,
       status: node.status as DashboardNodeStatus,

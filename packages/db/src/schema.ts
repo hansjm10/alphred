@@ -196,6 +196,8 @@ export const treeNodes = sqliteTable(
     executionPermissions: text('execution_permissions', { mode: 'json' }),
     errorHandlerConfig: text('error_handler_config', { mode: 'json' }),
     promptTemplateId: integer('prompt_template_id').references(() => promptTemplates.id, { onDelete: 'restrict' }),
+    nodeRole: text('node_role').notNull().default('standard'),
+    maxChildren: integer('max_children').notNull().default(12),
     maxRetries: integer('max_retries').notNull().default(0),
     sequenceIndex: integer('sequence_index').notNull(),
     positionX: integer('position_x'),
@@ -207,10 +209,16 @@ export const treeNodes = sqliteTable(
     treeNodeKeyUnique: uniqueIndex('tree_nodes_tree_id_node_key_uq').on(table.workflowTreeId, table.nodeKey),
     treeSequenceUnique: uniqueIndex('tree_nodes_tree_id_sequence_uq').on(table.workflowTreeId, table.sequenceIndex),
     nodeTypeCheck: check('tree_nodes_node_type_ck', sql`${table.nodeType} in ('agent', 'human', 'tool')`),
+    nodeRoleCheck: check('tree_nodes_node_role_ck', sql`${table.nodeRole} in ('standard', 'spawner', 'join')`),
+    nodeRoleAgentCheck: check(
+      'tree_nodes_node_role_agent_ck',
+      sql`(${table.nodeRole} not in ('spawner', 'join')) or (${table.nodeType} = 'agent')`,
+    ),
     providerForAgentCheck: check(
       'tree_nodes_provider_for_agent_ck',
       sql`(${table.nodeType} <> 'agent') or (${table.provider} is not null)`,
     ),
+    maxChildrenCheck: check('tree_nodes_max_children_ck', sql`${table.maxChildren} >= 0`),
     maxRetriesCheck: check('tree_nodes_max_retries_ck', sql`${table.maxRetries} >= 0`),
     nodeKeyIdx: index('tree_nodes_node_key_idx').on(table.nodeKey),
     createdAtIdx: index('tree_nodes_created_at_idx').on(table.createdAt),
@@ -269,6 +277,20 @@ export const runNodes = sqliteTable(
       .notNull()
       .references(() => treeNodes.id, { onDelete: 'restrict' }),
     nodeKey: text('node_key').notNull(),
+    nodeRole: text('node_role').notNull().default('standard'),
+    nodeType: text('node_type').notNull().default('agent'),
+    provider: text('provider'),
+    model: text('model'),
+    prompt: text('prompt'),
+    promptContentType: text('prompt_content_type').notNull().default('markdown'),
+    executionPermissions: text('execution_permissions', { mode: 'json' }),
+    errorHandlerConfig: text('error_handler_config', { mode: 'json' }),
+    maxChildren: integer('max_children').notNull().default(12),
+    maxRetries: integer('max_retries').notNull().default(0),
+    spawnerNodeId: integer('spawner_node_id'),
+    joinNodeId: integer('join_node_id'),
+    lineageDepth: integer('lineage_depth').notNull().default(0),
+    sequencePath: text('sequence_path'),
     status: text('status').notNull().default('pending'),
     sequenceIndex: integer('sequence_index').notNull(),
     attempt: integer('attempt').notNull().default(1),
@@ -285,6 +307,25 @@ export const runNodes = sqliteTable(
       table.attempt,
     ),
     runIdIdUnique: uniqueIndex('run_nodes_run_id_id_uq').on(table.workflowRunId, table.id),
+    runNodeSpawnerFk: foreignKey({
+      columns: [table.workflowRunId, table.spawnerNodeId],
+      foreignColumns: [table.workflowRunId, table.id],
+      name: 'run_nodes_run_id_spawner_node_id_fk',
+    }).onDelete('set null'),
+    runNodeJoinFk: foreignKey({
+      columns: [table.workflowRunId, table.joinNodeId],
+      foreignColumns: [table.workflowRunId, table.id],
+      name: 'run_nodes_run_id_join_node_id_fk',
+    }).onDelete('set null'),
+    nodeRoleCheck: check('run_nodes_node_role_ck', sql`${table.nodeRole} in ('standard', 'spawner', 'join')`),
+    nodeTypeCheck: check('run_nodes_node_type_ck', sql`${table.nodeType} in ('agent', 'human', 'tool')`),
+    promptContentTypeCheck: check(
+      'run_nodes_prompt_content_type_ck',
+      sql`${table.promptContentType} in ('text', 'markdown')`,
+    ),
+    maxRetriesCheck: check('run_nodes_max_retries_ck', sql`${table.maxRetries} >= 0`),
+    maxChildrenCheck: check('run_nodes_max_children_ck', sql`${table.maxChildren} >= 0`),
+    lineageDepthCheck: check('run_nodes_lineage_depth_ck', sql`${table.lineageDepth} >= 0`),
     statusCheck: check(
       'run_nodes_status_ck',
       sql`${table.status} in ('pending', 'running', 'completed', 'failed', 'skipped', 'cancelled')`,
@@ -310,8 +351,61 @@ export const runNodes = sqliteTable(
     ),
     runStatusIdx: index('run_nodes_run_id_status_idx').on(table.workflowRunId, table.status),
     runSequenceIdx: index('run_nodes_run_id_sequence_idx').on(table.workflowRunId, table.sequenceIndex),
+    runSpawnerIdx: index('run_nodes_run_id_spawner_node_idx').on(table.workflowRunId, table.spawnerNodeId),
+    runJoinIdx: index('run_nodes_run_id_join_node_idx').on(table.workflowRunId, table.joinNodeId),
     nodeKeyIdx: index('run_nodes_node_key_idx').on(table.nodeKey),
     createdAtIdx: index('run_nodes_created_at_idx').on(table.createdAt),
+  }),
+);
+
+export const runNodeEdges = sqliteTable(
+  'run_node_edges',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    workflowRunId: integer('workflow_run_id')
+      .notNull()
+      .references(() => workflowRuns.id, { onDelete: 'cascade' }),
+    sourceRunNodeId: integer('source_run_node_id')
+      .notNull()
+      .references(() => runNodes.id, { onDelete: 'cascade' }),
+    targetRunNodeId: integer('target_run_node_id')
+      .notNull()
+      .references(() => runNodes.id, { onDelete: 'cascade' }),
+    routeOn: text('route_on').notNull().default('success'),
+    auto: integer('auto').notNull().default(1),
+    guardExpression: text('guard_expression', { mode: 'json' }),
+    priority: integer('priority').notNull().default(0),
+    edgeKind: text('edge_kind').notNull().default('tree'),
+    createdAt: text('created_at').notNull().default(utcNow),
+  },
+  table => ({
+    sourceRunNodeBelongsToRunFk: foreignKey({
+      columns: [table.workflowRunId, table.sourceRunNodeId],
+      foreignColumns: [runNodes.workflowRunId, runNodes.id],
+      name: 'run_node_edges_source_run_node_fk',
+    }).onDelete('cascade'),
+    targetRunNodeBelongsToRunFk: foreignKey({
+      columns: [table.workflowRunId, table.targetRunNodeId],
+      foreignColumns: [runNodes.workflowRunId, runNodes.id],
+      name: 'run_node_edges_target_run_node_fk',
+    }).onDelete('cascade'),
+    routeOnCheck: check('run_node_edges_route_on_ck', sql`${table.routeOn} in ('success', 'failure', 'terminal')`),
+    autoBooleanCheck: check('run_node_edges_auto_bool_ck', sql`${table.auto} in (0, 1)`),
+    priorityCheck: check('run_node_edges_priority_ck', sql`${table.priority} >= 0`),
+    edgeKindCheck: check(
+      'run_node_edges_kind_ck',
+      sql`${table.edgeKind} in ('tree', 'dynamic_spawner_to_child', 'dynamic_child_to_join')`,
+    ),
+    edgeUnique: uniqueIndex('run_node_edges_unique_uq').on(
+      table.workflowRunId,
+      table.sourceRunNodeId,
+      table.routeOn,
+      table.priority,
+      table.targetRunNodeId,
+    ),
+    targetLookupIdx: index('run_node_edges_run_id_target_idx').on(table.workflowRunId, table.targetRunNodeId),
+    sourceLookupIdx: index('run_node_edges_run_id_source_idx').on(table.workflowRunId, table.sourceRunNodeId),
+    createdAtIdx: index('run_node_edges_created_at_idx').on(table.createdAt),
   }),
 );
 
@@ -374,6 +468,73 @@ export const phaseArtifacts = sqliteTable(
     ),
     runCreatedAtIdx: index('phase_artifacts_run_id_created_at_idx').on(table.workflowRunId, table.createdAt),
     createdAtIdx: index('phase_artifacts_created_at_idx').on(table.createdAt),
+  }),
+);
+
+export const runJoinBarriers = sqliteTable(
+  'run_join_barriers',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    workflowRunId: integer('workflow_run_id')
+      .notNull()
+      .references(() => workflowRuns.id, { onDelete: 'cascade' }),
+    spawnerRunNodeId: integer('spawner_run_node_id')
+      .notNull()
+      .references(() => runNodes.id, { onDelete: 'cascade' }),
+    joinRunNodeId: integer('join_run_node_id')
+      .notNull()
+      .references(() => runNodes.id, { onDelete: 'cascade' }),
+    spawnSourceArtifactId: integer('spawn_source_artifact_id')
+      .notNull()
+      .references(() => phaseArtifacts.id, { onDelete: 'cascade' }),
+    expectedChildren: integer('expected_children').notNull(),
+    terminalChildren: integer('terminal_children').notNull().default(0),
+    completedChildren: integer('completed_children').notNull().default(0),
+    failedChildren: integer('failed_children').notNull().default(0),
+    status: text('status').notNull().default('pending'),
+    createdAt: text('created_at').notNull().default(utcNow),
+    updatedAt: text('updated_at').notNull().default(utcNow),
+    releasedAt: text('released_at'),
+  },
+  table => ({
+    spawnerRunNodeBelongsToRunFk: foreignKey({
+      columns: [table.workflowRunId, table.spawnerRunNodeId],
+      foreignColumns: [runNodes.workflowRunId, runNodes.id],
+      name: 'run_join_barriers_spawner_run_node_fk',
+    }).onDelete('cascade'),
+    joinRunNodeBelongsToRunFk: foreignKey({
+      columns: [table.workflowRunId, table.joinRunNodeId],
+      foreignColumns: [runNodes.workflowRunId, runNodes.id],
+      name: 'run_join_barriers_join_run_node_fk',
+    }).onDelete('cascade'),
+    expectedChildrenCheck: check('run_join_barriers_expected_children_ck', sql`${table.expectedChildren} >= 0`),
+    terminalChildrenCheck: check('run_join_barriers_terminal_children_ck', sql`${table.terminalChildren} >= 0`),
+    completedChildrenCheck: check('run_join_barriers_completed_children_ck', sql`${table.completedChildren} >= 0`),
+    failedChildrenCheck: check('run_join_barriers_failed_children_ck', sql`${table.failedChildren} >= 0`),
+    terminalWithinExpectedCheck: check(
+      'run_join_barriers_terminal_within_expected_ck',
+      sql`${table.terminalChildren} <= ${table.expectedChildren}`,
+    ),
+    completedWithinExpectedCheck: check(
+      'run_join_barriers_completed_within_expected_ck',
+      sql`${table.completedChildren} <= ${table.expectedChildren}`,
+    ),
+    failedWithinExpectedCheck: check(
+      'run_join_barriers_failed_within_expected_ck',
+      sql`${table.failedChildren} <= ${table.expectedChildren}`,
+    ),
+    completedFailedWithinTerminalCheck: check(
+      'run_join_barriers_completed_failed_within_terminal_ck',
+      sql`${table.completedChildren} + ${table.failedChildren} <= ${table.terminalChildren}`,
+    ),
+    statusCheck: check('run_join_barriers_status_ck', sql`${table.status} in ('pending', 'ready', 'released', 'cancelled')`),
+    spawnUnique: uniqueIndex('run_join_barriers_spawn_uq').on(
+      table.workflowRunId,
+      table.spawnerRunNodeId,
+      table.spawnSourceArtifactId,
+    ),
+    joinStatusIdx: index('run_join_barriers_run_id_join_status_idx').on(table.workflowRunId, table.joinRunNodeId, table.status),
+    createdAtIdx: index('run_join_barriers_created_at_idx').on(table.createdAt),
   }),
 );
 

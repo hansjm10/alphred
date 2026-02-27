@@ -20,6 +20,11 @@ export function RunDetailLifecycleGrid({
   onClearNodeFilter,
   onToggleNodeFilter,
 }: RunDetailLifecycleGridProps) {
+  const nodeById = new Map(detail.nodes.map(node => [node.id, node]));
+  const fanOutGroups = detail.fanOutGroups ?? [];
+  const groupedChildNodeIds = new Set(fanOutGroups.flatMap(group => group.childNodeIds));
+  const ungroupedNodes = detail.nodes.filter(node => !groupedChildNodeIds.has(node.id));
+
   const renderTimelineEvent = (event: TimelineItem) => {
     const highlighted = highlightedNodeId !== null && event.relatedNodeId === highlightedNodeId;
 
@@ -86,24 +91,64 @@ export function RunDetailLifecycleGrid({
       <Panel title="Node status" description="Node lifecycle snapshot">
         <ul className="entity-list run-node-status-list">
           {detail.nodes.length > 0 ? (
-            detail.nodes.map((node) => {
-              const selected = filteredNodeId === node.id;
+            <>
+              {fanOutGroups.map((group) => {
+                const spawnerNode = nodeById.get(group.spawnerNodeId);
+                const joinNode = nodeById.get(group.joinNodeId);
 
-              return (
-                <li key={node.id}>
-                  <ActionButton
-                    className={`run-node-filter${selected ? ' run-node-filter--selected' : ''}`}
-                    aria-pressed={selected}
-                    onClick={() => {
-                      onToggleNodeFilter(node.id);
-                    }}
-                  >
-                    {`${node.nodeKey} (attempt ${node.attempt})`}
-                  </ActionButton>
-                  <StatusBadge status={node.status} />
-                </li>
-              );
-            })
+                return (
+                  <li key={`${group.spawnerNodeId}:${group.joinNodeId}:${group.spawnSourceArtifactId}`}>
+                    <details>
+                      <summary>
+                        {`${spawnerNode?.nodeKey ?? 'spawner'} -> ${group.terminalChildren}/${group.expectedChildren} terminal (${group.completedChildren} completed, ${group.failedChildren} failed) -> ${joinNode?.nodeKey ?? 'join'} [${group.status}]`}
+                      </summary>
+                      <ul className="entity-list run-node-status-list">
+                        {group.childNodeIds.map((childNodeId) => {
+                          const node = nodeById.get(childNodeId);
+                          if (!node) {
+                            return null;
+                          }
+                          const selected = filteredNodeId === node.id;
+
+                          return (
+                            <li key={node.id}>
+                              <ActionButton
+                                className={`run-node-filter${selected ? ' run-node-filter--selected' : ''}`}
+                                aria-pressed={selected}
+                                onClick={() => {
+                                  onToggleNodeFilter(node.id);
+                                }}
+                              >
+                                {`${node.nodeKey} (attempt ${node.attempt})`}
+                              </ActionButton>
+                              <StatusBadge status={node.status} />
+                            </li>
+                          );
+                        })}
+                      </ul>
+                    </details>
+                  </li>
+                );
+              })}
+              {ungroupedNodes.map((node) => {
+                const selected = filteredNodeId === node.id;
+
+                return (
+                  <li key={node.id}>
+                    <ActionButton
+                      className={`run-node-filter${selected ? ' run-node-filter--selected' : ''}`}
+                      aria-pressed={selected}
+                      onClick={() => {
+                        onToggleNodeFilter(node.id);
+                      }}
+                    >
+                      {`${node.nodeKey} (attempt ${node.attempt})`}
+                    </ActionButton>
+                    <StatusBadge status={node.status} />
+                  </li>
+                );
+              })}
+            </>
           ) : (
             <li>
               <span>No run nodes have been materialized yet.</span>

@@ -4,6 +4,8 @@ import { buildRoutingSelection, loadLatestArtifactsByRunNodeId, loadLatestRoutin
 import { getLatestRunNodeAttempts } from './type-conversions.js';
 import type { EdgeRow, LatestArtifact, NextRunnableSelection, RoutingDecisionRow, RunNodeExecutionRow } from './types.js';
 
+const terminalRunNodeStatuses = new Set(['completed', 'failed', 'skipped', 'cancelled']);
+
 export function hasPotentialIncomingRoute(
   incomingEdges: EdgeRow[],
   latestByTreeNodeId: Map<number, RunNodeExecutionRow>,
@@ -18,6 +20,10 @@ export function hasPotentialIncomingRoute(
 
     if (sourceNode.status === 'pending' || sourceNode.status === 'running') {
       return true;
+    }
+
+    if (edge.routeOn === 'terminal') {
+      return terminalRunNodeStatuses.has(sourceNode.status);
     }
 
     if (sourceNode.status === 'completed') {
@@ -52,6 +58,10 @@ export function hasRunnableIncomingRoute(
       return false;
     }
 
+    if (edge.routeOn === 'terminal') {
+      return terminalRunNodeStatuses.has(sourceNode.status);
+    }
+
     if (edge.routeOn === 'success' && sourceNode.status !== 'completed') {
       return false;
     }
@@ -79,6 +89,15 @@ export function hasRevisitableIncomingRoute(
       return false;
     }
 
+    if (edge.routeOn === 'terminal') {
+      if (!terminalRunNodeStatuses.has(sourceNode.status)) {
+        return false;
+      }
+
+      const sourceArtifactId = latestArtifactsByRunNodeId.get(sourceNode.runNodeId)?.id ?? Number.NEGATIVE_INFINITY;
+      return sourceArtifactId > targetArtifactId;
+    }
+
     if (edge.routeOn === 'success' && sourceNode.status !== 'completed') {
       return false;
     }
@@ -101,6 +120,7 @@ export function selectNextRunnableNode(
   edges: EdgeRow[],
   latestRoutingDecisionsByRunNodeId: Map<number, RoutingDecisionRow>,
   latestArtifactsByRunNodeId: Map<number, LatestArtifact>,
+  joinBarrierStatesByJoinRunNodeId: ReadonlyMap<number, 'pending' | 'ready'> = new Map<number, 'pending' | 'ready'>(),
 ): NextRunnableSelection {
   const latestNodeAttempts = getLatestRunNodeAttempts(rows);
   const routingSelection = buildRoutingSelection(
@@ -116,7 +136,14 @@ export function selectNextRunnableNode(
         return false;
       }
 
-      const incomingEdges = routingSelection.incomingEdgesByTargetNodeId.get(row.treeNodeId) ?? [];
+      if (row.nodeRole === 'join') {
+        const barrierState = joinBarrierStatesByJoinRunNodeId.get(row.runNodeId);
+        if (barrierState === 'pending') {
+          return false;
+        }
+      }
+
+      const incomingEdges = routingSelection.incomingEdgesByTargetNodeId.get(row.runNodeId) ?? [];
       if (incomingEdges.length === 0) {
         return row.status === 'pending';
       }
@@ -155,6 +182,7 @@ export function markUnreachablePendingNodesAsSkipped(
   db: AlphredDatabase,
   workflowRunId: number,
   edgeRows: EdgeRow[],
+  joinBarrierStatesByJoinRunNodeId: ReadonlyMap<number, 'pending' | 'ready'> = new Map<number, 'pending' | 'ready'>(),
 ): void {
   while (true) {
     const latestNodeAttempts = getLatestRunNodeAttempts(loadRunNodeExecutionRows(db, workflowRunId));
@@ -172,7 +200,11 @@ export function markUnreachablePendingNodesAsSkipped(
         return false;
       }
 
-      const incomingEdges = routingSelection.incomingEdgesByTargetNodeId.get(node.treeNodeId) ?? [];
+      if (node.nodeRole === 'join' && joinBarrierStatesByJoinRunNodeId.get(node.runNodeId) === 'pending') {
+        return false;
+      }
+
+      const incomingEdges = routingSelection.incomingEdgesByTargetNodeId.get(node.runNodeId) ?? [];
       if (incomingEdges.length === 0) {
         return false;
       }

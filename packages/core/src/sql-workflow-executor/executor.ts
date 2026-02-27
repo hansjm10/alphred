@@ -2,6 +2,7 @@ import type { AlphredDatabase } from '@alphred/db';
 import { runTerminalStatuses } from './constants.js';
 import { executeClaimedRunnableNode } from './node-execution.js';
 import { selectNextRunnableNode } from './node-selection.js';
+import { loadJoinBarrierStatesByJoinRunNodeId } from './fanout.js';
 import {
   loadEdgeRows,
   loadRunNodeExecutionRowById,
@@ -162,14 +163,16 @@ export function createSqlWorkflowExecutor(
       }
 
       const runNodeRows = loadRunNodeExecutionRows(db, run.id);
-      const edgeRows = loadEdgeRows(db, run.workflowTreeId);
+      const edgeRows = loadEdgeRows(db, run.id);
       const routingDecisionSelection = loadLatestRoutingDecisionsByRunNodeId(db, run.id);
       const latestArtifactsByRunNodeId = loadLatestArtifactsByRunNodeId(db, run.id);
+      const joinBarrierStatesByJoinRunNodeId = loadJoinBarrierStatesByJoinRunNodeId(db, run.id);
       const { nextRunnableNode, latestNodeAttempts, hasNoRouteDecision, hasUnresolvedDecision } = selectNextRunnableNode(
         runNodeRows,
         edgeRows,
         routingDecisionSelection.latestByRunNodeId,
         latestArtifactsByRunNodeId,
+        joinBarrierStatesByJoinRunNodeId,
       );
 
       resolveSingleNodeTarget({
@@ -198,14 +201,16 @@ export function createSqlWorkflowExecutor(
       }
 
       const runNodeRows = loadRunNodeExecutionRows(db, initialRun.id);
-      const edgeRows = loadEdgeRows(db, initialRun.workflowTreeId);
+      const edgeRows = loadEdgeRows(db, initialRun.id);
       const routingDecisionSelection = loadLatestRoutingDecisionsByRunNodeId(db, initialRun.id);
       const latestArtifactsByRunNodeId = loadLatestArtifactsByRunNodeId(db, initialRun.id);
+      const joinBarrierStatesByJoinRunNodeId = loadJoinBarrierStatesByJoinRunNodeId(db, initialRun.id);
       const { nextRunnableNode, latestNodeAttempts, hasNoRouteDecision, hasUnresolvedDecision } = selectNextRunnableNode(
         runNodeRows,
         edgeRows,
         routingDecisionSelection.latestByRunNodeId,
         latestArtifactsByRunNodeId,
+        joinBarrierStatesByJoinRunNodeId,
       );
 
       const selectedNode = resolveSingleNodeTarget({
@@ -363,9 +368,10 @@ export function createSqlWorkflowExecutor(
       }
 
       const runNodeRows = loadRunNodeExecutionRows(db, initialRun.id);
-      const edgeRows = loadEdgeRows(db, initialRun.workflowTreeId);
+      const edgeRows = loadEdgeRows(db, initialRun.id);
       const routingDecisionSelection = loadLatestRoutingDecisionsByRunNodeId(db, initialRun.id);
       const latestArtifactsByRunNodeId = loadLatestArtifactsByRunNodeId(db, initialRun.id);
+      const joinBarrierStatesByJoinRunNodeId = loadJoinBarrierStatesByJoinRunNodeId(db, initialRun.id);
       const {
         nextRunnableNode,
         latestNodeAttempts,
@@ -377,6 +383,7 @@ export function createSqlWorkflowExecutor(
         edgeRows,
         routingDecisionSelection.latestByRunNodeId,
         latestArtifactsByRunNodeId,
+        joinBarrierStatesByJoinRunNodeId,
       );
 
       const currentRun = loadWorkflowRunRow(db, initialRun.id);
