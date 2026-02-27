@@ -44,6 +44,7 @@ export function RunOperatorFocusCard({
     <Card
       title="Operator focus"
       description="Current run status, latest event, and next likely operator action."
+      headingId="run-detail-operator-focus-heading"
       className="run-operator-focus"
     >
       <ul className="entity-list run-operator-focus-list">

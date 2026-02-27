@@ -17,6 +17,8 @@ type StreamEventItemsProps = Readonly<{
   renderEvent: (event: DashboardRunNodeStreamEvent) => ReactNode;
 }>;
 
+const RUN_DETAIL_STREAM_HEADING_ID = 'run-detail-stream-heading';
+
 export function StreamEventItems({ partition, renderEvent }: StreamEventItemsProps) {
   if (partition.earlier.length === 0 && partition.recent.length === 0) {
     return (
@@ -253,7 +255,11 @@ export function RunAgentStreamCard({
 
   if (!isTerminalRun) {
     return (
-      <Card title="Agent stream" description="Live provider events for a selected node attempt.">
+      <Card
+        title="Agent stream"
+        description="Live provider events for a selected node attempt."
+        headingId={RUN_DETAIL_STREAM_HEADING_ID}
+      >
         {streamContent}
       </Card>
     );
@@ -266,7 +272,11 @@ export function RunAgentStreamCard({
   });
 
   return (
-    <Card title="Agent stream" description="Provider events for a selected node attempt.">
+    <Card
+      title="Agent stream"
+      description="Provider events for a selected node attempt."
+      headingId={RUN_DETAIL_STREAM_HEADING_ID}
+    >
       <details className="run-agent-stream-collapsed">
         <summary className="run-agent-stream-collapsed__summary">{terminalStreamSummary}</summary>
         {streamContent}
