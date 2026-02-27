@@ -1599,6 +1599,7 @@ output {
   top: var(--space-3);
   right: var(--space-3);
   z-index: 8;
+  pointer-events: none;
   display: grid;
   gap: 8px;
   min-width: 220px;
