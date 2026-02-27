@@ -103,18 +103,26 @@ function resolveWorkflowEdgeVisuals(routeOn: 'success' | 'failure', auto: boolea
   const isFailure = routeOn === 'failure';
   const isGuard = !isFailure && !auto;
   const routeStroke = isFailure ? '#da1e28' : '#198038';
+  let className: string;
+  if (isFailure) {
+    className = 'workflow-edge workflow-edge--failure';
+  } else if (isGuard) {
+    className = 'workflow-edge workflow-edge--success-guard';
+  } else {
+    className = 'workflow-edge workflow-edge--success-auto';
+  }
+  let style: Edge['style'];
+  if (isFailure) {
+    style = { strokeWidth: 2.5, strokeDasharray: '9 5' };
+  } else if (isGuard) {
+    style = { strokeWidth: 2.5, strokeDasharray: '4 4' };
+  } else {
+    style = { strokeWidth: 2.5 };
+  }
 
   return {
-    className: isFailure
-      ? 'workflow-edge workflow-edge--failure'
-      : isGuard
-        ? 'workflow-edge workflow-edge--success-guard'
-        : 'workflow-edge workflow-edge--success-auto',
-    style: isFailure
-      ? { strokeWidth: 2.5, strokeDasharray: '9 5' }
-      : isGuard
-        ? { strokeWidth: 2.5, strokeDasharray: '4 4' }
-        : { strokeWidth: 2.5 },
+    className,
+    style,
     labelStyle: {
       fill: isFailure ? '#7f1d1d' : '#14532d',
       fontWeight: 600,
