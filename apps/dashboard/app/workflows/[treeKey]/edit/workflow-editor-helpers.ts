@@ -1,4 +1,4 @@
-import type { Edge, Node, ReactFlowInstance } from '@xyflow/react';
+import { MarkerType, type Edge, type Node, type ReactFlowInstance } from '@xyflow/react';
 import type {
   DashboardWorkflowDraftEdge,
   DashboardWorkflowDraftNode,
@@ -10,7 +10,7 @@ import { slugifyKey } from '../../workflows-shared';
 type FlowPoint = Readonly<{ x: number; y: number }>;
 type ReactFlowNodeData = DashboardWorkflowDraftNode & { label?: string };
 
-function normalizeEdgeRouteOn(routeOn: DashboardWorkflowDraftEdge['routeOn']): 'success' | 'failure' {
+export function normalizeEdgeRouteOn(routeOn: DashboardWorkflowDraftEdge['routeOn']): 'success' | 'failure' {
   return routeOn === 'failure' ? 'failure' : 'success';
 }
 
@@ -83,13 +83,76 @@ export function createConnectedDraftEdge(args: Readonly<{
   };
 }
 
-function buildEdgeLabel(edge: DashboardWorkflowDraftEdge): string {
-  const routeOn = normalizeEdgeRouteOn(edge.routeOn);
-  if (routeOn === 'failure') {
-    return `failure · ${edge.priority}`;
+export function formatWorkflowEdgeLabel(
+  routeOn: DashboardWorkflowDraftEdge['routeOn'],
+  auto: boolean,
+  priority: number,
+): string {
+  const normalizedRouteOn = normalizeEdgeRouteOn(routeOn);
+  if (normalizedRouteOn === 'failure') {
+    return `failure · ${priority}`;
   }
 
-  return edge.auto ? `auto · ${edge.priority}` : `guard · ${edge.priority}`;
+  return auto ? `auto · ${priority}` : `guard · ${priority}`;
+}
+
+function resolveWorkflowEdgeVisuals(routeOn: 'success' | 'failure', auto: boolean): Pick<
+  Edge,
+  'className' | 'style' | 'labelStyle' | 'labelBgStyle' | 'markerEnd'
+> {
+  const isFailure = routeOn === 'failure';
+  const isGuard = !isFailure && !auto;
+  const routeStroke = isFailure ? '#da1e28' : '#198038';
+  let className: string;
+  if (isFailure) {
+    className = 'workflow-edge workflow-edge--failure';
+  } else if (isGuard) {
+    className = 'workflow-edge workflow-edge--success-guard';
+  } else {
+    className = 'workflow-edge workflow-edge--success-auto';
+  }
+  let style: Edge['style'];
+  if (isFailure) {
+    style = { strokeWidth: 2.5, strokeDasharray: '9 5' };
+  } else if (isGuard) {
+    style = { strokeWidth: 2.5, strokeDasharray: '4 4' };
+  } else {
+    style = { strokeWidth: 2.5 };
+  }
+
+  return {
+    className,
+    style,
+    labelStyle: {
+      fill: isFailure ? '#7f1d1d' : '#14532d',
+      fontWeight: 600,
+    },
+    labelBgStyle: {
+      fill: isFailure ? '#fef2f2' : '#f0fdf4',
+      stroke: isFailure ? '#fecaca' : '#bbf7d0',
+      strokeWidth: 1,
+    },
+    markerEnd: {
+      type: MarkerType.ArrowClosed,
+      color: routeStroke,
+    },
+  };
+}
+
+export function toReactFlowEdge(edge: DashboardWorkflowDraftEdge): Edge {
+  const routeOn = normalizeEdgeRouteOn(edge.routeOn);
+
+  return {
+    id: buildWorkflowEdgeId(edge.sourceNodeKey, edge.targetNodeKey, edge.priority, routeOn),
+    source: edge.sourceNodeKey,
+    target: edge.targetNodeKey,
+    label: formatWorkflowEdgeLabel(routeOn, edge.auto, edge.priority),
+    data: {
+      ...edge,
+      routeOn,
+    },
+    ...resolveWorkflowEdgeVisuals(routeOn, edge.auto),
+  };
 }
 
 export function buildReactFlowNodes(draft: DashboardWorkflowDraftTopology): Node[] {
@@ -102,15 +165,7 @@ export function buildReactFlowNodes(draft: DashboardWorkflowDraftTopology): Node
 }
 
 export function buildReactFlowEdges(draft: DashboardWorkflowDraftTopology): Edge[] {
-  return draft.edges.map(edge => ({
-    id: buildWorkflowEdgeId(edge.sourceNodeKey, edge.targetNodeKey, edge.priority, edge.routeOn),
-    source: edge.sourceNodeKey,
-    target: edge.targetNodeKey,
-    label: buildEdgeLabel(edge),
-    data: {
-      ...edge,
-    },
-  }));
+  return draft.edges.map(toReactFlowEdge);
 }
 
 export function mapNodeFromReactFlow(node: Node): DashboardWorkflowDraftNode {
