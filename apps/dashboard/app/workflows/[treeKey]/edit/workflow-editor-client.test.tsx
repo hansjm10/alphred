@@ -1072,6 +1072,78 @@ describe('WorkflowEditorPageContent', () => {
     expect(screen.queryByText('Select a transition to edit details.')).toBeNull();
   });
 
+  it('preserves React Flow runtime edge state when transition details change', async () => {
+    render(
+      <WorkflowEditorPageContent
+        initialDraft={{
+          treeKey: 'demo-tree',
+          version: 1,
+          draftRevision: 0,
+          name: 'Demo Tree',
+          description: null,
+          versionNotes: null,
+          nodes: [
+            {
+              nodeKey: 'design',
+              displayName: 'Design',
+              nodeType: 'agent',
+              provider: 'codex',
+              maxRetries: 0,
+              sequenceIndex: 10,
+              position: { x: 0, y: 0 },
+              promptTemplate: { content: 'Draft prompt', contentType: 'markdown' },
+            },
+            {
+              nodeKey: 'implement',
+              displayName: 'Implement',
+              nodeType: 'agent',
+              provider: 'codex',
+              maxRetries: 0,
+              sequenceIndex: 20,
+              position: { x: 200, y: 0 },
+              promptTemplate: { content: 'Draft prompt', contentType: 'markdown' },
+            },
+          ],
+          edges: [
+            {
+              sourceNodeKey: 'design',
+              targetNodeKey: 'implement',
+              priority: 100,
+              auto: true,
+              guardExpression: null,
+            },
+          ],
+          initialRunnableNodeKeys: ['design'],
+        }}
+      />,
+    );
+
+    const selectionChange = latestReactFlowProps?.onSelectionChange;
+    expect(typeof selectionChange).toBe('function');
+    await act(async () => {
+      (selectionChange as (params: { nodes: unknown[]; edges: unknown[] }) => void)({
+        nodes: [],
+        edges: [{ id: 'design->implement:100' }],
+      });
+    });
+
+    const selectedFlowEdge = (latestReactFlowProps?.edges as { id: string; selected?: boolean }[]).find(
+      edge => edge.id === 'design->implement:100',
+    );
+    expect(selectedFlowEdge).toBeDefined();
+    if (!selectedFlowEdge) {
+      throw new Error('Expected selected flow edge to exist.');
+    }
+    selectedFlowEdge.selected = true;
+
+    fireEvent.change(screen.getByLabelText('Priority'), { target: { value: '90' } });
+
+    const updatedEdge = (latestReactFlowProps?.edges as { id: string; selected?: boolean }[]).find(
+      edge => edge.id === 'design->implement:90',
+    );
+    expect(updatedEdge?.selected).toBe(true);
+  });
+
   it('keeps transition ids unique after reprioritize then duplicate', async () => {
     const fetchMock = vi.fn(async () => createJsonResponse({ draft: {} }, { status: 200 }));
     vi.stubGlobal('fetch', fetchMock);

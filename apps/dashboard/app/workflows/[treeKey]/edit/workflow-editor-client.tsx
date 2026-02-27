@@ -619,7 +619,10 @@ function WorkflowEditorInspectorBody({
           setEdges((current) =>
             current.map((edge) =>
               edge.id === selectedEdge.id
-                ? nextFlowEdge
+                ? {
+                    ...edge,
+                    ...nextFlowEdge,
+                  }
                 : edge,
             ),
           );
