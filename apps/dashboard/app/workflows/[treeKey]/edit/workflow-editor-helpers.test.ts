@@ -1,7 +1,7 @@
 import type { Node } from '@xyflow/react';
 import { describe, expect, it } from 'vitest';
-import type { DashboardWorkflowDraftNode } from '../../../../src/server/dashboard-contracts';
-import { createDraftNode, mapNodeFromReactFlow } from './workflow-editor-helpers';
+import type { DashboardWorkflowDraftEdge, DashboardWorkflowDraftNode } from '../../../../src/server/dashboard-contracts';
+import { buildReactFlowEdges, createDraftNode, mapNodeFromReactFlow } from './workflow-editor-helpers';
 
 function createDraftNodeData(overrides: Partial<DashboardWorkflowDraftNode> = {}): DashboardWorkflowDraftNode {
   return {
@@ -67,5 +67,54 @@ describe('workflow-editor-helpers', () => {
     expect(created.executionPermissions).toBeNull();
     expect(created.sequenceIndex).toBe(40);
     expect(created.position).toEqual({ x: 100, y: 50 });
+  });
+
+  it('maps success and failure routes to distinct React Flow edge styles', () => {
+    const edges = buildReactFlowEdges({
+      treeKey: 'demo-tree',
+      version: 1,
+      draftRevision: 0,
+      name: 'Demo Tree',
+      description: null,
+      versionNotes: null,
+      nodes: [
+        createDraftNodeData({ nodeKey: 'design' }),
+        createDraftNodeData({ nodeKey: 'review', sequenceIndex: 20 }),
+      ],
+      edges: [
+        {
+          sourceNodeKey: 'design',
+          targetNodeKey: 'review',
+          routeOn: 'success',
+          priority: 100,
+          auto: true,
+          guardExpression: null,
+        },
+        {
+          sourceNodeKey: 'review',
+          targetNodeKey: 'design',
+          routeOn: 'failure',
+          priority: 90,
+          auto: true,
+          guardExpression: null,
+        },
+      ] satisfies DashboardWorkflowDraftEdge[],
+      initialRunnableNodeKeys: ['design'],
+    });
+
+    expect(edges[0]).toMatchObject({
+      id: 'design->review:100',
+      className: expect.stringContaining('workflow-edge--success-auto'),
+      label: 'auto · 100',
+      style: expect.objectContaining({ stroke: '#198038' }),
+      data: expect.objectContaining({ routeOn: 'success' }),
+    });
+    expect(edges[1]).toMatchObject({
+      id: 'review->design:failure:90',
+      className: expect.stringContaining('workflow-edge--failure'),
+      label: 'failure · 90',
+      style: expect.objectContaining({ stroke: '#da1e28', strokeDasharray: '9 5' }),
+      data: expect.objectContaining({ routeOn: 'failure' }),
+    });
   });
 });

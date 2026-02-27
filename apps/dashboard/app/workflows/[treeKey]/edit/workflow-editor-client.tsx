@@ -54,8 +54,11 @@ import {
   createConnectedDraftEdge,
   createDraftNode,
   duplicateDraftNode,
+  formatWorkflowEdgeLabel,
   mapEdgeFromReactFlow,
   mapNodeFromReactFlow,
+  normalizeEdgeRouteOn,
+  toReactFlowEdge,
   toReactFlowNodeData,
   toFlowPosition,
 } from './workflow-editor-helpers';
@@ -117,36 +120,6 @@ function statusBadgeForSaveState(saveState: SaveState): { status: 'running' | 'c
     default:
       return { status: 'pending', label: 'Draft' };
   }
-}
-
-function normalizeEdgeRouteOn(routeOn: DashboardWorkflowDraftEdge['routeOn']): 'success' | 'failure' {
-  return routeOn === 'failure' ? 'failure' : 'success';
-}
-
-function formatWorkflowEdgeLabel(routeOn: 'success' | 'failure', auto: boolean, priority: number): string {
-  if (routeOn === 'failure') {
-    return `failure · ${priority}`;
-  }
-
-  if (auto) {
-    return `auto · ${priority}`;
-  }
-
-  return `guard · ${priority}`;
-}
-
-function toReactFlowEdge(edge: DashboardWorkflowDraftEdge): Edge {
-  const routeOn = normalizeEdgeRouteOn(edge.routeOn);
-  return {
-    id: buildWorkflowEdgeId(edge.sourceNodeKey, edge.targetNodeKey, edge.priority, routeOn),
-    source: edge.sourceNodeKey,
-    target: edge.targetNodeKey,
-    label: formatWorkflowEdgeLabel(routeOn, edge.auto, edge.priority),
-    data: {
-      ...edge,
-      routeOn,
-    },
-  };
 }
 
 type WorkflowContextMenuState = {
@@ -840,6 +813,40 @@ function WorkflowContextMenuPanel({
   );
 }
 
+function WorkflowTransitionLegend() {
+  return (
+    <aside className="workflow-transition-legend" aria-label="Transition legend">
+      <p className="workflow-transition-legend__title">Transition legend</p>
+      <ul className="workflow-transition-legend__list">
+        <li>
+          <span className="workflow-transition-legend__line workflow-transition-legend__line--success" aria-hidden="true" />
+          <span>
+            <strong>success</strong> route
+          </span>
+        </li>
+        <li>
+          <span className="workflow-transition-legend__line workflow-transition-legend__line--failure" aria-hidden="true" />
+          <span>
+            <strong>failure</strong> route
+          </span>
+        </li>
+        <li>
+          <span className="workflow-transition-legend__chip" aria-hidden="true">auto</span>
+          <span>
+            <strong>auto</strong> transition (unconditional)
+          </span>
+        </li>
+        <li>
+          <span className="workflow-transition-legend__chip" aria-hidden="true">guard</span>
+          <span>
+            <strong>guard</strong> transition (conditional)
+          </span>
+        </li>
+      </ul>
+    </aside>
+  );
+}
+
 type WorkflowEditorPageContentProps = Readonly<{
   initialDraft: DashboardWorkflowDraftTopology;
   providerOptions?: DashboardAgentProviderOption[];
@@ -1307,6 +1314,45 @@ function WorkflowEditorLoadedContent({
     return computeWorkflowLiveWarnings(draftNodesForSave, draftEdgesForSave);
   }, [draftEdgesForSave, draftNodesForSave]);
 
+  const minimapNodeRouteModes = useMemo(() => {
+    const modesByNodeKey = new Map<string, { hasSuccess: boolean; hasFailure: boolean }>();
+    for (const edge of draftEdgesForSave) {
+      const routeOn = normalizeEdgeRouteOn(edge.routeOn);
+      for (const nodeKey of [edge.sourceNodeKey, edge.targetNodeKey]) {
+        const current = modesByNodeKey.get(nodeKey) ?? { hasSuccess: false, hasFailure: false };
+        if (routeOn === 'failure') {
+          current.hasFailure = true;
+        } else {
+          current.hasSuccess = true;
+        }
+        modesByNodeKey.set(nodeKey, current);
+      }
+    }
+    return modesByNodeKey;
+  }, [draftEdgesForSave]);
+
+  const minimapNodeColor = useCallback((node: Node) => {
+    const routeModes = minimapNodeRouteModes.get(node.id);
+    if (routeModes?.hasFailure) {
+      return '#fee2e2';
+    }
+    if (routeModes?.hasSuccess) {
+      return '#dcfce7';
+    }
+    return '#f8fafc';
+  }, [minimapNodeRouteModes]);
+
+  const minimapNodeStrokeColor = useCallback((node: Node) => {
+    const routeModes = minimapNodeRouteModes.get(node.id);
+    if (routeModes?.hasFailure) {
+      return '#da1e28';
+    }
+    if (routeModes?.hasSuccess) {
+      return '#198038';
+    }
+    return '#d0d7e2';
+  }, [minimapNodeRouteModes]);
+
   const publishSummary = useMemo(() => {
     const previousPublishedVersion = version > 1 ? version - 1 : null;
     const versionBump = previousPublishedVersion === null ? `new → v${version}` : `v${previousPublishedVersion} → v${version}`;
@@ -1645,6 +1691,7 @@ function WorkflowEditorLoadedContent({
         </aside>
 
         <section className="workflow-editor-canvas" aria-label="Workflow canvas">
+          <WorkflowTransitionLegend />
           <ReactFlow
             nodes={nodes}
             edges={edges}
@@ -1661,7 +1708,14 @@ function WorkflowEditorLoadedContent({
             fitView
           >
             <Background />
-            <MiniMap />
+            <MiniMap
+              ariaLabel="Workflow minimap"
+              nodeBorderRadius={5}
+              nodeStrokeWidth={2}
+              nodeColor={minimapNodeColor}
+              nodeStrokeColor={minimapNodeStrokeColor}
+              maskColor="rgba(15, 23, 42, 0.2)"
+            />
             <Controls />
           </ReactFlow>
         </section>

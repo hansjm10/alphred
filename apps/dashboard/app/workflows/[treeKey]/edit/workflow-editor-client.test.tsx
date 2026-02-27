@@ -13,6 +13,7 @@ const { pushMock } = vi.hoisted(() => ({
 }));
 
 let latestReactFlowProps: Record<string, unknown> | null = null;
+let latestMiniMapProps: Record<string, unknown> | null = null;
 
 vi.mock('next/navigation', () => ({
   useRouter: () => ({
@@ -23,9 +24,15 @@ vi.mock('next/navigation', () => ({
 vi.mock('@xyflow/react', async () => {
   const React = await import('react');
   return {
+    MarkerType: {
+      ArrowClosed: 'arrowclosed',
+    },
     Background: () => null,
     Controls: () => null,
-    MiniMap: () => null,
+    MiniMap: (props: Record<string, unknown>) => {
+      latestMiniMapProps = props;
+      return null;
+    },
     ReactFlow: (props: { children?: React.ReactNode; onInit?: (instance: unknown) => void }) => {
       latestReactFlowProps = props as unknown as Record<string, unknown>;
       const instance = React.useMemo(() => {
@@ -108,6 +115,7 @@ describe('WorkflowEditorPageContent', () => {
   beforeEach(() => {
     pushMock.mockReset();
     latestReactFlowProps = null;
+    latestMiniMapProps = null;
     vi.useFakeTimers();
   });
 
@@ -412,6 +420,77 @@ describe('WorkflowEditorPageContent', () => {
     )?.find((node) => node.id === 'design');
     expect(flowNode?.data.displayName).toBe('Design');
     expect(flowNode?.data.label).toBe('Design');
+  });
+
+  it('renders a transition legend with success, failure, auto, and guard semantics', () => {
+    render(<WorkflowEditorPageContent initialDraft={createInitialDraft()} />);
+
+    const legend = screen.getByLabelText('Transition legend');
+    expect(within(legend).getByText('success')).toBeInTheDocument();
+    expect(within(legend).getByText('failure')).toBeInTheDocument();
+    expect(within(legend).getAllByText('auto').length).toBeGreaterThan(0);
+    expect(within(legend).getAllByText('guard').length).toBeGreaterThan(0);
+  });
+
+  it('maps success and failure routes to distinct edge styles and minimap semantics', () => {
+    render(
+      <WorkflowEditorPageContent
+        initialDraft={createInitialDraft({
+          nodes: [
+            createAgentNode({ nodeKey: 'design', displayName: 'Design' }),
+            createAgentNode({ nodeKey: 'implement', displayName: 'Implement', sequenceIndex: 20, position: { x: 300, y: 0 } }),
+            createAgentNode({ nodeKey: 'review', displayName: 'Review', sequenceIndex: 30, position: { x: 600, y: 0 } }),
+          ],
+          edges: [
+            createTransitionEdge({
+              sourceNodeKey: 'design',
+              targetNodeKey: 'implement',
+              routeOn: 'success',
+              auto: true,
+              priority: 100,
+            }),
+            createTransitionEdge({
+              sourceNodeKey: 'implement',
+              targetNodeKey: 'review',
+              routeOn: 'failure',
+              auto: true,
+              priority: 90,
+            }),
+          ],
+          initialRunnableNodeKeys: ['design'],
+        })}
+      />,
+    );
+
+    const flowEdges = latestReactFlowProps?.edges as {
+      id: string;
+      className?: string;
+      label?: string;
+      style?: { stroke?: string; strokeDasharray?: string };
+      data?: { routeOn?: string };
+    }[];
+
+    const successEdge = flowEdges.find(edge => edge.id === 'design->implement:100');
+    expect(successEdge?.className).toContain('workflow-edge--success-auto');
+    expect(successEdge?.label).toBe('auto · 100');
+    expect(successEdge?.style?.stroke).toBe('#198038');
+    expect(successEdge?.data?.routeOn).toBe('success');
+
+    const failureEdge = flowEdges.find(edge => edge.id === 'implement->review:failure:90');
+    expect(failureEdge?.className).toContain('workflow-edge--failure');
+    expect(failureEdge?.label).toBe('failure · 90');
+    expect(failureEdge?.style?.stroke).toBe('#da1e28');
+    expect(failureEdge?.style?.strokeDasharray).toBe('9 5');
+    expect(failureEdge?.data?.routeOn).toBe('failure');
+
+    const nodeColor = latestMiniMapProps?.nodeColor as ((node: { id: string }) => string) | undefined;
+    const nodeStrokeColor = latestMiniMapProps?.nodeStrokeColor as ((node: { id: string }) => string) | undefined;
+    expect(typeof nodeColor).toBe('function');
+    expect(typeof nodeStrokeColor).toBe('function');
+    expect(nodeColor?.({ id: 'design' })).toBe('#dcfce7');
+    expect(nodeColor?.({ id: 'review' })).toBe('#fee2e2');
+    expect(nodeStrokeColor?.({ id: 'design' })).toBe('#198038');
+    expect(nodeStrokeColor?.({ id: 'review' })).toBe('#da1e28');
   });
 
   it('shows live warnings before manual validation runs', async () => {

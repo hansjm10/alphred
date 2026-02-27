@@ -1591,6 +1591,96 @@ output {
   background: var(--bg-canvas);
   height: 100%;
   min-height: 720px;
+  position: relative;
+}
+
+.workflow-transition-legend {
+  position: absolute;
+  top: var(--space-3);
+  right: var(--space-3);
+  z-index: 8;
+  display: grid;
+  gap: 8px;
+  min-width: 220px;
+  max-width: min(340px, calc(100% - 2 * var(--space-3)));
+  padding: 10px 12px;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--bg-surface) 92%, var(--bg-canvas));
+  box-shadow: var(--shadow-sm);
+}
+
+.workflow-transition-legend__title {
+  color: var(--text-secondary);
+  font: 600 12px/18px var(--font-data);
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.workflow-transition-legend__list {
+  display: grid;
+  gap: 6px;
+  list-style: none;
+}
+
+.workflow-transition-legend__list li {
+  align-items: center;
+  display: grid;
+  gap: 8px;
+  grid-template-columns: auto minmax(0, 1fr);
+  color: var(--text-secondary);
+  font: 500 12px/18px var(--font-data);
+}
+
+.workflow-transition-legend__line {
+  display: inline-block;
+  width: 26px;
+  border-top: 3px solid currentColor;
+}
+
+.workflow-transition-legend__line--success {
+  color: var(--accent-success);
+}
+
+.workflow-transition-legend__line--failure {
+  border-top-style: dashed;
+  color: var(--accent-danger);
+}
+
+.workflow-transition-legend__chip {
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-pill);
+  color: var(--text-secondary);
+  font: 600 11px/16px var(--font-data);
+  padding: 1px 8px;
+}
+
+.react-flow__edge.workflow-edge .react-flow__edge-path {
+  transition: stroke var(--motion-fast), stroke-dasharray var(--motion-fast), stroke-width var(--motion-fast);
+}
+
+.react-flow__edge.workflow-edge--success-auto .react-flow__edge-path {
+  stroke: var(--accent-success);
+  stroke-dasharray: none;
+}
+
+.react-flow__edge.workflow-edge--success-guard .react-flow__edge-path {
+  stroke: var(--accent-success);
+  stroke-dasharray: 4 4;
+}
+
+.react-flow__edge.workflow-edge--failure .react-flow__edge-path {
+  stroke: var(--accent-danger);
+  stroke-dasharray: 9 5;
+}
+
+.react-flow__edge.workflow-edge .react-flow__edge-text {
+  font-family: var(--font-data);
+  font-weight: 600;
+}
+
+.react-flow__edge.workflow-edge .react-flow__edge-textbg {
+  stroke-width: 1px;
 }
 
 .workflow-editor-tabs {
@@ -1786,6 +1876,14 @@ output {
 @media (max-width: 960px) {
   .workflow-new-grid {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  .workflow-transition-legend {
+    left: var(--space-2);
+    max-width: none;
+    min-width: 0;
+    right: var(--space-2);
+    top: var(--space-2);
   }
 
   .workflow-editor-body {
