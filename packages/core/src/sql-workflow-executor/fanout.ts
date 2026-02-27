@@ -453,6 +453,43 @@ export function loadJoinBarrierStatesByJoinRunNodeId(
   return states;
 }
 
+export function loadReadyJoinBarriersForJoinNode(
+  db: Pick<AlphredDatabase, 'select'>,
+  params: {
+    workflowRunId: number;
+    joinRunNodeId: number;
+  },
+): JoinBarrierRow[] {
+  const rows = db
+    .select({
+      id: runJoinBarriers.id,
+      workflowRunId: runJoinBarriers.workflowRunId,
+      spawnerRunNodeId: runJoinBarriers.spawnerRunNodeId,
+      joinRunNodeId: runJoinBarriers.joinRunNodeId,
+      spawnSourceArtifactId: runJoinBarriers.spawnSourceArtifactId,
+      expectedChildren: runJoinBarriers.expectedChildren,
+      terminalChildren: runJoinBarriers.terminalChildren,
+      completedChildren: runJoinBarriers.completedChildren,
+      failedChildren: runJoinBarriers.failedChildren,
+      status: runJoinBarriers.status,
+    })
+    .from(runJoinBarriers)
+    .where(
+      and(
+        eq(runJoinBarriers.workflowRunId, params.workflowRunId),
+        eq(runJoinBarriers.joinRunNodeId, params.joinRunNodeId),
+        eq(runJoinBarriers.status, 'ready'),
+      ),
+    )
+    .orderBy(desc(runJoinBarriers.id))
+    .all();
+
+  return rows.map(row => ({
+    ...row,
+    status: parseJoinBarrierStatus(row.status),
+  }));
+}
+
 export function loadMostRecentJoinBarrier(
   db: AlphredDatabase,
   params: {

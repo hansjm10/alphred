@@ -43,6 +43,7 @@ import {
   persistFailureArtifact,
   persistNoteArtifact,
   persistSuccessArtifact,
+  resolveCompletedNodeRoutingOutcome,
 } from './persistence.js';
 import {
   buildRoutingSelection,
@@ -601,7 +602,13 @@ export function handleClaimedNodeSuccess(
     },
   });
 
-  if (shouldSpawnChildren && joinNode) {
+  const routingOutcomePreview = resolveCompletedNodeRoutingOutcome({
+    runNodeId: node.runNodeId,
+    routingDecision: phaseResult.routingDecision,
+    edgeRows,
+  });
+
+  if (shouldSpawnChildren && joinNode && routingOutcomePreview.decisionType !== 'no_route') {
     spawnDynamicChildrenForSpawner(db, {
       workflowRunId: run.id,
       spawnerNode: node,

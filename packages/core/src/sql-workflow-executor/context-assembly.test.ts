@@ -297,6 +297,107 @@ function seedJoinFanoutContextRun(): SeededRun {
   };
 }
 
+function seedMultiSpawnerJoinFanoutContextRun(): SeededRun {
+  const db = createDatabase(':memory:');
+  migrateDatabase(db);
+
+  const tree = db
+    .insert(workflowTrees)
+    .values({
+      treeKey: 'context_assembly_multi_spawner_join_fanout_tree',
+      version: 1,
+      name: 'Context Assembly Multi Spawner Join Fanout Tree',
+    })
+    .returning({ id: workflowTrees.id })
+    .get();
+  const prompt = db
+    .insert(promptTemplates)
+    .values({
+      templateKey: 'context_assembly_multi_spawner_join_fanout_prompt',
+      version: 1,
+      content: 'Process subtasks',
+      contentType: 'markdown',
+    })
+    .returning({ id: promptTemplates.id })
+    .get();
+
+  const insertedNodes = db
+    .insert(treeNodes)
+    .values([
+      {
+        workflowTreeId: tree.id,
+        nodeKey: 'breakdown-a',
+        nodeRole: 'spawner',
+        nodeType: 'agent',
+        provider: 'codex',
+        promptTemplateId: prompt.id,
+        maxChildren: 8,
+        sequenceIndex: 10,
+      },
+      {
+        workflowTreeId: tree.id,
+        nodeKey: 'breakdown-b',
+        nodeRole: 'spawner',
+        nodeType: 'agent',
+        provider: 'codex',
+        promptTemplateId: prompt.id,
+        maxChildren: 8,
+        sequenceIndex: 20,
+      },
+      {
+        workflowTreeId: tree.id,
+        nodeKey: 'aggregate',
+        nodeRole: 'join',
+        nodeType: 'agent',
+        provider: 'codex',
+        promptTemplateId: prompt.id,
+        sequenceIndex: 30,
+      },
+    ])
+    .returning({
+      id: treeNodes.id,
+      nodeKey: treeNodes.nodeKey,
+    })
+    .all();
+
+  const nodeIdByKey = new Map(insertedNodes.map(node => [node.nodeKey, node.id]));
+  const spawnerANodeId = nodeIdByKey.get('breakdown-a');
+  const spawnerBNodeId = nodeIdByKey.get('breakdown-b');
+  const joinNodeId = nodeIdByKey.get('aggregate');
+  if (!spawnerANodeId || !spawnerBNodeId || !joinNodeId) {
+    throw new Error('Expected multi-spawner join run nodes to be seeded.');
+  }
+
+  db.insert(treeEdges)
+    .values([
+      {
+        workflowTreeId: tree.id,
+        sourceNodeId: spawnerANodeId,
+        targetNodeId: joinNodeId,
+        routeOn: 'success',
+        priority: 0,
+        auto: 1,
+      },
+      {
+        workflowTreeId: tree.id,
+        sourceNodeId: spawnerBNodeId,
+        targetNodeId: joinNodeId,
+        routeOn: 'success',
+        priority: 0,
+        auto: 1,
+      },
+    ])
+    .run();
+
+  const materialized = materializeWorkflowRunFromTree(db, { treeKey: 'context_assembly_multi_spawner_join_fanout_tree' });
+  return {
+    db,
+    runId: materialized.run.id,
+    treeId: tree.id,
+    runNodeIdByKey: createRunNodeIdMap(db, materialized.run.id),
+  };
+}
+
 function insertReportArtifact(params: {
   db: AlphredDatabase;
   runId: number;
@@ -764,5 +865,152 @@ describe('assembleUpstreamArtifactContext join fan-out batching', () => {
     expect(joinedContext).toContain('new-child-a');
     expect(joinedContext).not.toContain('old-child-a');
     expect(joinedContext).not.toContain('old-child-b');
+  });
+
+  it('includes terminal children from all ready barriers when assembling join context', () => {
+    const { db, runId } = seedMultiSpawnerJoinFanoutContextRun();
+    const runNodeIdByKey = createRunNodeIdMap(db, runId);
+    const spawnerARunNodeId = runNodeIdByKey.get('breakdown-a');
+    const spawnerBRunNodeId = runNodeIdByKey.get('breakdown-b');
+    const joinRunNodeId = runNodeIdByKey.get('aggregate');
+    if (!spawnerARunNodeId || !spawnerBRunNodeId || !joinRunNodeId) {
+      throw new Error('Expected multi-spawner/join run nodes to exist.');
+    }
+
+    const initialNodes = getLatestRunNodeAttempts(loadRunNodeExecutionRows(db, runId));
+    const spawnerANode = initialNodes.find(node => node.runNodeId === spawnerARunNodeId);
+    const spawnerBNode = initialNodes.find(node => node.runNodeId === spawnerBRunNodeId);
+    const joinNode = initialNodes.find(node => node.runNodeId === joinRunNodeId);
+    if (!spawnerANode || !spawnerBNode || !joinNode) {
+      throw new Error('Expected multi-spawner/join run nodes to be materialized.');
+    }
+
+    transitionWorkflowRunStatus(db, {
+      workflowRunId: runId,
+      expectedFrom: 'pending',
+      to: 'running',
+    });
+
+    const firstSpawnArtifactId = insertReportArtifact({
+      db,
+      runId,
+      runNodeId: spawnerARunNodeId,
+      content: 'first fan-out request',
+    });
+    spawnDynamicChildrenForSpawner(db, {
+      workflowRunId: runId,
+      spawnerNode: spawnerANode,
+      joinNode,
+      spawnSourceArtifactId: firstSpawnArtifactId,
+      subtasks: [
+        {
+          nodeKey: 'a-child',
+          title: 'A child',
+          prompt: 'implement child A',
+          provider: null,
+          model: null,
+          metadata: null,
+        },
+      ],
+    });
+
+    const secondSpawnArtifactId = insertReportArtifact({
+      db,
+      runId,
+      runNodeId: spawnerBRunNodeId,
+      content: 'second fan-out request',
+    });
+    spawnDynamicChildrenForSpawner(db, {
+      workflowRunId: runId,
+      spawnerNode: spawnerBNode,
+      joinNode,
+      spawnSourceArtifactId: secondSpawnArtifactId,
+      subtasks: [
+        {
+          nodeKey: 'b-child',
+          title: 'B child',
+          prompt: 'implement child B',
+          provider: null,
+          model: null,
+          metadata: null,
+        },
+      ],
+    });
+
+    const spawnedChildren = getLatestRunNodeAttempts(loadRunNodeExecutionRows(db, runId));
+    const childA = spawnedChildren.find(node => node.nodeKey === 'a-child');
+    const childB = spawnedChildren.find(node => node.nodeKey === 'b-child');
+    if (!childA || !childB) {
+      throw new Error('Expected both dynamic children to be materialized.');
+    }
+
+    transitionRunNodeStatus(db, {
+      runNodeId: childA.runNodeId,
+      expectedFrom: 'pending',
+      to: 'running',
+    });
+    transitionRunNodeStatus(db, {
+      runNodeId: childA.runNodeId,
+      expectedFrom: 'running',
+      to: 'completed',
+    });
+    const childAArtifactId = insertReportArtifact({
+      db,
+      runId,
+      runNodeId: childA.runNodeId,
+      content: 'fresh artifact from child A',
+    });
+    updateJoinBarrierForChildTerminal(db, {
+      workflowRunId: runId,
+      childNode: childA,
+      childTerminalStatus: 'completed',
+    });
+
+    transitionRunNodeStatus(db, {
+      runNodeId: childB.runNodeId,
+      expectedFrom: 'pending',
+      to: 'running',
+    });
+    transitionRunNodeStatus(db, {
+      runNodeId: childB.runNodeId,
+      expectedFrom: 'running',
+      to: 'completed',
+    });
+    const childBArtifactId = insertReportArtifact({
+      db,
+      runId,
+      runNodeId: childB.runNodeId,
+      content: 'fresh artifact from child B',
+    });
+    updateJoinBarrierForChildTerminal(db, {
+      workflowRunId: runId,
+      childNode: childB,
+      childTerminalStatus: 'completed',
+    });
+
+    const latestNodeAttempts = getLatestRunNodeAttempts(loadRunNodeExecutionRows(db, runId));
+    const latestJoinNode = latestNodeAttempts.find(node => node.runNodeId === joinRunNodeId);
+    if (!latestJoinNode) {
+      throw new Error('Expected join run node to exist.');
+    }
+
+    const assembly = assembleUpstreamArtifactContext(db, {
+      workflowRunId: runId,
+      targetNode: latestJoinNode,
+      targetAttempt: latestJoinNode.attempt,
+      latestNodeAttempts,
+      edgeRows: loadEdgeRows(db, runId),
+      latestRoutingDecisionsByRunNodeId: loadLatestRoutingDecisionsByRunNodeId(db, runId).latestByRunNodeId,
+      latestArtifactsByRunNodeId: loadLatestArtifactsByRunNodeId(db, runId),
+    });
+
+    expect(assembly.manifest.included_source_node_keys).toContain('a-child');
+    expect(assembly.manifest.included_source_node_keys).toContain('b-child');
+    expect(assembly.manifest.included_artifact_ids).toContain(childAArtifactId);
+    expect(assembly.manifest.included_artifact_ids).toContain(childBArtifactId);
+
+    const joinedContext = assembly.contextEntries.join('\n');
+    expect(joinedContext).toContain('a-child');
+    expect(joinedContext).toContain('b-child');
   });
 });

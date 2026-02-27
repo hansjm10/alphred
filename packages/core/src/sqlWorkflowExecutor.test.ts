@@ -1796,6 +1796,125 @@ function seedDynamicFanOutIssue163Run() {
   };
 }
 
+function seedGuardedDynamicFanOutNoRouteRun() {
+  const db = createDatabase(':memory:');
+  migrateDatabase(db);
+
+  const tree = db
+    .insert(workflowTrees)
+    .values({
+      treeKey: 'guarded-dynamic-fanout-no-route',
+      version: 1,
+      name: 'Guarded Dynamic Fan-Out No Route',
+    })
+    .returning({ id: workflowTrees.id })
+    .get();
+
+  const spawnerPrompt = db
+    .insert(promptTemplates)
+    .values({
+      templateKey: 'guarded_dynamic_fanout_no_route_spawner_prompt',
+      version: 1,
+      content: 'Break issue into independent subtasks.',
+      contentType: 'markdown',
+    })
+    .returning({ id: promptTemplates.id })
+    .get();
+
+  const joinPrompt = db
+    .insert(promptTemplates)
+    .values({
+      templateKey: 'guarded_dynamic_fanout_no_route_join_prompt',
+      version: 1,
+      content: 'Aggregate subtask outcomes.',
+      contentType: 'markdown',
+    })
+    .returning({ id: promptTemplates.id })
+    .get();
+
+  const approvedGuard = db
+    .insert(guardDefinitions)
+    .values({
+      guardKey: 'guarded_dynamic_fanout_no_route_approved',
+      version: 1,
+      expression: {
+        field: 'decision',
+        operator: '==',
+        value: 'approved',
+      },
+    })
+    .returning({ id: guardDefinitions.id })
+    .get();
+
+  const insertedNodes = db
+    .insert(treeNodes)
+    .values([
+      {
+        workflowTreeId: tree.id,
+        nodeKey: 'breakdown',
+        nodeType: 'agent',
+        nodeRole: 'spawner',
+        provider: 'codex',
+        promptTemplateId: spawnerPrompt.id,
+        sequenceIndex: 10,
+        maxChildren: 8,
+      },
+      {
+        workflowTreeId: tree.id,
+        nodeKey: 'final-review',
+        nodeType: 'agent',
+        nodeRole: 'join',
+        provider: 'codex',
+        promptTemplateId: joinPrompt.id,
+        sequenceIndex: 20,
+      },
+    ])
+    .returning({
+      id: treeNodes.id,
+      nodeKey: treeNodes.nodeKey,
+    })
+    .all();
+
+  const nodeIdByKey = new Map(insertedNodes.map(node => [node.nodeKey, node.id]));
+  const breakdownNodeId = nodeIdByKey.get('breakdown');
+  const finalReviewNodeId = nodeIdByKey.get('final-review');
+  if (!breakdownNodeId || !finalReviewNodeId) {
+    throw new Error('Expected guarded dynamic fan-out tree nodes to be seeded.');
+  }
+
+  db.insert(treeEdges)
+    .values({
+      workflowTreeId: tree.id,
+      sourceNodeId: breakdownNodeId,
+      targetNodeId: finalReviewNodeId,
+      routeOn: 'success',
+      priority: 0,
+      auto: 0,
+      guardDefinitionId: approvedGuard.id,
+    })
+    .run();
+
+  const materialized = materializeWorkflowRunFromTree(db, {
+    treeKey: 'guarded-dynamic-fanout-no-route',
+  });
+
+  const runNodeRows = db
+    .select({
+      id: runNodes.id,
+      nodeKey: runNodes.nodeKey,
+    })
+    .from(runNodes)
+    .where(eq(runNodes.workflowRunId, materialized.run.id))
+    .all();
+
+  const runNodeIdByKey = new Map(runNodeRows.map(node => [node.nodeKey, node.id]));
+  return {
+    db,
+    runId: materialized.run.id,
+    runNodeIdByKey,
+  };
+}
+
 describe('createSqlWorkflowExecutor', () => {
   it('executes runnable nodes, persists artifacts, and completes the run on success', async () => {
     const { db, runId, runNodeId } = seedSingleAgentRun();
@@ -4319,6 +4438,95 @@ describe('createSqlWorkflowExecutor', () => {
         attempt: 1,
       },
     });
+  });
+
+  it('does not persist fan-out children or barriers when guarded spawner routing resolves to no_route', async () => {
+    const { db, runId, runNodeIdByKey } = seedGuardedDynamicFanOutNoRouteRun();
+    const breakdownRunNodeId = runNodeIdByKey.get('breakdown');
+    if (!breakdownRunNodeId) {
+      throw new Error('Expected breakdown run node to exist.');
+    }
+
+    const executor = createSqlWorkflowExecutor(db, {
+      resolveProvider: () => ({
+        async *run(): AsyncIterable<ProviderEvent> {
+          yield {
+            type: 'result',
+            content: JSON.stringify({
+              schemaVersion: 1,
+              subtasks: [
+                {
+                  nodeKey: 'should-not-persist',
+                  title: 'Should not persist',
+                  prompt: 'This fan-out child should not be created.',
+                },
+              ],
+            }),
+            timestamp: 10,
+          };
+        },
+      }),
+    });
+
+    const firstStep = await executor.executeNextRunnableNode({
+      workflowRunId: runId,
+      options: {
+        workingDirectory: '/tmp/alphred-worktree',
+      },
+    });
+
+    expect(firstStep).toEqual({
+      outcome: 'executed',
+      workflowRunId: runId,
+      runNodeId: breakdownRunNodeId,
+      nodeKey: 'breakdown',
+      runNodeStatus: 'completed',
+      runStatus: 'failed',
+      artifactId: expect.any(Number),
+    });
+
+    const persistedDecision = db
+      .select({
+        decisionType: routingDecisions.decisionType,
+      })
+      .from(routingDecisions)
+      .where(eq(routingDecisions.runNodeId, breakdownRunNodeId))
+      .get();
+    expect(persistedDecision).toEqual({
+      decisionType: 'no_route',
+    });
+
+    const dynamicChildCountRow = db
+      .select({
+        count: sql<number>`count(*)`,
+      })
+      .from(runNodes)
+      .where(and(eq(runNodes.workflowRunId, runId), eq(runNodes.spawnerNodeId, breakdownRunNodeId)))
+      .get();
+    expect(dynamicChildCountRow?.count ?? 0).toBe(0);
+
+    const joinBarrierCountRow = db
+      .select({
+        count: sql<number>`count(*)`,
+      })
+      .from(runJoinBarriers)
+      .where(eq(runJoinBarriers.workflowRunId, runId))
+      .get();
+    expect(joinBarrierCountRow?.count ?? 0).toBe(0);
+
+    const dynamicEdgeCountRow = db
+      .select({
+        count: sql<number>`count(*)`,
+      })
+      .from(runNodeEdges)
+      .where(
+        and(
+          eq(runNodeEdges.workflowRunId, runId),
+          inArray(runNodeEdges.edgeKind, ['dynamic_spawner_to_child', 'dynamic_child_to_join']),
+        ),
+      )
+      .get();
+    expect(dynamicEdgeCountRow?.count ?? 0).toBe(0);
   });
 
   it('persists fallback routing decision source when provider emits contract-parsed metadata', async () => {

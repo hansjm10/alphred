@@ -16,7 +16,7 @@ import {
   loadRetryFailureSummaryArtifact,
   loadUpstreamArtifactSelectionByRunNodeId,
 } from './routing-selection.js';
-import { loadMostRecentJoinBarrier } from './fanout.js';
+import { loadMostRecentJoinBarrier, loadReadyJoinBarriersForJoinNode } from './fanout.js';
 import {
   buildTruncationMetadata,
   compareUpstreamSourceOrder,
@@ -119,27 +119,38 @@ function resolveJoinBatchChildRunNodeIds(
     return null;
   }
 
-  const barrier = loadMostRecentJoinBarrier(db, {
+  const readyBarriers = loadReadyJoinBarriersForJoinNode(db, {
     workflowRunId: params.workflowRunId,
     joinRunNodeId: params.targetNode.runNodeId,
   });
-  if (!barrier) {
-    return null;
+  if (readyBarriers.length === 0) {
+    const mostRecentBarrier = loadMostRecentJoinBarrier(db, {
+      workflowRunId: params.workflowRunId,
+      joinRunNodeId: params.targetNode.runNodeId,
+    });
+    return mostRecentBarrier ? new Set<number>() : null;
   }
 
-  const batchChildren = params.latestNodeAttempts
-    .filter(
-      node => node.spawnerNodeId === barrier.spawnerRunNodeId && node.joinNodeId === params.targetNode.runNodeId,
-    )
-    .sort((left, right) => {
-      if (left.sequenceIndex !== right.sequenceIndex) {
-        return right.sequenceIndex - left.sequenceIndex;
-      }
-      return right.runNodeId - left.runNodeId;
-    })
-    .slice(0, barrier.expectedChildren);
+  const batchChildRunNodeIds = new Set<number>();
+  for (const barrier of readyBarriers) {
+    const batchChildren = params.latestNodeAttempts
+      .filter(
+        node => node.spawnerNodeId === barrier.spawnerRunNodeId && node.joinNodeId === params.targetNode.runNodeId,
+      )
+      .sort((left, right) => {
+        if (left.sequenceIndex !== right.sequenceIndex) {
+          return right.sequenceIndex - left.sequenceIndex;
+        }
+        return right.runNodeId - left.runNodeId;
+      })
+      .slice(0, barrier.expectedChildren);
 
-  return new Set(batchChildren.map(node => node.runNodeId));
+    for (const childNode of batchChildren) {
+      batchChildRunNodeIds.add(childNode.runNodeId);
+    }
+  }
+
+  return batchChildRunNodeIds;
 }
 
 export function resolveIncludedContentForContextCandidate(

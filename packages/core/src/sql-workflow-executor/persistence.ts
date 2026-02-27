@@ -191,55 +191,29 @@ export function persistCompletedNodeRoutingDecision(
   const outgoingEdges = params.edgeRows.filter(
     edge => edge.sourceNodeId === params.runNodeId && edge.routeOn === 'success',
   );
+  const routingOutcome = resolveCompletedNodeRoutingOutcome({
+    runNodeId: params.runNodeId,
+    routingDecision: decisionSignal,
+    edgeRows: params.edgeRows,
+  });
 
-  if (outgoingEdges.length === 0) {
-    if (!decisionSignal) {
-      return {
-        decisionType: null,
-        selectedEdgeId: null,
-      };
-    }
-
-    persistRoutingDecision(db, {
-      workflowRunId: params.workflowRunId,
-      runNodeId: params.runNodeId,
-      decisionType: decisionSignal,
-      rawOutput: {
-        source: routingDecisionSource,
-        routingDecision: decisionSignal,
-        attempt: params.attempt,
-      },
-    });
-    return {
-      decisionType: decisionSignal,
-      selectedEdgeId: null,
-    };
+  if (routingOutcome.decisionType === null) {
+    return routingOutcome;
   }
 
-  const matchingEdge = selectFirstMatchingOutgoingEdge(outgoingEdges, decisionSignal);
-  if (matchingEdge) {
-    if (!decisionSignal) {
-      return {
-        decisionType: null,
-        selectedEdgeId: matchingEdge.edgeId,
-      };
-    }
-
+  if (routingOutcome.decisionType !== 'no_route') {
     persistRoutingDecision(db, {
       workflowRunId: params.workflowRunId,
       runNodeId: params.runNodeId,
-      decisionType: decisionSignal,
+      decisionType: routingOutcome.decisionType,
       rawOutput: {
         source: routingDecisionSource,
         routingDecision: decisionSignal,
-        selectedEdgeId: matchingEdge.edgeId,
+        ...(routingOutcome.selectedEdgeId === null ? {} : { selectedEdgeId: routingOutcome.selectedEdgeId }),
         attempt: params.attempt,
       },
     });
-    return {
-      decisionType: decisionSignal,
-      selectedEdgeId: matchingEdge.edgeId,
-    };
+    return routingOutcome;
   }
 
   const noRouteRationale =
@@ -259,6 +233,39 @@ export function persistCompletedNodeRoutingDecision(
       attempt: params.attempt,
     },
   });
+
+  return routingOutcome;
+}
+
+export function resolveCompletedNodeRoutingOutcome(params: {
+  runNodeId: number;
+  routingDecision: RouteDecisionSignal | null;
+  edgeRows: EdgeRow[];
+}): CompletedNodeRoutingOutcome {
+  const outgoingEdges = params.edgeRows.filter(
+    edge => edge.sourceNodeId === params.runNodeId && edge.routeOn === 'success',
+  );
+  if (outgoingEdges.length === 0) {
+    if (!params.routingDecision) {
+      return {
+        decisionType: null,
+        selectedEdgeId: null,
+      };
+    }
+
+    return {
+      decisionType: params.routingDecision,
+      selectedEdgeId: null,
+    };
+  }
+
+  const matchingEdge = selectFirstMatchingOutgoingEdge(outgoingEdges, params.routingDecision);
+  if (matchingEdge) {
+    return {
+      decisionType: params.routingDecision,
+      selectedEdgeId: matchingEdge.edgeId,
+    };
+  }
 
   return {
     decisionType: 'no_route',
