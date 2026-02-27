@@ -13,6 +13,7 @@ import {
   promptTemplates,
   repositories,
   runNodeDiagnostics,
+  runJoinBarriers,
   runNodeStreamEvents,
   routingDecisions,
   runNodes,
@@ -1020,6 +1021,305 @@ describe('createDashboardService', () => {
     expect(runDetail.nodes[0]?.latestDiagnostics?.outcome).toBe('completed');
     expect(runDetail.diagnostics).toHaveLength(1);
     expect(runDetail.worktrees).toHaveLength(1);
+  });
+
+  it('scopes fan-out child membership to each barrier batch for the same spawner and join pair', async () => {
+    const { db, dependencies } = createHarness();
+    migrateDatabase(db);
+
+    const treeId = Number(
+      db
+        .insert(workflowTrees)
+        .values({
+          treeKey: 'fanout-batch-tree',
+          version: 1,
+          name: 'Fan-out Batch Tree',
+          createdAt: '2026-02-17T21:00:00.000Z',
+          updatedAt: '2026-02-17T21:00:00.000Z',
+        })
+        .run().lastInsertRowid,
+    );
+
+    const insertedTreeNodes = db
+      .insert(treeNodes)
+      .values([
+        {
+          workflowTreeId: treeId,
+          nodeKey: 'spawner',
+          nodeRole: 'spawner',
+          nodeType: 'agent',
+          provider: 'codex',
+          promptTemplateId: null,
+          sequenceIndex: 10,
+          createdAt: '2026-02-17T21:00:00.000Z',
+          updatedAt: '2026-02-17T21:00:00.000Z',
+        },
+        {
+          workflowTreeId: treeId,
+          nodeKey: 'join',
+          nodeRole: 'join',
+          nodeType: 'agent',
+          provider: 'codex',
+          promptTemplateId: null,
+          sequenceIndex: 20,
+          createdAt: '2026-02-17T21:00:00.000Z',
+          updatedAt: '2026-02-17T21:00:00.000Z',
+        },
+      ])
+      .returning({
+        id: treeNodes.id,
+        nodeKey: treeNodes.nodeKey,
+      })
+      .all();
+    const treeNodeIdByKey = new Map(insertedTreeNodes.map(node => [node.nodeKey, node.id]));
+    const spawnerTreeNodeId = treeNodeIdByKey.get('spawner');
+    const joinTreeNodeId = treeNodeIdByKey.get('join');
+    if (!spawnerTreeNodeId || !joinTreeNodeId) {
+      throw new Error('Expected spawner/join tree nodes to exist.');
+    }
+
+    const runId = Number(
+      db
+        .insert(workflowRuns)
+        .values({
+          workflowTreeId: treeId,
+          status: 'running',
+          startedAt: '2026-02-17T21:01:00.000Z',
+          completedAt: null,
+          createdAt: '2026-02-17T21:01:00.000Z',
+          updatedAt: '2026-02-17T21:01:00.000Z',
+        })
+        .run().lastInsertRowid,
+    );
+
+    const spawnerRunNodeId = Number(
+      db
+        .insert(runNodes)
+        .values({
+          workflowRunId: runId,
+          treeNodeId: spawnerTreeNodeId,
+          nodeKey: 'spawner',
+          nodeRole: 'spawner',
+          nodeType: 'agent',
+          provider: 'codex',
+          status: 'pending',
+          sequenceIndex: 10,
+          attempt: 1,
+          startedAt: null,
+          completedAt: null,
+          createdAt: '2026-02-17T21:01:00.000Z',
+          updatedAt: '2026-02-17T21:01:00.000Z',
+        })
+        .run().lastInsertRowid,
+    );
+    const joinRunNodeId = Number(
+      db
+        .insert(runNodes)
+        .values({
+          workflowRunId: runId,
+          treeNodeId: joinTreeNodeId,
+          nodeKey: 'join',
+          nodeRole: 'join',
+          nodeType: 'agent',
+          provider: 'codex',
+          status: 'pending',
+          sequenceIndex: 20,
+          attempt: 1,
+          startedAt: null,
+          completedAt: null,
+          createdAt: '2026-02-17T21:01:00.000Z',
+          updatedAt: '2026-02-17T21:01:00.000Z',
+        })
+        .run().lastInsertRowid,
+    );
+
+    const childNodeIds = db
+      .insert(runNodes)
+      .values([
+        {
+          workflowRunId: runId,
+          treeNodeId: spawnerTreeNodeId,
+          nodeKey: 'child-a',
+          nodeRole: 'standard',
+          nodeType: 'agent',
+          provider: 'codex',
+          spawnerNodeId: spawnerRunNodeId,
+          joinNodeId: joinRunNodeId,
+          lineageDepth: 1,
+          sequencePath: '10.1',
+          status: 'pending',
+          sequenceIndex: 30,
+          attempt: 1,
+          startedAt: null,
+          completedAt: null,
+          createdAt: '2026-02-17T21:02:00.000Z',
+          updatedAt: '2026-02-17T21:02:00.000Z',
+        },
+        {
+          workflowRunId: runId,
+          treeNodeId: spawnerTreeNodeId,
+          nodeKey: 'child-b',
+          nodeRole: 'standard',
+          nodeType: 'agent',
+          provider: 'codex',
+          spawnerNodeId: spawnerRunNodeId,
+          joinNodeId: joinRunNodeId,
+          lineageDepth: 1,
+          sequencePath: '10.2',
+          status: 'pending',
+          sequenceIndex: 31,
+          attempt: 1,
+          startedAt: null,
+          completedAt: null,
+          createdAt: '2026-02-17T21:03:00.000Z',
+          updatedAt: '2026-02-17T21:03:00.000Z',
+        },
+        {
+          workflowRunId: runId,
+          treeNodeId: spawnerTreeNodeId,
+          nodeKey: 'child-c',
+          nodeRole: 'standard',
+          nodeType: 'agent',
+          provider: 'codex',
+          spawnerNodeId: spawnerRunNodeId,
+          joinNodeId: joinRunNodeId,
+          lineageDepth: 1,
+          sequencePath: '10.1',
+          status: 'pending',
+          sequenceIndex: 40,
+          attempt: 1,
+          startedAt: null,
+          completedAt: null,
+          createdAt: '2026-02-17T21:04:00.000Z',
+          updatedAt: '2026-02-17T21:04:00.000Z',
+        },
+      ])
+      .returning({ id: runNodes.id })
+      .all()
+      .map(node => node.id);
+    const [childAId, childBId, childCId] = childNodeIds;
+    if (!childAId || !childBId || !childCId) {
+      throw new Error('Expected all fan-out child run nodes to be inserted.');
+    }
+
+    transitionRunNodeStatus(db, {
+      runNodeId: spawnerRunNodeId,
+      expectedFrom: 'pending',
+      to: 'running',
+      occurredAt: '2026-02-17T21:01:00.000Z',
+    });
+    transitionRunNodeStatus(db, {
+      runNodeId: spawnerRunNodeId,
+      expectedFrom: 'running',
+      to: 'completed',
+      occurredAt: '2026-02-17T21:01:30.000Z',
+    });
+    transitionRunNodeStatus(db, {
+      runNodeId: childAId,
+      expectedFrom: 'pending',
+      to: 'running',
+      occurredAt: '2026-02-17T21:02:00.000Z',
+    });
+    transitionRunNodeStatus(db, {
+      runNodeId: childAId,
+      expectedFrom: 'running',
+      to: 'completed',
+      occurredAt: '2026-02-17T21:02:30.000Z',
+    });
+    transitionRunNodeStatus(db, {
+      runNodeId: childBId,
+      expectedFrom: 'pending',
+      to: 'running',
+      occurredAt: '2026-02-17T21:03:00.000Z',
+    });
+    transitionRunNodeStatus(db, {
+      runNodeId: childBId,
+      expectedFrom: 'running',
+      to: 'completed',
+      occurredAt: '2026-02-17T21:03:30.000Z',
+    });
+
+    const spawnArtifactA = Number(
+      db
+        .insert(phaseArtifacts)
+        .values({
+          workflowRunId: runId,
+          runNodeId: spawnerRunNodeId,
+          artifactType: 'report',
+          contentType: 'json',
+          content: '{"schemaVersion":1,"subtasks":[{"nodeKey":"child-a"},{"nodeKey":"child-b"}]}',
+          metadata: null,
+          createdAt: '2026-02-17T21:01:30.000Z',
+        })
+        .run().lastInsertRowid,
+    );
+    const spawnArtifactB = Number(
+      db
+        .insert(phaseArtifacts)
+        .values({
+          workflowRunId: runId,
+          runNodeId: spawnerRunNodeId,
+          artifactType: 'report',
+          contentType: 'json',
+          content: '{"schemaVersion":1,"subtasks":[{"nodeKey":"child-c"}]}',
+          metadata: null,
+          createdAt: '2026-02-17T21:03:45.000Z',
+        })
+        .run().lastInsertRowid,
+    );
+
+    db.insert(runJoinBarriers)
+      .values([
+        {
+          workflowRunId: runId,
+          spawnerRunNodeId: spawnerRunNodeId,
+          joinRunNodeId: joinRunNodeId,
+          spawnSourceArtifactId: spawnArtifactA,
+          expectedChildren: 2,
+          terminalChildren: 2,
+          completedChildren: 2,
+          failedChildren: 0,
+          status: 'released',
+          createdAt: '2026-02-17T21:01:31.000Z',
+          updatedAt: '2026-02-17T21:03:31.000Z',
+          releasedAt: '2026-02-17T21:03:31.000Z',
+        },
+        {
+          workflowRunId: runId,
+          spawnerRunNodeId: spawnerRunNodeId,
+          joinRunNodeId: joinRunNodeId,
+          spawnSourceArtifactId: spawnArtifactB,
+          expectedChildren: 1,
+          terminalChildren: 0,
+          completedChildren: 0,
+          failedChildren: 0,
+          status: 'pending',
+          createdAt: '2026-02-17T21:03:46.000Z',
+          updatedAt: '2026-02-17T21:03:46.000Z',
+          releasedAt: null,
+        },
+      ])
+      .run();
+
+    const service = createDashboardService({ dependencies });
+    const detail = await service.getWorkflowRunDetail(runId);
+
+    expect(detail.fanOutGroups).toEqual([
+      expect.objectContaining({
+        spawnerNodeId: spawnerRunNodeId,
+        joinNodeId: joinRunNodeId,
+        spawnSourceArtifactId: spawnArtifactA,
+        expectedChildren: 2,
+        childNodeIds: [childAId, childBId],
+      }),
+      expect.objectContaining({
+        spawnerNodeId: spawnerRunNodeId,
+        joinNodeId: joinRunNodeId,
+        spawnSourceArtifactId: spawnArtifactB,
+        expectedChildren: 1,
+        childNodeIds: [childCId],
+      }),
+    ]);
   });
 
   it('loads run-node stream snapshots with resume semantics and terminal status', async () => {

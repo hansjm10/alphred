@@ -231,7 +231,7 @@ function loadMaxSequenceIndex(db: AlphredDatabase, workflowRunId: number): numbe
 }
 
 function loadActiveBarriersForSpawnerJoin(
-  db: AlphredDatabase,
+  db: Pick<AlphredDatabase, 'select'>,
   params: {
     workflowRunId: number;
     spawnerRunNodeId: number;
@@ -466,7 +466,7 @@ export function loadMostRecentJoinBarrier(
 }
 
 function loadActiveBarrierForChild(
-  db: AlphredDatabase,
+  db: Pick<AlphredDatabase, 'select'>,
   params: {
     workflowRunId: number;
     spawnerRunNodeId: number;
@@ -488,7 +488,7 @@ function loadActiveBarrierForChild(
 }
 
 export function updateJoinBarrierForChildTerminal(
-  db: AlphredDatabase,
+  db: Pick<AlphredDatabase, 'select' | 'update'>,
   params: {
     workflowRunId: number;
     childNode: Pick<RunNodeExecutionRow, 'spawnerNodeId' | 'joinNodeId'>;
@@ -523,6 +523,62 @@ export function updateJoinBarrierForChildTerminal(
   const completedChildren = barrier.completedChildren + completedIncrement;
   const failedChildren = barrier.failedChildren + failedIncrement;
   const status = terminalChildren >= barrier.expectedChildren ? 'ready' : barrier.status;
+  const now = new Date().toISOString();
+
+  db.update(runJoinBarriers)
+    .set({
+      terminalChildren,
+      completedChildren,
+      failedChildren,
+      status,
+      updatedAt: now,
+    })
+    .where(eq(runJoinBarriers.id, barrier.id))
+    .run();
+}
+
+export function reopenJoinBarrierForRetriedChild(
+  db: Pick<AlphredDatabase, 'select' | 'update'>,
+  params: {
+    workflowRunId: number;
+    childNode: Pick<RunNodeExecutionRow, 'spawnerNodeId' | 'joinNodeId'>;
+    previousTerminalStatus: RunNodeStatus;
+  },
+): void {
+  if (!terminalStatuses.has(params.previousTerminalStatus)) {
+    return;
+  }
+
+  const spawnerRunNodeId = params.childNode.spawnerNodeId;
+  const joinRunNodeId = params.childNode.joinNodeId;
+  if (!spawnerRunNodeId || !joinRunNodeId) {
+    return;
+  }
+
+  const barrier = loadActiveBarrierForChild(db, {
+    workflowRunId: params.workflowRunId,
+    spawnerRunNodeId,
+    joinRunNodeId,
+  });
+  if (!barrier) {
+    return;
+  }
+  if (barrier.terminalChildren === 0) {
+    return;
+  }
+
+  const completedDecrement = params.previousTerminalStatus === 'completed' ? 1 : 0;
+  const failedDecrement = params.previousTerminalStatus === 'failed' ? 1 : 0;
+  if (barrier.completedChildren < completedDecrement || barrier.failedChildren < failedDecrement) {
+    throw new Error(
+      `JOIN_BARRIER_STATE_INVALID: cannot reopen barrier id=${barrier.id} for child status "${params.previousTerminalStatus}" because counters would become negative.`,
+    );
+  }
+
+  const terminalChildren = barrier.terminalChildren - 1;
+  const completedChildren = barrier.completedChildren - completedDecrement;
+  const failedChildren = barrier.failedChildren - failedDecrement;
+  const status = terminalChildren >= barrier.expectedChildren ? 'ready' : 'pending';
   const now = new Date().toISOString();
 
   db.update(runJoinBarriers)

@@ -425,19 +425,48 @@ export function createRunOperations(params: {
           latestRoutingDecision: latestDecisionByRunNodeId.get(node.id) ?? null,
           latestDiagnostics: latestDiagnosticsByRunNodeId.get(node.id) ?? null,
         }));
-        const fanOutGroups: DashboardFanOutGroupSnapshot[] = fanOutBarrierRows.map(row => ({
-          spawnerNodeId: row.spawnerNodeId,
-          joinNodeId: row.joinNodeId,
-          spawnSourceArtifactId: row.spawnSourceArtifactId,
-          expectedChildren: row.expectedChildren,
-          terminalChildren: row.terminalChildren,
-          completedChildren: row.completedChildren,
-          failedChildren: row.failedChildren,
-          status: row.status as DashboardFanOutGroupSnapshot['status'],
-          childNodeIds: nodes
-            .filter(node => node.spawnerNodeId === row.spawnerNodeId && node.joinNodeId === row.joinNodeId)
-            .map(node => node.id),
-        }));
+
+        const fanOutChildNodesByPair = new Map<string, DashboardRunNodeSnapshot[]>();
+        for (const node of nodes) {
+          if (node.spawnerNodeId === null || node.joinNodeId === null) {
+            continue;
+          }
+          const pairKey = `${String(node.spawnerNodeId)}:${String(node.joinNodeId)}`;
+          const existing = fanOutChildNodesByPair.get(pairKey) ?? [];
+          existing.push(node);
+          fanOutChildNodesByPair.set(pairKey, existing);
+        }
+        for (const childNodes of fanOutChildNodesByPair.values()) {
+          childNodes.sort((left, right) => {
+            if (left.sequenceIndex !== right.sequenceIndex) {
+              return left.sequenceIndex - right.sequenceIndex;
+            }
+            return left.id - right.id;
+          });
+        }
+        const fanOutConsumedChildrenByPair = new Map<string, number>();
+
+        const fanOutGroups: DashboardFanOutGroupSnapshot[] = [];
+        for (const row of fanOutBarrierRows) {
+          const pairKey = `${String(row.spawnerNodeId)}:${String(row.joinNodeId)}`;
+          const pairChildren = fanOutChildNodesByPair.get(pairKey) ?? [];
+          const nextChildOffset = fanOutConsumedChildrenByPair.get(pairKey) ?? 0;
+          const expectedChildren = Math.max(row.expectedChildren, 0);
+          const childNodeIds = pairChildren.slice(nextChildOffset, nextChildOffset + expectedChildren).map(node => node.id);
+          fanOutConsumedChildrenByPair.set(pairKey, nextChildOffset + expectedChildren);
+
+          fanOutGroups.push({
+            spawnerNodeId: row.spawnerNodeId,
+            joinNodeId: row.joinNodeId,
+            spawnSourceArtifactId: row.spawnSourceArtifactId,
+            expectedChildren: row.expectedChildren,
+            terminalChildren: row.terminalChildren,
+            completedChildren: row.completedChildren,
+            failedChildren: row.failedChildren,
+            status: row.status as DashboardFanOutGroupSnapshot['status'],
+            childNodeIds,
+          });
+        }
 
         const allRunWorktrees = db
           .select({

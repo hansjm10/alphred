@@ -8754,6 +8754,161 @@ describe('createSqlWorkflowExecutor', () => {
     );
   });
 
+  it('reopens ready fan-out barriers when retry control requeues failed dynamic children', async () => {
+    const { db, runId, runNodeIdByKey } = seedDynamicFanOutIssue163Run();
+    const breakdownRunNodeId = runNodeIdByKey.get('breakdown');
+    const finalReviewRunNodeId = runNodeIdByKey.get('final-review');
+    if (!breakdownRunNodeId || !finalReviewRunNodeId) {
+      throw new Error('Expected dynamic fan-out run nodes to include breakdown and final-review.');
+    }
+
+    transitionWorkflowRunStatus(db, {
+      workflowRunId: runId,
+      expectedFrom: 'pending',
+      to: 'running',
+      occurredAt: '2026-01-01T00:00:00.000Z',
+    });
+
+    const spawnerNode = db
+      .select({
+        treeNodeId: runNodes.treeNodeId,
+      })
+      .from(runNodes)
+      .where(eq(runNodes.id, breakdownRunNodeId))
+      .get();
+    if (!spawnerNode) {
+      throw new Error('Expected breakdown run node to exist.');
+    }
+
+    const spawnArtifactId = Number(
+      db
+        .insert(phaseArtifacts)
+        .values({
+          workflowRunId: runId,
+          runNodeId: breakdownRunNodeId,
+          artifactType: 'report',
+          contentType: 'json',
+          content: '{"schemaVersion":1,"subtasks":[]}',
+          metadata: null,
+          createdAt: '2026-01-01T00:00:30.000Z',
+        })
+        .run().lastInsertRowid,
+    );
+
+    const childRunNodeId = Number(
+      db
+        .insert(runNodes)
+        .values({
+          workflowRunId: runId,
+          treeNodeId: spawnerNode.treeNodeId,
+          nodeKey: 'issue-163-retry-child',
+          nodeRole: 'standard',
+          nodeType: 'agent',
+          provider: 'codex',
+          model: null,
+          prompt: 'Retry this fan-out child.',
+          promptContentType: 'markdown',
+          executionPermissions: null,
+          errorHandlerConfig: null,
+          maxChildren: 0,
+          maxRetries: 0,
+          spawnerNodeId: breakdownRunNodeId,
+          joinNodeId: finalReviewRunNodeId,
+          lineageDepth: 1,
+          sequencePath: '20.1',
+          status: 'pending',
+          sequenceIndex: 50,
+          attempt: 1,
+          startedAt: null,
+          completedAt: null,
+          createdAt: '2026-01-01T00:01:00.000Z',
+          updatedAt: '2026-01-01T00:01:00.000Z',
+        })
+        .run().lastInsertRowid,
+    );
+
+    transitionRunNodeStatus(db, {
+      runNodeId: childRunNodeId,
+      expectedFrom: 'pending',
+      to: 'running',
+      occurredAt: '2026-01-01T00:01:30.000Z',
+    });
+    transitionRunNodeStatus(db, {
+      runNodeId: childRunNodeId,
+      expectedFrom: 'running',
+      to: 'failed',
+      occurredAt: '2026-01-01T00:02:00.000Z',
+    });
+
+    db.insert(runJoinBarriers)
+      .values({
+        workflowRunId: runId,
+        spawnerRunNodeId: breakdownRunNodeId,
+        joinRunNodeId: finalReviewRunNodeId,
+        spawnSourceArtifactId: spawnArtifactId,
+        expectedChildren: 1,
+        terminalChildren: 1,
+        completedChildren: 0,
+        failedChildren: 1,
+        status: 'ready',
+        createdAt: '2026-01-01T00:00:30.000Z',
+        updatedAt: '2026-01-01T00:02:00.000Z',
+        releasedAt: null,
+      })
+      .run();
+
+    transitionWorkflowRunStatus(db, {
+      workflowRunId: runId,
+      expectedFrom: 'running',
+      to: 'failed',
+      occurredAt: '2026-01-01T00:02:30.000Z',
+    });
+
+    const executor = createSqlWorkflowExecutor(db, {
+      resolveProvider: () => createProvider([]),
+    });
+
+    const retryResult = await executor.retryRun({
+      workflowRunId: runId,
+    });
+
+    expect(retryResult.retriedRunNodeIds).toEqual([childRunNodeId]);
+
+    const retriedChild = db
+      .select({
+        status: runNodes.status,
+        attempt: runNodes.attempt,
+        startedAt: runNodes.startedAt,
+        completedAt: runNodes.completedAt,
+      })
+      .from(runNodes)
+      .where(eq(runNodes.id, childRunNodeId))
+      .get();
+    expect(retriedChild).toEqual({
+      status: 'pending',
+      attempt: 2,
+      startedAt: null,
+      completedAt: null,
+    });
+
+    const reopenedBarrier = db
+      .select({
+        terminalChildren: runJoinBarriers.terminalChildren,
+        completedChildren: runJoinBarriers.completedChildren,
+        failedChildren: runJoinBarriers.failedChildren,
+        status: runJoinBarriers.status,
+      })
+      .from(runJoinBarriers)
+      .where(eq(runJoinBarriers.workflowRunId, runId))
+      .get();
+    expect(reopenedBarrier).toEqual({
+      terminalChildren: 0,
+      completedChildren: 0,
+      failedChildren: 0,
+      status: 'pending',
+    });
+  });
+
   it('treats repeated retry control requests deterministically under near-concurrent calls', async () => {
     const { db, runId, secondRunNodeId } = seedTwoRootAgentRun();
     transitionWorkflowRunStatus(db, {
