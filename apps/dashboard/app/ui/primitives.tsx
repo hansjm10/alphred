@@ -15,12 +15,14 @@ type ButtonTone = 'primary' | 'secondary';
 type CardProps = ComponentPropsWithoutRef<'section'> & {
   title?: string;
   description?: string;
+  headingId?: string;
   tone?: SurfaceTone;
 };
 
 type PanelProps = ComponentPropsWithoutRef<'aside'> & {
   title?: string;
   description?: string;
+  headingId?: string;
   tone?: SurfaceTone;
 };
 
@@ -74,14 +76,15 @@ function isActiveHref(pathname: string, href: string): boolean {
 function SurfaceHeader({
   title,
   description,
-}: Readonly<{ title?: string; description?: string }>): ReactNode {
+  headingId,
+}: Readonly<{ title?: string; description?: string; headingId?: string }>): ReactNode {
   if (!title && !description) {
     return null;
   }
 
   return (
     <header className="surface-header">
-      {title ? <h3>{title}</h3> : null}
+      {title ? <h3 id={headingId}>{title}</h3> : null}
       {description ? <p>{description}</p> : null}
     </header>
   );
@@ -156,6 +159,7 @@ function StatusIcon({ status }: Readonly<{ status: StatusVariant }>) {
 export function Card({
   title,
   description,
+  headingId,
   tone = 'default',
   className,
   children,
@@ -166,7 +170,7 @@ export function Card({
       className={classNames('surface', 'surface-card', `surface--${tone}`, className)}
       {...rest}
     >
-      <SurfaceHeader title={title} description={description} />
+      <SurfaceHeader title={title} description={description} headingId={headingId} />
       {children}
     </section>
   );
@@ -175,6 +179,7 @@ export function Card({
 export function Panel({
   title,
   description,
+  headingId,
   tone = 'subtle',
   className,
   children,
@@ -185,7 +190,7 @@ export function Panel({
       className={classNames('surface', 'surface-panel', `surface--${tone}`, className)}
       {...rest}
     >
-      <SurfaceHeader title={title} description={description} />
+      <SurfaceHeader title={title} description={description} headingId={headingId} />
       {children}
     </aside>
   );

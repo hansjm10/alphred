@@ -253,7 +253,11 @@ export function RunAgentStreamCard({
 
   if (!isTerminalRun) {
     return (
-      <Card title="Agent stream" description="Live provider events for a selected node attempt.">
+      <Card
+        title="Agent stream"
+        description="Live provider events for a selected node attempt."
+        headingId="run-stream-heading"
+      >
         {streamContent}
       </Card>
     );
@@ -266,7 +270,11 @@ export function RunAgentStreamCard({
   });
 
   return (
-    <Card title="Agent stream" description="Provider events for a selected node attempt.">
+    <Card
+      title="Agent stream"
+      description="Provider events for a selected node attempt."
+      headingId="run-stream-heading"
+    >
       <details className="run-agent-stream-collapsed">
         <summary className="run-agent-stream-collapsed__summary">{terminalStreamSummary}</summary>
         {streamContent}
