@@ -3,9 +3,11 @@ import { NextResponse } from 'next/server';
 import {
   createDatabase,
   migrateDatabase,
+  phaseArtifacts,
   runNodeDiagnostics,
   runNodeStreamEvents,
   runNodes,
+  routingDecisions,
   treeNodes,
   transitionRunNodeStatus,
   transitionWorkflowRunStatus,
@@ -286,6 +288,41 @@ function insertFixtureRun(params: {
           usageDeltaTokens: null,
           usageCumulativeTokens: null,
           createdAt: timestamp(baseMs, 2000),
+        },
+      ])
+      .run();
+
+    const artifactRows = Array.from({ length: 10 }, (_, index) => ({
+      workflowRunId: run.id,
+      runNodeId: runNode.id,
+      artifactType: index % 2 === 0 ? 'report' : 'note',
+      contentType: index % 3 === 0 ? 'markdown' : 'text',
+      content: `Fixture artifact ${index + 1}: ${'Long observability payload '.repeat(10)}`.trim(),
+      metadata: {
+        source: 'e2e-lifecycle-fixture',
+        ordinal: index + 1,
+      },
+      createdAt: timestamp(baseMs, 3600 + index * 30),
+    }));
+    db.insert(phaseArtifacts).values(artifactRows).run();
+
+    db.insert(routingDecisions)
+      .values([
+        {
+          workflowRunId: run.id,
+          runNodeId: runNode.id,
+          decisionType: 'retry',
+          rationale: 'Retry queued after synthetic failure for fixture coverage.',
+          rawOutput: { source: 'fixture', retryable: true },
+          createdAt: timestamp(baseMs, 3900),
+        },
+        {
+          workflowRunId: run.id,
+          runNodeId: runNode.id,
+          decisionType: 'blocked',
+          rationale: 'Awaiting operator acknowledgement before another retry.',
+          rawOutput: { source: 'fixture', reason: 'operator-ack-required' },
+          createdAt: timestamp(baseMs, 3950),
         },
       ])
       .run();
