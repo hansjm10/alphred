@@ -1656,6 +1656,112 @@ output {
   padding: 1px 8px;
 }
 
+.workflow-transition-legend__chip--fanout {
+  border-color: color-mix(in srgb, var(--accent-active) 50%, var(--border-default));
+  color: var(--accent-active);
+}
+
+.workflow-transition-legend__chip--join {
+  border-color: color-mix(in srgb, var(--accent-info) 55%, var(--border-default));
+  color: var(--accent-info);
+}
+
+.workflow-transition-legend__chip--isolated {
+  border-color: color-mix(in srgb, var(--accent-warning) 55%, var(--border-default));
+  color: var(--accent-warning);
+}
+
+.workflow-transition-legend__chip--counts {
+  border-color: color-mix(in srgb, var(--text-muted) 40%, var(--border-default));
+  color: var(--text-muted);
+}
+
+.react-flow__node.workflow-flow-node {
+  border-width: 2px;
+  border-style: solid;
+  border-color: var(--border-default);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-sm);
+  font: 600 12px/16px var(--font-body);
+  min-width: 164px;
+  text-align: center;
+  padding-top: 18px;
+  padding-bottom: 18px;
+  transition: border-color var(--motion-fast), box-shadow var(--motion-fast), background-color var(--motion-fast);
+}
+
+.react-flow__node.workflow-flow-node::after {
+  position: absolute;
+  top: 4px;
+  left: 8px;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-pill);
+  background: var(--bg-surface);
+  color: var(--text-secondary);
+  font: 600 10px/14px var(--font-data);
+  letter-spacing: 0.01em;
+  padding: 0 6px;
+  text-transform: uppercase;
+}
+
+.react-flow__node.workflow-flow-node::before {
+  position: absolute;
+  right: 8px;
+  bottom: 4px;
+  color: var(--text-muted);
+  content: var(--workflow-node-connection-summary, "in 0 / out 0");
+  font: 600 10px/14px var(--font-data);
+}
+
+.react-flow__node.workflow-flow-node.workflow-flow-node--fanout-source {
+  border-color: color-mix(in srgb, var(--accent-active) 62%, var(--border-default));
+  background: color-mix(in srgb, var(--accent-active) 7%, var(--bg-surface));
+}
+
+.react-flow__node.workflow-flow-node.workflow-flow-node--fanout-source::after {
+  border-color: color-mix(in srgb, var(--accent-active) 55%, var(--border-default));
+  color: var(--accent-active);
+  content: 'fan-out source';
+}
+
+.react-flow__node.workflow-flow-node.workflow-flow-node--join-point {
+  border-color: color-mix(in srgb, var(--accent-info) 65%, var(--border-default));
+  background: color-mix(in srgb, var(--accent-info) 8%, var(--bg-surface));
+}
+
+.react-flow__node.workflow-flow-node.workflow-flow-node--join-point::after {
+  border-color: color-mix(in srgb, var(--accent-info) 55%, var(--border-default));
+  color: var(--accent-info);
+  content: 'join point';
+}
+
+.react-flow__node.workflow-flow-node.workflow-flow-node--entry::after {
+  content: 'entry';
+}
+
+.react-flow__node.workflow-flow-node.workflow-flow-node--terminal::after {
+  content: 'terminal';
+}
+
+.react-flow__node.workflow-flow-node.workflow-flow-node--isolated {
+  border-color: color-mix(in srgb, var(--accent-warning) 62%, var(--border-default));
+  background: color-mix(in srgb, var(--accent-warning) 10%, var(--bg-surface));
+}
+
+.react-flow__node.workflow-flow-node.workflow-flow-node--isolated::after {
+  border-color: color-mix(in srgb, var(--accent-warning) 50%, var(--border-default));
+  color: var(--accent-warning);
+  content: 'isolated';
+}
+
+.react-flow__node.workflow-flow-node.workflow-flow-node--linear::after {
+  content: 'step';
+}
+
+.react-flow__node.workflow-flow-node.selected {
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-active) 35%, transparent);
+}
+
 .react-flow__edge.workflow-edge .react-flow__edge-path {
   transition: stroke var(--motion-fast), stroke-dasharray var(--motion-fast), stroke-width var(--motion-fast);
 }
@@ -1673,6 +1779,18 @@ output {
 .react-flow__edge.workflow-edge--failure .react-flow__edge-path {
   stroke: var(--accent-danger);
   stroke-dasharray: 9 5;
+}
+
+.react-flow__edge.workflow-edge.workflow-edge--from-fanout .react-flow__edge-path {
+  stroke-width: 3px;
+}
+
+.react-flow__edge.workflow-edge.workflow-edge--into-join .react-flow__edge-path {
+  stroke-width: 3px;
+}
+
+.react-flow__edge.workflow-edge.workflow-edge--from-fanout.workflow-edge--into-join .react-flow__edge-path {
+  stroke-width: 3.25px;
 }
 
 .react-flow__edge.workflow-edge .react-flow__edge-text {
