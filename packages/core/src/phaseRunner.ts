@@ -3,6 +3,7 @@ import {
   type PhaseDefinition,
   type ProviderEvent,
   type ProviderRunOptions,
+  type RoutingDecisionSource,
   type RoutingDecisionSignal,
 } from '@alphred/shared';
 
@@ -10,6 +11,7 @@ export type PhaseRunResult = {
   success: boolean;
   report: string;
   routingDecision: RoutingDecisionSignal | null;
+  routingDecisionSource: RoutingDecisionSource | null;
   events: ProviderEvent[];
   tokensUsed: number;
 };
@@ -171,19 +173,114 @@ function readRoutingDecision(event: ProviderEvent): RoutingDecisionSignal | null
   return null;
 }
 
+function readRoutingDecisionSource(event: ProviderEvent): RoutingDecisionSource | null {
+  if (event.type !== 'result' || !event.metadata) {
+    return null;
+  }
+
+  const source = event.metadata.routingDecisionSource;
+  if (source === 'provider_result_metadata' || source === 'result_content_contract_fallback') {
+    return source;
+  }
+
+  return null;
+}
+
+type PhaseRunState = {
+  events: ProviderEvent[];
+  report: string;
+  routingDecision: RoutingDecisionSignal | null;
+  routingDecisionSource: RoutingDecisionSource | null;
+  hasResultEvent: boolean;
+  incrementalTokensUsed: number;
+  maxCumulativeTokensUsed: number;
+};
+
+function createPhaseRunState(): PhaseRunState {
+  return {
+    events: [],
+    report: '',
+    routingDecision: null,
+    routingDecisionSource: null,
+    hasResultEvent: false,
+    incrementalTokensUsed: 0,
+    maxCumulativeTokensUsed: 0,
+  };
+}
+
+function resolveTokensUsed(state: PhaseRunState): number {
+  return Math.max(state.incrementalTokensUsed, state.maxCumulativeTokensUsed);
+}
+
+function collectResultMetadata(state: PhaseRunState, event: ProviderEvent): void {
+  if (event.type !== 'result') {
+    return;
+  }
+
+  state.hasResultEvent = true;
+  state.report = event.content;
+  state.routingDecision = readRoutingDecision(event);
+  state.routingDecisionSource =
+    state.routingDecision === null ? null : (readRoutingDecisionSource(event) ?? 'provider_result_metadata');
+}
+
+function collectTokenUsage(state: PhaseRunState, event: ProviderEvent): void {
+  const tokenUsage = extractTokenUsage(event);
+  if (!tokenUsage) {
+    return;
+  }
+
+  if (tokenUsage.mode === 'incremental') {
+    state.incrementalTokensUsed += tokenUsage.tokens;
+    return;
+  }
+
+  state.maxCumulativeTokensUsed = Math.max(state.maxCumulativeTokensUsed, tokenUsage.tokens);
+}
+
+async function collectPhaseEvent(
+  state: PhaseRunState,
+  event: ProviderEvent,
+  onEvent?: (event: ProviderEvent) => Promise<void> | void,
+): Promise<void> {
+  state.events.push(event);
+  collectResultMetadata(state, event);
+  collectTokenUsage(state, event);
+
+  if (onEvent) {
+    await onEvent(event);
+  }
+}
+
+function toNonAgentResult(): PhaseRunResult {
+  return {
+    success: true,
+    report: '',
+    routingDecision: null,
+    routingDecisionSource: null,
+    events: [],
+    tokensUsed: 0,
+  };
+}
+
+function toPhaseRunResult(state: PhaseRunState): PhaseRunResult {
+  return {
+    success: true,
+    report: state.report,
+    routingDecision: state.routingDecision,
+    routingDecisionSource: state.routingDecisionSource,
+    events: state.events,
+    tokensUsed: resolveTokensUsed(state),
+  };
+}
+
 export async function runPhase(
   phase: PhaseDefinition,
   options: ProviderRunOptions,
   dependencies: PhaseRunnerDependencies,
 ): Promise<PhaseRunResult> {
   if (phase.type !== 'agent') {
-    return {
-      success: true,
-      report: '',
-      routingDecision: null,
-      events: [],
-      tokensUsed: 0,
-    };
+    return toNonAgentResult();
   }
 
   if (!phase.provider) {
@@ -191,56 +288,26 @@ export async function runPhase(
   }
 
   const provider = dependencies.resolveProvider(phase.provider);
-  const events: ProviderEvent[] = [];
-  let report = '';
-  let routingDecision: RoutingDecisionSignal | null = null;
-  let hasResultEvent = false;
-  let incrementalTokensUsed = 0;
-  let maxCumulativeTokensUsed = 0;
-  const onEvent = dependencies.onEvent;
+  const state = createPhaseRunState();
 
   try {
     for await (const event of provider.run(phase.prompt, options)) {
-      events.push(event);
-      if (event.type === 'result') {
-        hasResultEvent = true;
-        report = event.content;
-        routingDecision = readRoutingDecision(event);
-      }
-
-      const tokenUsage = extractTokenUsage(event);
-      if (tokenUsage) {
-        if (tokenUsage.mode === 'incremental') {
-          incrementalTokensUsed += tokenUsage.tokens;
-        } else {
-          maxCumulativeTokensUsed = Math.max(maxCumulativeTokensUsed, tokenUsage.tokens);
-        }
-      }
-
-      if (onEvent) {
-        await onEvent(event);
-      }
+      await collectPhaseEvent(state, event, dependencies.onEvent);
     }
   } catch (error) {
     throw new PhaseRunError(`Agent phase "${phase.name}" execution failed.`, {
-      events,
-      tokensUsed: Math.max(incrementalTokensUsed, maxCumulativeTokensUsed),
+      events: state.events,
+      tokensUsed: resolveTokensUsed(state),
       cause: error,
     });
   }
 
-  if (!hasResultEvent) {
+  if (!state.hasResultEvent) {
     throw new PhaseRunError(`Agent phase "${phase.name}" completed without a result event.`, {
-      events,
-      tokensUsed: Math.max(incrementalTokensUsed, maxCumulativeTokensUsed),
+      events: state.events,
+      tokensUsed: resolveTokensUsed(state),
     });
   }
 
-  return {
-    success: true,
-    report,
-    routingDecision,
-    events,
-    tokensUsed: Math.max(incrementalTokensUsed, maxCumulativeTokensUsed),
-  };
+  return toPhaseRunResult(state);
 }

@@ -115,8 +115,13 @@ function toTrimmedString(value: unknown): string | undefined {
   return trimmed.length > 0 ? trimmed : undefined;
 }
 
-function createResultMetadata(sdkEvent: Record<string, unknown>): Record<string, unknown> | undefined {
-  return createRoutingResultMetadata(sdkEvent, toRecord);
+function createResultMetadata(
+  sdkEvent: Record<string, unknown>,
+  resultContent: string,
+): Record<string, unknown> | undefined {
+  return createRoutingResultMetadata(sdkEvent, toRecord, {
+    resultContent,
+  });
 }
 
 function collectFailureRecords(source: unknown): Record<string, unknown>[] {
@@ -645,7 +650,8 @@ function mapSdkStreamEvent(
         eventIndex,
         'event.usage.cached_input_tokens',
       );
-      const resultMetadata = createResultMetadata(sdkEvent);
+      const resultContent = state.lastAssistantMessage;
+      const resultMetadata = createResultMetadata(sdkEvent, resultContent);
 
       return [
         {
@@ -658,7 +664,7 @@ function mapSdkStreamEvent(
         },
         {
           type: 'result',
-          content: state.lastAssistantMessage,
+          content: resultContent,
           metadata: resultMetadata,
         },
       ];

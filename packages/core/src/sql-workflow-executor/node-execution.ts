@@ -1,9 +1,13 @@
 import { transitionRunNodeStatus, type AlphredDatabase, type RunNodeStatus, type WorkflowRunStatus } from '@alphred/db';
-import type {
-  AgentProviderName,
-  PhaseDefinition,
-  ProviderEvent,
-  ProviderRunOptions,
+import {
+  routingDecisionContractLinePrefix,
+  routingDecisionContractSentinel,
+  routingDecisionSignals,
+  type AgentProviderName,
+  type PhaseDefinition,
+  type ProviderEvent,
+  type ProviderRunOptions,
+  type RoutingDecisionSignal,
 } from '@alphred/shared';
 import { PhaseRunError, runPhase } from '../phaseRunner.js';
 import {
@@ -60,7 +64,100 @@ import type {
   WorkflowRunRow,
 } from './types.js';
 
-export function createExecutionPhase(node: RunNodeExecutionRow): PhaseDefinition {
+const routingDecisionSignalSet: ReadonlySet<RoutingDecisionSignal> = new Set(routingDecisionSignals);
+
+function loadGuardedSuccessOutgoingEdges(node: RunNodeExecutionRow, edgeRows: EdgeRow[]): EdgeRow[] {
+  return edgeRows.filter(edge => edge.sourceNodeId === node.treeNodeId && edge.routeOn === 'success' && edge.auto === 0);
+}
+
+function collectGuardDecisionSignals(
+  guardExpression: unknown,
+  result: Set<RoutingDecisionSignal>,
+): void {
+  if (!isRecord(guardExpression)) {
+    return;
+  }
+
+  if ('logic' in guardExpression) {
+    if (Array.isArray(guardExpression.conditions)) {
+      for (const nestedCondition of guardExpression.conditions) {
+        collectGuardDecisionSignals(nestedCondition, result);
+      }
+    }
+    return;
+  }
+
+  if (
+    guardExpression.field !== 'decision' ||
+    guardExpression.operator !== '==' ||
+    typeof guardExpression.value !== 'string' ||
+    !routingDecisionSignalSet.has(guardExpression.value as RoutingDecisionSignal)
+  ) {
+    return;
+  }
+
+  result.add(guardExpression.value as RoutingDecisionSignal);
+}
+
+function resolveGuardDecisionHints(guardedSuccessEdges: EdgeRow[]): RoutingDecisionSignal[] {
+  const signals = new Set<RoutingDecisionSignal>();
+  for (const edge of guardedSuccessEdges) {
+    collectGuardDecisionSignals(edge.guardExpression, signals);
+  }
+
+  return routingDecisionSignals.filter(signal => signals.has(signal));
+}
+
+function formatRoutingDecisionSignals(signals: readonly RoutingDecisionSignal[]): string {
+  return signals.map(signal => `\`${signal}\``).join(', ');
+}
+
+function buildRoutingDecisionPromptContract(guardedSuccessEdges: EdgeRow[]): string {
+  const guardedRouteCount = guardedSuccessEdges.length;
+  const guardDecisionHints = resolveGuardDecisionHints(guardedSuccessEdges);
+  const contractLineTemplate = `${routingDecisionContractLinePrefix} <${routingDecisionSignals.join('|')}>`;
+  const contractLineExample = `${routingDecisionContractLinePrefix} changes_requested`;
+  const canonicalValues = formatRoutingDecisionSignals(routingDecisionSignals);
+  const guardHintValues = formatRoutingDecisionSignals(guardDecisionHints);
+
+  const guardHintLine =
+    guardDecisionHints.length === 0
+      ? '- Choose a value that matches this node\'s guarded success route conditions.'
+      : `- Node-specific guard hints: ${guardHintValues}.`;
+
+  return [
+    routingDecisionContractSentinel,
+    'Routing metadata contract (required for guarded success routing):',
+    '- Emit terminal metadata key `result.metadata.routingDecision`.',
+    `- Canonical values: ${canonicalValues}.`,
+    `- This node currently has ${guardedRouteCount} guarded success route${guardedRouteCount === 1 ? '' : 's'}.`,
+    guardHintLine,
+    '- Include one terminal line exactly in this format:',
+    `  ${contractLineTemplate}`,
+    `- Example: \`${contractLineExample}\`.`,
+    '- Do not use alternative key names.',
+    '- Do not omit `routingDecision`.',
+  ].join('\n');
+}
+
+function resolveExecutionPrompt(node: RunNodeExecutionRow, edgeRows: EdgeRow[]): string {
+  const basePrompt = node.prompt ?? '';
+  const guardedSuccessEdges = loadGuardedSuccessOutgoingEdges(node, edgeRows);
+  if (guardedSuccessEdges.length === 0) {
+    return basePrompt;
+  }
+
+  if (basePrompt.includes(routingDecisionContractSentinel)) {
+    return basePrompt;
+  }
+
+  const sections = [basePrompt.trim(), buildRoutingDecisionPromptContract(guardedSuccessEdges)].filter(
+    section => section.length > 0,
+  );
+  return sections.join('\n\n');
+}
+
+export function createExecutionPhase(node: RunNodeExecutionRow, promptOverride?: string): PhaseDefinition {
   if (node.nodeType !== 'agent') {
     throw new Error(`Unsupported node type "${node.nodeType}" for run node "${node.nodeKey}".`);
   }
@@ -70,7 +167,7 @@ export function createExecutionPhase(node: RunNodeExecutionRow): PhaseDefinition
     type: 'agent',
     provider: (node.provider as AgentProviderName | null) ?? undefined,
     model: node.model ?? undefined,
-    prompt: node.prompt ?? '',
+    prompt: promptOverride ?? node.prompt ?? '',
     transitions: [],
   };
 }
@@ -418,12 +515,14 @@ function applyNodeExecutionPermissions(
 
 export async function executeNodePhase(
   node: RunNodeExecutionRow,
+  edgeRows: EdgeRow[],
   options: ProviderRunOptions,
   upstreamContextEntries: string[],
   dependencies: SqlWorkflowExecutorDependencies,
   onEvent?: (event: ProviderEvent) => Promise<void>,
 ): Promise<Awaited<ReturnType<typeof runPhase>>> {
-  const phase = createExecutionPhase(node);
+  const executionPrompt = resolveExecutionPrompt(node, edgeRows);
+  const phase = createExecutionPhase(node, executionPrompt);
   const optionsWithContext =
     upstreamContextEntries.length === 0
       ? options
@@ -474,6 +573,7 @@ export function handleClaimedNodeSuccess(
     treeNodeId: node.treeNodeId,
     attempt: currentAttempt,
     routingDecision: phaseResult.routingDecision,
+    routingDecisionSource: phaseResult.routingDecisionSource,
     edgeRows,
   });
 
@@ -1013,6 +1113,7 @@ export async function executeClaimedRunnableNode(
     try {
       const phaseResult = await executeNodePhase(
         node,
+        edgeRows,
         options,
         contextAssembly.contextEntries,
         dependencies,

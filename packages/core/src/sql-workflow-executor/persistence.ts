@@ -15,6 +15,7 @@ import { isRecord, normalizeArtifactContentType, toRunNodeStatus, toWorkflowRunS
 import type {
   CompletedNodeRoutingOutcome,
   EdgeRow,
+  RouteDecisionSource,
   RunNodeFailureRouteDiagnostics,
   RouteDecisionSignal,
   RoutingDecisionType,
@@ -158,10 +159,12 @@ export function persistCompletedNodeRoutingDecision(
     treeNodeId: number;
     attempt: number;
     routingDecision: RouteDecisionSignal | null;
+    routingDecisionSource: RouteDecisionSource | null;
     edgeRows: EdgeRow[];
   },
 ): CompletedNodeRoutingOutcome {
   const decisionSignal = params.routingDecision;
+  const routingDecisionSource = params.routingDecisionSource ?? 'provider_result_metadata';
   const outgoingEdges = params.edgeRows.filter(
     edge => edge.sourceNodeId === params.treeNodeId && edge.routeOn === 'success',
   );
@@ -179,7 +182,7 @@ export function persistCompletedNodeRoutingDecision(
       runNodeId: params.runNodeId,
       decisionType: decisionSignal,
       rawOutput: {
-        source: 'provider_result_metadata',
+        source: routingDecisionSource,
         routingDecision: decisionSignal,
         attempt: params.attempt,
       },
@@ -204,7 +207,7 @@ export function persistCompletedNodeRoutingDecision(
       runNodeId: params.runNodeId,
       decisionType: decisionSignal,
       rawOutput: {
-        source: 'provider_result_metadata',
+        source: routingDecisionSource,
         routingDecision: decisionSignal,
         selectedEdgeId: matchingEdge.edgeId,
         attempt: params.attempt,
@@ -216,13 +219,18 @@ export function persistCompletedNodeRoutingDecision(
     };
   }
 
+  const noRouteRationale =
+    decisionSignal === null
+      ? `Node completed with guarded success edges but did not emit a valid result.metadata.routingDecision (tree_node_id=${params.treeNodeId}).`
+      : `Node completed with routingDecision="${decisionSignal}" but no guarded success edge matched (tree_node_id=${params.treeNodeId}).`;
+
   persistRoutingDecision(db, {
     workflowRunId: params.workflowRunId,
     runNodeId: params.runNodeId,
     decisionType: 'no_route',
-    rationale: `No outgoing edge matched for tree_node_id=${params.treeNodeId}.`,
+    rationale: noRouteRationale,
     rawOutput: {
-      source: 'provider_result_metadata',
+      source: routingDecisionSource,
       routingDecision: decisionSignal,
       outgoingEdgeIds: outgoingEdges.map(edge => edge.edgeId),
       attempt: params.attempt,

@@ -116,6 +116,10 @@ export type WorkflowDefinition = {
 export const routingDecisionSignals = ['approved', 'changes_requested', 'blocked', 'retry'] as const;
 export type RoutingDecisionSignal = (typeof routingDecisionSignals)[number];
 export type RoutingDecisionType = RoutingDecisionSignal | 'no_route';
+export const routingDecisionSources = ['provider_result_metadata', 'result_content_contract_fallback'] as const;
+export type RoutingDecisionSource = (typeof routingDecisionSources)[number];
+export const routingDecisionContractSentinel = 'ALPHRED_ROUTING_CONTRACT_V1';
+export const routingDecisionContractLinePrefix = 'result.metadata.routingDecision:';
 
 export const providerApprovalPolicies = ['never', 'on-request', 'on-failure', 'untrusted'] as const;
 export type ProviderApprovalPolicy = (typeof providerApprovalPolicies)[number];
@@ -143,6 +147,7 @@ export type ProviderEvent = {
   timestamp: number;
   metadata?: Record<string, unknown> & {
     routingDecision?: RoutingDecisionSignal;
+    routingDecisionSource?: RoutingDecisionSource;
   };
 };
 

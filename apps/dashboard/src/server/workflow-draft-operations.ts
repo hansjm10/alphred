@@ -7,6 +7,7 @@ import {
   workflowTrees,
   type AlphredDatabase,
 } from '@alphred/db';
+import { routingDecisionSignals } from '@alphred/shared';
 import { loadAgentCatalog, resolveDefaultModelForProvider, type AgentCatalog } from './agent-catalog';
 import type {
   DashboardCreateWorkflowRequest,
@@ -27,6 +28,8 @@ import {
 } from './workflow-validation';
 
 const MAX_DRAFT_BOOTSTRAP_ATTEMPTS = 4;
+const ROUTING_DECISION_CONTRACT_SENTINEL = 'ALPHRED_ROUTING_CONTRACT_V1';
+const ROUTING_DECISION_CONTRACT_LINE_PREFIX = 'result.metadata.routingDecision:';
 
 const utcNow = sql`(strftime('%Y-%m-%dT%H:%M:%fZ','now'))`;
 
@@ -43,6 +46,19 @@ export type WorkflowDraftOperations = {
   validateWorkflowDraft: (treeKeyRaw: string, version: number) => Promise<DashboardWorkflowValidationResult>;
 };
 
+const seededReviewRoutingContract = [
+  ROUTING_DECISION_CONTRACT_SENTINEL,
+  'Routing metadata contract (required when guarded success routes are configured):',
+  '- Emit terminal metadata key `result.metadata.routingDecision`.',
+  `- Canonical values: ${routingDecisionSignals.map(signal => `\`${signal}\``).join(', ')}.`,
+  '- Choose the value that matches this workflow\'s guarded success route conditions.',
+  '- Include one terminal line exactly in this format:',
+  `  ${ROUTING_DECISION_CONTRACT_LINE_PREFIX} <${routingDecisionSignals.join('|')}>`,
+  `- Example: \`${ROUTING_DECISION_CONTRACT_LINE_PREFIX} changes_requested\`.`,
+  '- Do not use alternative key names.',
+  '- Do not omit `routingDecision`.',
+].join('\n');
+
 function templatePrompt(template: DashboardCreateWorkflowRequest['template'], nodeKey: string): string {
   if (template !== 'design-implement-review') {
     return 'Describe what to do for this workflow phase.';
@@ -54,7 +70,10 @@ function templatePrompt(template: DashboardCreateWorkflowRequest['template'], no
     case 'implement':
       return 'You are the implementation phase. Make the required code changes, run tests, and summarize the result.';
     case 'review':
-      return 'You are the review phase. Audit changes for correctness, risks, and edge cases.';
+      return [
+        'You are the review phase. Audit changes for correctness, risks, and edge cases.',
+        seededReviewRoutingContract,
+      ].join('\n\n');
     default:
       return 'Describe what to do for this workflow phase.';
   }

@@ -58,6 +58,7 @@ describe('runPhase', () => {
       success: true,
       report: 'final report',
       routingDecision: null,
+      routingDecisionSource: null,
       events: emittedEvents,
       tokensUsed: 13,
     });
@@ -282,6 +283,29 @@ describe('runPhase', () => {
     });
 
     expect(result.routingDecision).toBe('approved');
+    expect(result.routingDecisionSource).toBe('provider_result_metadata');
+  });
+
+  it('preserves explicit fallback routing decision source metadata on result events', async () => {
+    const phase = createAgentPhase();
+    const emittedEvents: ProviderEvent[] = [
+      {
+        type: 'result',
+        content: 'final report',
+        timestamp: 100,
+        metadata: {
+          routingDecision: 'changes_requested',
+          routingDecisionSource: 'result_content_contract_fallback',
+        },
+      },
+    ];
+
+    const result = await runPhase(phase, defaultOptions, {
+      resolveProvider: () => createProvider(emittedEvents),
+    });
+
+    expect(result.routingDecision).toBe('changes_requested');
+    expect(result.routingDecisionSource).toBe('result_content_contract_fallback');
   });
 
   it('treats unknown routing decision metadata as missing', async () => {
@@ -437,6 +461,7 @@ describe('runPhase', () => {
       success: true,
       report: '',
       routingDecision: null,
+      routingDecisionSource: null,
       events: [],
       tokensUsed: 0,
     });

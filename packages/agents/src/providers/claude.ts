@@ -137,8 +137,13 @@ function toTrimmedString(value: unknown): string | undefined {
   return trimmed.length > 0 ? trimmed : undefined;
 }
 
-function createResultMetadata(sdkMessage: Record<string, unknown>): Record<string, unknown> | undefined {
-  return createRoutingResultMetadata(sdkMessage, toRecord);
+function createResultMetadata(
+  sdkMessage: Record<string, unknown>,
+  resultContent: string,
+): Record<string, unknown> | undefined {
+  return createRoutingResultMetadata(sdkMessage, toRecord, {
+    resultContent,
+  });
 }
 
 function toStringOrThrow(value: unknown, eventIndex: number, fieldPath: string): string {
@@ -748,7 +753,7 @@ function mapResultMessage(sdkMessage: Record<string, unknown>, state: ClaudeStre
   const usage = toRecordOrThrow(sdkMessage.usage, eventIndex, 'event.usage');
   const usageMetadata = createUsageMetadata(usage, eventIndex);
   const result = toString(sdkMessage.result) ?? state.lastAssistantMessage;
-  const resultMetadata = createResultMetadata(sdkMessage);
+  const resultMetadata = createResultMetadata(sdkMessage, result);
 
   return [
     {

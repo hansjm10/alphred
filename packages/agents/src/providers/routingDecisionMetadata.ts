@@ -1,8 +1,21 @@
-import { routingDecisionSignals, type RoutingDecisionSignal } from '@alphred/shared';
+import {
+  routingDecisionContractLinePrefix,
+  routingDecisionSignals,
+  type RoutingDecisionSignal,
+} from '@alphred/shared';
 
 type RecordReader = (value: unknown) => Record<string, unknown> | undefined;
 
 const routingDecisionSignalSet: ReadonlySet<RoutingDecisionSignal> = new Set(routingDecisionSignals);
+const routingDecisionContractLineRegex = /^result\.metadata\.routingDecision\s*:\s*(approved|changes_requested|blocked|retry)$/i;
+
+function unwrapInlineCodeLine(line: string): string {
+  if (line.length >= 2 && line.startsWith('`') && line.endsWith('`')) {
+    return line.slice(1, -1).trim();
+  }
+
+  return line;
+}
 
 function toRoutingDecisionSignal(value: unknown): RoutingDecisionSignal | undefined {
   if (typeof value !== 'string') {
@@ -49,16 +62,59 @@ function collectMetadataRecords(
   ];
 }
 
+function readRoutingDecisionFromResultContent(resultContent: string): RoutingDecisionSignal | undefined {
+  const lines = resultContent.split(/\r?\n/u);
+  let terminalRoutingDecision: RoutingDecisionSignal | undefined;
+  for (const rawLine of lines) {
+    const trimmedLine = unwrapInlineCodeLine(rawLine.trim());
+    if (!trimmedLine.startsWith(routingDecisionContractLinePrefix.slice(0, -1))) {
+      continue;
+    }
+
+    const match = routingDecisionContractLineRegex.exec(trimmedLine);
+    if (!match) {
+      continue;
+    }
+
+    const value = match[1];
+    const routingDecision = toRoutingDecisionSignal(value?.toLowerCase());
+    if (routingDecision) {
+      terminalRoutingDecision = routingDecision;
+    }
+  }
+
+  return terminalRoutingDecision;
+}
+
 export function createRoutingResultMetadata(
   sdkPayload: Record<string, unknown>,
   readRecord: RecordReader,
+  options?: {
+    resultContent?: string;
+  },
 ): Record<string, unknown> | undefined {
   const metadataRecords = collectMetadataRecords(sdkPayload, readRecord);
   const routingDecision = readRoutingDecisionFromMetadataRecords(metadataRecords, 'routingDecision');
 
-  if (!routingDecision) {
+  if (routingDecision) {
+    return {
+      routingDecision,
+      routingDecisionSource: 'provider_result_metadata',
+    };
+  }
+
+  const resultContent = options?.resultContent?.trim();
+  if (!resultContent) {
     return undefined;
   }
 
-  return { routingDecision };
+  const fallbackRoutingDecision = readRoutingDecisionFromResultContent(resultContent);
+  if (!fallbackRoutingDecision) {
+    return undefined;
+  }
+
+  return {
+    routingDecision: fallbackRoutingDecision,
+    routingDecisionSource: 'result_content_contract_fallback',
+  };
 }
