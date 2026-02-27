@@ -22,6 +22,7 @@ import {
   runNodeDiagnostics,
   runNodeEdges,
   runNodeStreamEvents,
+  runJoinBarriers,
   runNodes,
   routingDecisions,
   transitionRunNodeStatus,
@@ -1614,6 +1615,168 @@ function seedDesignTreeIntegrationRun() {
 
   const materialized = materializeWorkflowRunFromTree(db, {
     treeKey: 'design_tree',
+  });
+
+  const runNodeRows = db
+    .select({
+      id: runNodes.id,
+      nodeKey: runNodes.nodeKey,
+    })
+    .from(runNodes)
+    .where(eq(runNodes.workflowRunId, materialized.run.id))
+    .all();
+
+  const runNodeIdByKey = new Map(runNodeRows.map(node => [node.nodeKey, node.id]));
+  return {
+    db,
+    runId: materialized.run.id,
+    runNodeIdByKey,
+  };
+}
+
+function seedDynamicFanOutIssue163Run() {
+  const db = createDatabase(':memory:');
+  migrateDatabase(db);
+
+  const tree = db
+    .insert(workflowTrees)
+    .values({
+      treeKey: 'issue-163-dynamic-fanout',
+      version: 1,
+      name: 'Issue 163 Dynamic Fan-Out',
+    })
+    .returning({ id: workflowTrees.id })
+    .get();
+
+  const designPrompt = db
+    .insert(promptTemplates)
+    .values({
+      templateKey: 'issue_163_design_prompt',
+      version: 1,
+      content: 'Create an implementation design for issue 163.',
+      contentType: 'markdown',
+    })
+    .returning({ id: promptTemplates.id })
+    .get();
+
+  const breakdownPrompt = db
+    .insert(promptTemplates)
+    .values({
+      templateKey: 'issue_163_breakdown_prompt',
+      version: 1,
+      content: 'Break issue 163 into independent subtasks.',
+      contentType: 'markdown',
+    })
+    .returning({ id: promptTemplates.id })
+    .get();
+
+  const finalReviewPrompt = db
+    .insert(promptTemplates)
+    .values({
+      templateKey: 'issue_163_final_review_prompt',
+      version: 1,
+      content: 'Review all issue 163 work items together.',
+      contentType: 'markdown',
+    })
+    .returning({ id: promptTemplates.id })
+    .get();
+
+  const createPrPrompt = db
+    .insert(promptTemplates)
+    .values({
+      templateKey: 'issue_163_create_pr_prompt',
+      version: 1,
+      content: 'Prepare a PR summary for issue 163.',
+      contentType: 'markdown',
+    })
+    .returning({ id: promptTemplates.id })
+    .get();
+
+  const insertedNodes = db
+    .insert(treeNodes)
+    .values([
+      {
+        workflowTreeId: tree.id,
+        nodeKey: 'design',
+        nodeType: 'agent',
+        provider: 'codex',
+        promptTemplateId: designPrompt.id,
+        sequenceIndex: 10,
+      },
+      {
+        workflowTreeId: tree.id,
+        nodeKey: 'breakdown',
+        nodeType: 'agent',
+        nodeRole: 'spawner',
+        provider: 'codex',
+        promptTemplateId: breakdownPrompt.id,
+        sequenceIndex: 20,
+        maxChildren: 8,
+      },
+      {
+        workflowTreeId: tree.id,
+        nodeKey: 'final-review',
+        nodeType: 'agent',
+        nodeRole: 'join',
+        provider: 'codex',
+        promptTemplateId: finalReviewPrompt.id,
+        sequenceIndex: 30,
+      },
+      {
+        workflowTreeId: tree.id,
+        nodeKey: 'create-pr',
+        nodeType: 'agent',
+        provider: 'codex',
+        promptTemplateId: createPrPrompt.id,
+        sequenceIndex: 40,
+      },
+    ])
+    .returning({
+      id: treeNodes.id,
+      nodeKey: treeNodes.nodeKey,
+    })
+    .all();
+
+  const nodeIdByKey = new Map(insertedNodes.map(node => [node.nodeKey, node.id]));
+  const designNodeId = nodeIdByKey.get('design');
+  const breakdownNodeId = nodeIdByKey.get('breakdown');
+  const finalReviewNodeId = nodeIdByKey.get('final-review');
+  const createPrNodeId = nodeIdByKey.get('create-pr');
+  if (!designNodeId || !breakdownNodeId || !finalReviewNodeId || !createPrNodeId) {
+    throw new Error('Expected dynamic fan-out tree nodes to be seeded.');
+  }
+
+  db.insert(treeEdges)
+    .values([
+      {
+        workflowTreeId: tree.id,
+        sourceNodeId: designNodeId,
+        targetNodeId: breakdownNodeId,
+        routeOn: 'success',
+        priority: 0,
+        auto: 1,
+      },
+      {
+        workflowTreeId: tree.id,
+        sourceNodeId: breakdownNodeId,
+        targetNodeId: finalReviewNodeId,
+        routeOn: 'success',
+        priority: 0,
+        auto: 1,
+      },
+      {
+        workflowTreeId: tree.id,
+        sourceNodeId: finalReviewNodeId,
+        targetNodeId: createPrNodeId,
+        routeOn: 'success',
+        priority: 0,
+        auto: 1,
+      },
+    ])
+    .run();
+
+  const materialized = materializeWorkflowRunFromTree(db, {
+    treeKey: 'issue-163-dynamic-fanout',
   });
 
   const runNodeRows = db
@@ -9203,6 +9366,150 @@ describe('createSqlWorkflowExecutor', () => {
       },
     });
     expect(resolveProvider).not.toHaveBeenCalled();
+  });
+
+  it('executes all dynamic fan-out children before join and create-pr', async () => {
+    const { db, runId, runNodeIdByKey } = seedDynamicFanOutIssue163Run();
+    let runInvocation = 0;
+    const executor = createSqlWorkflowExecutor(db, {
+      resolveProvider: () => ({
+        async *run(): AsyncIterable<ProviderEvent> {
+          runInvocation += 1;
+          switch (runInvocation) {
+            case 1:
+              yield {
+                type: 'result',
+                content: 'Issue 163 design completed.',
+                timestamp: 10,
+              };
+              return;
+            case 2:
+              yield {
+                type: 'result',
+                content: JSON.stringify({
+                  schemaVersion: 1,
+                  subtasks: [
+                    {
+                      nodeKey: 'issue-163-jump-nav-component',
+                      title: 'Implement jump navigation component',
+                      prompt: 'Implement jump nav component for issue 163.',
+                    },
+                    {
+                      nodeKey: 'issue-163-run-detail-integration',
+                      title: 'Integrate jump navigation into run detail view',
+                      prompt: 'Integrate jump nav into run detail for issue 163.',
+                    },
+                    {
+                      nodeKey: 'issue-163-e2e-coverage',
+                      title: 'Add end-to-end coverage',
+                      prompt: 'Add e2e coverage for issue 163 jump nav behavior.',
+                    },
+                  ],
+                }),
+                timestamp: 20,
+              };
+              return;
+            case 3:
+            case 4:
+            case 5:
+              yield {
+                type: 'result',
+                content: `Child work item ${runInvocation - 2} complete.`,
+                timestamp: 30 + runInvocation,
+              };
+              return;
+            case 6:
+              yield {
+                type: 'result',
+                content: 'Final review complete.',
+                timestamp: 60,
+              };
+              return;
+            case 7:
+              yield {
+                type: 'result',
+                content: 'PR summary complete.',
+                timestamp: 70,
+              };
+              return;
+            default:
+              throw new Error(`Unexpected provider invocation ${runInvocation}.`);
+          }
+        },
+      }),
+    });
+
+    const result = await executor.executeRun({
+      workflowRunId: runId,
+      options: {
+        workingDirectory: '/tmp/alphred-worktree',
+      },
+      maxSteps: 20,
+    });
+
+    expect(result).toEqual({
+      workflowRunId: runId,
+      executedNodes: 7,
+      finalStep: {
+        outcome: 'run_terminal',
+        workflowRunId: runId,
+        runStatus: 'completed',
+      },
+    });
+
+    const breakdownRunNodeId = runNodeIdByKey.get('breakdown');
+    if (!breakdownRunNodeId) {
+      throw new Error('Expected breakdown run node to exist.');
+    }
+
+    const dynamicChildren = db
+      .select({
+        nodeKey: runNodes.nodeKey,
+        status: runNodes.status,
+      })
+      .from(runNodes)
+      .where(and(eq(runNodes.workflowRunId, runId), eq(runNodes.spawnerNodeId, breakdownRunNodeId)))
+      .orderBy(asc(runNodes.sequenceIndex), asc(runNodes.id))
+      .all();
+
+    expect(dynamicChildren).toEqual([
+      { nodeKey: 'issue-163-jump-nav-component', status: 'completed' },
+      { nodeKey: 'issue-163-run-detail-integration', status: 'completed' },
+      { nodeKey: 'issue-163-e2e-coverage', status: 'completed' },
+    ]);
+
+    const skippedNodeCountRow = db
+      .select({
+        count: sql<number>`count(*)`,
+      })
+      .from(runNodes)
+      .where(and(eq(runNodes.workflowRunId, runId), eq(runNodes.status, 'skipped')))
+      .get();
+
+    expect(skippedNodeCountRow?.count ?? 0).toBe(0);
+
+    const joinBarrier = db
+      .select({
+        expectedChildren: runJoinBarriers.expectedChildren,
+        terminalChildren: runJoinBarriers.terminalChildren,
+        completedChildren: runJoinBarriers.completedChildren,
+        failedChildren: runJoinBarriers.failedChildren,
+        status: runJoinBarriers.status,
+      })
+      .from(runJoinBarriers)
+      .where(eq(runJoinBarriers.workflowRunId, runId))
+      .orderBy(asc(runJoinBarriers.id))
+      .get();
+
+    expect(joinBarrier).toEqual({
+      expectedChildren: 3,
+      terminalChildren: 3,
+      completedChildren: 3,
+      failedChildren: 0,
+      status: 'released',
+    });
+
+    expect(runInvocation).toBe(7);
   });
 
   it('retries retry-control precondition conflicts and keeps retried node ids unique per run node', async () => {
