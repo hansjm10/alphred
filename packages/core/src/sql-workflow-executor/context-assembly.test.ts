@@ -16,6 +16,7 @@ import {
 } from '@alphred/db';
 import { ERROR_HANDLER_SUMMARY_METADATA_KIND } from './constants.js';
 import { assembleUpstreamArtifactContext } from './context-assembly.js';
+import { releaseReadyJoinBarriersForJoinNode, spawnDynamicChildrenForSpawner, updateJoinBarrierForChildTerminal } from './fanout.js';
 import { loadEdgeRows, loadRunNodeExecutionRows } from './persistence.js';
 import { loadLatestArtifactsByRunNodeId, loadLatestRoutingDecisionsByRunNodeId } from './routing-selection.js';
 import { transitionCompletedRunNodeToPendingAttempt, transitionFailedRunNodeToRetryAttempt } from './transitions.js';
@@ -222,6 +223,100 @@ function seedFailureRouteRun(): SeededRun {
     treeId: tree.id,
     runNodeIdByKey: createRunNodeIdMap(db, materialized.run.id),
   };
+}
+
+function seedJoinFanoutContextRun(): SeededRun {
+  const db = createDatabase(':memory:');
+  migrateDatabase(db);
+
+  const tree = db
+    .insert(workflowTrees)
+    .values({
+      treeKey: 'context_assembly_join_fanout_tree',
+      version: 1,
+      name: 'Context Assembly Join Fanout Tree',
+    })
+    .returning({ id: workflowTrees.id })
+    .get();
+  const prompt = db
+    .insert(promptTemplates)
+    .values({
+      templateKey: 'context_assembly_join_fanout_prompt',
+      version: 1,
+      content: 'Process subtasks',
+      contentType: 'markdown',
+    })
+    .returning({ id: promptTemplates.id })
+    .get();
+
+  const spawnerNode = db
+    .insert(treeNodes)
+    .values({
+      workflowTreeId: tree.id,
+      nodeKey: 'breakdown',
+      nodeRole: 'spawner',
+      nodeType: 'agent',
+      provider: 'codex',
+      promptTemplateId: prompt.id,
+      maxChildren: 8,
+      sequenceIndex: 10,
+    })
+    .returning({ id: treeNodes.id })
+    .get();
+  const joinNode = db
+    .insert(treeNodes)
+    .values({
+      workflowTreeId: tree.id,
+      nodeKey: 'aggregate',
+      nodeRole: 'join',
+      nodeType: 'agent',
+      provider: 'codex',
+      promptTemplateId: prompt.id,
+      sequenceIndex: 20,
+    })
+    .returning({ id: treeNodes.id })
+    .get();
+
+  db.insert(treeEdges)
+    .values({
+      workflowTreeId: tree.id,
+      sourceNodeId: spawnerNode.id,
+      targetNodeId: joinNode.id,
+      routeOn: 'success',
+      priority: 100,
+      auto: 1,
+    })
+    .run();
+
+  const materialized = materializeWorkflowRunFromTree(db, { treeKey: 'context_assembly_join_fanout_tree' });
+  return {
+    db,
+    runId: materialized.run.id,
+    treeId: tree.id,
+    runNodeIdByKey: createRunNodeIdMap(db, materialized.run.id),
+  };
+}
+
+function insertReportArtifact(params: {
+  db: AlphredDatabase;
+  runId: number;
+  runNodeId: number;
+  content: string;
+}): number {
+  const artifact = params.db
+    .insert(phaseArtifacts)
+    .values({
+      workflowRunId: params.runId,
+      runNodeId: params.runNodeId,
+      artifactType: 'report',
+      contentType: 'markdown',
+      content: params.content,
+      metadata: { success: true },
+    })
+    .returning({ id: phaseArtifacts.id })
+    .get();
+
+  return artifact.id;
 }
 
 describe('assembleUpstreamArtifactContext failure-route handling', () => {
@@ -496,5 +591,178 @@ describe('assembleUpstreamArtifactContext failure-route handling', () => {
     expect(failureRouteContext).not.toContain('retry_summary_artifact:');
     expect(failureRouteContext).not.toContain('source_attempt: 1');
     expect(failureRouteContext).not.toContain('target_attempt: 2');
+  });
+});
+
+describe('assembleUpstreamArtifactContext join fan-out batching', () => {
+  it('excludes stale terminal children from earlier released barriers when assembling join context', () => {
+    const { db, runId } = seedJoinFanoutContextRun();
+    const runNodeIdByKey = createRunNodeIdMap(db, runId);
+    const spawnerRunNodeId = runNodeIdByKey.get('breakdown');
+    const joinRunNodeId = runNodeIdByKey.get('aggregate');
+    if (!spawnerRunNodeId || !joinRunNodeId) {
+      throw new Error('Expected spawner/join run nodes to exist.');
+    }
+
+    const initialNodes = getLatestRunNodeAttempts(loadRunNodeExecutionRows(db, runId));
+    const spawnerNode = initialNodes.find(node => node.runNodeId === spawnerRunNodeId);
+    const joinNode = initialNodes.find(node => node.runNodeId === joinRunNodeId);
+    if (!spawnerNode || !joinNode) {
+      throw new Error('Expected spawner/join run nodes to be materialized.');
+    }
+
+    transitionWorkflowRunStatus(db, {
+      workflowRunId: runId,
+      expectedFrom: 'pending',
+      to: 'running',
+    });
+
+    const firstSpawnArtifactId = insertReportArtifact({
+      db,
+      runId,
+      runNodeId: spawnerRunNodeId,
+      content: 'first fan-out request',
+    });
+    spawnDynamicChildrenForSpawner(db, {
+      workflowRunId: runId,
+      spawnerNode,
+      joinNode,
+      spawnSourceArtifactId: firstSpawnArtifactId,
+      subtasks: [
+        {
+          nodeKey: 'old-child-a',
+          title: 'Old child A',
+          prompt: 'old A',
+          provider: null,
+          model: null,
+          metadata: null,
+        },
+        {
+          nodeKey: 'old-child-b',
+          title: 'Old child B',
+          prompt: 'old B',
+          provider: null,
+          model: null,
+          metadata: null,
+        },
+      ],
+    });
+
+    const firstBatchChildren = getLatestRunNodeAttempts(loadRunNodeExecutionRows(db, runId)).filter(
+      node => node.nodeKey === 'old-child-a' || node.nodeKey === 'old-child-b',
+    );
+    expect(firstBatchChildren).toHaveLength(2);
+
+    const staleArtifactIds: number[] = [];
+    for (const childNode of firstBatchChildren) {
+      transitionRunNodeStatus(db, {
+        runNodeId: childNode.runNodeId,
+        expectedFrom: 'pending',
+        to: 'running',
+      });
+      transitionRunNodeStatus(db, {
+        runNodeId: childNode.runNodeId,
+        expectedFrom: 'running',
+        to: 'completed',
+      });
+      staleArtifactIds.push(
+        insertReportArtifact({
+          db,
+          runId,
+          runNodeId: childNode.runNodeId,
+          content: `stale artifact from ${childNode.nodeKey}`,
+        }),
+      );
+      updateJoinBarrierForChildTerminal(db, {
+        workflowRunId: runId,
+        childNode,
+        childTerminalStatus: 'completed',
+      });
+    }
+
+    releaseReadyJoinBarriersForJoinNode(db, {
+      workflowRunId: runId,
+      joinRunNodeId,
+    });
+
+    const secondSpawnArtifactId = insertReportArtifact({
+      db,
+      runId,
+      runNodeId: spawnerRunNodeId,
+      content: 'second fan-out request',
+    });
+    spawnDynamicChildrenForSpawner(db, {
+      workflowRunId: runId,
+      spawnerNode,
+      joinNode,
+      spawnSourceArtifactId: secondSpawnArtifactId,
+      subtasks: [
+        {
+          nodeKey: 'new-child-a',
+          title: 'New child A',
+          prompt: 'new A',
+          provider: null,
+          model: null,
+          metadata: null,
+        },
+      ],
+    });
+
+    const newChild = getLatestRunNodeAttempts(loadRunNodeExecutionRows(db, runId)).find(
+      node => node.nodeKey === 'new-child-a',
+    );
+    if (!newChild) {
+      throw new Error('Expected current-batch child to be materialized.');
+    }
+
+    transitionRunNodeStatus(db, {
+      runNodeId: newChild.runNodeId,
+      expectedFrom: 'pending',
+      to: 'running',
+    });
+    transitionRunNodeStatus(db, {
+      runNodeId: newChild.runNodeId,
+      expectedFrom: 'running',
+      to: 'completed',
+    });
+    const currentArtifactId = insertReportArtifact({
+      db,
+      runId,
+      runNodeId: newChild.runNodeId,
+      content: 'fresh artifact from new child',
+    });
+    updateJoinBarrierForChildTerminal(db, {
+      workflowRunId: runId,
+      childNode: newChild,
+      childTerminalStatus: 'completed',
+    });
+
+    const latestNodeAttempts = getLatestRunNodeAttempts(loadRunNodeExecutionRows(db, runId));
+    const latestJoinNode = latestNodeAttempts.find(node => node.runNodeId === joinRunNodeId);
+    if (!latestJoinNode) {
+      throw new Error('Expected join run node to exist.');
+    }
+
+    const assembly = assembleUpstreamArtifactContext(db, {
+      workflowRunId: runId,
+      targetNode: latestJoinNode,
+      targetAttempt: latestJoinNode.attempt,
+      latestNodeAttempts,
+      edgeRows: loadEdgeRows(db, runId),
+      latestRoutingDecisionsByRunNodeId: loadLatestRoutingDecisionsByRunNodeId(db, runId).latestByRunNodeId,
+      latestArtifactsByRunNodeId: loadLatestArtifactsByRunNodeId(db, runId),
+    });
+
+    expect(assembly.manifest.included_source_node_keys).toContain('new-child-a');
+    expect(assembly.manifest.included_source_node_keys).not.toContain('old-child-a');
+    expect(assembly.manifest.included_source_node_keys).not.toContain('old-child-b');
+    expect(assembly.manifest.included_artifact_ids).toContain(currentArtifactId);
+    for (const staleArtifactId of staleArtifactIds) {
+      expect(assembly.manifest.included_artifact_ids).not.toContain(staleArtifactId);
+    }
+    const joinedContext = assembly.contextEntries.join('\n');
+    expect(joinedContext).toContain('new-child-a');
+    expect(joinedContext).not.toContain('old-child-a');
+    expect(joinedContext).not.toContain('old-child-b');
   });
 });

@@ -48,6 +48,7 @@ export function selectDirectPredecessorNodes(
   edgeRows: EdgeRow[],
   latestRoutingDecisionsByRunNodeId: Map<number, RoutingDecisionRow>,
   latestArtifactsByRunNodeId: Map<number, LatestArtifact>,
+  joinBatchChildRunNodeIds: ReadonlySet<number> | null = null,
 ): RunNodeExecutionRow[] {
   const routingSelection = buildRoutingSelection(
     latestNodeAttempts,
@@ -89,11 +90,56 @@ export function selectDirectPredecessorNodes(
       continue;
     }
 
+    if (
+      targetNode.nodeRole === 'join' &&
+      edge.routeOn === 'terminal' &&
+      edge.edgeKind === 'dynamic_child_to_join' &&
+      joinBatchChildRunNodeIds !== null &&
+      !joinBatchChildRunNodeIds.has(sourceNode.runNodeId)
+    ) {
+      continue;
+    }
+
     seenSourceNodeIds.add(edge.sourceNodeId);
     predecessors.push(sourceNode);
   }
 
   return predecessors.sort(compareUpstreamSourceOrder);
+}
+
+function resolveJoinBatchChildRunNodeIds(
+  db: AlphredDatabase,
+  params: {
+    workflowRunId: number;
+    targetNode: RunNodeExecutionRow;
+    latestNodeAttempts: RunNodeExecutionRow[];
+  },
+): Set<number> | null {
+  if (params.targetNode.nodeRole !== 'join') {
+    return null;
+  }
+
+  const barrier = loadMostRecentJoinBarrier(db, {
+    workflowRunId: params.workflowRunId,
+    joinRunNodeId: params.targetNode.runNodeId,
+  });
+  if (!barrier) {
+    return null;
+  }
+
+  const batchChildren = params.latestNodeAttempts
+    .filter(
+      node => node.spawnerNodeId === barrier.spawnerRunNodeId && node.joinNodeId === params.targetNode.runNodeId,
+    )
+    .sort((left, right) => {
+      if (left.sequenceIndex !== right.sequenceIndex) {
+        return right.sequenceIndex - left.sequenceIndex;
+      }
+      return right.runNodeId - left.runNodeId;
+    })
+    .slice(0, barrier.expectedChildren);
+
+  return new Set(batchChildren.map(node => node.runNodeId));
 }
 
 export function resolveIncludedContentForContextCandidate(
@@ -663,12 +709,18 @@ export function assembleUpstreamArtifactContext(
     latestArtifactsByRunNodeId: Map<number, LatestArtifact>;
   },
 ): AssembledUpstreamContext {
+  const joinBatchChildRunNodeIds = resolveJoinBatchChildRunNodeIds(db, {
+    workflowRunId: params.workflowRunId,
+    targetNode: params.targetNode,
+    latestNodeAttempts: params.latestNodeAttempts,
+  });
   const directPredecessors = selectDirectPredecessorNodes(
     params.targetNode,
     params.latestNodeAttempts,
     params.edgeRows,
     params.latestRoutingDecisionsByRunNodeId,
     params.latestArtifactsByRunNodeId,
+    joinBatchChildRunNodeIds,
   );
   const predecessorRunNodeIds = directPredecessors.map(node => node.runNodeId);
   const artifactSelection = loadUpstreamArtifactSelectionByRunNodeId(db, params.workflowRunId, predecessorRunNodeIds);

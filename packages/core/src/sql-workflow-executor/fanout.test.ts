@@ -16,10 +16,16 @@ import {
   spawnDynamicChildrenForSpawner,
   updateJoinBarrierForChildTerminal,
 } from './fanout.js';
-import { loadRunNodeExecutionRows } from './persistence.js';
+import { loadEdgeRows, loadRunNodeExecutionRows } from './persistence.js';
+import { loadLatestArtifactsByRunNodeId, loadLatestRoutingDecisionsByRunNodeId } from './routing-selection.js';
+import { buildRoutingSelection } from './routing-selection.js';
 import type { RunNodeExecutionRow } from './types.js';
 
-function seedSpawnerJoinRun(): {
+function seedSpawnerJoinRun(
+  params: {
+    staticSuccessPriority?: number;
+  } = {},
+): {
   db: ReturnType<typeof createDatabase>;
   runId: number;
   spawnerNode: RunNodeExecutionRow;
@@ -102,7 +108,7 @@ function seedSpawnerJoinRun(): {
       sourceNodeId: spawnerNodeId,
       targetNodeId: joinNodeId,
       routeOn: 'success',
-      priority: 0,
+      priority: params.staticSuccessPriority ?? 0,
       auto: 1,
     })
     .run();
@@ -148,6 +154,80 @@ function insertSpawnerReportArtifact(params: {
 }
 
 describe('fanout join barrier guards', () => {
+  it('keeps the static spawner->join route selected after dynamic child edges are inserted', () => {
+    const { db, runId, spawnerNode, joinNode } = seedSpawnerJoinRun({
+      staticSuccessPriority: 100,
+    });
+    const spawnArtifactId = insertSpawnerReportArtifact({
+      db,
+      runId,
+      spawnerRunNodeId: spawnerNode.runNodeId,
+      content: 'spawn-priority-check',
+    });
+
+    spawnDynamicChildrenForSpawner(db, {
+      workflowRunId: runId,
+      spawnerNode,
+      joinNode,
+      spawnSourceArtifactId: spawnArtifactId,
+      subtasks: [
+        {
+          nodeKey: 'priority-child-a',
+          title: 'Priority Child A',
+          prompt: 'Implement A',
+          provider: null,
+          model: null,
+          metadata: null,
+        },
+        {
+          nodeKey: 'priority-child-b',
+          title: 'Priority Child B',
+          prompt: 'Implement B',
+          provider: null,
+          model: null,
+          metadata: null,
+        },
+      ],
+    });
+
+    const edgeRows = loadEdgeRows(db, runId);
+    const staticJoinEdge = edgeRows.find(
+      edge =>
+        edge.sourceNodeId === spawnerNode.runNodeId &&
+        edge.targetNodeId === joinNode.runNodeId &&
+        edge.routeOn === 'success' &&
+        edge.edgeKind === 'tree',
+    );
+    expect(staticJoinEdge?.priority).toBe(100);
+
+    const dynamicSpawnerEdges = edgeRows
+      .filter(
+        edge =>
+          edge.sourceNodeId === spawnerNode.runNodeId &&
+          edge.routeOn === 'success' &&
+          edge.edgeKind === 'dynamic_spawner_to_child',
+      )
+      .sort((left, right) => left.priority - right.priority);
+    expect(dynamicSpawnerEdges.map(edge => edge.priority)).toEqual([101, 102]);
+
+    const latestNodeAttempts = loadRunNodeExecutionRows(db, runId).map(node =>
+      node.runNodeId === spawnerNode.runNodeId
+        ? {
+            ...node,
+            status: 'completed' as const,
+          }
+        : node,
+    );
+    const routingSelection = buildRoutingSelection(
+      latestNodeAttempts,
+      edgeRows,
+      loadLatestRoutingDecisionsByRunNodeId(db, runId).latestByRunNodeId,
+      loadLatestArtifactsByRunNodeId(db, runId),
+    );
+
+    expect(routingSelection.selectedEdgeIdBySourceNodeId.get(spawnerNode.runNodeId)).toBe(staticJoinEdge?.edgeId);
+  });
+
   it('rejects a second active barrier for the same spawner and join', () => {
     const { db, runId, spawnerNode, joinNode } = seedSpawnerJoinRun();
     const firstArtifactId = insertSpawnerReportArtifact({

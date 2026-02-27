@@ -230,6 +230,30 @@ function loadMaxSequenceIndex(db: AlphredDatabase, workflowRunId: number): numbe
   return row?.maxSequenceIndex ?? 0;
 }
 
+function loadNextSuccessEdgePriorityForSource(
+  db: Pick<AlphredDatabase, 'select'>,
+  params: {
+    workflowRunId: number;
+    sourceRunNodeId: number;
+  },
+): number {
+  const row = db
+    .select({
+      maxPriority: sql<number>`COALESCE(MAX(${runNodeEdges.priority}), -1)`,
+    })
+    .from(runNodeEdges)
+    .where(
+      and(
+        eq(runNodeEdges.workflowRunId, params.workflowRunId),
+        eq(runNodeEdges.sourceRunNodeId, params.sourceRunNodeId),
+        eq(runNodeEdges.routeOn, 'success'),
+      ),
+    )
+    .get();
+
+  return (row?.maxPriority ?? -1) + 1;
+}
+
 function loadActiveBarriersForSpawnerJoin(
   db: Pick<AlphredDatabase, 'select'>,
   params: {
@@ -346,6 +370,10 @@ export function spawnDynamicChildrenForSpawner(
           .all();
 
   if (insertedChildren.length > 0) {
+    const dynamicSpawnerEdgePriorityBase = loadNextSuccessEdgePriorityForSource(db, {
+      workflowRunId: params.workflowRunId,
+      sourceRunNodeId: params.spawnerNode.runNodeId,
+    });
     db
       .insert(runNodeEdges)
       .values(
@@ -357,7 +385,7 @@ export function spawnDynamicChildrenForSpawner(
             routeOn: 'success',
             auto: 1,
             guardExpression: null,
-            priority: index,
+            priority: dynamicSpawnerEdgePriorityBase + index,
             edgeKind: 'dynamic_spawner_to_child',
           },
           {
