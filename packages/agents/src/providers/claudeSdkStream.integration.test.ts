@@ -210,6 +210,54 @@ const sdkStreamFixtures = {
       },
     },
   ] as const,
+  contractLineRoutingDecisionFallback: [
+    {
+      type: 'assistant',
+      message: {
+        content: [
+          {
+            type: 'text',
+            text: 'Review complete.\nresult.metadata.routingDecision: changes_requested',
+          },
+        ],
+      },
+      parent_tool_use_id: null,
+    },
+    {
+      type: 'result',
+      subtype: 'success',
+      result: 'Review complete.\nresult.metadata.routingDecision: changes_requested',
+      usage: {
+        input_tokens: 13,
+        output_tokens: 5,
+        cache_read_input_tokens: 0,
+      },
+    },
+  ] as const,
+  looseDecisionLineIgnored: [
+    {
+      type: 'assistant',
+      message: {
+        content: [
+          {
+            type: 'text',
+            text: 'Review complete.\ndecision: changes_requested',
+          },
+        ],
+      },
+      parent_tool_use_id: null,
+    },
+    {
+      type: 'result',
+      subtype: 'success',
+      result: 'Review complete.\ndecision: changes_requested',
+      usage: {
+        input_tokens: 13,
+        output_tokens: 5,
+        cache_read_input_tokens: 0,
+      },
+    },
+  ] as const,
   mixedToolUseAssistantThenProgress: [
     {
       type: 'assistant',
@@ -522,6 +570,29 @@ describe('claude provider sdk stream integration fixtures', () => {
 
     expect(events.map((event) => event.type)).toEqual(['system', 'assistant', 'usage', 'result']);
     expect(events[3]?.content).toBe('Legacy routing metadata should be ignored when canonical value is unsupported.');
+    expect(events[3]?.metadata).toBeUndefined();
+  });
+
+  it('falls back to strict contract routing decision line in result content when sdk metadata is missing', async () => {
+    const provider = createProviderForFixture(sdkStreamFixtures.contractLineRoutingDecisionFallback);
+
+    const events = await collectEvents(provider, 'Apply integration fixture tests.');
+
+    expect(events.map((event) => event.type)).toEqual(['system', 'assistant', 'usage', 'result']);
+    expect(events[3]?.content).toContain('result.metadata.routingDecision: changes_requested');
+    expect(events[3]?.metadata).toMatchObject({
+      routingDecision: 'changes_requested',
+      routingDecisionSource: 'result_content_contract_fallback',
+    });
+  });
+
+  it('keeps metadata undefined when result content only includes loose decision text', async () => {
+    const provider = createProviderForFixture(sdkStreamFixtures.looseDecisionLineIgnored);
+
+    const events = await collectEvents(provider, 'Apply integration fixture tests.');
+
+    expect(events.map((event) => event.type)).toEqual(['system', 'assistant', 'usage', 'result']);
+    expect(events[3]?.content).toContain('decision: changes_requested');
     expect(events[3]?.metadata).toBeUndefined();
   });
 

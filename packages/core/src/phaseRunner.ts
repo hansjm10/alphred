@@ -3,6 +3,7 @@ import {
   type PhaseDefinition,
   type ProviderEvent,
   type ProviderRunOptions,
+  type RoutingDecisionSource,
   type RoutingDecisionSignal,
 } from '@alphred/shared';
 
@@ -10,6 +11,7 @@ export type PhaseRunResult = {
   success: boolean;
   report: string;
   routingDecision: RoutingDecisionSignal | null;
+  routingDecisionSource: RoutingDecisionSource | null;
   events: ProviderEvent[];
   tokensUsed: number;
 };
@@ -171,6 +173,19 @@ function readRoutingDecision(event: ProviderEvent): RoutingDecisionSignal | null
   return null;
 }
 
+function readRoutingDecisionSource(event: ProviderEvent): RoutingDecisionSource | null {
+  if (event.type !== 'result' || !event.metadata) {
+    return null;
+  }
+
+  const source = event.metadata.routingDecisionSource;
+  if (source === 'provider_result_metadata' || source === 'result_content_contract_fallback') {
+    return source;
+  }
+
+  return null;
+}
+
 export async function runPhase(
   phase: PhaseDefinition,
   options: ProviderRunOptions,
@@ -181,6 +196,7 @@ export async function runPhase(
       success: true,
       report: '',
       routingDecision: null,
+      routingDecisionSource: null,
       events: [],
       tokensUsed: 0,
     };
@@ -194,6 +210,7 @@ export async function runPhase(
   const events: ProviderEvent[] = [];
   let report = '';
   let routingDecision: RoutingDecisionSignal | null = null;
+  let routingDecisionSource: RoutingDecisionSource | null = null;
   let hasResultEvent = false;
   let incrementalTokensUsed = 0;
   let maxCumulativeTokensUsed = 0;
@@ -206,6 +223,8 @@ export async function runPhase(
         hasResultEvent = true;
         report = event.content;
         routingDecision = readRoutingDecision(event);
+        routingDecisionSource =
+          routingDecision === null ? null : (readRoutingDecisionSource(event) ?? 'provider_result_metadata');
       }
 
       const tokenUsage = extractTokenUsage(event);
@@ -240,6 +259,7 @@ export async function runPhase(
     success: true,
     report,
     routingDecision,
+    routingDecisionSource,
     events,
     tokensUsed: Math.max(incrementalTokensUsed, maxCumulativeTokensUsed),
   };

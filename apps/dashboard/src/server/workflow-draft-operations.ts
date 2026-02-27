@@ -7,7 +7,11 @@ import {
   workflowTrees,
   type AlphredDatabase,
 } from '@alphred/db';
-import { routingDecisionSignals } from '@alphred/shared';
+import {
+  routingDecisionContractLinePrefix,
+  routingDecisionContractSentinel,
+  routingDecisionSignals,
+} from '@alphred/shared';
 import { loadAgentCatalog, resolveDefaultModelForProvider, type AgentCatalog } from './agent-catalog';
 import type {
   DashboardCreateWorkflowRequest,
@@ -45,10 +49,15 @@ export type WorkflowDraftOperations = {
 };
 
 const seededReviewRoutingContract = [
+  routingDecisionContractSentinel,
   'Routing metadata contract (required when guarded success routes are configured):',
   '- Emit terminal metadata key `result.metadata.routingDecision`.',
   `- Canonical values: ${routingDecisionSignals.map(signal => `\`${signal}\``).join(', ')}.`,
   '- Choose the value that matches this workflow\'s guarded success route conditions.',
+  '- Include one terminal line exactly in this format:',
+  `  ${routingDecisionContractLinePrefix} <${routingDecisionSignals.join('|')}>`,
+  `- Example: \`${routingDecisionContractLinePrefix} changes_requested\`.`,
+  '- Do not use alternative key names.',
   '- Do not omit `routingDecision`.',
 ].join('\n');
 

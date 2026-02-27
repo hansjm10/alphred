@@ -1,5 +1,7 @@
 import { transitionRunNodeStatus, type AlphredDatabase, type RunNodeStatus, type WorkflowRunStatus } from '@alphred/db';
 import {
+  routingDecisionContractLinePrefix,
+  routingDecisionContractSentinel,
   routingDecisionSignals,
   type AgentProviderName,
   type PhaseDefinition,
@@ -109,6 +111,8 @@ function resolveGuardDecisionHints(guardedSuccessEdges: EdgeRow[]): RoutingDecis
 function buildRoutingDecisionPromptContract(guardedSuccessEdges: EdgeRow[]): string {
   const guardedRouteCount = guardedSuccessEdges.length;
   const guardDecisionHints = resolveGuardDecisionHints(guardedSuccessEdges);
+  const contractLineTemplate = `${routingDecisionContractLinePrefix} <${routingDecisionSignals.join('|')}>`;
+  const contractLineExample = `${routingDecisionContractLinePrefix} changes_requested`;
 
   const guardHintLine =
     guardDecisionHints.length === 0
@@ -116,11 +120,16 @@ function buildRoutingDecisionPromptContract(guardedSuccessEdges: EdgeRow[]): str
       : `- Node-specific guard hints: ${guardDecisionHints.map(signal => `\`${signal}\``).join(', ')}.`;
 
   return [
+    routingDecisionContractSentinel,
     'Routing metadata contract (required for guarded success routing):',
     '- Emit terminal metadata key `result.metadata.routingDecision`.',
     `- Canonical values: ${routingDecisionSignals.map(signal => `\`${signal}\``).join(', ')}.`,
     `- This node currently has ${guardedRouteCount} guarded success route${guardedRouteCount === 1 ? '' : 's'}.`,
     guardHintLine,
+    '- Include one terminal line exactly in this format:',
+    `  ${contractLineTemplate}`,
+    `- Example: \`${contractLineExample}\`.`,
+    '- Do not use alternative key names.',
     '- Do not omit `routingDecision`.',
   ].join('\n');
 }
@@ -132,7 +141,7 @@ function resolveExecutionPrompt(node: RunNodeExecutionRow, edgeRows: EdgeRow[]):
     return basePrompt;
   }
 
-  if (basePrompt.includes('result.metadata.routingDecision')) {
+  if (basePrompt.includes(routingDecisionContractSentinel)) {
     return basePrompt;
   }
 
@@ -558,6 +567,7 @@ export function handleClaimedNodeSuccess(
     treeNodeId: node.treeNodeId,
     attempt: currentAttempt,
     routingDecision: phaseResult.routingDecision,
+    routingDecisionSource: phaseResult.routingDecisionSource,
     edgeRows,
   });
 

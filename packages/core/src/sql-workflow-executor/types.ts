@@ -3,6 +3,7 @@ import type {
   AgentProviderName,
   ProviderEventType,
   ProviderRunOptions,
+  RoutingDecisionSource,
   RoutingDecisionSignal,
 } from '@alphred/shared';
 import type { PhaseProviderResolver } from '../phaseRunner.js';
@@ -57,6 +58,7 @@ export type EdgeRow = {
 
 export type RoutingDecisionType = RoutingDecisionSignal | 'no_route';
 export type RouteDecisionSignal = RoutingDecisionSignal;
+export type RouteDecisionSource = RoutingDecisionSource;
 
 export type RoutingDecisionRow = {
   id: number;
