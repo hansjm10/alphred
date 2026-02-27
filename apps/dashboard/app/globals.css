@@ -349,7 +349,6 @@ output {
 .button-link:focus-visible,
 .shell-nav-link:focus-visible,
 .tabs__link:focus-visible,
-.run-detail-section-nav__link:focus-visible,
 .run-timeline-event:focus-visible {
   outline: 2px solid var(--accent-active);
   outline-offset: 2px;
@@ -702,11 +701,14 @@ output {
 }
 
 .run-detail-section-nav {
-  backdrop-filter: blur(4px);
+  backdrop-filter: blur(6px);
   background: color-mix(in srgb, var(--bg-surface) 92%, transparent);
   border: 1px solid var(--border-default);
   border-radius: var(--radius-pill);
+  box-shadow: var(--shadow-sm);
   overflow-x: auto;
+  overflow-y: hidden;
+  overscroll-behavior-x: contain;
   padding: 4px;
   position: sticky;
   top: calc(var(--space-3) + 72px);
@@ -714,9 +716,11 @@ output {
 }
 
 .run-detail-section-nav__list {
+  align-items: center;
   display: flex;
   gap: 4px;
   list-style: none;
+  margin: 0;
   min-width: max-content;
 }
 
@@ -729,9 +733,11 @@ output {
   padding: 6px 12px;
   text-decoration: none;
   transition: background-color var(--motion-fast), border-color var(--motion-fast), color var(--motion-fast);
+  white-space: nowrap;
 }
 
 .run-detail-section-nav__link:hover {
+  background: color-mix(in srgb, var(--bg-subtle) 90%, var(--bg-surface));
   border-color: color-mix(in srgb, var(--accent-active) 35%, var(--border-default));
   color: var(--text-primary);
 }
@@ -742,8 +748,20 @@ output {
   color: var(--accent-active);
 }
 
-.run-detail-section {
-  scroll-margin-top: calc(var(--space-4) + 112px);
+.run-detail-section-nav__link:focus-visible {
+  background: color-mix(in srgb, var(--accent-active) 10%, var(--bg-surface));
+  border-color: color-mix(in srgb, var(--accent-active) 55%, var(--border-default));
+  color: var(--text-primary);
+  outline: 2px solid var(--accent-active);
+  outline-offset: 2px;
+}
+
+.run-detail-section,
+#run-focus-heading,
+#run-timeline-heading,
+#run-stream-heading,
+#run-observability-heading {
+  scroll-margin-top: calc(var(--space-5) + 112px);
 }
 
 .run-operator-focus-list {
@@ -2027,7 +2045,18 @@ output {
   }
 
   .run-detail-section-nav {
+    -webkit-overflow-scrolling: touch;
+    border-radius: var(--radius-md);
+    padding: 4px var(--space-1);
     top: calc(var(--space-2) + 96px);
+  }
+
+  .run-detail-section,
+  #run-focus-heading,
+  #run-timeline-heading,
+  #run-stream-heading,
+  #run-observability-heading {
+    scroll-margin-top: calc(var(--space-5) + 132px);
   }
 
   .run-detail-primary-actions {
