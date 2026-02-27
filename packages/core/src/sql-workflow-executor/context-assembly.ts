@@ -4,12 +4,14 @@ import {
   CONTEXT_POLICY_VERSION,
   MAX_CHARS_PER_ARTIFACT,
   MAX_CONTEXT_CHARS_TOTAL,
+  MAX_FAILURE_ROUTE_CONTEXT_CHARS,
   MAX_RETRY_SUMMARY_CONTEXT_CHARS,
   MAX_UPSTREAM_ARTIFACTS,
   MIN_REMAINING_CONTEXT_CHARS,
 } from './constants.js';
 import {
   buildRoutingSelection,
+  loadLatestFailureArtifact,
   loadRetryFailureSummaryArtifact,
   loadUpstreamArtifactSelectionByRunNodeId,
 } from './routing-selection.js';
@@ -17,6 +19,7 @@ import {
   buildTruncationMetadata,
   compareUpstreamSourceOrder,
   hashContentSha256,
+  serializeFailureRouteContextEnvelope,
   serializeRetryFailureSummaryEnvelope,
   serializeContextEnvelope,
   truncateHeadTail,
@@ -27,9 +30,12 @@ import type {
   ContextEnvelopeEntry,
   ContextHandoffManifest,
   EdgeRow,
+  FailureLogArtifact,
   LatestArtifact,
+  RetryFailureSummaryArtifact,
   RoutingDecisionRow,
   RunNodeExecutionRow,
+  UpstreamReportArtifact,
 } from './types.js';
 
 export function selectDirectPredecessorNodes(
@@ -50,6 +56,10 @@ export function selectDirectPredecessorNodes(
   const predecessors: RunNodeExecutionRow[] = [];
   const seenSourceNodeIds = new Set<number>();
   for (const edge of incomingEdges) {
+    if (edge.routeOn !== 'success') {
+      continue;
+    }
+
     if (routingSelection.selectedEdgeIdBySourceNodeId.get(edge.sourceNodeId) !== edge.edgeId) {
       continue;
     }
@@ -113,31 +123,93 @@ export function resolveIncludedContentForContextCandidate(
   };
 }
 
-export function assembleUpstreamArtifactContext(
-  db: AlphredDatabase,
-  params: {
-    workflowRunId: number;
-    targetNode: RunNodeExecutionRow;
-    targetAttempt: number;
-    latestNodeAttempts: RunNodeExecutionRow[];
-    edgeRows: EdgeRow[];
-    latestRoutingDecisionsByRunNodeId: Map<number, RoutingDecisionRow>;
-    latestArtifactsByRunNodeId: Map<number, LatestArtifact>;
-  },
-): AssembledUpstreamContext {
-  const directPredecessors = selectDirectPredecessorNodes(
-    params.targetNode,
-    params.latestNodeAttempts,
-    params.edgeRows,
-    params.latestRoutingDecisionsByRunNodeId,
-    params.latestArtifactsByRunNodeId,
-  );
-  const predecessorRunNodeIds = directPredecessors.map(node => node.runNodeId);
-  const artifactSelection = loadUpstreamArtifactSelectionByRunNodeId(db, params.workflowRunId, predecessorRunNodeIds);
+function selectFailureRouteSourceNode(params: {
+  targetNode: RunNodeExecutionRow;
+  incomingEdges: EdgeRow[];
+  latestByTreeNodeId: Map<number, RunNodeExecutionRow>;
+  selectedEdgeIdBySourceNodeId: Map<number, number>;
+  latestArtifactsByRunNodeId: Map<number, LatestArtifact>;
+}): RunNodeExecutionRow | null {
+  const targetArtifactId =
+    params.latestArtifactsByRunNodeId.get(params.targetNode.runNodeId)?.id ?? Number.NEGATIVE_INFINITY;
 
+  const selectedFailureSources: {
+    sourceNode: RunNodeExecutionRow;
+    latestArtifactId: number;
+  }[] = [];
+  for (const edge of params.incomingEdges) {
+    if (edge.routeOn !== 'failure') {
+      continue;
+    }
+
+    if (params.selectedEdgeIdBySourceNodeId.get(edge.sourceNodeId) !== edge.edgeId) {
+      continue;
+    }
+
+    const sourceNode = params.latestByTreeNodeId.get(edge.sourceNodeId);
+    if (sourceNode?.status !== 'failed') {
+      continue;
+    }
+
+    const latestArtifactId = params.latestArtifactsByRunNodeId.get(sourceNode.runNodeId)?.id ?? Number.NEGATIVE_INFINITY;
+    selectedFailureSources.push({
+      sourceNode,
+      latestArtifactId,
+    });
+  }
+
+  if (selectedFailureSources.length === 0) {
+    return null;
+  }
+
+  const triggeringSources = selectedFailureSources.filter(candidate => candidate.latestArtifactId > targetArtifactId);
+  if (triggeringSources.length === 0) {
+    return null;
+  }
+
+  triggeringSources.sort((a, b) => {
+    if (a.latestArtifactId !== b.latestArtifactId) {
+      return a.latestArtifactId > b.latestArtifactId ? -1 : 1;
+    }
+
+    return compareUpstreamSourceOrder(a.sourceNode, b.sourceNode);
+  });
+
+  return triggeringSources[0]?.sourceNode ?? null;
+}
+
+type FailureRouteContextEntry = {
+  entry: string;
+  sourceNodeKey: string;
+  sourceRunNodeId: number;
+  failureArtifactId: number;
+  retrySummaryArtifactId: number | null;
+  includedChars: number;
+  truncated: boolean;
+};
+
+type RetrySummaryContextEntry = {
+  entry: string;
+  artifactId: number;
+  sourceAttempt: number;
+  targetAttempt: number;
+  includedChars: number;
+  truncated: boolean;
+};
+
+type IncludedContextCandidates = {
+  includedEntries: ContextEnvelopeEntry[];
+  droppedArtifactIds: number[];
+  budgetOverflow: boolean;
+};
+
+function collectContextEnvelopeCandidates(
+  directPredecessors: RunNodeExecutionRow[],
+  latestReportsByRunNodeId: Map<number, UpstreamReportArtifact>,
+): ContextEnvelopeCandidate[] {
   const candidateEntries: ContextEnvelopeCandidate[] = [];
   for (const sourceNode of directPredecessors) {
-    const artifact = artifactSelection.latestReportsByRunNodeId.get(sourceNode.runNodeId);
+    const artifact = latestReportsByRunNodeId.get(sourceNode.runNodeId);
     if (!artifact) {
       continue;
     }
@@ -154,48 +226,193 @@ export function assembleUpstreamArtifactContext(
     });
   }
 
-  const retrySummaryCandidate =
-    params.targetAttempt > 1
-      ? loadRetryFailureSummaryArtifact(db, {
-          workflowRunId: params.workflowRunId,
-          runNodeId: params.targetNode.runNodeId,
-          sourceAttempt: params.targetAttempt - 1,
-          targetAttempt: params.targetAttempt,
-        })
-      : null;
-  const retrySummaryEntry = retrySummaryCandidate
-    ? (() => {
-        const summaryCharLimit = Math.min(MAX_ERROR_SUMMARY_CHARS, MAX_RETRY_SUMMARY_CONTEXT_CHARS);
-        const includedSummaryContent = truncateHeadTail(retrySummaryCandidate.content, summaryCharLimit);
-        const truncation = buildTruncationMetadata(retrySummaryCandidate.content.length, includedSummaryContent.length);
+  return candidateEntries;
+}
 
-        return {
-          entry: serializeRetryFailureSummaryEnvelope({
-            workflowRunId: params.workflowRunId,
-            targetNodeKey: params.targetNode.nodeKey,
-            sourceAttempt: retrySummaryCandidate.sourceAttempt,
-            targetAttempt: retrySummaryCandidate.targetAttempt,
-            summaryArtifactId: retrySummaryCandidate.id,
-            failureArtifactId: retrySummaryCandidate.failureArtifactId,
-            createdAt: retrySummaryCandidate.createdAt,
-            includedContent: includedSummaryContent,
-            sha256: hashContentSha256(retrySummaryCandidate.content),
-            truncation,
-          }),
-          artifactId: retrySummaryCandidate.id,
-          sourceAttempt: retrySummaryCandidate.sourceAttempt,
-          targetAttempt: retrySummaryCandidate.targetAttempt,
-          includedChars: truncation.includedChars,
-          truncated: truncation.applied,
-        };
-      })()
-    : null;
+function loadFailureRouteArtifacts(
+  db: AlphredDatabase,
+  params: {
+    workflowRunId: number;
+    sourceNode: RunNodeExecutionRow | null;
+  },
+): {
+  failureArtifact: FailureLogArtifact | null;
+  retrySummaryArtifact: RetryFailureSummaryArtifact | null;
+} {
+  const { sourceNode, workflowRunId } = params;
+  if (!sourceNode) {
+    return {
+      failureArtifact: null,
+      retrySummaryArtifact: null,
+    };
+  }
 
+  const failureArtifact = loadLatestFailureArtifact(db, {
+    workflowRunId,
+    runNodeId: sourceNode.runNodeId,
+  });
+  let retrySummaryArtifact: RetryFailureSummaryArtifact | null = null;
+  if (sourceNode.attempt > 1) {
+    retrySummaryArtifact = loadRetryFailureSummaryArtifact(db, {
+      workflowRunId,
+      runNodeId: sourceNode.runNodeId,
+      sourceAttempt: sourceNode.attempt - 1,
+      targetAttempt: sourceNode.attempt,
+    });
+  }
+
+  return {
+    failureArtifact,
+    retrySummaryArtifact,
+  };
+}
+
+function resolveFailureRouteFailureReason(
+  sourceNode: RunNodeExecutionRow,
+  failureArtifact: FailureLogArtifact,
+): string {
+  const metadataFailureReason = failureArtifact.metadata?.failureReason;
+  if (typeof metadataFailureReason === 'string') {
+    return metadataFailureReason;
+  }
+
+  if (sourceNode.attempt > sourceNode.maxRetries) {
+    return 'retry_limit_exceeded';
+  }
+
+  return 'failure';
+}
+
+function buildFailureRouteRawPayload(params: {
+  sourceNode: RunNodeExecutionRow;
+  failureArtifact: FailureLogArtifact;
+  retrySummaryArtifact: RetryFailureSummaryArtifact | null;
+}): string {
+  const { failureArtifact, retrySummaryArtifact, sourceNode } = params;
+  const failureReason = resolveFailureRouteFailureReason(sourceNode, failureArtifact);
+  const retriesExhausted = sourceNode.attempt > sourceNode.maxRetries;
+  let rawPayload = [
+    'attempt_metadata:',
+    `  attempt: ${sourceNode.attempt}`,
+    `  max_retries: ${sourceNode.maxRetries}`,
+    `  retries_exhausted: ${retriesExhausted ? 'true' : 'false'}`,
+    `  retries_used: ${Math.max(sourceNode.attempt - 1, 0)}`,
+    `  failure_reason: ${failureReason}`,
+    'failure_artifact:',
+    `  id: ${failureArtifact.id}`,
+    `  created_at: ${failureArtifact.createdAt}`,
+    '  content:',
+    failureArtifact.content,
+  ].join('\n');
+
+  if (!retrySummaryArtifact) {
+    return rawPayload;
+  }
+
+  const failureArtifactId =
+    retrySummaryArtifact.failureArtifactId === null ? 'null' : String(retrySummaryArtifact.failureArtifactId);
+  rawPayload = `${rawPayload}\nretry_summary_artifact:\n  id: ${retrySummaryArtifact.id}\n  source_attempt: ${retrySummaryArtifact.sourceAttempt}\n  target_attempt: ${retrySummaryArtifact.targetAttempt}\n  failure_artifact_id: ${failureArtifactId}\n  created_at: ${retrySummaryArtifact.createdAt}\n  content:\n${retrySummaryArtifact.content}`;
+  return rawPayload;
+}
+
+function createFailureRouteContextEntry(params: {
+  workflowRunId: number;
+  targetNode: RunNodeExecutionRow;
+  sourceNode: RunNodeExecutionRow | null;
+  failureArtifact: FailureLogArtifact | null;
+  retrySummaryArtifact: RetryFailureSummaryArtifact | null;
+}): FailureRouteContextEntry | null {
+  const { failureArtifact, retrySummaryArtifact, sourceNode, targetNode, workflowRunId } = params;
+  if (!sourceNode || !failureArtifact) {
+    return null;
+  }
+
+  const rawPayload = buildFailureRouteRawPayload({
+    sourceNode,
+    failureArtifact,
+    retrySummaryArtifact,
+  });
+  const includedContent = truncateHeadTail(rawPayload, MAX_FAILURE_ROUTE_CONTEXT_CHARS);
+  const truncation = buildTruncationMetadata(rawPayload.length, includedContent.length);
+
+  return {
+    entry: serializeFailureRouteContextEnvelope({
+      workflowRunId,
+      targetNodeKey: targetNode.nodeKey,
+      sourceNodeKey: sourceNode.nodeKey,
+      sourceRunNodeId: sourceNode.runNodeId,
+      sourceAttempt: sourceNode.attempt,
+      failureArtifactId: failureArtifact.id,
+      retrySummaryArtifactId: retrySummaryArtifact?.id ?? null,
+      createdAt: failureArtifact.createdAt,
+      includedContent,
+      truncation,
+    }),
+    sourceNodeKey: sourceNode.nodeKey,
+    sourceRunNodeId: sourceNode.runNodeId,
+    failureArtifactId: failureArtifact.id,
+    retrySummaryArtifactId: retrySummaryArtifact?.id ?? null,
+    includedChars: truncation.includedChars,
+    truncated: truncation.applied,
+  };
+}
+
+function loadRetrySummaryContextEntry(
+  db: AlphredDatabase,
+  params: {
+    workflowRunId: number;
+    targetNode: RunNodeExecutionRow;
+    targetAttempt: number;
+  },
+): RetrySummaryContextEntry | null {
+  const { targetAttempt, targetNode, workflowRunId } = params;
+  if (targetAttempt <= 1) {
+    return null;
+  }
+
+  const retrySummaryCandidate = loadRetryFailureSummaryArtifact(db, {
+    workflowRunId,
+    runNodeId: targetNode.runNodeId,
+    sourceAttempt: targetAttempt - 1,
+    targetAttempt,
+  });
+  if (!retrySummaryCandidate) {
+    return null;
+  }
+
+  const summaryCharLimit = Math.min(MAX_ERROR_SUMMARY_CHARS, MAX_RETRY_SUMMARY_CONTEXT_CHARS);
+  const includedSummaryContent = truncateHeadTail(retrySummaryCandidate.content, summaryCharLimit);
+  const truncation = buildTruncationMetadata(retrySummaryCandidate.content.length, includedSummaryContent.length);
+  return {
+    entry: serializeRetryFailureSummaryEnvelope({
+      workflowRunId,
+      targetNodeKey: targetNode.nodeKey,
+      sourceAttempt: retrySummaryCandidate.sourceAttempt,
+      targetAttempt: retrySummaryCandidate.targetAttempt,
+      summaryArtifactId: retrySummaryCandidate.id,
+      failureArtifactId: retrySummaryCandidate.failureArtifactId,
+      createdAt: retrySummaryCandidate.createdAt,
+      includedContent: includedSummaryContent,
+      sha256: hashContentSha256(retrySummaryCandidate.content),
+      truncation,
+    }),
+    artifactId: retrySummaryCandidate.id,
+    sourceAttempt: retrySummaryCandidate.sourceAttempt,
+    targetAttempt: retrySummaryCandidate.targetAttempt,
+    includedChars: truncation.includedChars,
+    truncated: truncation.applied,
+  };
+}
+
+function includeContextCandidates(
+  candidateEntries: ContextEnvelopeCandidate[],
+  reservedChars: number,
+): IncludedContextCandidates {
   const includedEntries: ContextEnvelopeEntry[] = [];
   const droppedArtifactIds: number[] = [];
-  const retrySummaryBudget = retrySummaryEntry?.includedChars ?? 0;
-  let remainingChars = Math.max(MAX_CONTEXT_CHARS_TOTAL - retrySummaryBudget, 0);
+  let remainingChars = Math.max(MAX_CONTEXT_CHARS_TOTAL - reservedChars, 0);
   let budgetOverflow = false;
+
   for (const candidate of candidateEntries) {
     if (includedEntries.length >= MAX_UPSTREAM_ARTIFACTS) {
       budgetOverflow = true;
@@ -221,54 +438,199 @@ export function assembleUpstreamArtifactContext(
     remainingChars -= inclusion.includedContent.length;
   }
 
-  const contextEntries = includedEntries.map(entry =>
-    serializeContextEnvelope({
-      workflowRunId: params.workflowRunId,
-      targetNodeKey: params.targetNode.nodeKey,
-      entry,
-    }),
-  );
+  return {
+    includedEntries,
+    droppedArtifactIds,
+    budgetOverflow,
+  };
+}
 
-  let retrySummaryIncluded = false;
-  let retrySummaryArtifactId: number | null = null;
-  let retrySummarySourceAttempt: number | null = null;
-  let retrySummaryTargetAttempt: number | null = null;
-  let retrySummaryChars = 0;
-  let retrySummaryTruncated = false;
+function buildContextEntries(params: {
+  workflowRunId: number;
+  targetNodeKey: string;
+  failureRouteContextEntry: FailureRouteContextEntry | null;
+  includedEntries: ContextEnvelopeEntry[];
+  retrySummaryEntry: RetrySummaryContextEntry | null;
+}): string[] {
+  const { failureRouteContextEntry, includedEntries, retrySummaryEntry, targetNodeKey, workflowRunId } = params;
+  const contextEntries: string[] = [];
+  if (failureRouteContextEntry) {
+    contextEntries.push(failureRouteContextEntry.entry);
+  }
+  contextEntries.push(
+    ...includedEntries.map(entry =>
+      serializeContextEnvelope({
+        workflowRunId,
+        targetNodeKey,
+        entry,
+      }),
+    ),
+  );
   if (retrySummaryEntry) {
     contextEntries.push(retrySummaryEntry.entry);
-    retrySummaryIncluded = true;
-    retrySummaryArtifactId = retrySummaryEntry.artifactId;
-    retrySummarySourceAttempt = retrySummaryEntry.sourceAttempt;
-    retrySummaryTargetAttempt = retrySummaryEntry.targetAttempt;
-    retrySummaryChars = retrySummaryEntry.includedChars;
-    retrySummaryTruncated = retrySummaryEntry.truncated;
   }
+
+  return contextEntries;
+}
+
+function buildFailureRouteManifestFields(
+  failureRouteContextEntry: FailureRouteContextEntry | null,
+): Pick<
+  ContextHandoffManifest,
+  | 'failure_route_context_included'
+  | 'failure_route_source_node_key'
+  | 'failure_route_source_run_node_id'
+  | 'failure_route_failure_artifact_id'
+  | 'failure_route_retry_summary_artifact_id'
+  | 'failure_route_context_chars'
+  | 'failure_route_context_truncated'
+> {
+  if (!failureRouteContextEntry) {
+    return {
+      failure_route_context_included: false,
+      failure_route_source_node_key: null,
+      failure_route_source_run_node_id: null,
+      failure_route_failure_artifact_id: null,
+      failure_route_retry_summary_artifact_id: null,
+      failure_route_context_chars: 0,
+      failure_route_context_truncated: false,
+    };
+  }
+
+  return {
+    failure_route_context_included: true,
+    failure_route_source_node_key: failureRouteContextEntry.sourceNodeKey,
+    failure_route_source_run_node_id: failureRouteContextEntry.sourceRunNodeId,
+    failure_route_failure_artifact_id: failureRouteContextEntry.failureArtifactId,
+    failure_route_retry_summary_artifact_id: failureRouteContextEntry.retrySummaryArtifactId,
+    failure_route_context_chars: failureRouteContextEntry.includedChars,
+    failure_route_context_truncated: failureRouteContextEntry.truncated,
+  };
+}
+
+function buildRetrySummaryManifestFields(
+  retrySummaryEntry: RetrySummaryContextEntry | null,
+): Pick<
+  ContextHandoffManifest,
+  | 'retry_summary_included'
+  | 'retry_summary_artifact_id'
+  | 'retry_summary_source_attempt'
+  | 'retry_summary_target_attempt'
+  | 'retry_summary_chars'
+  | 'retry_summary_truncated'
+> {
+  if (!retrySummaryEntry) {
+    return {
+      retry_summary_included: false,
+      retry_summary_artifact_id: null,
+      retry_summary_source_attempt: null,
+      retry_summary_target_attempt: null,
+      retry_summary_chars: 0,
+      retry_summary_truncated: false,
+    };
+  }
+
+  return {
+    retry_summary_included: true,
+    retry_summary_artifact_id: retrySummaryEntry.artifactId,
+    retry_summary_source_attempt: retrySummaryEntry.sourceAttempt,
+    retry_summary_target_attempt: retrySummaryEntry.targetAttempt,
+    retry_summary_chars: retrySummaryEntry.includedChars,
+    retry_summary_truncated: retrySummaryEntry.truncated,
+  };
+}
+
+export function assembleUpstreamArtifactContext(
+  db: AlphredDatabase,
+  params: {
+    workflowRunId: number;
+    targetNode: RunNodeExecutionRow;
+    targetAttempt: number;
+    latestNodeAttempts: RunNodeExecutionRow[];
+    edgeRows: EdgeRow[];
+    latestRoutingDecisionsByRunNodeId: Map<number, RoutingDecisionRow>;
+    latestArtifactsByRunNodeId: Map<number, LatestArtifact>;
+  },
+): AssembledUpstreamContext {
+  const directPredecessors = selectDirectPredecessorNodes(
+    params.targetNode,
+    params.latestNodeAttempts,
+    params.edgeRows,
+    params.latestRoutingDecisionsByRunNodeId,
+    params.latestArtifactsByRunNodeId,
+  );
+  const predecessorRunNodeIds = directPredecessors.map(node => node.runNodeId);
+  const artifactSelection = loadUpstreamArtifactSelectionByRunNodeId(db, params.workflowRunId, predecessorRunNodeIds);
+  const candidateEntries = collectContextEnvelopeCandidates(
+    directPredecessors,
+    artifactSelection.latestReportsByRunNodeId,
+  );
+
+  const routingSelection = buildRoutingSelection(
+    params.latestNodeAttempts,
+    params.edgeRows,
+    params.latestRoutingDecisionsByRunNodeId,
+    params.latestArtifactsByRunNodeId,
+  );
+  const incomingEdges = routingSelection.incomingEdgesByTargetNodeId.get(params.targetNode.treeNodeId) ?? [];
+  const failureRouteSourceNode = selectFailureRouteSourceNode({
+    targetNode: params.targetNode,
+    incomingEdges,
+    latestByTreeNodeId: routingSelection.latestByTreeNodeId,
+    selectedEdgeIdBySourceNodeId: routingSelection.selectedEdgeIdBySourceNodeId,
+    latestArtifactsByRunNodeId: params.latestArtifactsByRunNodeId,
+  });
+  const failureRouteArtifacts = loadFailureRouteArtifacts(db, {
+    workflowRunId: params.workflowRunId,
+    sourceNode: failureRouteSourceNode,
+  });
+  const failureRouteContextEntry = createFailureRouteContextEntry({
+    workflowRunId: params.workflowRunId,
+    targetNode: params.targetNode,
+    sourceNode: failureRouteSourceNode,
+    failureArtifact: failureRouteArtifacts.failureArtifact,
+    retrySummaryArtifact: failureRouteArtifacts.retrySummaryArtifact,
+  });
+  const retrySummaryEntry = loadRetrySummaryContextEntry(db, {
+    workflowRunId: params.workflowRunId,
+    targetNode: params.targetNode,
+    targetAttempt: params.targetAttempt,
+  });
+  const reservedChars = (failureRouteContextEntry?.includedChars ?? 0) + (retrySummaryEntry?.includedChars ?? 0);
+  const includedCandidateContext = includeContextCandidates(candidateEntries, reservedChars);
+  const contextEntries = buildContextEntries({
+    workflowRunId: params.workflowRunId,
+    targetNodeKey: params.targetNode.nodeKey,
+    failureRouteContextEntry,
+    includedEntries: includedCandidateContext.includedEntries,
+    retrySummaryEntry,
+  });
 
   const hasAnyArtifacts = directPredecessors.some(sourceNode =>
     artifactSelection.runNodeIdsWithAnyArtifacts.has(sourceNode.runNodeId),
   );
+  const failureRouteManifestFields = buildFailureRouteManifestFields(failureRouteContextEntry);
+  const retrySummaryManifestFields = buildRetrySummaryManifestFields(retrySummaryEntry);
   const manifest: ContextHandoffManifest = {
     context_policy_version: CONTEXT_POLICY_VERSION,
-    included_artifact_ids: includedEntries.map(entry => entry.artifactId),
-    included_source_node_keys: includedEntries.map(entry => entry.sourceNodeKey),
-    included_source_run_node_ids: includedEntries.map(entry => entry.sourceRunNodeId),
-    included_count: includedEntries.length,
-    included_chars_total: includedEntries.reduce((total, entry) => total + entry.truncation.includedChars, 0),
-    truncated_artifact_ids: includedEntries
+    included_artifact_ids: includedCandidateContext.includedEntries.map(entry => entry.artifactId),
+    included_source_node_keys: includedCandidateContext.includedEntries.map(entry => entry.sourceNodeKey),
+    included_source_run_node_ids: includedCandidateContext.includedEntries.map(entry => entry.sourceRunNodeId),
+    included_count: includedCandidateContext.includedEntries.length,
+    included_chars_total: includedCandidateContext.includedEntries.reduce(
+      (total, entry) => total + entry.truncation.includedChars,
+      0,
+    ),
+    truncated_artifact_ids: includedCandidateContext.includedEntries
       .filter(entry => entry.truncation.applied)
       .map(entry => entry.artifactId),
-    missing_upstream_artifacts: includedEntries.length === 0,
+    missing_upstream_artifacts: includedCandidateContext.includedEntries.length === 0,
     assembly_timestamp: new Date().toISOString(),
     no_eligible_artifact_types: hasAnyArtifacts && candidateEntries.length === 0,
-    budget_overflow: budgetOverflow,
-    dropped_artifact_ids: droppedArtifactIds,
-    retry_summary_included: retrySummaryIncluded,
-    retry_summary_artifact_id: retrySummaryArtifactId,
-    retry_summary_source_attempt: retrySummarySourceAttempt,
-    retry_summary_target_attempt: retrySummaryTargetAttempt,
-    retry_summary_chars: retrySummaryChars,
-    retry_summary_truncated: retrySummaryTruncated,
+    budget_overflow: includedCandidateContext.budgetOverflow,
+    dropped_artifact_ids: includedCandidateContext.droppedArtifactIds,
+    ...failureRouteManifestFields,
+    ...retrySummaryManifestFields,
   };
 
   return {
@@ -291,6 +653,13 @@ export function createEmptyContextManifest(assemblyTimestamp = new Date().toISOS
     no_eligible_artifact_types: false,
     budget_overflow: false,
     dropped_artifact_ids: [],
+    failure_route_context_included: false,
+    failure_route_source_node_key: null,
+    failure_route_source_run_node_id: null,
+    failure_route_failure_artifact_id: null,
+    failure_route_retry_summary_artifact_id: null,
+    failure_route_context_chars: 0,
+    failure_route_context_truncated: false,
     retry_summary_included: false,
     retry_summary_artifact_id: null,
     retry_summary_source_attempt: null,

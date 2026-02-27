@@ -172,8 +172,11 @@ export function resolveExecutionTerminalNotificationPreviousStatus(
   return previousRunStatus;
 }
 
-export function resolveRunStatusFromNodes(latestNodeAttempts: RunNodeExecutionRow[]): WorkflowRunStatus {
-  if (latestNodeAttempts.some(node => node.status === 'failed')) {
+export function resolveRunStatusFromNodes(
+  latestNodeAttempts: RunNodeExecutionRow[],
+  handledFailedSourceNodeIds: ReadonlySet<number> = new Set<number>(),
+): WorkflowRunStatus {
+  if (latestNodeAttempts.some(node => node.status === 'failed' && !handledFailedSourceNodeIds.has(node.treeNodeId))) {
     return 'failed';
   }
 
@@ -458,12 +461,15 @@ export function resolveNoRunnableOutcome(
   db: AlphredDatabase,
   run: WorkflowRunRow,
   latestNodeAttempts: RunNodeExecutionRow[],
+  handledFailedSourceNodeIds: ReadonlySet<number>,
   hasNoRouteDecision: boolean,
   hasUnresolvedDecision: boolean,
 ): ExecuteNextRunnableNodeResult {
   const hasPending = latestNodeAttempts.some(node => node.status === 'pending');
   const hasRunning = latestNodeAttempts.some(node => node.status === 'running');
-  const hasTerminalFailure = latestNodeAttempts.some(node => node.status === 'failed');
+  const hasTerminalFailure = latestNodeAttempts.some(
+    node => node.status === 'failed' && !handledFailedSourceNodeIds.has(node.treeNodeId),
+  );
 
   if (hasNoRouteDecision || hasUnresolvedDecision) {
     const runStatus = transitionRunToCurrentForExecutor(db, run.id, 'failed');

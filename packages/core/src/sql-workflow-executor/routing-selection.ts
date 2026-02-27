@@ -5,6 +5,7 @@ import { readRoutingDecisionAttempt, selectFirstMatchingOutgoingEdge } from './r
 import { isRecord, normalizeArtifactContentType, toRoutingDecisionType } from './type-conversions.js';
 import type {
   EdgeRow,
+  FailureLogArtifact,
   LatestArtifact,
   RetryFailureSummaryArtifact,
   RoutingDecisionRow,
@@ -57,6 +58,46 @@ function resolveIntegerMetadataValue(metadata: Record<string, unknown>, key: str
   return value as number;
 }
 
+export function loadLatestFailureArtifact(
+  db: AlphredDatabase,
+  params: {
+    workflowRunId: number;
+    runNodeId: number;
+  },
+): FailureLogArtifact | null {
+  const rows = db
+    .select({
+      id: phaseArtifacts.id,
+      runNodeId: phaseArtifacts.runNodeId,
+      content: phaseArtifacts.content,
+      createdAt: phaseArtifacts.createdAt,
+      metadata: phaseArtifacts.metadata,
+    })
+    .from(phaseArtifacts)
+    .where(
+      and(
+        eq(phaseArtifacts.workflowRunId, params.workflowRunId),
+        eq(phaseArtifacts.runNodeId, params.runNodeId),
+        eq(phaseArtifacts.artifactType, 'log'),
+      ),
+    )
+    .orderBy(asc(phaseArtifacts.createdAt), asc(phaseArtifacts.id))
+    .all();
+
+  let latest: FailureLogArtifact | null = null;
+  for (const row of rows) {
+    latest = {
+      id: row.id,
+      runNodeId: row.runNodeId,
+      content: row.content,
+      createdAt: row.createdAt,
+      metadata: isRecord(row.metadata) ? row.metadata : null,
+    };
+  }
+
+  return latest;
+}
+
 export function loadRetryFailureSummaryArtifact(
   db: AlphredDatabase,
   params: {
@@ -102,6 +143,63 @@ export function loadRetryFailureSummaryArtifact(
 
     const targetAttempt = resolveIntegerMetadataValue(row.metadata, 'targetAttempt');
     if (targetAttempt !== params.targetAttempt) {
+      continue;
+    }
+
+    const failureArtifactId = resolveIntegerMetadataValue(row.metadata, 'failureArtifactId');
+    latest = {
+      id: row.id,
+      runNodeId: row.runNodeId,
+      sourceAttempt,
+      targetAttempt,
+      failureArtifactId,
+      content: row.content,
+      createdAt: row.createdAt,
+    };
+  }
+
+  return latest;
+}
+
+export function loadLatestRetryFailureSummaryArtifact(
+  db: AlphredDatabase,
+  params: {
+    workflowRunId: number;
+    runNodeId: number;
+  },
+): RetryFailureSummaryArtifact | null {
+  const rows = db
+    .select({
+      id: phaseArtifacts.id,
+      runNodeId: phaseArtifacts.runNodeId,
+      content: phaseArtifacts.content,
+      createdAt: phaseArtifacts.createdAt,
+      metadata: phaseArtifacts.metadata,
+    })
+    .from(phaseArtifacts)
+    .where(
+      and(
+        eq(phaseArtifacts.workflowRunId, params.workflowRunId),
+        eq(phaseArtifacts.runNodeId, params.runNodeId),
+        eq(phaseArtifacts.artifactType, 'note'),
+      ),
+    )
+    .orderBy(asc(phaseArtifacts.createdAt), asc(phaseArtifacts.id))
+    .all();
+
+  let latest: RetryFailureSummaryArtifact | null = null;
+  for (const row of rows) {
+    if (!isRecord(row.metadata)) {
+      continue;
+    }
+
+    if (row.metadata.kind !== ERROR_HANDLER_SUMMARY_METADATA_KIND) {
+      continue;
+    }
+
+    const sourceAttempt = resolveIntegerMetadataValue(row.metadata, 'sourceAttempt');
+    const targetAttempt = resolveIntegerMetadataValue(row.metadata, 'targetAttempt');
+    if (sourceAttempt === null || targetAttempt === null) {
       continue;
     }
 
@@ -267,6 +365,94 @@ export function resolveCompletedSourceNodeRouting(
   };
 }
 
+function selectFirstFailureOutgoingEdge(outgoingEdges: EdgeRow[]): EdgeRow | null {
+  for (const edge of outgoingEdges) {
+    if (edge.routeOn === 'failure') {
+      return edge;
+    }
+  }
+
+  return null;
+}
+
+function isExecutableFailureRouteTarget(node: RunNodeExecutionRow | undefined): boolean {
+  if (!node) {
+    return false;
+  }
+
+  return node.status === 'pending' || node.status === 'running' || node.status === 'completed';
+}
+
+type RoutingSelectionMutationState = {
+  selectedEdgeIdBySourceNodeId: Map<number, number>;
+  handledFailedSourceNodeIds: Set<number>;
+  unresolvedDecisionSourceNodeIds: Set<number>;
+  hasNoRouteDecision: boolean;
+};
+
+function createRoutingSelectionMutationState(): RoutingSelectionMutationState {
+  return {
+    selectedEdgeIdBySourceNodeId: new Map<number, number>(),
+    handledFailedSourceNodeIds: new Set<number>(),
+    unresolvedDecisionSourceNodeIds: new Set<number>(),
+    hasNoRouteDecision: false,
+  };
+}
+
+function applyFailedSourceNodeSelection(params: {
+  sourceNode: RunNodeExecutionRow;
+  outgoingEdges: EdgeRow[];
+  latestByTreeNodeId: Map<number, RunNodeExecutionRow>;
+  selectionState: RoutingSelectionMutationState;
+}): void {
+  const { latestByTreeNodeId, outgoingEdges, selectionState, sourceNode } = params;
+  const selectedFailureEdge = selectFirstFailureOutgoingEdge(outgoingEdges);
+  if (!selectedFailureEdge) {
+    return;
+  }
+
+  selectionState.selectedEdgeIdBySourceNodeId.set(sourceNode.treeNodeId, selectedFailureEdge.edgeId);
+  const targetNode = latestByTreeNodeId.get(selectedFailureEdge.targetNodeId);
+  if (isExecutableFailureRouteTarget(targetNode)) {
+    selectionState.handledFailedSourceNodeIds.add(sourceNode.treeNodeId);
+  }
+}
+
+function applyCompletedSourceNodeSelection(params: {
+  sourceNode: RunNodeExecutionRow;
+  outgoingEdges: EdgeRow[];
+  latestRoutingDecisionsByRunNodeId: Map<number, RoutingDecisionRow>;
+  latestArtifactsByRunNodeId: Map<number, LatestArtifact>;
+  selectionState: RoutingSelectionMutationState;
+}): void {
+  const {
+    latestArtifactsByRunNodeId,
+    latestRoutingDecisionsByRunNodeId,
+    outgoingEdges,
+    selectionState,
+    sourceNode,
+  } = params;
+  const successOutgoingEdges = outgoingEdges.filter(edge => edge.routeOn === 'success');
+  const routing = resolveCompletedSourceNodeRouting(
+    sourceNode,
+    successOutgoingEdges,
+    latestRoutingDecisionsByRunNodeId,
+    latestArtifactsByRunNodeId,
+  );
+
+  if (routing.selectedEdgeId !== null) {
+    selectionState.selectedEdgeIdBySourceNodeId.set(sourceNode.treeNodeId, routing.selectedEdgeId);
+  }
+
+  if (routing.hasNoRouteDecision) {
+    selectionState.hasNoRouteDecision = true;
+  }
+
+  if (routing.hasUnresolvedDecision) {
+    selectionState.unresolvedDecisionSourceNodeIds.add(sourceNode.treeNodeId);
+  }
+}
+
 export function buildRoutingSelection(
   latestNodeAttempts: RunNodeExecutionRow[],
   edges: EdgeRow[],
@@ -281,38 +467,37 @@ export function buildRoutingSelection(
     appendEdgeToNodeMap(outgoingEdgesBySourceNodeId, edge.sourceNodeId, edge);
   }
 
-  const selectedEdgeIdBySourceNodeId = new Map<number, number>();
-  const unresolvedDecisionSourceNodeIds = new Set<number>();
-  let hasNoRouteDecision = false;
+  const selectionState = createRoutingSelectionMutationState();
   for (const sourceNode of latestNodeAttempts) {
-    if (sourceNode.status !== 'completed') {
+    const outgoingEdges = outgoingEdgesBySourceNodeId.get(sourceNode.treeNodeId) ?? [];
+    if (sourceNode.status === 'failed') {
+      applyFailedSourceNodeSelection({
+        sourceNode,
+        outgoingEdges,
+        latestByTreeNodeId,
+        selectionState,
+      });
       continue;
     }
 
-    const outgoingEdges = outgoingEdgesBySourceNodeId.get(sourceNode.treeNodeId) ?? [];
-    const routing = resolveCompletedSourceNodeRouting(
-      sourceNode,
-      outgoingEdges,
-      latestRoutingDecisionsByRunNodeId,
-      latestArtifactsByRunNodeId,
-    );
-    if (routing.selectedEdgeId !== null) {
-      selectedEdgeIdBySourceNodeId.set(sourceNode.treeNodeId, routing.selectedEdgeId);
-    }
-    if (routing.hasNoRouteDecision) {
-      hasNoRouteDecision = true;
-    }
-    if (routing.hasUnresolvedDecision) {
-      unresolvedDecisionSourceNodeIds.add(sourceNode.treeNodeId);
+    if (sourceNode.status === 'completed') {
+      applyCompletedSourceNodeSelection({
+        sourceNode,
+        outgoingEdges,
+        latestRoutingDecisionsByRunNodeId,
+        latestArtifactsByRunNodeId,
+        selectionState,
+      });
     }
   }
 
   return {
     latestByTreeNodeId,
     incomingEdgesByTargetNodeId,
-    selectedEdgeIdBySourceNodeId,
-    unresolvedDecisionSourceNodeIds,
-    hasNoRouteDecision,
-    hasUnresolvedDecision: unresolvedDecisionSourceNodeIds.size > 0,
+    selectedEdgeIdBySourceNodeId: selectionState.selectedEdgeIdBySourceNodeId,
+    handledFailedSourceNodeIds: selectionState.handledFailedSourceNodeIds,
+    unresolvedDecisionSourceNodeIds: selectionState.unresolvedDecisionSourceNodeIds,
+    hasNoRouteDecision: selectionState.hasNoRouteDecision,
+    hasUnresolvedDecision: selectionState.unresolvedDecisionSourceNodeIds.size > 0,
   };
 }

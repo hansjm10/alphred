@@ -97,6 +97,7 @@ export type DashboardWorkflowDraftNode = {
 export type DashboardWorkflowDraftEdge = {
   sourceNodeKey: string;
   targetNodeKey: string;
+  routeOn?: 'success' | 'failure';
   priority: number;
   auto: boolean;
   guardExpression: GuardExpression | null;
@@ -269,6 +270,13 @@ export type DashboardRunNodeDiagnosticPayload = {
   events: DashboardRunNodeDiagnosticEvent[];
   toolEvents: DashboardRunNodeDiagnosticToolEvent[];
   routingDecision: 'approved' | 'changes_requested' | 'blocked' | 'retry' | null;
+  failureRoute?: {
+    attempted: boolean;
+    selectedEdgeId: number | null;
+    targetNodeId: number | null;
+    targetNodeKey: string | null;
+    status: 'selected' | 'no_route' | 'skipped_terminal';
+  };
   error: {
     name: string;
     message: string;

@@ -755,6 +755,74 @@ describe('database schema hardening', () => {
         guardDefinitionId: seed.guardDefinitionId,
       }).run(),
     ).not.toThrow();
+
+    expect(() =>
+      db.insert(treeEdges).values({
+        workflowTreeId: seed.treeId,
+        sourceNodeId: seed.sourceNodeId,
+        targetNodeId: seed.targetNodeId,
+        routeOn: 'failure',
+        priority: 5,
+        auto: 0,
+        guardDefinitionId: seed.guardDefinitionId,
+      }).run(),
+    ).toThrow();
+
+    expect(() =>
+      db.insert(treeEdges).values({
+        workflowTreeId: seed.treeId,
+        sourceNodeId: seed.sourceNodeId,
+        targetNodeId: seed.targetNodeId,
+        routeOn: 'failure',
+        priority: 6,
+        auto: 1,
+      }).run(),
+    ).not.toThrow();
+  });
+
+  it('defaults tree_edges.route_on to success and scopes sibling priority uniqueness by route_on', () => {
+    const db = createDatabase(':memory:');
+    migrateDatabase(db);
+    const seed = seedTreeState(db);
+
+    const inserted = db
+      .insert(treeEdges)
+      .values({
+        workflowTreeId: seed.treeId,
+        sourceNodeId: seed.sourceNodeId,
+        targetNodeId: seed.targetNodeId,
+        priority: 7,
+        auto: 1,
+      })
+      .returning({
+        id: treeEdges.id,
+        routeOn: treeEdges.routeOn,
+      })
+      .get();
+
+    expect(inserted.routeOn).toBe('success');
+
+    expect(() =>
+      db.insert(treeEdges).values({
+        workflowTreeId: seed.treeId,
+        sourceNodeId: seed.sourceNodeId,
+        targetNodeId: seed.targetNodeId,
+        routeOn: 'success',
+        priority: 7,
+        auto: 1,
+      }).run(),
+    ).toThrow();
+
+    expect(() =>
+      db.insert(treeEdges).values({
+        workflowTreeId: seed.treeId,
+        sourceNodeId: seed.sourceNodeId,
+        targetNodeId: seed.targetNodeId,
+        routeOn: 'failure',
+        priority: 7,
+        auto: 1,
+      }).run(),
+    ).not.toThrow();
   });
 
   it('enforces run-node node_key consistency with referenced tree nodes', () => {

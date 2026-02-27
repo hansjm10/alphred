@@ -51,6 +51,7 @@ export type PlannedTreeEdge = {
   id: number;
   sourceNodeId: number;
   targetNodeId: number;
+  routeOn: 'success' | 'failure';
   priority: number;
   auto: boolean;
   guardDefinition: PlannedGuardDefinition | null;
@@ -177,6 +178,11 @@ function sortPlannedEdges(edges: PlannedTreeEdge[], nodes: PlannedTreeNode[]): P
     const bySourceSequence = compareNumbers(sourceSequenceA, sourceSequenceB);
     if (bySourceSequence !== 0) {
       return bySourceSequence;
+    }
+
+    const byRouteOn = compareStringsByCodeUnit(a.routeOn, b.routeOn);
+    if (byRouteOn !== 0) {
+      return byRouteOn;
     }
 
     const byPriority = compareNumbers(a.priority, b.priority);
@@ -323,6 +329,7 @@ export function loadWorkflowTreeTopology(
       edgeId: treeEdges.id,
       sourceNodeId: treeEdges.sourceNodeId,
       targetNodeId: treeEdges.targetNodeId,
+      routeOn: treeEdges.routeOn,
       priority: treeEdges.priority,
       auto: treeEdges.auto,
       guardDefinitionId: guardDefinitions.id,
@@ -334,7 +341,7 @@ export function loadWorkflowTreeTopology(
     .from(treeEdges)
     .leftJoin(guardDefinitions, eq(treeEdges.guardDefinitionId, guardDefinitions.id))
     .where(eq(treeEdges.workflowTreeId, tree.id))
-    .orderBy(asc(treeEdges.sourceNodeId), asc(treeEdges.priority), asc(treeEdges.targetNodeId), asc(treeEdges.id))
+    .orderBy(asc(treeEdges.sourceNodeId), asc(treeEdges.routeOn), asc(treeEdges.priority), asc(treeEdges.targetNodeId), asc(treeEdges.id))
     .all();
 
   const edges = sortPlannedEdges(
@@ -342,6 +349,7 @@ export function loadWorkflowTreeTopology(
       id: row.edgeId,
       sourceNodeId: row.sourceNodeId,
       targetNodeId: row.targetNodeId,
+      routeOn: row.routeOn === 'failure' ? 'failure' : 'success',
       priority: row.priority,
       auto: row.auto === 1,
       guardDefinition:

@@ -42,6 +42,10 @@ export function isGuardExpression(value: unknown): value is GuardExpression {
 }
 
 export function doesEdgeMatchDecision(edge: EdgeRow, decisionType: RoutingDecisionType | null): boolean {
+  if (edge.routeOn !== 'success') {
+    return false;
+  }
+
   if (edge.auto === 1) {
     return true;
   }

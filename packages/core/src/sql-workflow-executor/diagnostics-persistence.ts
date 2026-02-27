@@ -13,6 +13,7 @@ import type {
   ContextHandoffManifest,
   RouteDecisionSignal,
   RunNodeErrorHandlerDiagnostics,
+  RunNodeFailureRouteDiagnostics,
   RunNodeExecutionRow,
   StreamUsageState,
 } from './types.js';
@@ -115,6 +116,7 @@ export function persistRunNodeAttemptDiagnostics(
     tokensUsed: number;
     events: ProviderEvent[];
     routingDecision: RouteDecisionSignal | null;
+    failureRoute?: RunNodeFailureRouteDiagnostics;
     error: unknown;
     errorHandler?: RunNodeErrorHandlerDiagnostics;
   },

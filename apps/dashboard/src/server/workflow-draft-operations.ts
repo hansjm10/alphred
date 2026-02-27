@@ -11,6 +11,7 @@ import { loadAgentCatalog, resolveDefaultModelForProvider, type AgentCatalog } f
 import type {
   DashboardCreateWorkflowRequest,
   DashboardCreateWorkflowResult,
+  DashboardWorkflowDraftEdge,
   DashboardWorkflowDraftTopology,
   DashboardWorkflowValidationResult,
   DashboardSaveWorkflowDraftRequest,
@@ -130,10 +131,11 @@ export function loadDraftTopologyByTreeId(
       .map((row) => [row.id, row.nodeKey]),
   );
 
-  const edges = db
+  const edges: DashboardWorkflowDraftEdge[] = db
     .select({
       sourceNodeId: treeEdges.sourceNodeId,
       targetNodeId: treeEdges.targetNodeId,
+      routeOn: treeEdges.routeOn,
       priority: treeEdges.priority,
       auto: treeEdges.auto,
       guardExpression: guardDefinitions.expression,
@@ -141,11 +143,12 @@ export function loadDraftTopologyByTreeId(
     .from(treeEdges)
     .leftJoin(guardDefinitions, eq(treeEdges.guardDefinitionId, guardDefinitions.id))
     .where(eq(treeEdges.workflowTreeId, treeId))
-    .orderBy(asc(treeEdges.sourceNodeId), asc(treeEdges.priority), asc(treeEdges.targetNodeId), asc(treeEdges.id))
+    .orderBy(asc(treeEdges.sourceNodeId), asc(treeEdges.routeOn), asc(treeEdges.priority), asc(treeEdges.targetNodeId), asc(treeEdges.id))
     .all()
     .map((row) => ({
       sourceNodeKey: nodeKeyById.get(row.sourceNodeId) ?? 'unknown',
       targetNodeKey: nodeKeyById.get(row.targetNodeId) ?? 'unknown',
+      routeOn: row.routeOn === 'failure' ? 'failure' : 'success',
       priority: row.priority,
       auto: row.auto === 1,
       guardExpression: row.auto === 1 ? null : (row.guardExpression as import('@alphred/shared').GuardExpression | null),
@@ -490,13 +493,14 @@ export function createWorkflowDraftOperations(params: {
               .select({
                 sourceNodeId: treeEdges.sourceNodeId,
                 targetNodeId: treeEdges.targetNodeId,
+                routeOn: treeEdges.routeOn,
                 priority: treeEdges.priority,
                 auto: treeEdges.auto,
                 guardDefinitionId: treeEdges.guardDefinitionId,
               })
               .from(treeEdges)
               .where(eq(treeEdges.workflowTreeId, published.id))
-              .orderBy(asc(treeEdges.sourceNodeId), asc(treeEdges.priority), asc(treeEdges.id))
+              .orderBy(asc(treeEdges.sourceNodeId), asc(treeEdges.routeOn), asc(treeEdges.priority), asc(treeEdges.id))
               .all();
 
             const guardDefinitionIds = publishedEdges
@@ -548,6 +552,7 @@ export function createWorkflowDraftOperations(params: {
                   workflowTreeId: draftTreeId,
                   sourceNodeId,
                   targetNodeId,
+                  routeOn: edge.routeOn === 'failure' ? 'failure' : 'success',
                   priority: edge.priority,
                   auto: edge.auto,
                   guardDefinitionId:
@@ -784,7 +789,8 @@ export function createWorkflowDraftOperations(params: {
             if (edge.auto || edge.guardExpression === null) {
               continue;
             }
-            const key = `${edge.sourceNodeKey}->${edge.targetNodeKey}/priority-${edge.priority}`;
+            const routeOn = edge.routeOn === 'failure' ? 'failure' : 'success';
+            const key = `${routeOn}/${edge.sourceNodeKey}->${edge.targetNodeKey}/priority-${edge.priority}`;
             const inserted = tx
               .insert(guardDefinitions)
               .values({
@@ -812,7 +818,8 @@ export function createWorkflowDraftOperations(params: {
               );
             }
 
-            const key = `${edge.sourceNodeKey}->${edge.targetNodeKey}/priority-${edge.priority}`;
+            const routeOn = edge.routeOn === 'failure' ? 'failure' : 'success';
+            const key = `${routeOn}/${edge.sourceNodeKey}->${edge.targetNodeKey}/priority-${edge.priority}`;
             if (!edge.auto && !guardDefinitionIdByKey.has(key)) {
               throw new DashboardIntegrationError(
                 'internal_error',
@@ -828,6 +835,7 @@ export function createWorkflowDraftOperations(params: {
                 workflowTreeId: tree.id,
                 sourceNodeId,
                 targetNodeId,
+                routeOn,
                 priority: edge.priority,
                 auto: edge.auto ? 1 : 0,
                 guardDefinitionId: edge.auto ? null : (guardDefinitionIdByKey.get(key) ?? null),

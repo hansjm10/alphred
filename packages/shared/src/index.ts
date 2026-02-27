@@ -73,6 +73,7 @@ export type AuthStatus = {
 // Guard operator types
 export type GuardOperator = '==' | '!=' | '>' | '<' | '>=' | '<=';
 export type GuardLogical = 'and' | 'or';
+export type TransitionRouteOn = 'success' | 'failure';
 
 // Guard expression: a single condition or a logical combination
 export type GuardCondition = {
@@ -88,6 +89,7 @@ export type GuardExpression =
 // Transition definition
 export type Transition = {
   target: string;
+  routeOn?: TransitionRouteOn;
   priority: number;
   auto?: boolean;
   when?: GuardExpression;

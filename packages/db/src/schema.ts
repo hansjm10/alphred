@@ -230,21 +230,27 @@ export const treeEdges = sqliteTable(
     targetNodeId: integer('target_node_id')
       .notNull()
       .references(() => treeNodes.id, { onDelete: 'cascade' }),
+    routeOn: text('route_on').notNull().default('success'),
     priority: integer('priority').notNull(),
     auto: integer('auto').notNull().default(0),
     guardDefinitionId: integer('guard_definition_id').references(() => guardDefinitions.id, { onDelete: 'restrict' }),
     createdAt: text('created_at').notNull().default(utcNow),
   },
   table => ({
-    sourcePriorityUnique: uniqueIndex('tree_edges_source_priority_uq').on(table.sourceNodeId, table.priority),
+    sourcePriorityUnique: uniqueIndex('tree_edges_source_priority_uq').on(table.sourceNodeId, table.routeOn, table.priority),
+    routeOnCheck: check('tree_edges_route_on_ck', sql`${table.routeOn} in ('success', 'failure')`),
     autoBooleanCheck: check('tree_edges_auto_bool_ck', sql`${table.auto} in (0, 1)`),
     priorityCheck: check('tree_edges_priority_ck', sql`${table.priority} >= 0`),
     transitionModeCheck: check(
       'tree_edges_transition_mode_ck',
       sql`(
-        ${table.auto} = 1 and ${table.guardDefinitionId} is null
+        ${table.routeOn} = 'success' and (
+          (${table.auto} = 1 and ${table.guardDefinitionId} is null)
+          or
+          (${table.auto} = 0 and ${table.guardDefinitionId} is not null)
+        )
       ) or (
-        ${table.auto} = 0 and ${table.guardDefinitionId} is not null
+        ${table.routeOn} = 'failure' and ${table.auto} = 1 and ${table.guardDefinitionId} is null
       )`,
     ),
     sourceNodeIdx: index('tree_edges_source_node_idx').on(table.sourceNodeId),

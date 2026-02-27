@@ -49,6 +49,7 @@ export type EdgeRow = {
   edgeId: number;
   sourceNodeId: number;
   targetNodeId: number;
+  routeOn: 'success' | 'failure';
   priority: number;
   auto: number;
   guardExpression: unknown;
@@ -84,6 +85,7 @@ export type WorkflowRunNodeSelector =
 export type NextRunnableSelection = {
   nextRunnableNode: RunNodeExecutionRow | null;
   latestNodeAttempts: RunNodeExecutionRow[];
+  handledFailedSourceNodeIds: Set<number>;
   hasNoRouteDecision: boolean;
   hasUnresolvedDecision: boolean;
 };
@@ -92,6 +94,7 @@ export type RoutingSelection = {
   latestByTreeNodeId: Map<number, RunNodeExecutionRow>;
   incomingEdgesByTargetNodeId: Map<number, EdgeRow[]>;
   selectedEdgeIdBySourceNodeId: Map<number, number>;
+  handledFailedSourceNodeIds: Set<number>;
   unresolvedDecisionSourceNodeIds: Set<number>;
   hasNoRouteDecision: boolean;
   hasUnresolvedDecision: boolean;
@@ -123,6 +126,14 @@ export type RetryFailureSummaryArtifact = {
   failureArtifactId: number | null;
   content: string;
   createdAt: string;
+};
+
+export type FailureLogArtifact = {
+  id: number;
+  runNodeId: number;
+  content: string;
+  createdAt: string;
+  metadata: Record<string, unknown> | null;
 };
 
 export type ContextEnvelopeTruncation = {
@@ -162,6 +173,13 @@ export type ContextHandoffManifest = {
   no_eligible_artifact_types: boolean;
   budget_overflow: boolean;
   dropped_artifact_ids: number[];
+  failure_route_context_included: boolean;
+  failure_route_source_node_key: string | null;
+  failure_route_source_run_node_id: number | null;
+  failure_route_failure_artifact_id: number | null;
+  failure_route_retry_summary_artifact_id: number | null;
+  failure_route_context_chars: number;
+  failure_route_context_truncated: boolean;
   retry_summary_included: boolean;
   retry_summary_artifact_id: number | null;
   retry_summary_source_attempt: number | null;
@@ -222,6 +240,14 @@ export type RunNodeErrorHandlerDiagnostics = {
   errorMessage: string | null;
 };
 
+export type RunNodeFailureRouteDiagnostics = {
+  attempted: boolean;
+  selectedEdgeId: number | null;
+  targetNodeId: number | null;
+  targetNodeKey: string | null;
+  status: 'selected' | 'no_route' | 'skipped_terminal';
+};
+
 export type RunNodeDiagnosticsPayload = {
   schemaVersion: 1;
   workflowRunId: number;
@@ -252,6 +278,7 @@ export type RunNodeDiagnosticsPayload = {
   events: DiagnosticEvent[];
   toolEvents: DiagnosticToolEvent[];
   routingDecision: RouteDecisionSignal | null;
+  failureRoute?: RunNodeFailureRouteDiagnostics;
   error: DiagnosticErrorDetails | null;
   errorHandler?: RunNodeErrorHandlerDiagnostics;
 };

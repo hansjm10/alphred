@@ -765,6 +765,113 @@ describe('PUT /api/dashboard/workflows/[treeKey]/draft', () => {
     expect(saveWorkflowDraftMock).not.toHaveBeenCalled();
   });
 
+  it('returns 400 when edge routeOn mode is invalid', async () => {
+    const request = new Request('http://localhost/api/dashboard/workflows/demo-tree/draft?version=1', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        draftRevision: 1,
+        name: 'Demo Tree',
+        nodes: [],
+        edges: [
+          {
+            sourceNodeKey: 'design',
+            targetNodeKey: 'implement',
+            routeOn: 'unknown',
+            priority: 100,
+            auto: true,
+          },
+        ],
+      }),
+    });
+
+    const response = await PUT(request, { params: Promise.resolve({ treeKey: 'demo-tree' }) });
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      error: {
+        code: 'invalid_request',
+        message: 'Draft edge at index 0 has an invalid routeOn mode.',
+        details: {
+          field: 'edges[0].routeOn',
+        },
+      },
+    });
+    expect(saveWorkflowDraftMock).not.toHaveBeenCalled();
+  });
+
+  it('returns 400 when routeOn=failure edge is not auto', async () => {
+    const request = new Request('http://localhost/api/dashboard/workflows/demo-tree/draft?version=1', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        draftRevision: 1,
+        name: 'Demo Tree',
+        nodes: [],
+        edges: [
+          {
+            sourceNodeKey: 'design',
+            targetNodeKey: 'implement',
+            routeOn: 'failure',
+            priority: 100,
+            auto: false,
+            guardExpression: null,
+          },
+        ],
+      }),
+    });
+
+    const response = await PUT(request, { params: Promise.resolve({ treeKey: 'demo-tree' }) });
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      error: {
+        code: 'invalid_request',
+        message: 'Draft edge at index 0 with routeOn="failure" must set auto=true.',
+        details: {
+          field: 'edges[0].auto',
+        },
+      },
+    });
+    expect(saveWorkflowDraftMock).not.toHaveBeenCalled();
+  });
+
+  it('returns 400 when routeOn=failure edge includes a guardExpression', async () => {
+    const request = new Request('http://localhost/api/dashboard/workflows/demo-tree/draft?version=1', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        draftRevision: 1,
+        name: 'Demo Tree',
+        nodes: [],
+        edges: [
+          {
+            sourceNodeKey: 'design',
+            targetNodeKey: 'implement',
+            routeOn: 'failure',
+            priority: 100,
+            auto: true,
+            guardExpression: { field: 'decision', operator: '==', value: 'blocked' },
+          },
+        ],
+      }),
+    });
+
+    const response = await PUT(request, { params: Promise.resolve({ treeKey: 'demo-tree' }) });
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      error: {
+        code: 'invalid_request',
+        message: 'Draft edge at index 0 with routeOn="failure" must not include guardExpression.',
+        details: {
+          field: 'edges[0].guardExpression',
+        },
+      },
+    });
+    expect(saveWorkflowDraftMock).not.toHaveBeenCalled();
+  });
+
   it('saves workflow drafts via the dashboard service', async () => {
     saveWorkflowDraftMock.mockResolvedValue({
       treeKey: 'demo-tree',
@@ -801,6 +908,56 @@ describe('PUT /api/dashboard/workflows/[treeKey]/draft', () => {
       },
     });
     expect(saveWorkflowDraftMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('accepts routeOn=failure edges when auto and guardless', async () => {
+    saveWorkflowDraftMock.mockResolvedValue({
+      treeKey: 'demo-tree',
+      version: 1,
+      draftRevision: 2,
+      name: 'Demo Tree',
+      description: null,
+      versionNotes: null,
+      nodes: [],
+      edges: [],
+      initialRunnableNodeKeys: [],
+    });
+
+    const request = new Request('http://localhost/api/dashboard/workflows/demo-tree/draft?version=1', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        draftRevision: 2,
+        name: 'Demo Tree',
+        nodes: [],
+        edges: [
+          {
+            sourceNodeKey: 'design',
+            targetNodeKey: 'remediation',
+            routeOn: 'failure',
+            priority: 100,
+            auto: true,
+            guardExpression: null,
+          },
+        ],
+      }),
+    });
+
+    const response = await PUT(request, { params: Promise.resolve({ treeKey: 'demo-tree' }) });
+
+    expect(response.status).toBe(200);
+    expect(saveWorkflowDraftMock).toHaveBeenCalledWith('demo-tree', 1, expect.objectContaining({
+      edges: [
+        expect.objectContaining({
+          sourceNodeKey: 'design',
+          targetNodeKey: 'remediation',
+          routeOn: 'failure',
+          priority: 100,
+          auto: true,
+          guardExpression: null,
+        }),
+      ],
+    }));
   });
 
   it('accepts node and edge payloads when saving drafts', async () => {
@@ -999,6 +1156,7 @@ describe('PUT /api/dashboard/workflows/[treeKey]/draft', () => {
         {
           sourceNodeKey: 'design',
           targetNodeKey: 'design',
+          routeOn: 'success',
           priority: 100,
           auto: false,
           guardExpression: null,
