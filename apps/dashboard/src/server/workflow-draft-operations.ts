@@ -7,6 +7,7 @@ import {
   workflowTrees,
   type AlphredDatabase,
 } from '@alphred/db';
+import { routingDecisionSignals } from '@alphred/shared';
 import { loadAgentCatalog, resolveDefaultModelForProvider, type AgentCatalog } from './agent-catalog';
 import type {
   DashboardCreateWorkflowRequest,
@@ -44,13 +45,10 @@ export type WorkflowDraftOperations = {
 };
 
 const seededReviewRoutingContract = [
-  'Routing metadata contract (required):',
+  'Routing metadata contract (required when guarded success routes are configured):',
   '- Emit terminal metadata key `result.metadata.routingDecision`.',
-  '- Allowed values: `approved`, `changes_requested`, `blocked`, `retry`.',
-  '- Use `approved` when implementation is acceptable as-is.',
-  '- Use `changes_requested` when additional implementation work is required.',
-  '- Use `blocked` when progress is blocked by an external dependency.',
-  '- Use `retry` for transient execution issues that should retry this node.',
+  `- Canonical values: ${routingDecisionSignals.map(signal => `\`${signal}\``).join(', ')}.`,
+  '- Choose the value that matches this workflow\'s guarded success route conditions.',
   '- Do not omit `routingDecision`.',
 ].join('\n');
 

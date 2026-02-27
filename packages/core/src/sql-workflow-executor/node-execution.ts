@@ -1,9 +1,11 @@
 import { transitionRunNodeStatus, type AlphredDatabase, type RunNodeStatus, type WorkflowRunStatus } from '@alphred/db';
-import type {
-  AgentProviderName,
-  PhaseDefinition,
-  ProviderEvent,
-  ProviderRunOptions,
+import {
+  routingDecisionSignals,
+  type AgentProviderName,
+  type PhaseDefinition,
+  type ProviderEvent,
+  type ProviderRunOptions,
+  type RoutingDecisionSignal,
 } from '@alphred/shared';
 import { PhaseRunError, runPhase } from '../phaseRunner.js';
 import {
@@ -60,33 +62,83 @@ import type {
   WorkflowRunRow,
 } from './types.js';
 
-const routingDecisionPromptSignals = ['approved', 'changes_requested', 'blocked', 'retry'] as const;
+const routingDecisionSignalSet: ReadonlySet<RoutingDecisionSignal> = new Set(routingDecisionSignals);
 
-const routingDecisionPromptContract = [
-  'Routing metadata contract (required for guarded success routing):',
-  '- Emit terminal metadata key `result.metadata.routingDecision`.',
-  `- Allowed values: ${routingDecisionPromptSignals.map(signal => `\`${signal}\``).join(', ')}.`,
-  '- Use `changes_requested` when additional implementation work is required.',
-  '- Do not omit `routingDecision`.',
-].join('\n');
+function loadGuardedSuccessOutgoingEdges(node: RunNodeExecutionRow, edgeRows: EdgeRow[]): EdgeRow[] {
+  return edgeRows.filter(edge => edge.sourceNodeId === node.treeNodeId && edge.routeOn === 'success' && edge.auto === 0);
+}
 
-function hasGuardedSuccessOutgoingEdge(node: RunNodeExecutionRow, edgeRows: EdgeRow[]): boolean {
-  return edgeRows.some(
-    edge => edge.sourceNodeId === node.treeNodeId && edge.routeOn === 'success' && edge.auto === 0,
-  );
+function collectGuardDecisionSignals(
+  guardExpression: unknown,
+  result: Set<RoutingDecisionSignal>,
+): void {
+  if (!isRecord(guardExpression)) {
+    return;
+  }
+
+  if ('logic' in guardExpression) {
+    if (Array.isArray(guardExpression.conditions)) {
+      for (const nestedCondition of guardExpression.conditions) {
+        collectGuardDecisionSignals(nestedCondition, result);
+      }
+    }
+    return;
+  }
+
+  if (
+    guardExpression.field !== 'decision' ||
+    guardExpression.operator !== '==' ||
+    typeof guardExpression.value !== 'string' ||
+    !routingDecisionSignalSet.has(guardExpression.value as RoutingDecisionSignal)
+  ) {
+    return;
+  }
+
+  result.add(guardExpression.value as RoutingDecisionSignal);
+}
+
+function resolveGuardDecisionHints(guardedSuccessEdges: EdgeRow[]): RoutingDecisionSignal[] {
+  const signals = new Set<RoutingDecisionSignal>();
+  for (const edge of guardedSuccessEdges) {
+    collectGuardDecisionSignals(edge.guardExpression, signals);
+  }
+
+  return routingDecisionSignals.filter(signal => signals.has(signal));
+}
+
+function buildRoutingDecisionPromptContract(guardedSuccessEdges: EdgeRow[]): string {
+  const guardedRouteCount = guardedSuccessEdges.length;
+  const guardDecisionHints = resolveGuardDecisionHints(guardedSuccessEdges);
+
+  const guardHintLine =
+    guardDecisionHints.length === 0
+      ? '- Choose a value that matches this node\'s guarded success route conditions.'
+      : `- Node-specific guard hints: ${guardDecisionHints.map(signal => `\`${signal}\``).join(', ')}.`;
+
+  return [
+    'Routing metadata contract (required for guarded success routing):',
+    '- Emit terminal metadata key `result.metadata.routingDecision`.',
+    `- Canonical values: ${routingDecisionSignals.map(signal => `\`${signal}\``).join(', ')}.`,
+    `- This node currently has ${guardedRouteCount} guarded success route${guardedRouteCount === 1 ? '' : 's'}.`,
+    guardHintLine,
+    '- Do not omit `routingDecision`.',
+  ].join('\n');
 }
 
 function resolveExecutionPrompt(node: RunNodeExecutionRow, edgeRows: EdgeRow[]): string {
   const basePrompt = node.prompt ?? '';
-  if (!hasGuardedSuccessOutgoingEdge(node, edgeRows)) {
+  const guardedSuccessEdges = loadGuardedSuccessOutgoingEdges(node, edgeRows);
+  if (guardedSuccessEdges.length === 0) {
     return basePrompt;
   }
 
-  if (basePrompt.toLowerCase().includes('routingdecision')) {
+  if (basePrompt.includes('result.metadata.routingDecision')) {
     return basePrompt;
   }
 
-  const sections = [basePrompt.trim(), routingDecisionPromptContract].filter(section => section.length > 0);
+  const sections = [basePrompt.trim(), buildRoutingDecisionPromptContract(guardedSuccessEdges)].filter(
+    section => section.length > 0,
+  );
   return sections.join('\n\n');
 }
 
