@@ -64,6 +64,7 @@ function collectMetadataRecords(
 
 function readRoutingDecisionFromResultContent(resultContent: string): RoutingDecisionSignal | undefined {
   const lines = resultContent.split(/\r?\n/u);
+  let terminalRoutingDecision: RoutingDecisionSignal | undefined;
   for (const rawLine of lines) {
     const trimmedLine = unwrapInlineCodeLine(rawLine.trim());
     if (!trimmedLine.startsWith(routingDecisionContractLinePrefix.slice(0, -1))) {
@@ -78,11 +79,11 @@ function readRoutingDecisionFromResultContent(resultContent: string): RoutingDec
     const value = match[1];
     const routingDecision = toRoutingDecisionSignal(value?.toLowerCase());
     if (routingDecision) {
-      return routingDecision;
+      terminalRoutingDecision = routingDecision;
     }
   }
 
-  return undefined;
+  return terminalRoutingDecision;
 }
 
 export function createRoutingResultMetadata(

@@ -234,6 +234,40 @@ const sdkStreamFixtures = {
       },
     },
   ] as const,
+  contractLineRoutingDecisionFallbackUsesTerminalLine: [
+    {
+      type: 'assistant',
+      message: {
+        content: [
+          {
+            type: 'text',
+            text: [
+              'Review complete.',
+              '`result.metadata.routingDecision: approved`',
+              'Final decision:',
+              'result.metadata.routingDecision: changes_requested',
+            ].join('\n'),
+          },
+        ],
+      },
+      parent_tool_use_id: null,
+    },
+    {
+      type: 'result',
+      subtype: 'success',
+      result: [
+        'Review complete.',
+        '`result.metadata.routingDecision: approved`',
+        'Final decision:',
+        'result.metadata.routingDecision: changes_requested',
+      ].join('\n'),
+      usage: {
+        input_tokens: 21,
+        output_tokens: 10,
+        cache_read_input_tokens: 0,
+      },
+    },
+  ] as const,
   looseDecisionLineIgnored: [
     {
       type: 'assistant',
@@ -575,6 +609,19 @@ describe('claude provider sdk stream integration fixtures', () => {
 
   it('falls back to strict contract routing decision line in result content when sdk metadata is missing', async () => {
     const provider = createProviderForFixture(sdkStreamFixtures.contractLineRoutingDecisionFallback);
+
+    const events = await collectEvents(provider, 'Apply integration fixture tests.');
+
+    expect(events.map((event) => event.type)).toEqual(['system', 'assistant', 'usage', 'result']);
+    expect(events[3]?.content).toContain('result.metadata.routingDecision: changes_requested');
+    expect(events[3]?.metadata).toMatchObject({
+      routingDecision: 'changes_requested',
+      routingDecisionSource: 'result_content_contract_fallback',
+    });
+  });
+
+  it('uses the terminal strict contract routing decision line when multiple contract lines are present', async () => {
+    const provider = createProviderForFixture(sdkStreamFixtures.contractLineRoutingDecisionFallbackUsesTerminalLine);
 
     const events = await collectEvents(provider, 'Apply integration fixture tests.');
 
