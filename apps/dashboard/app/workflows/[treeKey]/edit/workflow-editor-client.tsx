@@ -54,7 +54,6 @@ import {
   createConnectedDraftEdge,
   createDraftNode,
   duplicateDraftNode,
-  formatWorkflowEdgeLabel,
   mapEdgeFromReactFlow,
   mapNodeFromReactFlow,
   normalizeEdgeRouteOn,
@@ -605,17 +604,22 @@ function WorkflowEditorInspectorBody({
         onChange={(next) => {
           if (!selectedEdge) return;
           const nextRouteOn = normalizeEdgeRouteOn(next.routeOn);
-          const nextSelectedEdgeId = buildWorkflowEdgeId(selectedEdge.source, selectedEdge.target, next.priority, nextRouteOn);
-          const label = formatWorkflowEdgeLabel(nextRouteOn, next.auto, next.priority);
+          const nextFlowEdge = toReactFlowEdge({
+            ...next,
+            sourceNodeKey: selectedEdge.source,
+            targetNodeKey: selectedEdge.target,
+            routeOn: nextRouteOn,
+          });
+          const nextSelectedEdgeId = buildWorkflowEdgeId(
+            selectedEdge.source,
+            selectedEdge.target,
+            next.priority,
+            nextRouteOn,
+          );
           setEdges((current) =>
             current.map((edge) =>
               edge.id === selectedEdge.id
-                ? {
-                    ...edge,
-                    id: nextSelectedEdgeId,
-                    label,
-                    data: next,
-                  }
+                ? nextFlowEdge
                 : edge,
             ),
           );

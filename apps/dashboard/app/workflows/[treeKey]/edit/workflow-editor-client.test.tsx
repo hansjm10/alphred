@@ -1302,9 +1302,24 @@ describe('WorkflowEditorPageContent', () => {
     });
 
     expect(screen.getByText('Auto transitions are unconditional.')).toBeInTheDocument();
+    const initialEdge = (latestReactFlowProps?.edges as {
+      id: string;
+      className?: string;
+      style?: { strokeDasharray?: string };
+    }[])?.find((edge) => edge.id === 'design->implement:100');
+    expect(initialEdge?.className).toContain('workflow-edge--success-auto');
+    expect(initialEdge?.style?.strokeDasharray).toBeUndefined();
 
     fireEvent.click(screen.getByRole('checkbox', { name: 'Auto' }));
     fireEvent.change(screen.getByLabelText('Guard value 1'), { target: { value: 'blocked' } });
+
+    const updatedEdge = (latestReactFlowProps?.edges as {
+      id: string;
+      className?: string;
+      style?: { strokeDasharray?: string };
+    }[])?.find((edge) => edge.id === 'design->implement:100');
+    expect(updatedEdge?.className).toContain('workflow-edge--success-guard');
+    expect(updatedEdge?.style?.strokeDasharray).toBe('4 4');
 
     await vi.advanceTimersByTimeAsync(1000);
 
