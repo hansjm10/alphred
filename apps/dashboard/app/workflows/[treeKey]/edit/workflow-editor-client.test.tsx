@@ -426,6 +426,7 @@ describe('WorkflowEditorPageContent', () => {
     render(<WorkflowEditorPageContent initialDraft={createInitialDraft()} />);
 
     const legend = screen.getByLabelText('Transition legend');
+    fireEvent.click(within(legend).getByRole('button', { name: 'Show legend' }));
     expect(within(legend).getByText('success')).toBeInTheDocument();
     expect(within(legend).getByText('failure')).toBeInTheDocument();
     expect(within(legend).getAllByText('auto').length).toBeGreaterThan(0);
@@ -437,17 +438,23 @@ describe('WorkflowEditorPageContent', () => {
     render(<WorkflowEditorPageContent initialDraft={createInitialDraft()} />);
 
     const legend = screen.getByLabelText('Transition legend');
+    const showLegendButton = within(legend).getByRole('button', { name: 'Show legend' });
+    expect(showLegendButton).toHaveAttribute('aria-expanded', 'false');
+    expect(within(legend).queryByText('success')).toBeNull();
+
+    fireEvent.click(showLegendButton);
+
     const hideLegendButton = within(legend).getByRole('button', { name: 'Hide legend' });
     expect(hideLegendButton).toHaveAttribute('aria-expanded', 'true');
     expect(within(legend).getByText('success')).toBeInTheDocument();
 
     fireEvent.click(hideLegendButton);
 
-    const showLegendButton = within(legend).getByRole('button', { name: 'Show legend' });
-    expect(showLegendButton).toHaveAttribute('aria-expanded', 'false');
+    const showLegendButtonAfterCollapse = within(legend).getByRole('button', { name: 'Show legend' });
+    expect(showLegendButtonAfterCollapse).toHaveAttribute('aria-expanded', 'false');
     expect(within(legend).queryByText('success')).toBeNull();
 
-    fireEvent.click(showLegendButton);
+    fireEvent.click(showLegendButtonAfterCollapse);
     expect(within(legend).getByRole('button', { name: 'Hide legend' })).toHaveAttribute('aria-expanded', 'true');
     expect(within(legend).getByText('success')).toBeInTheDocument();
   });

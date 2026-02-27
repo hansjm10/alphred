@@ -1319,7 +1319,7 @@ function WorkflowEditorLoadedContent({
   const [publishConfirmOpen, setPublishConfirmOpen] = useState(false);
   const [pendingConnectionSourceNodeKey, setPendingConnectionSourceNodeKey] = useState<string | null>(null);
   const [inspectorDrawerOpen, setInspectorDrawerOpen] = useState(false);
-  const [legendCollapsed, setLegendCollapsed] = useState(false);
+  const [legendCollapsed, setLegendCollapsed] = useState(true);
   const [isCompactViewport, setIsCompactViewport] = useState(false);
   const [contextMenu, setContextMenu] = useState<WorkflowContextMenuState | null>(null);
   const [publishing, setPublishing] = useState(false);
