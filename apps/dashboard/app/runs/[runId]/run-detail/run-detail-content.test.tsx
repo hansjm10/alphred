@@ -2068,6 +2068,68 @@ describe('RunDetailContent realtime updates', () => {
     expect(screen.getByRole('link', { name: 'Focus' })).not.toHaveAttribute('aria-current');
   });
 
+  it('keeps the current section active when a different section intersects at a lower ratio', async () => {
+    MockIntersectionObserver.instances = [];
+    vi.stubGlobal('IntersectionObserver', MockIntersectionObserver as unknown as typeof IntersectionObserver);
+
+    render(
+      <RunDetailContent
+        initialDetail={createRunDetail()}
+        repositories={[createRepository()]}
+        enableRealtime={false}
+      />,
+    );
+
+    expect(MockIntersectionObserver.instances).toHaveLength(1);
+    const observer = MockIntersectionObserver.instances[0]!;
+    const focusHeading = screen.getByRole('heading', { level: 3, name: 'Operator focus' });
+    const timelineHeading = screen.getByRole('heading', { level: 3, name: 'Timeline' });
+
+    act(() => {
+      observer.emit([
+        {
+          target: focusHeading,
+          isIntersecting: true,
+          intersectionRatio: 0.7,
+        },
+      ]);
+    });
+
+    await waitFor(() => {
+      expect(screen.getByRole('link', { name: 'Focus' })).toHaveAttribute('aria-current', 'location');
+    });
+
+    act(() => {
+      observer.emit([
+        {
+          target: timelineHeading,
+          isIntersecting: true,
+          intersectionRatio: 0.36,
+        },
+      ]);
+    });
+
+    await waitFor(() => {
+      expect(screen.getByRole('link', { name: 'Focus' })).toHaveAttribute('aria-current', 'location');
+    });
+    expect(screen.getByRole('link', { name: 'Timeline' })).not.toHaveAttribute('aria-current');
+
+    act(() => {
+      observer.emit([
+        {
+          target: timelineHeading,
+          isIntersecting: true,
+          intersectionRatio: 0.74,
+        },
+      ]);
+    });
+
+    await waitFor(() => {
+      expect(screen.getByRole('link', { name: 'Timeline' })).toHaveAttribute('aria-current', 'location');
+    });
+    expect(screen.getByRole('link', { name: 'Focus' })).not.toHaveAttribute('aria-current');
+  });
+
   it('falls back to hash-based active section state when IntersectionObserver is unavailable', async () => {
     window.history.replaceState(null, '', '#run-detail-stream');
     vi.stubGlobal('IntersectionObserver', undefined);

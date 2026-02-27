@@ -69,27 +69,51 @@ export function RunDetailSectionNav({ sections }: RunDetailSectionNavProps) {
       return;
     }
 
+    const intersectionRatioBySectionId = new Map<string, number>(
+      sectionIds.map((sectionId) => [sectionId, 0]),
+    );
+
+    const resolveMostVisibleSectionId = (): string | null => {
+      let nextActiveSectionId: string | null = null;
+      let nextActiveSectionRatio = 0;
+
+      for (const sectionId of sectionIds) {
+        const sectionRatio = intersectionRatioBySectionId.get(sectionId) ?? 0;
+        if (sectionRatio > nextActiveSectionRatio) {
+          nextActiveSectionId = sectionId;
+          nextActiveSectionRatio = sectionRatio;
+        }
+      }
+
+      return nextActiveSectionId;
+    };
+
     const observer = new window.IntersectionObserver(
       (entries) => {
-        let nextActive: string | null = null;
-        let nextRatio = 0;
-
+        let hasRatioUpdates = false;
         for (const entry of entries) {
-          if (!entry.isIntersecting) {
+          const sectionId = (entry.target as HTMLElement).id;
+          if (!intersectionRatioBySectionId.has(sectionId)) {
             continue;
           }
 
-          if (entry.intersectionRatio >= nextRatio) {
-            nextActive = (entry.target as HTMLElement).id;
-            nextRatio = entry.intersectionRatio;
+          const nextSectionRatio = entry.isIntersecting ? entry.intersectionRatio : 0;
+          if (intersectionRatioBySectionId.get(sectionId) !== nextSectionRatio) {
+            intersectionRatioBySectionId.set(sectionId, nextSectionRatio);
+            hasRatioUpdates = true;
           }
         }
 
-        if (nextActive === null) {
+        if (!hasRatioUpdates) {
           return;
         }
 
-        setActiveSectionId((current) => (current === nextActive ? current : nextActive));
+        const nextActiveSectionId = resolveMostVisibleSectionId();
+        if (nextActiveSectionId === null) {
+          return;
+        }
+
+        setActiveSectionId((current) => (current === nextActiveSectionId ? current : nextActiveSectionId));
       },
       {
         rootMargin: '-104px 0px -45% 0px',
