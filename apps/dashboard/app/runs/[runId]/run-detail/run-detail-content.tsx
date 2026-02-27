@@ -17,6 +17,7 @@ import { formatDateTime, resolveAgentStreamLabel, resolveRealtimeLabel } from '.
 import { RunDetailLifecycleGrid } from './lifecycle-grid';
 import { RunObservabilityCard } from './observability-card';
 import { RunOperatorFocusCard } from './operator-card';
+import { RunDetailSectionNav, type RunDetailSectionAnchor } from './run-detail-section-nav';
 import {
   createAgentStreamLifecycleEffect,
   createRunDetailPollingEffect,
@@ -44,6 +45,25 @@ import {
   type RealtimeChannelState,
   type RunDetailContentProps,
 } from './types';
+
+const RUN_DETAIL_SECTIONS: readonly RunDetailSectionAnchor[] = [
+  {
+    id: 'run-detail-focus',
+    label: 'Focus',
+  },
+  {
+    id: 'run-detail-timeline',
+    label: 'Timeline',
+  },
+  {
+    id: 'run-detail-stream',
+    label: 'Stream',
+  },
+  {
+    id: 'run-detail-observability',
+    label: 'Observability',
+  },
+] as const;
 
 export function RunDetailContent({
   initialDetail,
@@ -301,8 +321,11 @@ export function RunDetailContent({
         <p>{pageSubtitle}</p>
       </section>
 
+      <RunDetailSectionNav sections={RUN_DETAIL_SECTIONS} />
+
       <div className="page-grid run-detail-priority-grid">
         <RunOperatorFocusCard
+          headingId={RUN_DETAIL_SECTIONS[0].id}
           detail={detail}
           latestTimelineEvent={latestTimelineEvent}
           hasHydrated={hasHydrated}
@@ -346,6 +369,7 @@ export function RunDetailContent({
       </div>
 
       <RunDetailLifecycleGrid
+        timelineHeadingId={RUN_DETAIL_SECTIONS[1].id}
         detail={detail}
         selectedNode={selectedNode}
         filteredNodeId={filteredNodeId}
@@ -359,6 +383,7 @@ export function RunDetailContent({
       />
 
       <RunAgentStreamCard
+        headingId={RUN_DETAIL_SECTIONS[2].id}
         isTerminalRun={!isActiveRunStatus(detail.run.status)}
         selectedStreamNode={selectedStreamNode}
         agentStreamLabel={agentStreamLabel}
@@ -375,7 +400,7 @@ export function RunDetailContent({
         setStreamEvents={setStreamEvents}
       />
 
-      <RunObservabilityCard detail={detail} />
+      <RunObservabilityCard detail={detail} headingId={RUN_DETAIL_SECTIONS[3].id} />
     </div>
   );
 }

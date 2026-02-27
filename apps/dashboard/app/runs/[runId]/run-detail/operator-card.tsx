@@ -8,6 +8,7 @@ type RunOperatorFocusCardProps = Readonly<{
   detail: DashboardRunDetail;
   latestTimelineEvent: TimelineItem | null;
   hasHydrated: boolean;
+  headingId?: string;
   primaryAction: OperatorActionState;
   secondaryAction: OperatorActionState | null;
   pendingControlAction: DashboardRunControlAction | null;
@@ -28,6 +29,7 @@ export function RunOperatorFocusCard({
   detail,
   latestTimelineEvent,
   hasHydrated,
+  headingId,
   primaryAction,
   secondaryAction,
   pendingControlAction,
@@ -44,6 +46,7 @@ export function RunOperatorFocusCard({
     <Card
       title="Operator focus"
       description="Current run status, latest event, and next likely operator action."
+      headingId={headingId}
       className="run-operator-focus"
     >
       <ul className="entity-list run-operator-focus-list">

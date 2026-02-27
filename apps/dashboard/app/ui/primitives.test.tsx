@@ -2,7 +2,7 @@
 
 import { render, screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
-import { StatusBadge, Tabs, type TabItem } from './primitives';
+import { Card, StatusBadge, Tabs, type TabItem } from './primitives';
 
 const ITEMS: readonly TabItem[] = [
   { href: '/runs', label: 'All Runs' },
@@ -34,5 +34,11 @@ describe('primitives', () => {
 
     expect(screen.getByRole('link', { name: 'All Runs' })).toHaveAttribute('aria-current', 'page');
     expect(screen.getByRole('link', { name: 'Running' })).not.toHaveAttribute('aria-current');
+  });
+
+  it('supports assigning a stable id to surface headings', () => {
+    render(<Card title="Operator focus" headingId="run-detail-focus" />);
+
+    expect(screen.getByRole('heading', { level: 3, name: 'Operator focus' })).toHaveAttribute('id', 'run-detail-focus');
   });
 });

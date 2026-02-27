@@ -349,7 +349,8 @@ output {
 .button-link:focus-visible,
 .shell-nav-link:focus-visible,
 .tabs__link:focus-visible,
-.run-timeline-event:focus-visible {
+.run-timeline-event:focus-visible,
+.run-detail-section-nav__link:focus-visible {
   outline: 2px solid var(--accent-active);
   outline-offset: 2px;
 }
@@ -698,6 +699,58 @@ output {
 
 .run-detail-priority-grid {
   align-items: start;
+}
+
+.run-detail-section-nav {
+  position: sticky;
+  top: calc(var(--space-3) + 72px);
+  z-index: 4;
+}
+
+.run-detail-section-nav__list {
+  align-items: center;
+  background: color-mix(in srgb, var(--bg-surface) 94%, var(--bg-canvas));
+  border: 1px solid color-mix(in srgb, var(--accent-active) 20%, var(--border-default));
+  border-radius: var(--radius-pill);
+  box-shadow: var(--shadow-sm);
+  display: flex;
+  gap: 6px;
+  list-style: none;
+  max-width: 100%;
+  overflow-x: auto;
+  padding: 6px;
+  scrollbar-width: thin;
+  width: fit-content;
+}
+
+.run-detail-section-nav__link {
+  border: 1px solid transparent;
+  border-radius: var(--radius-pill);
+  color: var(--text-secondary);
+  display: inline-flex;
+  font: 600 12px/18px var(--font-display);
+  padding: 6px 12px;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.run-detail-section-nav__link:hover {
+  background: color-mix(in srgb, var(--accent-active) 8%, var(--bg-surface));
+  border-color: color-mix(in srgb, var(--accent-active) 32%, var(--border-default));
+  color: var(--accent-active);
+}
+
+.run-detail-section-nav__link--active {
+  background: color-mix(in srgb, var(--accent-active) 16%, var(--bg-surface));
+  border-color: color-mix(in srgb, var(--accent-active) 42%, var(--border-default));
+  color: var(--accent-active);
+}
+
+#run-detail-focus,
+#run-detail-timeline,
+#run-detail-stream,
+#run-detail-observability {
+  scroll-margin-top: calc(var(--space-6) + 120px);
 }
 
 .run-operator-focus-list {
@@ -1879,6 +1932,14 @@ output {
 
   .run-detail-priority-grid {
     gap: var(--space-2);
+  }
+
+  .run-detail-section-nav {
+    top: calc(var(--space-2) + 110px);
+  }
+
+  .run-detail-section-nav__list {
+    width: 100%;
   }
 
   .run-detail-primary-actions {

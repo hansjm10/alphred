@@ -9,6 +9,7 @@ export function resolveEmptyTimelineLabel(filteredNodeId: number | null): string
 }
 
 export function RunDetailLifecycleGrid({
+  timelineHeadingId,
   detail,
   selectedNode,
   filteredNodeId,
@@ -48,7 +49,7 @@ export function RunDetailLifecycleGrid({
 
   return (
     <div className="page-grid run-detail-lifecycle-grid">
-      <Card title="Timeline" description="Latest run events">
+      <Card title="Timeline" description="Latest run events" headingId={timelineHeadingId}>
         {selectedNode ? (
           <div className="run-timeline-filter">
             <p className="meta-text">{`Filtered to ${selectedNode.nodeKey} (attempt ${selectedNode.attempt}).`}</p>

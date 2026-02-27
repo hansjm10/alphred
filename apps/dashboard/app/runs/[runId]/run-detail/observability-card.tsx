@@ -23,9 +23,10 @@ export function resolvePayloadStorageSummary(diagnostics: DashboardRunDetail['di
 
 type RunObservabilityCardProps = Readonly<{
   detail: DashboardRunDetail;
+  headingId?: string;
 }>;
 
-export function RunObservabilityCard({ detail }: RunObservabilityCardProps) {
+export function RunObservabilityCard({ detail, headingId }: RunObservabilityCardProps) {
   const artifactPartition = partitionByRecency(detail.artifacts, RUN_OBSERVABILITY_RECENT_ENTRY_COUNT, 'newest-first');
   const diagnosticsPartition = partitionByRecency(
     detail.diagnostics,
@@ -64,7 +65,7 @@ export function RunObservabilityCard({ detail }: RunObservabilityCardProps) {
   };
 
   return (
-    <Card title="Observability">
+    <Card title="Observability" headingId={headingId}>
       <section className="run-observability-section">
         <p className="meta-text">Artifacts</p>
         {detail.artifacts.length === 0 ? <p>No artifacts captured yet.</p> : null}
@@ -138,4 +139,3 @@ export function RunObservabilityCard({ detail }: RunObservabilityCardProps) {
     </Card>
   );
 }
-

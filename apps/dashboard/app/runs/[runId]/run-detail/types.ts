@@ -232,6 +232,7 @@ export type RunOperatorFocusCardProps = Readonly<{
 }>;
 
 export type RunDetailLifecycleGridProps = Readonly<{
+  timelineHeadingId?: string;
   detail: DashboardRunDetail;
   selectedNode: DashboardRunDetail['nodes'][number] | null;
   filteredNodeId: number | null;

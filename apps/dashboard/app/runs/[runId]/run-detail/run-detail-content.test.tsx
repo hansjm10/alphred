@@ -331,6 +331,59 @@ class MockEventSource {
   }
 }
 
+type MockIntersectionEntry = Readonly<{
+  target: Element;
+  isIntersecting?: boolean;
+  intersectionRatio?: number;
+}>;
+
+class MockIntersectionObserver {
+  static instances: MockIntersectionObserver[] = [];
+
+  readonly callback: IntersectionObserverCallback;
+  readonly options: IntersectionObserverInit | undefined;
+  private observedTargets = new Set<Element>();
+
+  constructor(callback: IntersectionObserverCallback, options?: IntersectionObserverInit) {
+    this.callback = callback;
+    this.options = options;
+    MockIntersectionObserver.instances.push(this);
+  }
+
+  observe(target: Element): void {
+    this.observedTargets.add(target);
+  }
+
+  unobserve(target: Element): void {
+    this.observedTargets.delete(target);
+  }
+
+  disconnect(): void {
+    this.observedTargets.clear();
+  }
+
+  takeRecords(): IntersectionObserverEntry[] {
+    return [];
+  }
+
+  emit(entries: readonly MockIntersectionEntry[]): void {
+    const payload = entries.map((entry) => {
+      const targetRect = entry.target.getBoundingClientRect();
+      return {
+        time: Date.now(),
+        target: entry.target,
+        rootBounds: null,
+        boundingClientRect: targetRect,
+        intersectionRect: targetRect,
+        isIntersecting: entry.isIntersecting ?? true,
+        intersectionRatio: entry.intersectionRatio ?? 1,
+      } satisfies IntersectionObserverEntry;
+    });
+
+    this.callback(payload, this as unknown as IntersectionObserver);
+  }
+}
+
 describe('RunDetailContent realtime updates', () => {
   const fetchMock = vi.fn();
 
@@ -1952,6 +2005,135 @@ describe('RunDetailContent realtime updates', () => {
     expect(within(focusCard!).getByRole('button', { name: 'Pause' })).toBeEnabled();
     expect(within(focusCard!).getByRole('button', { name: 'Cancel Run' })).toBeEnabled();
     expect(within(focusCard!).getByText(/implement started \(attempt 1\)\./i)).toBeInTheDocument();
+  });
+
+  it('renders section jump navigation with stable anchor targets', () => {
+    render(
+      <RunDetailContent
+        initialDetail={createRunDetail()}
+        repositories={[createRepository()]}
+        enableRealtime={false}
+      />,
+    );
+
+    const sectionNav = screen.getByRole('navigation', {
+      name: 'Run detail section navigation',
+    });
+    expect(within(sectionNav).getByRole('link', { name: 'Focus' })).toHaveAttribute('href', '#run-detail-focus');
+    expect(within(sectionNav).getByRole('link', { name: 'Timeline' })).toHaveAttribute('href', '#run-detail-timeline');
+    expect(within(sectionNav).getByRole('link', { name: 'Stream' })).toHaveAttribute('href', '#run-detail-stream');
+    expect(within(sectionNav).getByRole('link', { name: 'Observability' })).toHaveAttribute(
+      'href',
+      '#run-detail-observability',
+    );
+
+    expect(screen.getByRole('heading', { level: 3, name: 'Operator focus' })).toHaveAttribute('id', 'run-detail-focus');
+    expect(screen.getByRole('heading', { level: 3, name: 'Timeline' })).toHaveAttribute('id', 'run-detail-timeline');
+    expect(screen.getByRole('heading', { level: 3, name: 'Agent stream' })).toHaveAttribute('id', 'run-detail-stream');
+    expect(screen.getByRole('heading', { level: 3, name: 'Observability' })).toHaveAttribute(
+      'id',
+      'run-detail-observability',
+    );
+  });
+
+  it('updates the active section nav item as sections intersect', async () => {
+    MockIntersectionObserver.instances = [];
+    vi.stubGlobal('IntersectionObserver', MockIntersectionObserver as unknown as typeof IntersectionObserver);
+
+    render(
+      <RunDetailContent
+        initialDetail={createRunDetail()}
+        repositories={[createRepository()]}
+        enableRealtime={false}
+      />,
+    );
+
+    expect(MockIntersectionObserver.instances).toHaveLength(1);
+    const observer = MockIntersectionObserver.instances[0]!;
+    const timelineHeading = screen.getByRole('heading', { level: 3, name: 'Timeline' });
+
+    act(() => {
+      observer.emit([
+        {
+          target: timelineHeading,
+          isIntersecting: true,
+          intersectionRatio: 0.82,
+        },
+      ]);
+    });
+
+    await waitFor(() => {
+      expect(screen.getByRole('link', { name: 'Timeline' })).toHaveAttribute('aria-current', 'location');
+    });
+    expect(screen.getByRole('link', { name: 'Focus' })).not.toHaveAttribute('aria-current');
+  });
+
+  it('falls back to hash-based active section state when IntersectionObserver is unavailable', async () => {
+    window.history.replaceState(null, '', '#run-detail-stream');
+    vi.stubGlobal('IntersectionObserver', undefined);
+
+    render(
+      <RunDetailContent
+        initialDetail={createRunDetail()}
+        repositories={[createRepository()]}
+        enableRealtime={false}
+      />,
+    );
+
+    expect(screen.getByRole('link', { name: 'Stream' })).toHaveAttribute('aria-current', 'location');
+
+    act(() => {
+      window.history.replaceState(null, '', '#run-detail-observability');
+      window.dispatchEvent(new Event('hashchange'));
+    });
+
+    await waitFor(() => {
+      expect(screen.getByRole('link', { name: 'Observability' })).toHaveAttribute('aria-current', 'location');
+    });
+
+    window.history.replaceState(null, '', '/');
+  });
+
+  it('uses non-animated section jumps when reduced motion is preferred', async () => {
+    vi.stubGlobal('IntersectionObserver', undefined);
+    vi.stubGlobal(
+      'matchMedia',
+      vi.fn().mockReturnValue({
+        matches: true,
+        media: '(prefers-reduced-motion: reduce)',
+        onchange: null,
+        addListener: vi.fn(),
+        removeListener: vi.fn(),
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+        dispatchEvent: vi.fn(),
+      }),
+    );
+
+    render(
+      <RunDetailContent
+        initialDetail={createRunDetail()}
+        repositories={[createRepository()]}
+        enableRealtime={false}
+      />,
+    );
+
+    const streamHeading = screen.getByRole('heading', { level: 3, name: 'Agent stream' });
+    const scrollIntoView = vi.fn();
+    Object.defineProperty(streamHeading, 'scrollIntoView', {
+      configurable: true,
+      value: scrollIntoView,
+    });
+
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('link', { name: 'Stream' }));
+
+    expect(scrollIntoView).toHaveBeenCalledWith({
+      behavior: 'auto',
+      block: 'start',
+    });
+    expect(screen.getByRole('link', { name: 'Stream' })).toHaveAttribute('href', '#run-detail-stream');
+    window.history.replaceState(null, '', '/');
   });
 
   it('collapses earlier timeline entries behind disclosure when the timeline is long', () => {
