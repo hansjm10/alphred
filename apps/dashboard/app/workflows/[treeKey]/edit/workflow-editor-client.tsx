@@ -123,13 +123,25 @@ function normalizeEdgeRouteOn(routeOn: DashboardWorkflowDraftEdge['routeOn']): '
   return routeOn === 'failure' ? 'failure' : 'success';
 }
 
+function formatWorkflowEdgeLabel(routeOn: 'success' | 'failure', auto: boolean, priority: number): string {
+  if (routeOn === 'failure') {
+    return `failure · ${priority}`;
+  }
+
+  if (auto) {
+    return `auto · ${priority}`;
+  }
+
+  return `guard · ${priority}`;
+}
+
 function toReactFlowEdge(edge: DashboardWorkflowDraftEdge): Edge {
   const routeOn = normalizeEdgeRouteOn(edge.routeOn);
   return {
     id: buildWorkflowEdgeId(edge.sourceNodeKey, edge.targetNodeKey, edge.priority, routeOn),
     source: edge.sourceNodeKey,
     target: edge.targetNodeKey,
-    label: routeOn === 'failure' ? `failure · ${edge.priority}` : (edge.auto ? `auto · ${edge.priority}` : `guard · ${edge.priority}`),
+    label: formatWorkflowEdgeLabel(routeOn, edge.auto, edge.priority),
     data: {
       ...edge,
       routeOn,
@@ -621,7 +633,7 @@ function WorkflowEditorInspectorBody({
           if (!selectedEdge) return;
           const nextRouteOn = normalizeEdgeRouteOn(next.routeOn);
           const nextSelectedEdgeId = buildWorkflowEdgeId(selectedEdge.source, selectedEdge.target, next.priority, nextRouteOn);
-          const label = nextRouteOn === 'failure' ? `failure · ${next.priority}` : (next.auto ? `auto · ${next.priority}` : `guard · ${next.priority}`);
+          const label = formatWorkflowEdgeLabel(nextRouteOn, next.auto, next.priority);
           setEdges((current) =>
             current.map((edge) =>
               edge.id === selectedEdge.id

@@ -530,6 +530,306 @@ export function handleClaimedNodeSuccess(
   };
 }
 
+type ErrorHandlerResolutionForFailure = {
+  errorHandlerDiagnostics: RunNodeErrorHandlerDiagnostics | undefined;
+  latestRunStatus: WorkflowRunStatus;
+  retryState: RetryState;
+};
+
+async function resolveErrorHandlerResolutionForFailure(
+  db: AlphredDatabase,
+  params: {
+    run: WorkflowRunRow;
+    node: RunNodeExecutionRow;
+    currentAttempt: number;
+    artifactId: number;
+    errorMessage: string;
+    failureEvents: ProviderEvent[];
+    dependencies: SqlWorkflowExecutorDependencies;
+    options: ProviderRunOptions;
+    retryEligible: boolean;
+    latestRunStatus: WorkflowRunStatus;
+    retryState: RetryState;
+  },
+): Promise<ErrorHandlerResolutionForFailure> {
+  const {
+    artifactId,
+    currentAttempt,
+    dependencies,
+    errorMessage,
+    failureEvents,
+    latestRunStatus,
+    node,
+    options,
+    retryEligible,
+    retryState,
+    run,
+  } = params;
+  let nextRunStatus = latestRunStatus;
+  let nextRetryState = retryState;
+  let errorHandlerDiagnostics: RunNodeErrorHandlerDiagnostics | undefined;
+
+  if (retryState.canRetry) {
+    errorHandlerDiagnostics = await executeErrorHandlerForRetry(db, {
+      run,
+      node,
+      currentAttempt,
+      failureArtifactId: artifactId,
+      errorMessage,
+      failureEvents,
+      dependencies,
+      options,
+    });
+    nextRunStatus = loadWorkflowRunRow(db, run.id).status;
+    nextRetryState = resolveRetryState(retryEligible, nextRunStatus);
+  } else if (retryEligible && isTerminalWorkflowRunStatus(nextRunStatus)) {
+    errorHandlerDiagnostics = buildSkippedErrorHandlerDiagnostics(currentAttempt, null);
+  }
+
+  return {
+    errorHandlerDiagnostics,
+    latestRunStatus: nextRunStatus,
+    retryState: nextRetryState,
+  };
+}
+
+function resolvePersistedNodeDiagnosticStatus(persistedNode: RunNodeExecutionRow): 'completed' | 'failed' {
+  if (persistedNode.status === 'completed') {
+    return 'completed';
+  }
+
+  return 'failed';
+}
+
+function loadFailureRouteTargetNode(
+  db: AlphredDatabase,
+  workflowRunId: number,
+  failureRouteEdge: EdgeRow | null,
+): RunNodeExecutionRow | null {
+  if (!failureRouteEdge) {
+    return null;
+  }
+
+  return (
+    getLatestRunNodeAttempts(loadRunNodeExecutionRows(db, workflowRunId)).find(
+      latestNode => latestNode.treeNodeId === failureRouteEdge.targetNodeId,
+    ) ?? null
+  );
+}
+
+function resolveFailureRouteStatus(params: {
+  retryState: RetryState;
+  failureRouteEdge: EdgeRow | null;
+  latestRunStatus: WorkflowRunStatus;
+  executionScope: WorkflowExecutionScope;
+}): RunNodeFailureRouteDiagnostics['status'] | null {
+  const { executionScope, failureRouteEdge, latestRunStatus, retryState } = params;
+  if (retryState.canRetry) {
+    return null;
+  }
+
+  if (failureRouteEdge === null) {
+    return 'no_route';
+  }
+
+  if (isTerminalWorkflowRunStatus(latestRunStatus) || executionScope === 'single_node') {
+    return 'skipped_terminal';
+  }
+
+  return 'selected';
+}
+
+function resolveFailureRouteDiagnostics(params: {
+  db: AlphredDatabase;
+  run: WorkflowRunRow;
+  node: RunNodeExecutionRow;
+  edgeRows: EdgeRow[];
+  retryState: RetryState;
+  latestRunStatus: WorkflowRunStatus;
+  executionScope: WorkflowExecutionScope;
+}): {
+  failureRouteEdge: EdgeRow | null;
+  failureRouteDiagnostics: RunNodeFailureRouteDiagnostics | undefined;
+} {
+  const { db, edgeRows, executionScope, latestRunStatus, node, retryState, run } = params;
+  const failureRouteEdge = retryState.canRetry ? null : selectFailureRouteEdgeForSourceNode(edgeRows, node.treeNodeId);
+  const failureRouteTargetNode = loadFailureRouteTargetNode(db, run.id, failureRouteEdge);
+  const failureRouteStatus = resolveFailureRouteStatus({
+    retryState,
+    failureRouteEdge,
+    latestRunStatus,
+    executionScope,
+  });
+
+  if (failureRouteStatus === null) {
+    return {
+      failureRouteEdge,
+      failureRouteDiagnostics: undefined,
+    };
+  }
+
+  return {
+    failureRouteEdge,
+    failureRouteDiagnostics: {
+      attempted: true,
+      selectedEdgeId: failureRouteEdge?.edgeId ?? null,
+      targetNodeId: failureRouteEdge?.targetNodeId ?? null,
+      targetNodeKey: failureRouteTargetNode?.nodeKey ?? null,
+      status: failureRouteStatus,
+    },
+  };
+}
+
+function persistFailureDiagnostics(params: {
+  db: AlphredDatabase;
+  run: WorkflowRunRow;
+  node: RunNodeExecutionRow;
+  currentAttempt: number;
+  persistedNode: RunNodeExecutionRow;
+  contextManifest: ContextHandoffManifest;
+  failureTokensUsed: number;
+  failureEvents: ProviderEvent[];
+  error: unknown;
+  errorHandlerDiagnostics: RunNodeErrorHandlerDiagnostics | undefined;
+  failureRouteDiagnostics: RunNodeFailureRouteDiagnostics | undefined;
+  artifactId: number;
+}): void {
+  const {
+    artifactId,
+    contextManifest,
+    currentAttempt,
+    db,
+    error,
+    errorHandlerDiagnostics,
+    failureEvents,
+    failureRouteDiagnostics,
+    failureTokensUsed,
+    node,
+    persistedNode,
+    run,
+  } = params;
+  persistRunNodeAttemptDiagnostics(db, {
+    workflowRunId: run.id,
+    node,
+    attempt: currentAttempt,
+    outcome: 'failed',
+    status: resolvePersistedNodeDiagnosticStatus(persistedNode),
+    runNodeSnapshot: persistedNode,
+    contextManifest,
+    tokensUsed: failureTokensUsed,
+    events: failureEvents,
+    routingDecision: null,
+    failureRoute: failureRouteDiagnostics,
+    error,
+    errorHandler: errorHandlerDiagnostics,
+  });
+
+  if (!failureRouteDiagnostics) {
+    return;
+  }
+
+  appendFailureRouteMetadataToArtifact(db, {
+    artifactId,
+    failureRoute: failureRouteDiagnostics,
+  });
+}
+
+function resolveRetryFailureOutcome(params: {
+  db: AlphredDatabase;
+  node: RunNodeExecutionRow;
+  currentAttempt: number;
+  artifactId: number;
+  latestRunStatus: WorkflowRunStatus;
+  retryState: RetryState;
+  retryEligible: boolean;
+}): ClaimedNodeFailure | null {
+  const { artifactId, currentAttempt, db, latestRunStatus, node, retryEligible, retryState } = params;
+  if (retryState.canRetry) {
+    const nextAttempt = currentAttempt + 1;
+    if (retryState.canRetryImmediately) {
+      transitionFailedRunNodeToRetryAttempt(db, {
+        runNodeId: node.runNodeId,
+        currentAttempt,
+        nextAttempt,
+      });
+      return {
+        artifactId,
+        runStatus: latestRunStatus,
+        runNodeStatus: 'failed',
+        nextAttempt,
+        nextStepOutcome: null,
+      };
+    }
+
+    transitionFailedRunNodeToPendingAttempt(db, {
+      runNodeId: node.runNodeId,
+      currentAttempt,
+      nextAttempt,
+    });
+    return {
+      artifactId,
+      runStatus: latestRunStatus,
+      runNodeStatus: 'failed',
+      nextAttempt: null,
+      nextStepOutcome: 'blocked',
+    };
+  }
+
+  if (retryEligible && isTerminalWorkflowRunStatus(latestRunStatus)) {
+    return {
+      artifactId,
+      runStatus: latestRunStatus,
+      runNodeStatus: 'failed',
+      nextAttempt: null,
+      nextStepOutcome: 'run_terminal',
+    };
+  }
+
+  return null;
+}
+
+function resolveSelectedFailureRouteOutcome(
+  db: AlphredDatabase,
+  params: {
+    run: WorkflowRunRow;
+    edgeRows: EdgeRow[];
+    failureRouteEdge: EdgeRow;
+    persistedNode: RunNodeExecutionRow;
+    artifactId: number;
+  },
+): ClaimedNodeFailure {
+  const { artifactId, edgeRows, failureRouteEdge, persistedNode, run } = params;
+  reactivateSelectedTargetNode(db, {
+    workflowRunId: run.id,
+    selectedEdgeId: failureRouteEdge.edgeId,
+    edgeRows,
+  });
+  markUnreachablePendingNodesAsSkipped(db, run.id, edgeRows);
+
+  const latestAfterFailureRoute = getLatestRunNodeAttempts(loadRunNodeExecutionRows(db, run.id));
+  const latestRoutingDecisionsAfterFailureRoute = loadLatestRoutingDecisionsByRunNodeId(db, run.id);
+  const latestArtifactsAfterFailureRoute = loadLatestArtifactsByRunNodeId(db, run.id);
+  const routingSelectionAfterFailureRoute = buildRoutingSelection(
+    latestAfterFailureRoute,
+    edgeRows,
+    latestRoutingDecisionsAfterFailureRoute.latestByRunNodeId,
+    latestArtifactsAfterFailureRoute,
+  );
+  const resolvedRunStatus = resolveRunStatusFromNodes(
+    latestAfterFailureRoute,
+    routingSelectionAfterFailureRoute.handledFailedSourceNodeIds,
+  );
+  const runStatus = transitionRunToCurrentForExecutor(db, run.id, resolvedRunStatus);
+
+  return {
+    artifactId,
+    runStatus,
+    runNodeStatus: resolvePersistedNodeDiagnosticStatus(persistedNode),
+    nextAttempt: null,
+    nextStepOutcome: null,
+  };
+}
+
 export async function handleClaimedNodeFailure(
   db: AlphredDatabase,
   run: WorkflowRunRow,
@@ -582,154 +882,77 @@ export async function handleClaimedNodeFailure(
     });
   }
 
-  let errorHandlerDiagnostics: RunNodeErrorHandlerDiagnostics | undefined;
-  if (retryState.canRetry) {
-    errorHandlerDiagnostics = await executeErrorHandlerForRetry(db, {
-      run,
-      node,
-      currentAttempt,
-      failureArtifactId: artifactId,
-      errorMessage,
-      failureEvents,
-      dependencies,
-      options,
-    });
-    latestRunStatus = loadWorkflowRunRow(db, run.id).status;
-    retryState = resolveRetryState(retryEligible, latestRunStatus);
-  } else if (retryEligible && isTerminalWorkflowRunStatus(latestRunStatus)) {
-    errorHandlerDiagnostics = buildSkippedErrorHandlerDiagnostics(currentAttempt, null);
-  }
+  const errorHandlerResolution = await resolveErrorHandlerResolutionForFailure(db, {
+    run,
+    node,
+    currentAttempt,
+    artifactId,
+    errorMessage,
+    failureEvents,
+    dependencies,
+    options,
+    retryEligible,
+    latestRunStatus,
+    retryState,
+  });
+  latestRunStatus = errorHandlerResolution.latestRunStatus;
+  retryState = errorHandlerResolution.retryState;
+  const { errorHandlerDiagnostics } = errorHandlerResolution;
 
   const persistedNode = loadRunNodeExecutionRowById(db, run.id, node.runNodeId);
-  const diagnosticStatus: 'completed' | 'failed' = persistedNode.status === 'completed' ? 'completed' : 'failed';
-  const failureRouteEdge = retryState.canRetry ? null : selectFailureRouteEdgeForSourceNode(edgeRows, node.treeNodeId);
-  const failureRouteTargetNode = failureRouteEdge
-    ? getLatestRunNodeAttempts(loadRunNodeExecutionRows(db, run.id)).find(
-        latestNode => latestNode.treeNodeId === failureRouteEdge.targetNodeId,
-      ) ?? null
-    : null;
-  const failureRouteStatus: RunNodeFailureRouteDiagnostics['status'] | null =
-    retryState.canRetry
-      ? null
-      : (failureRouteEdge === null
-          ? 'no_route'
-          : (isTerminalWorkflowRunStatus(latestRunStatus) || executionScope === 'single_node' ? 'skipped_terminal' : 'selected'));
-  const failureRouteDiagnostics: RunNodeFailureRouteDiagnostics | undefined =
-    failureRouteStatus === null
-      ? undefined
-      : {
-          attempted: true,
-          selectedEdgeId: failureRouteEdge?.edgeId ?? null,
-          targetNodeId: failureRouteEdge?.targetNodeId ?? null,
-          targetNodeKey: failureRouteTargetNode?.nodeKey ?? null,
-          status: failureRouteStatus,
-        };
-  persistRunNodeAttemptDiagnostics(db, {
-    workflowRunId: run.id,
+  const failureRouteResolution = resolveFailureRouteDiagnostics({
+    db,
+    run,
     node,
-    attempt: currentAttempt,
-    outcome: 'failed',
-    status: diagnosticStatus,
-    runNodeSnapshot: persistedNode,
-    contextManifest,
-    tokensUsed: failureTokensUsed,
-    events: failureEvents,
-    routingDecision: null,
-    failureRoute: failureRouteDiagnostics,
-    error,
-    errorHandler: errorHandlerDiagnostics,
+    edgeRows,
+    retryState,
+    latestRunStatus,
+    executionScope,
   });
-  if (failureRouteDiagnostics) {
-    appendFailureRouteMetadataToArtifact(db, {
-      artifactId,
-      failureRoute: failureRouteDiagnostics,
-    });
-  }
+  const { failureRouteEdge, failureRouteDiagnostics } = failureRouteResolution;
+  persistFailureDiagnostics({
+    db,
+    run,
+    node,
+    currentAttempt,
+    persistedNode,
+    contextManifest,
+    failureTokensUsed,
+    failureEvents,
+    error,
+    errorHandlerDiagnostics,
+    failureRouteDiagnostics,
+    artifactId,
+  });
 
-  if (retryState.canRetry) {
-    const nextAttempt = currentAttempt + 1;
-    if (retryState.canRetryImmediately) {
-      transitionFailedRunNodeToRetryAttempt(db, {
-        runNodeId: node.runNodeId,
-        currentAttempt,
-        nextAttempt,
-      });
-      return {
-        artifactId,
-        runStatus: latestRunStatus,
-        runNodeStatus: 'failed',
-        nextAttempt,
-        nextStepOutcome: null,
-      };
-    }
-
-    transitionFailedRunNodeToPendingAttempt(db, {
-      runNodeId: node.runNodeId,
-      currentAttempt,
-      nextAttempt,
-    });
-    return {
-      artifactId,
-      runStatus: latestRunStatus,
-      runNodeStatus: 'failed',
-      nextAttempt: null,
-      nextStepOutcome: 'blocked',
-    };
-  }
-
-  if (retryEligible && isTerminalWorkflowRunStatus(latestRunStatus)) {
-    return {
-      artifactId,
-      runStatus: latestRunStatus,
-      runNodeStatus: 'failed',
-      nextAttempt: null,
-      nextStepOutcome: 'run_terminal',
-    };
+  const retryOutcome = resolveRetryFailureOutcome({
+    db,
+    node,
+    currentAttempt,
+    artifactId,
+    latestRunStatus,
+    retryState,
+    retryEligible,
+  });
+  if (retryOutcome) {
+    return retryOutcome;
   }
 
   if (failureRouteDiagnostics?.status === 'selected' && failureRouteEdge) {
-    reactivateSelectedTargetNode(db, {
-      workflowRunId: run.id,
-      selectedEdgeId: failureRouteEdge.edgeId,
+    return resolveSelectedFailureRouteOutcome(db, {
+      run,
       edgeRows,
-    });
-    markUnreachablePendingNodesAsSkipped(db, run.id, edgeRows);
-
-    const latestAfterFailureRoute = getLatestRunNodeAttempts(loadRunNodeExecutionRows(db, run.id));
-    const latestRoutingDecisionsAfterFailureRoute = loadLatestRoutingDecisionsByRunNodeId(db, run.id);
-    const latestArtifactsAfterFailureRoute = loadLatestArtifactsByRunNodeId(db, run.id);
-    const routingSelectionAfterFailureRoute = buildRoutingSelection(
-      latestAfterFailureRoute,
-      edgeRows,
-      latestRoutingDecisionsAfterFailureRoute.latestByRunNodeId,
-      latestArtifactsAfterFailureRoute,
-    );
-    const resolvedRunStatus = resolveRunStatusFromNodes(
-      latestAfterFailureRoute,
-      routingSelectionAfterFailureRoute.handledFailedSourceNodeIds,
-    );
-    const runStatus = transitionRunToCurrentForExecutor(db, run.id, resolvedRunStatus);
-    const runNodeStatus: 'completed' | 'failed' = persistedNode.status === 'completed' ? 'completed' : 'failed';
-
-    return {
+      failureRouteEdge,
+      persistedNode,
       artifactId,
-      runStatus,
-      runNodeStatus,
-      nextAttempt: null,
-      nextStepOutcome: null,
-    };
+    });
   }
 
   const runStatus = transitionRunToCurrentForExecutor(db, run.id, 'failed');
-  let runNodeStatus: 'completed' | 'failed' = 'failed';
-  if (persistedNode.status === 'completed') {
-    runNodeStatus = 'completed';
-  }
-
   return {
     artifactId,
     runStatus,
-    runNodeStatus,
+    runNodeStatus: resolvePersistedNodeDiagnosticStatus(persistedNode),
     nextAttempt: null,
     nextStepOutcome: null,
   };
