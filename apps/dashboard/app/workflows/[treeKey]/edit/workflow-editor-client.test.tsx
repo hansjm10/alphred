@@ -433,6 +433,25 @@ describe('WorkflowEditorPageContent', () => {
     expect(within(legend).getAllByText('in/out').length).toBeGreaterThan(0);
   });
 
+  it('allows collapsing and expanding the transition legend', () => {
+    render(<WorkflowEditorPageContent initialDraft={createInitialDraft()} />);
+
+    const legend = screen.getByLabelText('Transition legend');
+    const hideLegendButton = within(legend).getByRole('button', { name: 'Hide legend' });
+    expect(hideLegendButton).toHaveAttribute('aria-expanded', 'true');
+    expect(within(legend).getByText('success')).toBeInTheDocument();
+
+    fireEvent.click(hideLegendButton);
+
+    const showLegendButton = within(legend).getByRole('button', { name: 'Show legend' });
+    expect(showLegendButton).toHaveAttribute('aria-expanded', 'false');
+    expect(within(legend).queryByText('success')).toBeNull();
+
+    fireEvent.click(showLegendButton);
+    expect(within(legend).getByRole('button', { name: 'Hide legend' })).toHaveAttribute('aria-expanded', 'true');
+    expect(within(legend).getByText('success')).toBeInTheDocument();
+  });
+
   it('maps success and failure routes to distinct edge styles and minimap semantics', () => {
     render(
       <WorkflowEditorPageContent

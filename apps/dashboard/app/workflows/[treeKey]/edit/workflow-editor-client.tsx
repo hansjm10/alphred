@@ -175,6 +175,10 @@ function inspectorTabClassName(activeTab: InspectorTab, tab: InspectorTab): stri
   return activeTab === tab ? 'active' : '';
 }
 
+function workflowTransitionLegendClassName(collapsed: boolean): string {
+  return collapsed ? 'workflow-transition-legend workflow-transition-legend--collapsed' : 'workflow-transition-legend';
+}
+
 function classifyWorkflowNodeTopology(incomingCount: number, outgoingCount: number): WorkflowNodeTopology {
   if (outgoingCount >= 2) {
     return 'fanout-source';
@@ -938,60 +942,79 @@ function WorkflowContextMenuPanel({
   );
 }
 
-function WorkflowTransitionLegend() {
+function WorkflowTransitionLegend({
+  collapsed,
+  onToggle,
+}: Readonly<{
+  collapsed: boolean;
+  onToggle: () => void;
+}>) {
   return (
-    <aside className="workflow-transition-legend" aria-label="Transition legend">
-      <p className="workflow-transition-legend__title">Transition legend</p>
-      <ul className="workflow-transition-legend__list">
-        <li>
-          <span className="workflow-transition-legend__line workflow-transition-legend__line--success" aria-hidden="true" />
-          <span>
-            <strong>success</strong> route
-          </span>
-        </li>
-        <li>
-          <span className="workflow-transition-legend__line workflow-transition-legend__line--failure" aria-hidden="true" />
-          <span>
-            <strong>failure</strong> route
-          </span>
-        </li>
-        <li>
-          <span className="workflow-transition-legend__chip" aria-hidden="true">auto</span>
-          <span>
-            <strong>auto</strong> transition (unconditional)
-          </span>
-        </li>
-        <li>
-          <span className="workflow-transition-legend__chip" aria-hidden="true">guard</span>
-          <span>
-            <strong>guard</strong> transition (conditional)
-          </span>
-        </li>
-        <li>
-          <span className="workflow-transition-legend__chip workflow-transition-legend__chip--fanout" aria-hidden="true">fan-out</span>
-          <span>
-            <strong>fan-out source</strong> node (&gt;=2 outgoing transitions)
-          </span>
-        </li>
-        <li>
-          <span className="workflow-transition-legend__chip workflow-transition-legend__chip--join" aria-hidden="true">join</span>
-          <span>
-            <strong>join point</strong> node (&gt;=2 incoming transitions)
-          </span>
-        </li>
-        <li>
-          <span className="workflow-transition-legend__chip workflow-transition-legend__chip--isolated" aria-hidden="true">isolated</span>
-          <span>
-            <strong>isolated</strong> node (no incoming or outgoing transitions)
-          </span>
-        </li>
-        <li>
-          <span className="workflow-transition-legend__chip workflow-transition-legend__chip--counts" aria-hidden="true">in/out</span>
-          <span>
-            <strong>in/out</strong> counters on nodes show incoming and outgoing transition totals
-          </span>
-        </li>
-      </ul>
+    <aside className={workflowTransitionLegendClassName(collapsed)} aria-label="Transition legend">
+      <div className="workflow-transition-legend__header">
+        <p className="workflow-transition-legend__title">Transition legend</p>
+        <button
+          type="button"
+          className="workflow-transition-legend__toggle"
+          aria-expanded={!collapsed}
+          aria-controls="workflow-transition-legend-list"
+          onClick={onToggle}
+        >
+          {collapsed ? 'Show legend' : 'Hide legend'}
+        </button>
+      </div>
+      {collapsed ? null : (
+        <ul id="workflow-transition-legend-list" className="workflow-transition-legend__list">
+          <li>
+            <span className="workflow-transition-legend__line workflow-transition-legend__line--success" aria-hidden="true" />
+            <span>
+              <strong>success</strong> route
+            </span>
+          </li>
+          <li>
+            <span className="workflow-transition-legend__line workflow-transition-legend__line--failure" aria-hidden="true" />
+            <span>
+              <strong>failure</strong> route
+            </span>
+          </li>
+          <li>
+            <span className="workflow-transition-legend__chip" aria-hidden="true">auto</span>
+            <span>
+              <strong>auto</strong> transition (unconditional)
+            </span>
+          </li>
+          <li>
+            <span className="workflow-transition-legend__chip" aria-hidden="true">guard</span>
+            <span>
+              <strong>guard</strong> transition (conditional)
+            </span>
+          </li>
+          <li>
+            <span className="workflow-transition-legend__chip workflow-transition-legend__chip--fanout" aria-hidden="true">fan-out</span>
+            <span>
+              <strong>fan-out source</strong> node (&gt;=2 outgoing transitions)
+            </span>
+          </li>
+          <li>
+            <span className="workflow-transition-legend__chip workflow-transition-legend__chip--join" aria-hidden="true">join</span>
+            <span>
+              <strong>join point</strong> node (&gt;=2 incoming transitions)
+            </span>
+          </li>
+          <li>
+            <span className="workflow-transition-legend__chip workflow-transition-legend__chip--isolated" aria-hidden="true">isolated</span>
+            <span>
+              <strong>isolated</strong> node (no incoming or outgoing transitions)
+            </span>
+          </li>
+          <li>
+            <span className="workflow-transition-legend__chip workflow-transition-legend__chip--counts" aria-hidden="true">in/out</span>
+            <span>
+              <strong>in/out</strong> counters on nodes show incoming and outgoing transition totals
+            </span>
+          </li>
+        </ul>
+      )}
     </aside>
   );
 }
@@ -1296,6 +1319,7 @@ function WorkflowEditorLoadedContent({
   const [publishConfirmOpen, setPublishConfirmOpen] = useState(false);
   const [pendingConnectionSourceNodeKey, setPendingConnectionSourceNodeKey] = useState<string | null>(null);
   const [inspectorDrawerOpen, setInspectorDrawerOpen] = useState(false);
+  const [legendCollapsed, setLegendCollapsed] = useState(false);
   const [isCompactViewport, setIsCompactViewport] = useState(false);
   const [contextMenu, setContextMenu] = useState<WorkflowContextMenuState | null>(null);
   const [publishing, setPublishing] = useState(false);
@@ -1844,7 +1868,10 @@ function WorkflowEditorLoadedContent({
         </aside>
 
         <section className="workflow-editor-canvas" aria-label="Workflow canvas">
-          <WorkflowTransitionLegend />
+          <WorkflowTransitionLegend
+            collapsed={legendCollapsed}
+            onToggle={() => setLegendCollapsed((current) => !current)}
+          />
           <ReactFlow
             nodes={flowNodes}
             edges={flowEdges}
