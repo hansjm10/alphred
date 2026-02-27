@@ -5,6 +5,7 @@ import { formatLastUpdated, formatTimelineTime } from './formatting';
 import type { OperatorActionState, RealtimeChannelState, TimelineItem } from './types';
 
 type RunOperatorFocusCardProps = Readonly<{
+  sectionId: string;
   detail: DashboardRunDetail;
   latestTimelineEvent: TimelineItem | null;
   hasHydrated: boolean;
@@ -25,6 +26,7 @@ type RunOperatorFocusCardProps = Readonly<{
 }>;
 
 export function RunOperatorFocusCard({
+  sectionId,
   detail,
   latestTimelineEvent,
   hasHydrated,
@@ -42,9 +44,10 @@ export function RunOperatorFocusCard({
 }: RunOperatorFocusCardProps) {
   return (
     <Card
+      id={sectionId}
       title="Operator focus"
       description="Current run status, latest event, and next likely operator action."
-      className="run-operator-focus"
+      className="run-operator-focus run-detail-anchor-target"
     >
       <ul className="entity-list run-operator-focus-list">
         <li>

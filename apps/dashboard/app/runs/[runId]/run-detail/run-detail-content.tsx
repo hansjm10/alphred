@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type MouseEvent } from 'react';
 import type {
   DashboardRunControlAction,
   DashboardRunDetail,
@@ -45,6 +45,34 @@ import {
   type RunDetailContentProps,
 } from './types';
 
+const RUN_DETAIL_SECTION_IDS = {
+  focus: 'run-detail-focus',
+  timeline: 'run-detail-timeline',
+  stream: 'run-detail-stream',
+  observability: 'run-detail-observability',
+} as const;
+
+const RUN_DETAIL_SECTION_ITEMS = [
+  { id: RUN_DETAIL_SECTION_IDS.focus, label: 'Focus' },
+  { id: RUN_DETAIL_SECTION_IDS.timeline, label: 'Timeline' },
+  { id: RUN_DETAIL_SECTION_IDS.stream, label: 'Stream' },
+  { id: RUN_DETAIL_SECTION_IDS.observability, label: 'Observability' },
+] as const;
+
+type RunDetailSectionId = (typeof RUN_DETAIL_SECTION_ITEMS)[number]['id'];
+
+function isRunDetailSectionId(value: string): value is RunDetailSectionId {
+  return RUN_DETAIL_SECTION_ITEMS.some((section) => section.id === value);
+}
+
+function resolveSectionJumpBehavior(): ScrollBehavior {
+  if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') {
+    return 'auto';
+  }
+
+  return window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth';
+}
+
 export function RunDetailContent({
   initialDetail,
   repositories,
@@ -78,6 +106,7 @@ export function RunDetailContent({
   );
   const [pendingControlAction, setPendingControlAction] = useState<DashboardRunControlAction | null>(null);
   const [actionFeedback, setActionFeedback] = useState<ActionFeedbackState>(null);
+  const [activeSectionId, setActiveSectionId] = useState<RunDetailSectionId>(RUN_DETAIL_SECTION_ITEMS[0].id);
 
   const lastUpdatedAtRef = useRef<number>(lastUpdatedAtMs);
   const streamLastUpdatedAtRef = useRef<number>(streamLastUpdatedAtMs);
@@ -209,6 +238,84 @@ export function RunDetailContent({
     });
   }, [detail.run.status]);
 
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+
+    const hash = window.location.hash.slice(1);
+    if (isRunDetailSectionId(hash)) {
+      setActiveSectionId(hash);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || typeof window.IntersectionObserver === 'undefined') {
+      return;
+    }
+
+    const sections = RUN_DETAIL_SECTION_ITEMS
+      .map((section) => {
+        const element = document.getElementById(section.id);
+        if (!(element instanceof HTMLElement)) {
+          return null;
+        }
+
+        return {
+          id: section.id,
+          element,
+        };
+      })
+      .filter((section): section is { id: RunDetailSectionId; element: HTMLElement } => section !== null);
+
+    if (sections.length === 0) {
+      return;
+    }
+
+    const visibilityById = new Map<RunDetailSectionId, number>(
+      RUN_DETAIL_SECTION_ITEMS.map((section) => [section.id, 0]),
+    );
+
+    const observer = new window.IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          const sectionId = entry.target.id;
+          if (!isRunDetailSectionId(sectionId)) {
+            continue;
+          }
+
+          visibilityById.set(sectionId, entry.isIntersecting ? entry.intersectionRatio : 0);
+        }
+
+        let nextActiveSection: RunDetailSectionId | null = null;
+        let nextVisibility = 0;
+        for (const section of RUN_DETAIL_SECTION_ITEMS) {
+          const visibility = visibilityById.get(section.id) ?? 0;
+          if (visibility > nextVisibility) {
+            nextVisibility = visibility;
+            nextActiveSection = section.id;
+          }
+        }
+
+        if (nextActiveSection !== null) {
+          setActiveSectionId((current) => (current === nextActiveSection ? current : nextActiveSection));
+        }
+      },
+      {
+        rootMargin: '-35% 0px -45% 0px',
+        threshold: [0, 0.2, 0.35, 0.5, 0.75, 1],
+      },
+    );
+
+    for (const section of sections) {
+      observer.observe(section.element);
+    }
+
+    return () => {
+      observer.disconnect();
+    };
+  }, []);
+
   const timeline = useMemo(() => buildTimeline(detail), [detail]);
   const repositoryContext = useMemo(
     () => resolveRepositoryContext(detail, repositories),
@@ -294,6 +401,25 @@ export function RunDetailContent({
     setHighlightedNodeId(null);
   };
 
+  const handleSectionNavClick = (event: MouseEvent<HTMLAnchorElement>, sectionId: RunDetailSectionId): void => {
+    if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) {
+      return;
+    }
+
+    const section = document.getElementById(sectionId);
+    if (!(section instanceof HTMLElement)) {
+      return;
+    }
+
+    event.preventDefault();
+    section.scrollIntoView({
+      behavior: resolveSectionJumpBehavior(),
+      block: 'start',
+    });
+    window.history.replaceState(null, '', `#${sectionId}`);
+    setActiveSectionId(sectionId);
+  };
+
   return (
     <div className="page-stack">
       <section className="page-heading">
@@ -301,8 +427,32 @@ export function RunDetailContent({
         <p>{pageSubtitle}</p>
       </section>
 
+      <nav className="run-detail-section-nav" aria-label="Run detail sections">
+        <ul>
+          {RUN_DETAIL_SECTION_ITEMS.map((section) => {
+            const active = activeSectionId === section.id;
+
+            return (
+              <li key={section.id}>
+                <a
+                  href={`#${section.id}`}
+                  className={`run-detail-section-nav__link${active ? ' run-detail-section-nav__link--active' : ''}`}
+                  aria-current={active ? 'location' : undefined}
+                  onClick={(event) => {
+                    handleSectionNavClick(event, section.id);
+                  }}
+                >
+                  {section.label}
+                </a>
+              </li>
+            );
+          })}
+        </ul>
+      </nav>
+
       <div className="page-grid run-detail-priority-grid">
         <RunOperatorFocusCard
+          sectionId={RUN_DETAIL_SECTION_IDS.focus}
           detail={detail}
           latestTimelineEvent={latestTimelineEvent}
           hasHydrated={hasHydrated}
@@ -346,6 +496,7 @@ export function RunDetailContent({
       </div>
 
       <RunDetailLifecycleGrid
+        sectionId={RUN_DETAIL_SECTION_IDS.timeline}
         detail={detail}
         selectedNode={selectedNode}
         filteredNodeId={filteredNodeId}
@@ -359,6 +510,7 @@ export function RunDetailContent({
       />
 
       <RunAgentStreamCard
+        sectionId={RUN_DETAIL_SECTION_IDS.stream}
         isTerminalRun={!isActiveRunStatus(detail.run.status)}
         selectedStreamNode={selectedStreamNode}
         agentStreamLabel={agentStreamLabel}
@@ -375,7 +527,7 @@ export function RunDetailContent({
         setStreamEvents={setStreamEvents}
       />
 
-      <RunObservabilityCard detail={detail} />
+      <RunObservabilityCard sectionId={RUN_DETAIL_SECTION_IDS.observability} detail={detail} />
     </div>
   );
 }

@@ -331,12 +331,81 @@ class MockEventSource {
   }
 }
 
+class MockIntersectionObserver implements IntersectionObserver {
+  static instances: MockIntersectionObserver[] = [];
+
+  readonly root: Element | Document | null;
+  readonly rootMargin: string;
+  readonly thresholds: readonly number[];
+  private readonly callback: IntersectionObserverCallback;
+  private readonly observedElements = new Set<Element>();
+
+  constructor(callback: IntersectionObserverCallback, options: IntersectionObserverInit = {}) {
+    this.callback = callback;
+    this.root = options.root ?? null;
+    this.rootMargin = options.rootMargin ?? '0px';
+    if (Array.isArray(options.threshold)) {
+      this.thresholds = options.threshold;
+    } else if (typeof options.threshold === 'number') {
+      this.thresholds = [options.threshold];
+    } else {
+      this.thresholds = [0];
+    }
+    MockIntersectionObserver.instances.push(this);
+  }
+
+  observe(target: Element): void {
+    this.observedElements.add(target);
+  }
+
+  unobserve(target: Element): void {
+    this.observedElements.delete(target);
+  }
+
+  disconnect(): void {
+    this.observedElements.clear();
+  }
+
+  takeRecords(): IntersectionObserverEntry[] {
+    return [];
+  }
+
+  emit(entries: Pick<IntersectionObserverEntry, 'target' | 'isIntersecting' | 'intersectionRatio'>[]): void {
+    const fullEntries = entries.map((entry) => ({
+      ...entry,
+      time: 0,
+      boundingClientRect: entry.target.getBoundingClientRect(),
+      intersectionRect: entry.target.getBoundingClientRect(),
+      rootBounds: null,
+    })) as IntersectionObserverEntry[];
+    this.callback(fullEntries, this);
+  }
+}
+
+function stubMatchMedia(matches: boolean): void {
+  vi.stubGlobal(
+    'matchMedia',
+    vi.fn().mockImplementation((query: string): MediaQueryList => ({
+      matches,
+      media: query,
+      onchange: null,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    })),
+  );
+}
+
 describe('RunDetailContent realtime updates', () => {
   const fetchMock = vi.fn();
 
   beforeEach(() => {
     fetchMock.mockReset();
     MockEventSource.instances = [];
+    MockIntersectionObserver.instances = [];
+    window.history.replaceState(null, '', '/runs/412');
     vi.stubGlobal('fetch', fetchMock);
   });
 
@@ -412,6 +481,101 @@ describe('RunDetailContent realtime updates', () => {
       consoleErrorSpy.mockRestore();
       container.remove();
     }
+  });
+
+  it('renders section nav links for anchored run detail sections', () => {
+    render(
+      <RunDetailContent
+        initialDetail={createRunDetail()}
+        repositories={[createRepository()]}
+        enableRealtime={false}
+      />,
+    );
+
+    const sectionNav = screen.getByRole('navigation', { name: 'Run detail sections' });
+    expect(within(sectionNav).getByRole('link', { name: 'Focus' })).toHaveAttribute('href', '#run-detail-focus');
+    expect(within(sectionNav).getByRole('link', { name: 'Timeline' })).toHaveAttribute('href', '#run-detail-timeline');
+    expect(within(sectionNav).getByRole('link', { name: 'Stream' })).toHaveAttribute('href', '#run-detail-stream');
+    expect(within(sectionNav).getByRole('link', { name: 'Observability' })).toHaveAttribute('href', '#run-detail-observability');
+
+    expect(document.getElementById('run-detail-focus')).not.toBeNull();
+    expect(document.getElementById('run-detail-timeline')).not.toBeNull();
+    expect(document.getElementById('run-detail-stream')).not.toBeNull();
+    expect(document.getElementById('run-detail-observability')).not.toBeNull();
+  });
+
+  it.each([
+    {
+      name: 'smooth scrolling by default',
+      reducedMotion: false,
+      expectedBehavior: 'smooth',
+    },
+    {
+      name: 'reduced motion preference',
+      reducedMotion: true,
+      expectedBehavior: 'auto',
+    },
+  ])('jumps to section anchors using $name', async ({ reducedMotion, expectedBehavior }) => {
+    stubMatchMedia(reducedMotion);
+    const user = userEvent.setup();
+
+    render(
+      <RunDetailContent
+        initialDetail={createRunDetail()}
+        repositories={[createRepository()]}
+        enableRealtime={false}
+      />,
+    );
+
+    const streamSection = document.getElementById('run-detail-stream');
+    expect(streamSection).not.toBeNull();
+    const scrollIntoView = vi.fn();
+    Object.defineProperty(streamSection!, 'scrollIntoView', {
+      value: scrollIntoView,
+      configurable: true,
+    });
+
+    await user.click(screen.getByRole('link', { name: 'Stream' }));
+
+    expect(scrollIntoView).toHaveBeenCalledWith({
+      behavior: expectedBehavior,
+      block: 'start',
+    });
+  });
+
+  it('updates the active section nav item from intersection observer entries', () => {
+    vi.stubGlobal('IntersectionObserver', MockIntersectionObserver as unknown as typeof IntersectionObserver);
+
+    render(
+      <RunDetailContent
+        initialDetail={createRunDetail()}
+        repositories={[createRepository()]}
+        enableRealtime={false}
+      />,
+    );
+
+    const sectionNav = screen.getByRole('navigation', { name: 'Run detail sections' });
+    const focusLink = within(sectionNav).getByRole('link', { name: 'Focus' });
+    const observabilityLink = within(sectionNav).getByRole('link', { name: 'Observability' });
+    expect(focusLink).toHaveAttribute('aria-current', 'location');
+    expect(observabilityLink).not.toHaveAttribute('aria-current');
+
+    const observer = MockIntersectionObserver.instances[0];
+    expect(observer).toBeDefined();
+    const observabilitySection = document.getElementById('run-detail-observability');
+    const focusSection = document.getElementById('run-detail-focus');
+    expect(observabilitySection).not.toBeNull();
+    expect(focusSection).not.toBeNull();
+
+    act(() => {
+      observer!.emit([
+        { target: focusSection!, isIntersecting: true, intersectionRatio: 0.1 },
+        { target: observabilitySection!, isIntersecting: true, intersectionRatio: 0.75 },
+      ]);
+    });
+
+    expect(observabilityLink).toHaveAttribute('aria-current', 'location');
+    expect(focusLink).not.toHaveAttribute('aria-current');
   });
 
   it('refreshes active run detail without a full page reload', async () => {

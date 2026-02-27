@@ -31,6 +31,9 @@
   --shadow-md: 0 10px 24px rgba(15, 23, 42, 0.08);
   --motion-fast: 150ms;
   --motion-medium: 240ms;
+  --shell-topbar-offset: 88px;
+  --shell-topbar-offset-mobile: 132px;
+  --run-detail-section-nav-height: 44px;
 }
 
 * {
@@ -349,7 +352,8 @@ output {
 .button-link:focus-visible,
 .shell-nav-link:focus-visible,
 .tabs__link:focus-visible,
-.run-timeline-event:focus-visible {
+.run-timeline-event:focus-visible,
+.run-detail-section-nav__link:focus-visible {
   outline: 2px solid var(--accent-active);
   outline-offset: 2px;
 }
@@ -694,6 +698,53 @@ output {
 
 .run-action-feedback--error {
   color: var(--accent-danger);
+}
+
+.run-detail-section-nav {
+  background: color-mix(in srgb, var(--bg-surface) 94%, transparent);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-pill);
+  overflow-x: auto;
+  position: sticky;
+  top: calc(var(--shell-topbar-offset) + var(--space-2));
+  z-index: 4;
+}
+
+.run-detail-section-nav ul {
+  display: flex;
+  gap: 6px;
+  list-style: none;
+  min-width: max-content;
+  padding: 6px;
+}
+
+.run-detail-section-nav__link {
+  align-items: center;
+  border: 1px solid transparent;
+  border-radius: var(--radius-pill);
+  color: var(--text-secondary);
+  display: inline-flex;
+  font: 600 13px/20px var(--font-display);
+  padding: 6px 12px;
+  text-decoration: none;
+  transition: background-color var(--motion-fast), border-color var(--motion-fast), color var(--motion-fast);
+  white-space: nowrap;
+}
+
+.run-detail-section-nav__link:hover {
+  background: color-mix(in srgb, var(--accent-active) 8%, var(--bg-surface));
+  border-color: color-mix(in srgb, var(--accent-active) 35%, var(--border-default));
+  color: var(--accent-active);
+}
+
+.run-detail-section-nav__link--active {
+  background: color-mix(in srgb, var(--accent-active) 12%, var(--bg-surface));
+  border-color: color-mix(in srgb, var(--accent-active) 45%, var(--border-default));
+  color: var(--accent-active);
+}
+
+.run-detail-anchor-target {
+  scroll-margin-top: calc(var(--shell-topbar-offset) + var(--run-detail-section-nav-height) + var(--space-4));
 }
 
 .run-detail-priority-grid {
@@ -1879,6 +1930,10 @@ output {
 
   .run-detail-priority-grid {
     gap: var(--space-2);
+  }
+
+  .run-detail-section-nav {
+    top: calc(var(--shell-topbar-offset-mobile) + var(--space-2));
   }
 
   .run-detail-primary-actions {

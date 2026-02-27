@@ -161,6 +161,7 @@ function SelectedStreamContent({
 }
 
 type RunAgentStreamCardProps = Readonly<{
+  sectionId: string;
   isTerminalRun: boolean;
   selectedStreamNode: DashboardRunDetail['nodes'][number] | null;
   agentStreamLabel: {
@@ -181,6 +182,7 @@ type RunAgentStreamCardProps = Readonly<{
 }>;
 
 export function RunAgentStreamCard({
+  sectionId,
   isTerminalRun,
   selectedStreamNode,
   agentStreamLabel,
@@ -253,7 +255,12 @@ export function RunAgentStreamCard({
 
   if (!isTerminalRun) {
     return (
-      <Card title="Agent stream" description="Live provider events for a selected node attempt.">
+      <Card
+        id={sectionId}
+        title="Agent stream"
+        description="Live provider events for a selected node attempt."
+        className="run-detail-anchor-target"
+      >
         {streamContent}
       </Card>
     );
@@ -266,7 +273,12 @@ export function RunAgentStreamCard({
   });
 
   return (
-    <Card title="Agent stream" description="Provider events for a selected node attempt.">
+    <Card
+      id={sectionId}
+      title="Agent stream"
+      description="Provider events for a selected node attempt."
+      className="run-detail-anchor-target"
+    >
       <details className="run-agent-stream-collapsed">
         <summary className="run-agent-stream-collapsed__summary">{terminalStreamSummary}</summary>
         {streamContent}
