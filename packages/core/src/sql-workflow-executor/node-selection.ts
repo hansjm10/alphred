@@ -5,6 +5,9 @@ import { getLatestRunNodeAttempts } from './type-conversions.js';
 import type { EdgeRow, LatestArtifact, NextRunnableSelection, RoutingDecisionRow, RunNodeExecutionRow } from './types.js';
 
 const terminalRunNodeStatuses = new Set(['completed', 'failed', 'skipped', 'cancelled']);
+function isDynamicSpawnerSuccessEdge(edge: EdgeRow): boolean {
+  return edge.routeOn === 'success' && edge.edgeKind === 'dynamic_spawner_to_child';
+}
 
 export function hasPotentialIncomingRoute(
   incomingEdges: EdgeRow[],
@@ -27,6 +30,9 @@ export function hasPotentialIncomingRoute(
     }
 
     if (sourceNode.status === 'completed') {
+      if (isDynamicSpawnerSuccessEdge(edge)) {
+        return true;
+      }
       if (edge.routeOn !== 'success') {
         return false;
       }
@@ -68,6 +74,10 @@ export function hasRunnableIncomingRoute(
 
     if (edge.routeOn === 'failure' && sourceNode.status !== 'failed') {
       return false;
+    }
+
+    if (isDynamicSpawnerSuccessEdge(edge)) {
+      return true;
     }
 
     return selectedEdgeIdBySourceNodeId.get(edge.sourceNodeId) === edge.edgeId;
