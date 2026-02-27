@@ -108,22 +108,28 @@ function resolveGuardDecisionHints(guardedSuccessEdges: EdgeRow[]): RoutingDecis
   return routingDecisionSignals.filter(signal => signals.has(signal));
 }
 
+function formatRoutingDecisionSignals(signals: readonly RoutingDecisionSignal[]): string {
+  return signals.map(signal => `\`${signal}\``).join(', ');
+}
+
 function buildRoutingDecisionPromptContract(guardedSuccessEdges: EdgeRow[]): string {
   const guardedRouteCount = guardedSuccessEdges.length;
   const guardDecisionHints = resolveGuardDecisionHints(guardedSuccessEdges);
   const contractLineTemplate = `${routingDecisionContractLinePrefix} <${routingDecisionSignals.join('|')}>`;
   const contractLineExample = `${routingDecisionContractLinePrefix} changes_requested`;
+  const canonicalValues = formatRoutingDecisionSignals(routingDecisionSignals);
+  const guardHintValues = formatRoutingDecisionSignals(guardDecisionHints);
 
   const guardHintLine =
     guardDecisionHints.length === 0
       ? '- Choose a value that matches this node\'s guarded success route conditions.'
-      : `- Node-specific guard hints: ${guardDecisionHints.map(signal => `\`${signal}\``).join(', ')}.`;
+      : `- Node-specific guard hints: ${guardHintValues}.`;
 
   return [
     routingDecisionContractSentinel,
     'Routing metadata contract (required for guarded success routing):',
     '- Emit terminal metadata key `result.metadata.routingDecision`.',
-    `- Canonical values: ${routingDecisionSignals.map(signal => `\`${signal}\``).join(', ')}.`,
+    `- Canonical values: ${canonicalValues}.`,
     `- This node currently has ${guardedRouteCount} guarded success route${guardedRouteCount === 1 ? '' : 's'}.`,
     guardHintLine,
     '- Include one terminal line exactly in this format:',

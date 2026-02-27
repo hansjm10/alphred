@@ -11,7 +11,7 @@ const routingDecisionContractLineRegex = /^result\.metadata\.routingDecision\s*:
 
 function unwrapInlineCodeLine(line: string): string {
   if (line.length >= 2 && line.startsWith('`') && line.endsWith('`')) {
-    return line.slice(1, line.length - 1).trim();
+    return line.slice(1, -1).trim();
   }
 
   return line;
@@ -71,7 +71,7 @@ function readRoutingDecisionFromResultContent(resultContent: string): RoutingDec
       continue;
     }
 
-    const match = trimmedLine.match(routingDecisionContractLineRegex);
+    const match = routingDecisionContractLineRegex.exec(trimmedLine);
     if (!match) {
       continue;
     }
