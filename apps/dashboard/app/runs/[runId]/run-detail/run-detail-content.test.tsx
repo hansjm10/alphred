@@ -331,6 +331,71 @@ class MockEventSource {
   }
 }
 
+type MockIntersectionEntryInput = Readonly<{
+  target: Element;
+  isIntersecting?: boolean;
+  intersectionRatio?: number;
+  top?: number;
+}>;
+
+function toRect(top: number): DOMRectReadOnly {
+  return {
+    x: 0,
+    y: top,
+    width: 1,
+    height: 1,
+    top,
+    right: 1,
+    bottom: top + 1,
+    left: 0,
+    toJSON: () => ({}),
+  };
+}
+
+class MockIntersectionObserver implements IntersectionObserver {
+  static instances: MockIntersectionObserver[] = [];
+
+  readonly root: Element | Document | null;
+  readonly rootMargin: string;
+  readonly thresholds: readonly number[];
+  readonly observe = vi.fn<(target: Element) => void>();
+  readonly unobserve = vi.fn<(target: Element) => void>();
+  readonly disconnect = vi.fn<() => void>();
+  readonly takeRecords = vi.fn<() => IntersectionObserverEntry[]>(() => []);
+
+  private readonly callback: IntersectionObserverCallback;
+  readonly options: IntersectionObserverInit | undefined;
+
+  constructor(callback: IntersectionObserverCallback, options?: IntersectionObserverInit) {
+    this.callback = callback;
+    this.options = options;
+    this.root = options?.root ?? null;
+    this.rootMargin = options?.rootMargin ?? '0px 0px 0px 0px';
+    this.thresholds = Array.isArray(options?.threshold)
+      ? options.threshold
+      : [options?.threshold ?? 0];
+
+    MockIntersectionObserver.instances.push(this);
+  }
+
+  emit(entries: readonly MockIntersectionEntryInput[]): void {
+    const observedEntries = entries.map((entry) => {
+      const top = entry.top ?? 0;
+      return {
+        time: 0,
+        target: entry.target,
+        rootBounds: null,
+        boundingClientRect: toRect(top),
+        intersectionRect: toRect(top),
+        isIntersecting: entry.isIntersecting ?? true,
+        intersectionRatio: entry.intersectionRatio ?? 1,
+      } satisfies IntersectionObserverEntry;
+    });
+
+    this.callback(observedEntries, this);
+  }
+}
+
 describe('RunDetailContent realtime updates', () => {
   const fetchMock = vi.fn();
 
@@ -1851,6 +1916,128 @@ describe('RunDetailContent realtime updates', () => {
 
     expect(lifecycleGrid).not.toBeNull();
     expect(lifecycleGrid).toHaveClass('run-detail-lifecycle-grid');
+  });
+
+  it('renders an in-page section nav with stable anchor targets', () => {
+    render(
+      <RunDetailContent
+        initialDetail={createRunDetail()}
+        repositories={[createRepository()]}
+        enableRealtime={false}
+      />,
+    );
+
+    const nav = screen.getByRole('navigation', { name: 'Run detail sections' });
+    const runHeading = screen.getByRole('heading', { level: 2, name: 'Run #412' });
+    const sectionExpectations = [
+      { id: 'focus', label: 'Focus', headingId: 'run-focus-heading' },
+      { id: 'timeline', label: 'Timeline', headingId: 'run-timeline-heading' },
+      { id: 'stream', label: 'Stream', headingId: 'run-stream-heading' },
+      { id: 'observability', label: 'Observability', headingId: 'run-observability-heading' },
+    ] as const;
+
+    expect(runHeading.closest('section')?.nextElementSibling).toBe(nav);
+
+    for (const section of sectionExpectations) {
+      const link = within(nav).getByRole('link', { name: section.label });
+      expect(link).toHaveAttribute('href', `#${section.id}`);
+      expect(document.getElementById(section.id)).toHaveAttribute('aria-labelledby', section.headingId);
+    }
+  });
+
+  it('updates active section from intersection observer updates', async () => {
+    MockIntersectionObserver.instances = [];
+    vi.stubGlobal('IntersectionObserver', MockIntersectionObserver);
+
+    render(
+      <RunDetailContent
+        initialDetail={createRunDetail()}
+        repositories={[createRepository()]}
+        enableRealtime={false}
+      />,
+    );
+
+    expect(MockIntersectionObserver.instances).toHaveLength(1);
+    const observer = MockIntersectionObserver.instances[0]!;
+    expect(observer.options).toEqual(
+      expect.objectContaining({
+        root: null,
+        rootMargin: '-112px 0px -45% 0px',
+        threshold: [0, 0.25, 0.5, 0.75, 1],
+      }),
+    );
+    const nav = screen.getByRole('navigation', { name: 'Run detail sections' });
+    const focusLink = within(nav).getByRole('link', { name: 'Focus' });
+    const timelineLink = within(nav).getByRole('link', { name: 'Timeline' });
+    const streamLink = within(nav).getByRole('link', { name: 'Stream' });
+
+    const focusSection = document.getElementById('focus');
+    const timelineSection = document.getElementById('timeline');
+    const streamSection = document.getElementById('stream');
+    if (!focusSection || !timelineSection || !streamSection) {
+      throw new Error('Expected run-detail section anchors to exist.');
+    }
+
+    observer.emit([
+      { target: focusSection, isIntersecting: true, intersectionRatio: 1, top: 0 },
+    ]);
+    expect(focusLink).toHaveAttribute('aria-current', 'location');
+    expect(timelineLink).not.toHaveAttribute('aria-current', 'location');
+
+    observer.emit([
+      { target: focusSection, isIntersecting: true, intersectionRatio: 0.4, top: -260 },
+      { target: timelineSection, isIntersecting: true, intersectionRatio: 0.9, top: 36 },
+    ]);
+    await waitFor(() => {
+      expect(timelineLink).toHaveAttribute('aria-current', 'location');
+    });
+
+    observer.emit([
+      { target: timelineSection, isIntersecting: true, intersectionRatio: 0.5, top: -220 },
+      { target: streamSection, isIntersecting: true, intersectionRatio: 0.9, top: 24 },
+    ]);
+    await waitFor(() => {
+      expect(streamLink).toHaveAttribute('aria-current', 'location');
+    });
+  });
+
+  it('falls back to hash and click state when intersection observer is unavailable', async () => {
+    vi.stubGlobal('IntersectionObserver', undefined);
+    window.history.replaceState(null, '', '#timeline');
+
+    render(
+      <RunDetailContent
+        initialDetail={createRunDetail()}
+        repositories={[createRepository()]}
+        enableRealtime={false}
+      />,
+    );
+
+    const user = userEvent.setup();
+    const nav = screen.getByRole('navigation', { name: 'Run detail sections' });
+    const timelineLink = within(nav).getByRole('link', { name: 'Timeline' });
+    const observabilityLink = within(nav).getByRole('link', { name: 'Observability' });
+    const observabilitySection = document.getElementById('observability');
+    if (!observabilitySection) {
+      throw new Error('Expected observability section anchor to exist.');
+    }
+    const scrollIntoViewSpy = vi.fn();
+    Object.defineProperty(observabilitySection, 'scrollIntoView', {
+      configurable: true,
+      value: scrollIntoViewSpy,
+    });
+
+    await waitFor(() => {
+      expect(timelineLink).toHaveAttribute('aria-current', 'location');
+    });
+
+    await user.click(observabilityLink);
+
+    expect(observabilityLink).toHaveAttribute('aria-current', 'location');
+    expect(scrollIntoViewSpy).toHaveBeenCalledWith({
+      behavior: 'smooth',
+      block: 'start',
+    });
   });
 
   it('adds an expand affordance for long artifact previews', async () => {

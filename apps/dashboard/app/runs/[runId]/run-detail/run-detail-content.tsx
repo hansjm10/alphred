@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type MouseEvent } from 'react';
 import type {
   DashboardRunControlAction,
   DashboardRunDetail,
@@ -45,6 +45,113 @@ import {
   type RunDetailContentProps,
 } from './types';
 
+type RunDetailSectionId = 'focus' | 'timeline' | 'stream' | 'observability';
+
+type RunDetailSection = Readonly<{
+  id: RunDetailSectionId;
+  label: string;
+  headingId: string;
+}>;
+
+type SectionIntersectionSnapshot = Readonly<{
+  id: RunDetailSectionId;
+  isIntersecting: boolean;
+  top: number;
+  ratio: number;
+}>;
+
+const RUN_DETAIL_SECTIONS: readonly RunDetailSection[] = [
+  {
+    id: 'focus',
+    label: 'Focus',
+    headingId: 'run-focus-heading',
+  },
+  {
+    id: 'timeline',
+    label: 'Timeline',
+    headingId: 'run-timeline-heading',
+  },
+  {
+    id: 'stream',
+    label: 'Stream',
+    headingId: 'run-stream-heading',
+  },
+  {
+    id: 'observability',
+    label: 'Observability',
+    headingId: 'run-observability-heading',
+  },
+];
+
+const RUN_DETAIL_SECTION_ID_LOOKUP: ReadonlySet<RunDetailSectionId> = new Set(
+  RUN_DETAIL_SECTIONS.map((section) => section.id),
+);
+const RUN_DETAIL_SECTION_OBSERVER_TOP_OFFSET_PX = 120;
+const RUN_DETAIL_SECTION_OBSERVER_OPTIONS = {
+  root: null,
+  rootMargin: '-112px 0px -45% 0px',
+  threshold: [0, 0.25, 0.5, 0.75, 1],
+} satisfies IntersectionObserverInit;
+
+function isRunDetailSectionId(value: string): value is RunDetailSectionId {
+  return RUN_DETAIL_SECTION_ID_LOOKUP.has(value as RunDetailSectionId);
+}
+
+function resolveSectionIdFromHash(hash: string): RunDetailSectionId | null {
+  const sectionId = hash.startsWith('#') ? hash.slice(1) : hash;
+  if (!isRunDetailSectionId(sectionId)) {
+    return null;
+  }
+
+  return sectionId;
+}
+
+function resolveActiveSectionFromIntersections(
+  sectionSnapshots: ReadonlyMap<RunDetailSectionId, SectionIntersectionSnapshot>,
+): RunDetailSectionId | null {
+  const intersectingSections = RUN_DETAIL_SECTIONS.map((section, index) => {
+    const snapshot = sectionSnapshots.get(section.id);
+    if (!snapshot || !snapshot.isIntersecting) {
+      return null;
+    }
+
+    return {
+      id: snapshot.id,
+      top: snapshot.top,
+      ratio: snapshot.ratio,
+      index,
+    };
+  }).filter((snapshot): snapshot is { id: RunDetailSectionId; top: number; ratio: number; index: number } => snapshot !== null);
+
+  if (intersectingSections.length === 0) {
+    return null;
+  }
+
+  const sortedIntersections = [...intersectingSections].sort((left, right) => {
+    if (left.top !== right.top) {
+      return left.top - right.top;
+    }
+    if (left.ratio !== right.ratio) {
+      return right.ratio - left.ratio;
+    }
+
+    return left.index - right.index;
+  });
+  const crossedTopOffset = sortedIntersections.filter(
+    (section) => section.top <= RUN_DETAIL_SECTION_OBSERVER_TOP_OFFSET_PX,
+  );
+
+  return (crossedTopOffset.at(-1) ?? sortedIntersections[0]).id;
+}
+
+function prefersReducedMotion(): boolean {
+  if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') {
+    return false;
+  }
+
+  return window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+}
+
 export function RunDetailContent({
   initialDetail,
   repositories,
@@ -78,6 +185,7 @@ export function RunDetailContent({
   );
   const [pendingControlAction, setPendingControlAction] = useState<DashboardRunControlAction | null>(null);
   const [actionFeedback, setActionFeedback] = useState<ActionFeedbackState>(null);
+  const [activeSectionId, setActiveSectionId] = useState<RunDetailSectionId>(RUN_DETAIL_SECTIONS[0].id);
 
   const lastUpdatedAtRef = useRef<number>(lastUpdatedAtMs);
   const streamLastUpdatedAtRef = useRef<number>(streamLastUpdatedAtMs);
@@ -209,6 +317,79 @@ export function RunDetailContent({
     });
   }, [detail.run.status]);
 
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+
+    const hashSectionId = resolveSectionIdFromHash(window.location.hash);
+    if (hashSectionId) {
+      setActiveSectionId(hashSectionId);
+    }
+
+    const handleHashChange = (): void => {
+      const nextSectionId = resolveSectionIdFromHash(window.location.hash);
+      if (nextSectionId) {
+        setActiveSectionId(nextSectionId);
+      }
+    };
+
+    window.addEventListener('hashchange', handleHashChange);
+
+    if (typeof window.IntersectionObserver !== 'function') {
+      return () => {
+        window.removeEventListener('hashchange', handleHashChange);
+      };
+    }
+
+    const sectionSnapshots = new Map<RunDetailSectionId, SectionIntersectionSnapshot>();
+    const observer = new window.IntersectionObserver((entries) => {
+      for (const entry of entries) {
+        const sectionId = entry.target.id;
+        if (!isRunDetailSectionId(sectionId)) {
+          continue;
+        }
+
+        sectionSnapshots.set(sectionId, {
+          id: sectionId,
+          isIntersecting: entry.isIntersecting,
+          top: entry.boundingClientRect.top,
+          ratio: entry.intersectionRatio,
+        });
+      }
+
+      const nextActiveSectionId = resolveActiveSectionFromIntersections(sectionSnapshots);
+      if (nextActiveSectionId) {
+        setActiveSectionId(nextActiveSectionId);
+      }
+    }, RUN_DETAIL_SECTION_OBSERVER_OPTIONS);
+
+    const observedSections: HTMLElement[] = [];
+    for (const section of RUN_DETAIL_SECTIONS) {
+      const sectionElement = document.getElementById(section.id);
+      if (!sectionElement) {
+        continue;
+      }
+
+      sectionSnapshots.set(section.id, {
+        id: section.id,
+        isIntersecting: false,
+        top: Number.POSITIVE_INFINITY,
+        ratio: 0,
+      });
+      observer.observe(sectionElement);
+      observedSections.push(sectionElement);
+    }
+
+    return () => {
+      for (const sectionElement of observedSections) {
+        observer.unobserve(sectionElement);
+      }
+      observer.disconnect();
+      window.removeEventListener('hashchange', handleHashChange);
+    };
+  }, []);
+
   const timeline = useMemo(() => buildTimeline(detail), [detail]);
   const repositoryContext = useMemo(
     () => resolveRepositoryContext(detail, repositories),
@@ -294,6 +475,39 @@ export function RunDetailContent({
     setHighlightedNodeId(null);
   };
 
+  const handleSectionNavigationClick = (
+    event: MouseEvent<HTMLAnchorElement>,
+    sectionId: RunDetailSectionId,
+  ): void => {
+    if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) {
+      return;
+    }
+
+    const sectionElement = document.getElementById(sectionId);
+    if (!sectionElement) {
+      return;
+    }
+
+    event.preventDefault();
+    setActiveSectionId(sectionId);
+
+    if (typeof sectionElement.scrollIntoView === 'function') {
+      sectionElement.scrollIntoView({
+        behavior: prefersReducedMotion() ? 'auto' : 'smooth',
+        block: 'start',
+      });
+    }
+
+    const targetHash = `#${sectionId}`;
+    if (window.location.hash !== targetHash) {
+      if (typeof window.history.pushState === 'function') {
+        window.history.pushState(null, '', targetHash);
+      } else {
+        window.location.hash = sectionId;
+      }
+    }
+  };
+
   return (
     <div className="page-stack">
       <section className="page-heading">
@@ -301,81 +515,108 @@ export function RunDetailContent({
         <p>{pageSubtitle}</p>
       </section>
 
-      <div className="page-grid run-detail-priority-grid">
-        <RunOperatorFocusCard
+      <nav aria-label="Run detail sections" className="run-detail-section-nav">
+        <ul className="run-detail-section-nav__list">
+          {RUN_DETAIL_SECTIONS.map((section) => (
+            <li key={section.id}>
+              <a
+                href={`#${section.id}`}
+                className="run-detail-section-nav__link"
+                aria-current={activeSectionId === section.id ? 'location' : undefined}
+                onClick={(event) => {
+                  handleSectionNavigationClick(event, section.id);
+                }}
+              >
+                {section.label}
+              </a>
+            </li>
+          ))}
+        </ul>
+      </nav>
+
+      <section id={RUN_DETAIL_SECTIONS[0].id} aria-labelledby={RUN_DETAIL_SECTIONS[0].headingId} className="run-detail-section">
+        <div className="page-grid run-detail-priority-grid">
+          <RunOperatorFocusCard
+            detail={detail}
+            latestTimelineEvent={latestTimelineEvent}
+            hasHydrated={hasHydrated}
+            primaryAction={primaryAction}
+            secondaryAction={secondaryAction}
+            pendingControlAction={pendingControlAction}
+            actionHint={actionHint}
+            actionHintTone={actionHintTone}
+            channelState={channelState}
+            realtimeLabel={realtimeLabel}
+            lastUpdatedAtMs={lastUpdatedAtMs}
+            isRefreshing={isRefreshing}
+            updateError={updateError}
+            onRunControlAction={handleRunControlAction}
+          />
+
+          <Panel title="Run summary" description="Workflow context and timestamps." className="run-detail-summary-panel">
+            <ul className="entity-list run-detail-summary-list">
+              <li>
+                <span>Workflow</span>
+                <span className="meta-text">{`${detail.run.tree.name} (${detail.run.tree.treeKey})`}</span>
+              </li>
+              <li>
+                <span>Repository context</span>
+                <span className="meta-text">{repositoryContext}</span>
+              </li>
+              <li>
+                <span>Worktrees</span>
+                <span className="meta-text">{detail.worktrees.length}</span>
+              </li>
+              <li>
+                <span>Started</span>
+                <span className="meta-text">{formatDateTime(detail.run.startedAt, 'Not started', hasHydrated)}</span>
+              </li>
+              <li>
+                <span>Completed</span>
+                <span className="meta-text">{formatDateTime(detail.run.completedAt, 'In progress', hasHydrated)}</span>
+              </li>
+            </ul>
+          </Panel>
+        </div>
+      </section>
+
+      <section id={RUN_DETAIL_SECTIONS[1].id} aria-labelledby={RUN_DETAIL_SECTIONS[1].headingId} className="run-detail-section">
+        <RunDetailLifecycleGrid
           detail={detail}
-          latestTimelineEvent={latestTimelineEvent}
+          selectedNode={selectedNode}
+          filteredNodeId={filteredNodeId}
+          highlightedNodeId={highlightedNodeId}
           hasHydrated={hasHydrated}
-          primaryAction={primaryAction}
-          secondaryAction={secondaryAction}
-          pendingControlAction={pendingControlAction}
-          actionHint={actionHint}
-          actionHintTone={actionHintTone}
-          channelState={channelState}
-          realtimeLabel={realtimeLabel}
-          lastUpdatedAtMs={lastUpdatedAtMs}
-          isRefreshing={isRefreshing}
-          updateError={updateError}
-          onRunControlAction={handleRunControlAction}
+          visibleTimeline={visibleTimeline}
+          visibleTimelinePartition={visibleTimelinePartition}
+          onSelectTimelineNode={setHighlightedNodeId}
+          onClearNodeFilter={clearNodeFilter}
+          onToggleNodeFilter={toggleNodeFilter}
         />
+      </section>
 
-        <Panel title="Run summary" description="Workflow context and timestamps." className="run-detail-summary-panel">
-          <ul className="entity-list run-detail-summary-list">
-            <li>
-              <span>Workflow</span>
-              <span className="meta-text">{`${detail.run.tree.name} (${detail.run.tree.treeKey})`}</span>
-            </li>
-            <li>
-              <span>Repository context</span>
-              <span className="meta-text">{repositoryContext}</span>
-            </li>
-            <li>
-              <span>Worktrees</span>
-              <span className="meta-text">{detail.worktrees.length}</span>
-            </li>
-            <li>
-              <span>Started</span>
-              <span className="meta-text">{formatDateTime(detail.run.startedAt, 'Not started', hasHydrated)}</span>
-            </li>
-            <li>
-              <span>Completed</span>
-              <span className="meta-text">{formatDateTime(detail.run.completedAt, 'In progress', hasHydrated)}</span>
-            </li>
-          </ul>
-        </Panel>
-      </div>
+      <section id={RUN_DETAIL_SECTIONS[2].id} aria-labelledby={RUN_DETAIL_SECTIONS[2].headingId} className="run-detail-section">
+        <RunAgentStreamCard
+          isTerminalRun={!isActiveRunStatus(detail.run.status)}
+          selectedStreamNode={selectedStreamNode}
+          agentStreamLabel={agentStreamLabel}
+          streamConnectionState={streamConnectionState}
+          streamLastUpdatedAtMs={streamLastUpdatedAtMs}
+          hasHydrated={hasHydrated}
+          streamAutoScroll={streamAutoScroll}
+          streamBufferedEvents={streamBufferedEvents}
+          streamError={streamError}
+          streamEvents={streamEvents}
+          streamEventListRef={streamEventListRef}
+          setStreamAutoScroll={setStreamAutoScroll}
+          setStreamBufferedEvents={setStreamBufferedEvents}
+          setStreamEvents={setStreamEvents}
+        />
+      </section>
 
-      <RunDetailLifecycleGrid
-        detail={detail}
-        selectedNode={selectedNode}
-        filteredNodeId={filteredNodeId}
-        highlightedNodeId={highlightedNodeId}
-        hasHydrated={hasHydrated}
-        visibleTimeline={visibleTimeline}
-        visibleTimelinePartition={visibleTimelinePartition}
-        onSelectTimelineNode={setHighlightedNodeId}
-        onClearNodeFilter={clearNodeFilter}
-        onToggleNodeFilter={toggleNodeFilter}
-      />
-
-      <RunAgentStreamCard
-        isTerminalRun={!isActiveRunStatus(detail.run.status)}
-        selectedStreamNode={selectedStreamNode}
-        agentStreamLabel={agentStreamLabel}
-        streamConnectionState={streamConnectionState}
-        streamLastUpdatedAtMs={streamLastUpdatedAtMs}
-        hasHydrated={hasHydrated}
-        streamAutoScroll={streamAutoScroll}
-        streamBufferedEvents={streamBufferedEvents}
-        streamError={streamError}
-        streamEvents={streamEvents}
-        streamEventListRef={streamEventListRef}
-        setStreamAutoScroll={setStreamAutoScroll}
-        setStreamBufferedEvents={setStreamBufferedEvents}
-        setStreamEvents={setStreamEvents}
-      />
-
-      <RunObservabilityCard detail={detail} />
+      <section id={RUN_DETAIL_SECTIONS[3].id} aria-labelledby={RUN_DETAIL_SECTIONS[3].headingId} className="run-detail-section">
+        <RunObservabilityCard detail={detail} />
+      </section>
     </div>
   );
 }

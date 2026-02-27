@@ -349,6 +349,7 @@ output {
 .button-link:focus-visible,
 .shell-nav-link:focus-visible,
 .tabs__link:focus-visible,
+.run-detail-section-nav__link:focus-visible,
 .run-timeline-event:focus-visible {
   outline: 2px solid var(--accent-active);
   outline-offset: 2px;
@@ -698,6 +699,51 @@ output {
 
 .run-detail-priority-grid {
   align-items: start;
+}
+
+.run-detail-section-nav {
+  backdrop-filter: blur(4px);
+  background: color-mix(in srgb, var(--bg-surface) 92%, transparent);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-pill);
+  overflow-x: auto;
+  padding: 4px;
+  position: sticky;
+  top: calc(var(--space-3) + 72px);
+  z-index: 4;
+}
+
+.run-detail-section-nav__list {
+  display: flex;
+  gap: 4px;
+  list-style: none;
+  min-width: max-content;
+}
+
+.run-detail-section-nav__link {
+  border: 1px solid transparent;
+  border-radius: var(--radius-pill);
+  color: var(--text-secondary);
+  display: inline-flex;
+  font: 600 13px/20px var(--font-display);
+  padding: 6px 12px;
+  text-decoration: none;
+  transition: background-color var(--motion-fast), border-color var(--motion-fast), color var(--motion-fast);
+}
+
+.run-detail-section-nav__link:hover {
+  border-color: color-mix(in srgb, var(--accent-active) 35%, var(--border-default));
+  color: var(--text-primary);
+}
+
+.run-detail-section-nav__link[aria-current="location"] {
+  background: color-mix(in srgb, var(--accent-active) 12%, var(--bg-surface));
+  border-color: color-mix(in srgb, var(--accent-active) 45%, var(--border-default));
+  color: var(--accent-active);
+}
+
+.run-detail-section {
+  scroll-margin-top: calc(var(--space-4) + 112px);
 }
 
 .run-operator-focus-list {
@@ -1978,6 +2024,10 @@ output {
 
   .run-detail-priority-grid {
     gap: var(--space-2);
+  }
+
+  .run-detail-section-nav {
+    top: calc(var(--space-2) + 96px);
   }
 
   .run-detail-primary-actions {
