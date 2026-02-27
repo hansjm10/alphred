@@ -106,15 +106,17 @@ describe('workflow-editor-helpers', () => {
       id: 'design->review:100',
       className: expect.stringContaining('workflow-edge--success-auto'),
       label: 'auto · 100',
-      style: expect.objectContaining({ stroke: '#198038' }),
+      style: expect.objectContaining({ strokeWidth: 2.5 }),
       data: expect.objectContaining({ routeOn: 'success' }),
     });
     expect(edges[1]).toMatchObject({
       id: 'review->design:failure:90',
       className: expect.stringContaining('workflow-edge--failure'),
       label: 'failure · 90',
-      style: expect.objectContaining({ stroke: '#da1e28', strokeDasharray: '9 5' }),
+      style: expect.objectContaining({ strokeWidth: 2.5, strokeDasharray: '9 5' }),
       data: expect.objectContaining({ routeOn: 'failure' }),
     });
+    expect(edges[0]?.style).not.toHaveProperty('stroke');
+    expect(edges[1]?.style).not.toHaveProperty('stroke');
   });
 });

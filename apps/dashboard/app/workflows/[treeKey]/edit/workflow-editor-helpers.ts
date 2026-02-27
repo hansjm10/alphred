@@ -111,10 +111,10 @@ function resolveWorkflowEdgeVisuals(routeOn: 'success' | 'failure', auto: boolea
         ? 'workflow-edge workflow-edge--success-guard'
         : 'workflow-edge workflow-edge--success-auto',
     style: isFailure
-      ? { stroke: routeStroke, strokeWidth: 2.5, strokeDasharray: '9 5' }
+      ? { strokeWidth: 2.5, strokeDasharray: '9 5' }
       : isGuard
-        ? { stroke: routeStroke, strokeWidth: 2.5, strokeDasharray: '4 4' }
-        : { stroke: routeStroke, strokeWidth: 2.5 },
+        ? { strokeWidth: 2.5, strokeDasharray: '4 4' }
+        : { strokeWidth: 2.5 },
     labelStyle: {
       fill: isFailure ? '#7f1d1d' : '#14532d',
       fontWeight: 600,

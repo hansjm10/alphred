@@ -466,20 +466,20 @@ describe('WorkflowEditorPageContent', () => {
       id: string;
       className?: string;
       label?: string;
-      style?: { stroke?: string; strokeDasharray?: string };
+      style?: { strokeWidth?: number; strokeDasharray?: string };
       data?: { routeOn?: string };
     }[];
 
     const successEdge = flowEdges.find(edge => edge.id === 'design->implement:100');
     expect(successEdge?.className).toContain('workflow-edge--success-auto');
     expect(successEdge?.label).toBe('auto · 100');
-    expect(successEdge?.style?.stroke).toBe('#198038');
+    expect(successEdge?.style?.strokeWidth).toBe(2.5);
     expect(successEdge?.data?.routeOn).toBe('success');
 
     const failureEdge = flowEdges.find(edge => edge.id === 'implement->review:failure:90');
     expect(failureEdge?.className).toContain('workflow-edge--failure');
     expect(failureEdge?.label).toBe('failure · 90');
-    expect(failureEdge?.style?.stroke).toBe('#da1e28');
+    expect(failureEdge?.style?.strokeWidth).toBe(2.5);
     expect(failureEdge?.style?.strokeDasharray).toBe('9 5');
     expect(failureEdge?.data?.routeOn).toBe('failure');
 
