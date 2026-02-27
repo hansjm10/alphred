@@ -60,7 +60,37 @@ import type {
   WorkflowRunRow,
 } from './types.js';
 
-export function createExecutionPhase(node: RunNodeExecutionRow): PhaseDefinition {
+const routingDecisionPromptSignals = ['approved', 'changes_requested', 'blocked', 'retry'] as const;
+
+const routingDecisionPromptContract = [
+  'Routing metadata contract (required for guarded success routing):',
+  '- Emit terminal metadata key `result.metadata.routingDecision`.',
+  `- Allowed values: ${routingDecisionPromptSignals.map(signal => `\`${signal}\``).join(', ')}.`,
+  '- Use `changes_requested` when additional implementation work is required.',
+  '- Do not omit `routingDecision`.',
+].join('\n');
+
+function hasGuardedSuccessOutgoingEdge(node: RunNodeExecutionRow, edgeRows: EdgeRow[]): boolean {
+  return edgeRows.some(
+    edge => edge.sourceNodeId === node.treeNodeId && edge.routeOn === 'success' && edge.auto === 0,
+  );
+}
+
+function resolveExecutionPrompt(node: RunNodeExecutionRow, edgeRows: EdgeRow[]): string {
+  const basePrompt = node.prompt ?? '';
+  if (!hasGuardedSuccessOutgoingEdge(node, edgeRows)) {
+    return basePrompt;
+  }
+
+  if (basePrompt.toLowerCase().includes('routingdecision')) {
+    return basePrompt;
+  }
+
+  const sections = [basePrompt.trim(), routingDecisionPromptContract].filter(section => section.length > 0);
+  return sections.join('\n\n');
+}
+
+export function createExecutionPhase(node: RunNodeExecutionRow, promptOverride?: string): PhaseDefinition {
   if (node.nodeType !== 'agent') {
     throw new Error(`Unsupported node type "${node.nodeType}" for run node "${node.nodeKey}".`);
   }
@@ -70,7 +100,7 @@ export function createExecutionPhase(node: RunNodeExecutionRow): PhaseDefinition
     type: 'agent',
     provider: (node.provider as AgentProviderName | null) ?? undefined,
     model: node.model ?? undefined,
-    prompt: node.prompt ?? '',
+    prompt: promptOverride ?? node.prompt ?? '',
     transitions: [],
   };
 }
@@ -418,12 +448,14 @@ function applyNodeExecutionPermissions(
 
 export async function executeNodePhase(
   node: RunNodeExecutionRow,
+  edgeRows: EdgeRow[],
   options: ProviderRunOptions,
   upstreamContextEntries: string[],
   dependencies: SqlWorkflowExecutorDependencies,
   onEvent?: (event: ProviderEvent) => Promise<void>,
 ): Promise<Awaited<ReturnType<typeof runPhase>>> {
-  const phase = createExecutionPhase(node);
+  const executionPrompt = resolveExecutionPrompt(node, edgeRows);
+  const phase = createExecutionPhase(node, executionPrompt);
   const optionsWithContext =
     upstreamContextEntries.length === 0
       ? options
@@ -1013,6 +1045,7 @@ export async function executeClaimedRunnableNode(
     try {
       const phaseResult = await executeNodePhase(
         node,
+        edgeRows,
         options,
         contextAssembly.contextEntries,
         dependencies,

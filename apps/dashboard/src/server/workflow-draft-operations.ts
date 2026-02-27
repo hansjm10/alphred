@@ -43,6 +43,17 @@ export type WorkflowDraftOperations = {
   validateWorkflowDraft: (treeKeyRaw: string, version: number) => Promise<DashboardWorkflowValidationResult>;
 };
 
+const seededReviewRoutingContract = [
+  'Routing metadata contract (required):',
+  '- Emit terminal metadata key `result.metadata.routingDecision`.',
+  '- Allowed values: `approved`, `changes_requested`, `blocked`, `retry`.',
+  '- Use `approved` when implementation is acceptable as-is.',
+  '- Use `changes_requested` when additional implementation work is required.',
+  '- Use `blocked` when progress is blocked by an external dependency.',
+  '- Use `retry` for transient execution issues that should retry this node.',
+  '- Do not omit `routingDecision`.',
+].join('\n');
+
 function templatePrompt(template: DashboardCreateWorkflowRequest['template'], nodeKey: string): string {
   if (template !== 'design-implement-review') {
     return 'Describe what to do for this workflow phase.';
@@ -54,7 +65,10 @@ function templatePrompt(template: DashboardCreateWorkflowRequest['template'], no
     case 'implement':
       return 'You are the implementation phase. Make the required code changes, run tests, and summarize the result.';
     case 'review':
-      return 'You are the review phase. Audit changes for correctness, risks, and edge cases.';
+      return [
+        'You are the review phase. Audit changes for correctness, risks, and edge cases.',
+        seededReviewRoutingContract,
+      ].join('\n\n');
     default:
       return 'Describe what to do for this workflow phase.';
   }

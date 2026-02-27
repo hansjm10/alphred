@@ -1323,6 +1323,10 @@ describe('createDashboardService', () => {
         }),
       ]),
     );
+    const reviewNode = draft.nodes.find(node => node.nodeKey === 'review');
+    expect(reviewNode?.promptTemplate?.content).toContain('result.metadata.routingDecision');
+    expect(reviewNode?.promptTemplate?.content).toContain('`changes_requested`');
+    expect(reviewNode?.promptTemplate?.content).toContain('`approved`');
 
     const validation = await service.validateWorkflowDraft('demo-tree', 1);
     expect(validation.initialRunnableNodeKeys).toEqual(['design']);

@@ -3911,6 +3911,44 @@ describe('createSqlWorkflowExecutor', () => {
     expect(runInvocation).toBe(2);
   });
 
+  it('injects routing metadata contract into prompts for guarded-success nodes', async () => {
+    const { db, runId, reviewRunNodeId } = seedDecisionRoutingRun();
+    let observedPrompt = '';
+    const executor = createSqlWorkflowExecutor(db, {
+      resolveProvider: () => ({
+        async *run(prompt: string): AsyncIterable<ProviderEvent> {
+          observedPrompt = prompt;
+          yield {
+            type: 'result',
+            content: 'Decision captured.',
+            timestamp: 10,
+            metadata: { routingDecision: 'approved' },
+          };
+        },
+      }),
+    });
+
+    const firstStep = await executor.executeNextRunnableNode({
+      workflowRunId: runId,
+      options: {
+        workingDirectory: '/tmp/alphred-worktree',
+      },
+    });
+
+    expect(firstStep).toEqual({
+      outcome: 'executed',
+      workflowRunId: runId,
+      runNodeId: reviewRunNodeId,
+      nodeKey: 'review',
+      runNodeStatus: 'completed',
+      runStatus: 'running',
+      artifactId: expect.any(Number),
+    });
+    expect(observedPrompt).toContain('Produce route decision');
+    expect(observedPrompt).toContain('result.metadata.routingDecision');
+    expect(observedPrompt).toContain('`changes_requested`');
+  });
+
   it('routes using structured metadata even when report text resembles a decision directive', async () => {
     const { db, runId, reviewRunNodeId, approvedRunNodeId } = seedDecisionRoutingRun();
     const executor = createSqlWorkflowExecutor(db, {
@@ -4071,6 +4109,7 @@ describe('createSqlWorkflowExecutor', () => {
     const persistedReviewDecision = db
       .select({
         decisionType: routingDecisions.decisionType,
+        rationale: routingDecisions.rationale,
         rawOutput: routingDecisions.rawOutput,
       })
       .from(routingDecisions)
@@ -4079,6 +4118,7 @@ describe('createSqlWorkflowExecutor', () => {
 
     expect(persistedReviewDecision).toEqual({
       decisionType: 'no_route',
+      rationale: expect.stringContaining('did not emit a valid result.metadata.routingDecision'),
       rawOutput: {
         source: 'provider_result_metadata',
         routingDecision: null,
@@ -4219,6 +4259,7 @@ describe('createSqlWorkflowExecutor', () => {
     const persistedReviewDecision = db
       .select({
         decisionType: routingDecisions.decisionType,
+        rationale: routingDecisions.rationale,
       })
       .from(routingDecisions)
       .where(eq(routingDecisions.runNodeId, reviewRunNodeId))
@@ -4226,6 +4267,7 @@ describe('createSqlWorkflowExecutor', () => {
 
     expect(persistedReviewDecision).toEqual({
       decisionType: 'no_route',
+      rationale: expect.stringContaining('routingDecision="blocked"'),
     });
 
     const secondStep = await executor.executeNextRunnableNode({
@@ -4343,6 +4385,7 @@ describe('createSqlWorkflowExecutor', () => {
     const persistedReviewDecision = db
       .select({
         decisionType: routingDecisions.decisionType,
+        rationale: routingDecisions.rationale,
         rawOutput: routingDecisions.rawOutput,
       })
       .from(routingDecisions)
@@ -4351,6 +4394,7 @@ describe('createSqlWorkflowExecutor', () => {
 
     expect(persistedReviewDecision).toEqual({
       decisionType: 'no_route',
+      rationale: expect.stringContaining('did not emit a valid result.metadata.routingDecision'),
       rawOutput: {
         source: 'provider_result_metadata',
         routingDecision: null,

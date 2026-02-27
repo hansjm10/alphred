@@ -216,11 +216,16 @@ export function persistCompletedNodeRoutingDecision(
     };
   }
 
+  const noRouteRationale =
+    decisionSignal === null
+      ? `Node completed with guarded success edges but did not emit a valid result.metadata.routingDecision (tree_node_id=${params.treeNodeId}).`
+      : `Node completed with routingDecision="${decisionSignal}" but no guarded success edge matched (tree_node_id=${params.treeNodeId}).`;
+
   persistRoutingDecision(db, {
     workflowRunId: params.workflowRunId,
     runNodeId: params.runNodeId,
     decisionType: 'no_route',
-    rationale: `No outgoing edge matched for tree_node_id=${params.treeNodeId}.`,
+    rationale: noRouteRationale,
     rawOutput: {
       source: 'provider_result_metadata',
       routingDecision: decisionSignal,
