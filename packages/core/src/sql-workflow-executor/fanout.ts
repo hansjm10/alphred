@@ -230,6 +230,45 @@ function loadMaxSequenceIndex(db: AlphredDatabase, workflowRunId: number): numbe
   return row?.maxSequenceIndex ?? 0;
 }
 
+function loadActiveBarriersForSpawnerJoin(
+  db: AlphredDatabase,
+  params: {
+    workflowRunId: number;
+    spawnerRunNodeId: number;
+    joinRunNodeId: number;
+  },
+): JoinBarrierRow[] {
+  const rows = db
+    .select({
+      id: runJoinBarriers.id,
+      workflowRunId: runJoinBarriers.workflowRunId,
+      spawnerRunNodeId: runJoinBarriers.spawnerRunNodeId,
+      joinRunNodeId: runJoinBarriers.joinRunNodeId,
+      spawnSourceArtifactId: runJoinBarriers.spawnSourceArtifactId,
+      expectedChildren: runJoinBarriers.expectedChildren,
+      terminalChildren: runJoinBarriers.terminalChildren,
+      completedChildren: runJoinBarriers.completedChildren,
+      failedChildren: runJoinBarriers.failedChildren,
+      status: runJoinBarriers.status,
+    })
+    .from(runJoinBarriers)
+    .where(
+      and(
+        eq(runJoinBarriers.workflowRunId, params.workflowRunId),
+        eq(runJoinBarriers.spawnerRunNodeId, params.spawnerRunNodeId),
+        eq(runJoinBarriers.joinRunNodeId, params.joinRunNodeId),
+        inArray(runJoinBarriers.status, ['pending', 'ready']),
+      ),
+    )
+    .orderBy(desc(runJoinBarriers.id))
+    .all();
+
+  return rows.map(row => ({
+    ...row,
+    status: parseJoinBarrierStatus(row.status),
+  }));
+}
+
 export function spawnDynamicChildrenForSpawner(
   db: AlphredDatabase,
   params: {
@@ -243,6 +282,17 @@ export function spawnDynamicChildrenForSpawner(
   if (params.subtasks.length > params.spawnerNode.maxChildren) {
     throw new Error(
       `SPAWNER_OUTPUT_INVALID: subtasks length ${params.subtasks.length} exceeds maxChildren=${params.spawnerNode.maxChildren}.`,
+    );
+  }
+
+  const activeBarrier = loadActiveBarriersForSpawnerJoin(db, {
+    workflowRunId: params.workflowRunId,
+    spawnerRunNodeId: params.spawnerNode.runNodeId,
+    joinRunNodeId: params.joinNode.runNodeId,
+  })[0];
+  if (activeBarrier) {
+    throw new Error(
+      `SPAWNER_OUTPUT_INVALID: spawner "${params.spawnerNode.nodeKey}" cannot emit another fan-out batch while join "${params.joinNode.nodeKey}" barrier id=${activeBarrier.id} remains ${activeBarrier.status}.`,
     );
   }
 
@@ -423,39 +473,18 @@ function loadActiveBarrierForChild(
     joinRunNodeId: number;
   },
 ): JoinBarrierRow | null {
-  const row = db
-    .select({
-      id: runJoinBarriers.id,
-      workflowRunId: runJoinBarriers.workflowRunId,
-      spawnerRunNodeId: runJoinBarriers.spawnerRunNodeId,
-      joinRunNodeId: runJoinBarriers.joinRunNodeId,
-      spawnSourceArtifactId: runJoinBarriers.spawnSourceArtifactId,
-      expectedChildren: runJoinBarriers.expectedChildren,
-      terminalChildren: runJoinBarriers.terminalChildren,
-      completedChildren: runJoinBarriers.completedChildren,
-      failedChildren: runJoinBarriers.failedChildren,
-      status: runJoinBarriers.status,
-    })
-    .from(runJoinBarriers)
-    .where(
-      and(
-        eq(runJoinBarriers.workflowRunId, params.workflowRunId),
-        eq(runJoinBarriers.spawnerRunNodeId, params.spawnerRunNodeId),
-        eq(runJoinBarriers.joinRunNodeId, params.joinRunNodeId),
-        inArray(runJoinBarriers.status, ['pending', 'ready']),
-      ),
-    )
-    .orderBy(desc(runJoinBarriers.id))
-    .get();
-
-  if (!row) {
+  const activeBarriers = loadActiveBarriersForSpawnerJoin(db, params);
+  if (activeBarriers.length === 0) {
     return null;
   }
 
-  return {
-    ...row,
-    status: parseJoinBarrierStatus(row.status),
-  };
+  if (activeBarriers.length > 1) {
+    throw new Error(
+      `JOIN_BARRIER_STATE_INVALID: found multiple active barriers for workflowRunId=${params.workflowRunId}, spawnerRunNodeId=${params.spawnerRunNodeId}, joinRunNodeId=${params.joinRunNodeId}.`,
+    );
+  }
+
+  return activeBarriers[0] ?? null;
 }
 
 export function updateJoinBarrierForChildTerminal(

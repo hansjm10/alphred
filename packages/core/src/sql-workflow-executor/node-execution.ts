@@ -245,13 +245,22 @@ export function resolveFailureReason(persistedNodeStatus: RunNodeStatus, canRetr
 }
 
 function selectFailureRouteEdgeForSourceNode(edgeRows: EdgeRow[], sourceRunNodeId: number): EdgeRow | null {
+  let terminalEdge: EdgeRow | null = null;
   for (const edge of edgeRows) {
-    if (edge.sourceNodeId === sourceRunNodeId && edge.routeOn === 'failure') {
+    if (edge.sourceNodeId !== sourceRunNodeId) {
+      continue;
+    }
+
+    if (edge.routeOn === 'failure') {
       return edge;
+    }
+
+    if (edge.routeOn === 'terminal' && terminalEdge === null) {
+      terminalEdge = edge;
     }
   }
 
-  return null;
+  return terminalEdge;
 }
 
 type RetryState = {

@@ -365,14 +365,18 @@ export function resolveCompletedSourceNodeRouting(
   };
 }
 
-function selectFirstFailureOutgoingEdge(outgoingEdges: EdgeRow[]): EdgeRow | null {
+function selectFirstFailureOrTerminalOutgoingEdge(outgoingEdges: EdgeRow[]): EdgeRow | null {
+  let terminalEdge: EdgeRow | null = null;
   for (const edge of outgoingEdges) {
     if (edge.routeOn === 'failure') {
       return edge;
     }
+    if (edge.routeOn === 'terminal' && terminalEdge === null) {
+      terminalEdge = edge;
+    }
   }
 
-  return null;
+  return terminalEdge;
 }
 
 function isExecutableFailureRouteTarget(node: RunNodeExecutionRow | undefined): boolean {
@@ -406,7 +410,7 @@ function applyFailedSourceNodeSelection(params: {
   selectionState: RoutingSelectionMutationState;
 }): void {
   const { latestByTreeNodeId, outgoingEdges, selectionState, sourceNode } = params;
-  const selectedFailureEdge = selectFirstFailureOutgoingEdge(outgoingEdges);
+  const selectedFailureEdge = selectFirstFailureOrTerminalOutgoingEdge(outgoingEdges);
   if (!selectedFailureEdge) {
     return;
   }
