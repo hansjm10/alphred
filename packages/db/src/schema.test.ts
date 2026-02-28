@@ -8,6 +8,7 @@ import {
   promptTemplates,
   repositories,
   runNodeDiagnostics,
+  runNodeEdges,
   runNodeStreamEvents,
   routingDecisions,
   runWorktrees,
@@ -290,6 +291,159 @@ describe('database schema hardening', () => {
       max_children: 3,
       max_retries: 7,
     });
+  });
+
+  it('backfills run_node_edges for legacy in-flight runs using the latest run-node attempts', () => {
+    const db = createDatabase(':memory:');
+
+    db.run(sql`CREATE TABLE workflow_trees (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      tree_key TEXT NOT NULL,
+      version INTEGER NOT NULL,
+      name TEXT NOT NULL,
+      description TEXT,
+      created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+      updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+    )`);
+    db.run(sql`CREATE TABLE guard_definitions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      guard_key TEXT NOT NULL,
+      version INTEGER NOT NULL DEFAULT 1,
+      expression TEXT NOT NULL,
+      description TEXT,
+      created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+      updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+    )`);
+    db.run(sql`CREATE TABLE tree_nodes (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      workflow_tree_id INTEGER NOT NULL REFERENCES workflow_trees(id) ON DELETE CASCADE,
+      node_key TEXT NOT NULL,
+      node_type TEXT NOT NULL,
+      provider TEXT,
+      prompt_template_id INTEGER,
+      max_retries INTEGER NOT NULL DEFAULT 0,
+      sequence_index INTEGER NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+      updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+    )`);
+    db.run(sql`CREATE TABLE tree_edges (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      workflow_tree_id INTEGER NOT NULL REFERENCES workflow_trees(id) ON DELETE CASCADE,
+      source_node_id INTEGER NOT NULL REFERENCES tree_nodes(id) ON DELETE CASCADE,
+      target_node_id INTEGER NOT NULL REFERENCES tree_nodes(id) ON DELETE CASCADE,
+      route_on TEXT NOT NULL DEFAULT 'success',
+      priority INTEGER NOT NULL,
+      auto INTEGER NOT NULL DEFAULT 1,
+      guard_definition_id INTEGER REFERENCES guard_definitions(id) ON DELETE RESTRICT,
+      created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+    )`);
+    db.run(sql`CREATE TABLE workflow_runs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      workflow_tree_id INTEGER NOT NULL REFERENCES workflow_trees(id) ON DELETE RESTRICT,
+      status TEXT NOT NULL DEFAULT 'pending',
+      started_at TEXT,
+      completed_at TEXT,
+      created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+      updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+    )`);
+    db.run(sql`CREATE TABLE run_nodes (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      workflow_run_id INTEGER NOT NULL REFERENCES workflow_runs(id) ON DELETE CASCADE,
+      tree_node_id INTEGER NOT NULL REFERENCES tree_nodes(id) ON DELETE RESTRICT,
+      node_key TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending',
+      sequence_index INTEGER NOT NULL,
+      attempt INTEGER NOT NULL DEFAULT 1,
+      started_at TEXT,
+      completed_at TEXT,
+      created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+      updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+    )`);
+
+    db.run(sql`INSERT INTO workflow_trees (id, tree_key, version, name)
+      VALUES (1, 'legacy_edge_backfill_tree', 1, 'Legacy edge backfill tree')`);
+    db.run(sql`INSERT INTO tree_nodes (id, workflow_tree_id, node_key, node_type, provider, sequence_index)
+      VALUES
+        (1, 1, 'design', 'agent', 'codex', 1),
+        (2, 1, 'implement', 'agent', 'codex', 2)`);
+    db.run(sql`INSERT INTO guard_definitions (id, guard_key, version, expression)
+      VALUES (1, 'approved_only', 1, '{"field":"decision","operator":"==","value":"approved"}')`);
+    db.run(sql`INSERT INTO tree_edges (
+      id,
+      workflow_tree_id,
+      source_node_id,
+      target_node_id,
+      route_on,
+      priority,
+      auto,
+      guard_definition_id
+    ) VALUES (
+      1,
+      1,
+      1,
+      2,
+      'success',
+      3,
+      0,
+      1
+    )`);
+    db.run(sql`INSERT INTO workflow_runs (id, workflow_tree_id, status)
+      VALUES (1, 1, 'running')`);
+    db.run(sql`INSERT INTO run_nodes (
+      id,
+      workflow_run_id,
+      tree_node_id,
+      node_key,
+      status,
+      sequence_index,
+      attempt,
+      started_at,
+      completed_at
+    ) VALUES
+      (10, 1, 1, 'design', 'failed', 1, 1, '2026-01-01T00:00:00.000Z', '2026-01-01T00:01:00.000Z'),
+      (11, 1, 1, 'design', 'completed', 3, 2, '2026-01-01T00:02:00.000Z', '2026-01-01T00:03:00.000Z'),
+      (20, 1, 2, 'implement', 'failed', 2, 1, '2026-01-01T00:04:00.000Z', '2026-01-01T00:05:00.000Z'),
+      (21, 1, 2, 'implement', 'pending', 4, 2, NULL, NULL)`);
+
+    migrateDatabase(db);
+
+    const edges = db
+      .select({
+        sourceRunNodeId: runNodeEdges.sourceRunNodeId,
+        targetRunNodeId: runNodeEdges.targetRunNodeId,
+        routeOn: runNodeEdges.routeOn,
+        auto: runNodeEdges.auto,
+        guardExpression: runNodeEdges.guardExpression,
+        priority: runNodeEdges.priority,
+        edgeKind: runNodeEdges.edgeKind,
+      })
+      .from(runNodeEdges)
+      .where(eq(runNodeEdges.workflowRunId, 1))
+      .all();
+
+    expect(edges).toEqual([
+      {
+        sourceRunNodeId: 11,
+        targetRunNodeId: 21,
+        routeOn: 'success',
+        auto: 0,
+        guardExpression: {
+          field: 'decision',
+          operator: '==',
+          value: 'approved',
+        },
+        priority: 3,
+        edgeKind: 'tree',
+      },
+    ]);
+
+    expect(() => migrateDatabase(db)).not.toThrow();
+    const edgeCount = db
+      .select({ count: sql<number>`COUNT(*)` })
+      .from(runNodeEdges)
+      .where(eq(runNodeEdges.workflowRunId, 1))
+      .get();
+    expect(edgeCount?.count).toBe(1);
   });
 
   it('persists nullable and custom tree_nodes.error_handler_config payloads', () => {

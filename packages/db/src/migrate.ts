@@ -933,6 +933,126 @@ export function migrateDatabase(db: AlphredDatabase): void {
     ON run_node_edges(workflow_run_id, source_run_node_id)`);
   tx.run(sql`CREATE INDEX IF NOT EXISTS run_node_edges_created_at_idx
     ON run_node_edges(created_at)`);
+  // Backfill runtime edges for pre-existing runs so upgraded in-flight runs keep
+  // dependency ordering when edge loading switches to run_node_edges.
+  tx.run(sql`INSERT OR IGNORE INTO run_node_edges (
+      workflow_run_id,
+      source_run_node_id,
+      target_run_node_id,
+      route_on,
+      auto,
+      guard_expression,
+      priority,
+      edge_kind
+    )
+    SELECT
+      source_nodes.workflow_run_id,
+      source_nodes.id,
+      target_nodes.id,
+      tree_edges.route_on,
+      tree_edges.auto,
+      guard_definitions.expression,
+      tree_edges.priority,
+      'tree'
+    FROM run_nodes AS source_nodes
+    INNER JOIN run_nodes AS target_nodes
+      ON target_nodes.workflow_run_id = source_nodes.workflow_run_id
+    INNER JOIN workflow_runs
+      ON workflow_runs.id = source_nodes.workflow_run_id
+    INNER JOIN tree_edges
+      ON tree_edges.workflow_tree_id = workflow_runs.workflow_tree_id
+      AND tree_edges.source_node_id = source_nodes.tree_node_id
+      AND tree_edges.target_node_id = target_nodes.tree_node_id
+    LEFT JOIN guard_definitions
+      ON guard_definitions.id = tree_edges.guard_definition_id
+    WHERE
+      source_nodes.spawner_node_id IS NULL
+      AND target_nodes.spawner_node_id IS NULL
+      AND NOT EXISTS (
+        SELECT 1
+        FROM run_nodes AS newer_source
+        WHERE
+          newer_source.workflow_run_id = source_nodes.workflow_run_id
+          AND newer_source.tree_node_id = source_nodes.tree_node_id
+          AND newer_source.spawner_node_id IS NULL
+          AND (
+            newer_source.attempt > source_nodes.attempt
+            OR (
+              newer_source.attempt = source_nodes.attempt
+              AND newer_source.id > source_nodes.id
+            )
+          )
+      )
+      AND NOT EXISTS (
+        SELECT 1
+        FROM run_nodes AS newer_target
+        WHERE
+          newer_target.workflow_run_id = target_nodes.workflow_run_id
+          AND newer_target.tree_node_id = target_nodes.tree_node_id
+          AND newer_target.spawner_node_id IS NULL
+          AND (
+            newer_target.attempt > target_nodes.attempt
+            OR (
+              newer_target.attempt = target_nodes.attempt
+              AND newer_target.id > target_nodes.id
+            )
+          )
+      )`);
+  tx.run(sql`INSERT OR IGNORE INTO run_node_edges (
+      workflow_run_id,
+      source_run_node_id,
+      target_run_node_id,
+      route_on,
+      auto,
+      guard_expression,
+      priority,
+      edge_kind
+    )
+    SELECT
+      child_nodes.workflow_run_id,
+      child_nodes.spawner_node_id,
+      child_nodes.id,
+      'success',
+      1,
+      NULL,
+      (
+        SELECT COUNT(*)
+        FROM run_nodes AS earlier_child
+        WHERE
+          earlier_child.workflow_run_id = child_nodes.workflow_run_id
+          AND earlier_child.spawner_node_id = child_nodes.spawner_node_id
+          AND (
+            earlier_child.sequence_index < child_nodes.sequence_index
+            OR (
+              earlier_child.sequence_index = child_nodes.sequence_index
+              AND earlier_child.id < child_nodes.id
+            )
+          )
+      ),
+      'dynamic_spawner_to_child'
+    FROM run_nodes AS child_nodes
+    WHERE child_nodes.spawner_node_id IS NOT NULL`);
+  tx.run(sql`INSERT OR IGNORE INTO run_node_edges (
+      workflow_run_id,
+      source_run_node_id,
+      target_run_node_id,
+      route_on,
+      auto,
+      guard_expression,
+      priority,
+      edge_kind
+    )
+    SELECT
+      child_nodes.workflow_run_id,
+      child_nodes.id,
+      child_nodes.join_node_id,
+      'terminal',
+      1,
+      NULL,
+      0,
+      'dynamic_child_to_join'
+    FROM run_nodes AS child_nodes
+    WHERE child_nodes.join_node_id IS NOT NULL`);
 
   tx.run(sql`CREATE TABLE IF NOT EXISTS routing_decisions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
