@@ -49,7 +49,6 @@ function createRunNodeIdMap(db: AlphredDatabase, runId: number): Map<string, num
 function assembleContextForTarget(params: {
   db: AlphredDatabase;
   runId: number;
-  treeId: number;
   targetRunNodeId: number;
 }) {
   const latestNodeAttempts = getLatestRunNodeAttempts(loadRunNodeExecutionRows(params.db, params.runId));
@@ -63,7 +62,7 @@ function assembleContextForTarget(params: {
     targetNode,
     targetAttempt: targetNode.attempt,
     latestNodeAttempts,
-    edgeRows: loadEdgeRows(params.db, params.treeId),
+    edgeRows: loadEdgeRows(params.db, params.runId),
     latestRoutingDecisionsByRunNodeId: loadLatestRoutingDecisionsByRunNodeId(params.db, params.runId).latestByRunNodeId,
     latestArtifactsByRunNodeId: loadLatestArtifactsByRunNodeId(params.db, params.runId),
   });
@@ -151,6 +150,8 @@ function seedMixedSuccessAndFailureSourcesRun(): SeededRun {
     ])
     .run();
 
+  // Create a throwaway run first so run.id diverges from tree.id in this fixture.
+  materializeWorkflowRunFromTree(db, { treeKey: 'context_assembly_mixed_sources_tree' });
   const materialized = materializeWorkflowRunFromTree(db, { treeKey: 'context_assembly_mixed_sources_tree' });
   return {
     db,
@@ -434,6 +435,7 @@ describe('assembleUpstreamArtifactContext failure-route handling', () => {
     if (!sourceSuccessRunNodeId || !sourceFailureRunNodeId || !targetRunNodeId) {
       throw new Error('Expected mixed-source run-nodes to be materialized.');
     }
+    expect(runId).not.toBe(treeId);
 
     transitionWorkflowRunStatus(db, {
       workflowRunId: runId,
@@ -527,7 +529,6 @@ describe('assembleUpstreamArtifactContext failure-route handling', () => {
     const assembly = assembleContextForTarget({
       db,
       runId,
-      treeId,
       targetRunNodeId,
     });
 
@@ -540,7 +541,7 @@ describe('assembleUpstreamArtifactContext failure-route handling', () => {
   });
 
   it('does not attach retry summaries from older failure cycles to the current failure-route context', () => {
-    const { db, runId, treeId, runNodeIdByKey } = seedFailureRouteRun();
+    const { db, runId, runNodeIdByKey } = seedFailureRouteRun();
     const sourceRunNodeId = runNodeIdByKey.get('source');
     const targetRunNodeId = runNodeIdByKey.get('target');
     if (!sourceRunNodeId || !targetRunNodeId) {
@@ -682,7 +683,6 @@ describe('assembleUpstreamArtifactContext failure-route handling', () => {
     const assembly = assembleContextForTarget({
       db,
       runId,
-      treeId,
       targetRunNodeId,
     });
     const failureRouteContext = assembly.contextEntries.find(entry => entry.includes('ALPHRED_FAILURE_ROUTE_CONTEXT v1'));
