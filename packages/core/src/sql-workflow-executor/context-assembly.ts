@@ -425,8 +425,18 @@ function buildJoinSummaryContextEntry(
     'subtask_rows:',
   ];
 
-  const sortedPredecessors = [...params.directPredecessors].sort(compareUpstreamSourceOrder);
-  for (const sourceNode of sortedPredecessors) {
+  const sortedSubtaskPredecessors = params.directPredecessors
+    .filter(sourceNode => {
+      const spawnerNodeId = sourceNode.spawnerNodeId;
+      return (
+        spawnerNodeId !== null &&
+        sourceNode.joinNodeId === params.targetNode.runNodeId &&
+        spawnerRunNodeIds.has(spawnerNodeId)
+      );
+    })
+    .sort(compareUpstreamSourceOrder);
+
+  for (const sourceNode of sortedSubtaskPredecessors) {
     const reportArtifact = params.latestReportsByRunNodeId.get(sourceNode.runNodeId) ?? null;
     const failureArtifact =
       sourceNode.status === 'failed'

@@ -1276,5 +1276,12 @@ describe('assembleUpstreamArtifactContext join fan-out batching', () => {
     expect(joinSummaryEntry).toContain('subtasks.terminal: 2');
     expect(joinSummaryEntry).toContain('subtasks.succeeded: 2');
     expect(joinSummaryEntry).toContain('subtasks.failed: 0');
+
+    const subtaskRows = joinSummaryEntry.split('\n').filter(line => line.startsWith('- node_key:'));
+    expect(subtaskRows).toHaveLength(2);
+    expect(subtaskRows.join('\n')).toContain('node_key: a-child;');
+    expect(subtaskRows.join('\n')).toContain('node_key: b-child;');
+    expect(subtaskRows.join('\n')).not.toContain('node_key: breakdown-a;');
+    expect(subtaskRows.join('\n')).not.toContain('node_key: breakdown-b;');
   });
 });

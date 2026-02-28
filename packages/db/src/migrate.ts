@@ -773,61 +773,69 @@ export function migrateDatabase(db: AlphredDatabase): void {
       SELECT RAISE(ABORT, 'run_nodes.workflow_run_id and run_nodes.tree_node_id must share workflow_tree_id');
     END`);
 
-  tx.run(sql`CREATE TRIGGER IF NOT EXISTS run_nodes_spawner_same_run_insert_ck
+  tx.run(sql`DROP TRIGGER IF EXISTS run_nodes_spawner_same_run_insert_ck`);
+  tx.run(sql`CREATE TRIGGER run_nodes_spawner_same_run_insert_ck
     BEFORE INSERT ON run_nodes
     FOR EACH ROW
     WHEN (
       NEW.spawner_node_id IS NOT NULL
-      AND (
-        SELECT workflow_run_id
+      AND NOT EXISTS (
+        SELECT 1
         FROM run_nodes
         WHERE id = NEW.spawner_node_id
-      ) <> NEW.workflow_run_id
+          AND workflow_run_id = NEW.workflow_run_id
+      )
     )
     BEGIN
       SELECT RAISE(ABORT, 'run_nodes.spawner_node_id must reference a run node in the same workflow_run_id');
     END`);
 
-  tx.run(sql`CREATE TRIGGER IF NOT EXISTS run_nodes_spawner_same_run_update_ck
+  tx.run(sql`DROP TRIGGER IF EXISTS run_nodes_spawner_same_run_update_ck`);
+  tx.run(sql`CREATE TRIGGER run_nodes_spawner_same_run_update_ck
     BEFORE UPDATE OF workflow_run_id, spawner_node_id ON run_nodes
     FOR EACH ROW
     WHEN (
       NEW.spawner_node_id IS NOT NULL
-      AND (
-        SELECT workflow_run_id
+      AND NOT EXISTS (
+        SELECT 1
         FROM run_nodes
         WHERE id = NEW.spawner_node_id
-      ) <> NEW.workflow_run_id
+          AND workflow_run_id = NEW.workflow_run_id
+      )
     )
     BEGIN
       SELECT RAISE(ABORT, 'run_nodes.spawner_node_id must reference a run node in the same workflow_run_id');
     END`);
 
-  tx.run(sql`CREATE TRIGGER IF NOT EXISTS run_nodes_join_same_run_insert_ck
+  tx.run(sql`DROP TRIGGER IF EXISTS run_nodes_join_same_run_insert_ck`);
+  tx.run(sql`CREATE TRIGGER run_nodes_join_same_run_insert_ck
     BEFORE INSERT ON run_nodes
     FOR EACH ROW
     WHEN (
       NEW.join_node_id IS NOT NULL
-      AND (
-        SELECT workflow_run_id
+      AND NOT EXISTS (
+        SELECT 1
         FROM run_nodes
         WHERE id = NEW.join_node_id
-      ) <> NEW.workflow_run_id
+          AND workflow_run_id = NEW.workflow_run_id
+      )
     )
     BEGIN
       SELECT RAISE(ABORT, 'run_nodes.join_node_id must reference a run node in the same workflow_run_id');
     END`);
 
-  tx.run(sql`CREATE TRIGGER IF NOT EXISTS run_nodes_join_same_run_update_ck
+  tx.run(sql`DROP TRIGGER IF EXISTS run_nodes_join_same_run_update_ck`);
+  tx.run(sql`CREATE TRIGGER run_nodes_join_same_run_update_ck
     BEFORE UPDATE OF workflow_run_id, join_node_id ON run_nodes
     FOR EACH ROW
     WHEN (
       NEW.join_node_id IS NOT NULL
-      AND (
-        SELECT workflow_run_id
+      AND NOT EXISTS (
+        SELECT 1
         FROM run_nodes
         WHERE id = NEW.join_node_id
-      ) <> NEW.workflow_run_id
+          AND workflow_run_id = NEW.workflow_run_id
+      )
     )
     BEGIN
       SELECT RAISE(ABORT, 'run_nodes.join_node_id must reference a run node in the same workflow_run_id');
