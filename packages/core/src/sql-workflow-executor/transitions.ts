@@ -14,7 +14,7 @@ import {
 } from './constants.js';
 import { createEmptyContextManifest } from './context-assembly.js';
 import { persistRunNodeAttemptDiagnostics } from './diagnostics-persistence.js';
-import { loadJoinBarrierStatesByJoinRunNodeId } from './fanout.js';
+import { loadJoinBarrierStatesByJoinRunNodeId, reopenJoinBarrierForRetriedChild } from './fanout.js';
 import { selectNextRunnableNode } from './node-selection.js';
 import {
   loadEdgeRows,
@@ -364,6 +364,11 @@ export function reactivateSelectedTargetNode(
       currentAttempt: targetNode.attempt,
       nextAttempt: targetNode.attempt + 1,
     });
+    reopenJoinBarrierForRetriedChild(db, {
+      workflowRunId: params.workflowRunId,
+      childNode: targetNode,
+      previousTerminalStatus: 'completed',
+    });
     return;
   }
 
@@ -535,6 +540,11 @@ export function claimRunnableNode(
         nextAttempt: node.attempt + 1,
         workflowRunId: run.id,
         requiredRunStatuses: runClaimableStatuses,
+      });
+      reopenJoinBarrierForRetriedChild(db, {
+        workflowRunId: run.id,
+        childNode: node,
+        previousTerminalStatus: 'completed',
       });
       transitionRunNodeStatus(db, {
         runNodeId: node.runNodeId,

@@ -175,6 +175,15 @@ export function persistRoutingDecision(
     .run();
 }
 
+function loadTreeSuccessOutgoingEdges(params: {
+  runNodeId: number;
+  edgeRows: EdgeRow[];
+}): EdgeRow[] {
+  return params.edgeRows.filter(
+    edge => edge.sourceNodeId === params.runNodeId && edge.routeOn === 'success' && edge.edgeKind === 'tree',
+  );
+}
+
 export function persistCompletedNodeRoutingDecision(
   db: AlphredDatabase,
   params: {
@@ -188,9 +197,10 @@ export function persistCompletedNodeRoutingDecision(
 ): CompletedNodeRoutingOutcome {
   const decisionSignal = params.routingDecision;
   const routingDecisionSource = params.routingDecisionSource ?? 'provider_result_metadata';
-  const outgoingEdges = params.edgeRows.filter(
-    edge => edge.sourceNodeId === params.runNodeId && edge.routeOn === 'success',
-  );
+  const outgoingEdges = loadTreeSuccessOutgoingEdges({
+    runNodeId: params.runNodeId,
+    edgeRows: params.edgeRows,
+  });
   const routingOutcome = resolveCompletedNodeRoutingOutcome({
     runNodeId: params.runNodeId,
     routingDecision: decisionSignal,
@@ -242,9 +252,10 @@ export function resolveCompletedNodeRoutingOutcome(params: {
   routingDecision: RouteDecisionSignal | null;
   edgeRows: EdgeRow[];
 }): CompletedNodeRoutingOutcome {
-  const outgoingEdges = params.edgeRows.filter(
-    edge => edge.sourceNodeId === params.runNodeId && edge.routeOn === 'success',
-  );
+  const outgoingEdges = loadTreeSuccessOutgoingEdges({
+    runNodeId: params.runNodeId,
+    edgeRows: params.edgeRows,
+  });
   if (outgoingEdges.length === 0) {
     if (!params.routingDecision) {
       return {

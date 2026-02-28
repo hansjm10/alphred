@@ -7,6 +7,7 @@ import {
   promptTemplates,
   runJoinBarriers,
   runNodeEdges,
+  transitionRunNodeStatus,
   treeEdges,
   treeNodes,
   workflowTrees,
@@ -22,6 +23,7 @@ import {
 import { loadEdgeRows, loadRunNodeExecutionRows } from './persistence.js';
 import { loadLatestArtifactsByRunNodeId, loadLatestRoutingDecisionsByRunNodeId } from './routing-selection.js';
 import { buildRoutingSelection } from './routing-selection.js';
+import { reactivateSelectedTargetNode } from './transitions.js';
 import type { RunNodeExecutionRow } from './types.js';
 
 function seedSpawnerJoinRun(
@@ -749,6 +751,94 @@ describe('fanout join barrier guards', () => {
         status: 'ready',
       },
     ]);
+  });
+
+  it('reopens a ready barrier when a completed child is reactivated via routing', () => {
+    const { db, runId, spawnerNode, joinNode } = seedSpawnerJoinRun();
+    const artifactId = insertSpawnerReportArtifact({
+      db,
+      runId,
+      spawnerRunNodeId: spawnerNode.runNodeId,
+      content: 'spawn-a',
+    });
+
+    spawnDynamicChildrenForSpawner(db, {
+      workflowRunId: runId,
+      spawnerNode,
+      joinNode,
+      spawnSourceArtifactId: artifactId,
+      subtasks: [
+        {
+          nodeKey: 'child-a',
+          title: 'Child A',
+          prompt: 'Implement child A',
+          provider: null,
+          model: null,
+          metadata: null,
+        },
+      ],
+    });
+
+    const childNode = loadRunNodeExecutionRows(db, runId).find(node => node.nodeKey === 'child-a');
+    if (!childNode) {
+      throw new Error('Expected dynamic child run node to be created.');
+    }
+
+    transitionRunNodeStatus(db, {
+      runNodeId: childNode.runNodeId,
+      expectedFrom: 'pending',
+      to: 'running',
+    });
+    transitionRunNodeStatus(db, {
+      runNodeId: childNode.runNodeId,
+      expectedFrom: 'running',
+      to: 'completed',
+    });
+    updateJoinBarrierForChildTerminal(db, {
+      workflowRunId: runId,
+      childNode,
+      childTerminalStatus: 'completed',
+    });
+
+    const edgeRows = loadEdgeRows(db, runId);
+    const dynamicEdgeToChild = edgeRows.find(
+      edge =>
+        edge.sourceNodeId === spawnerNode.runNodeId &&
+        edge.targetNodeId === childNode.runNodeId &&
+        edge.routeOn === 'success' &&
+        edge.edgeKind === 'dynamic_spawner_to_child',
+    );
+    if (!dynamicEdgeToChild) {
+      throw new Error('Expected dynamic spawner->child edge to exist.');
+    }
+
+    reactivateSelectedTargetNode(db, {
+      workflowRunId: runId,
+      selectedEdgeId: dynamicEdgeToChild.edgeId,
+      edgeRows,
+    });
+
+    const reactivatedChildNode = loadRunNodeExecutionRows(db, runId).find(node => node.runNodeId === childNode.runNodeId);
+    expect(reactivatedChildNode?.status).toBe('pending');
+    expect(reactivatedChildNode?.attempt).toBe(2);
+
+    const reopenedBarrier = db
+      .select({
+        terminalChildren: runJoinBarriers.terminalChildren,
+        completedChildren: runJoinBarriers.completedChildren,
+        failedChildren: runJoinBarriers.failedChildren,
+        status: runJoinBarriers.status,
+      })
+      .from(runJoinBarriers)
+      .where(eq(runJoinBarriers.workflowRunId, runId))
+      .get();
+
+    expect(reopenedBarrier).toEqual({
+      terminalChildren: 0,
+      completedChildren: 0,
+      failedChildren: 0,
+      status: 'pending',
+    });
   });
 
   it('reopens a ready barrier when a failed child is retried', () => {
