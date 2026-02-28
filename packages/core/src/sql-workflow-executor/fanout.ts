@@ -42,21 +42,29 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function formatUnexpectedValue(value: unknown): string {
-  if (typeof value === 'string') {
-    return value;
+  switch (typeof value) {
+    case 'string':
+      return value;
+    case 'number':
+    case 'boolean':
+    case 'bigint':
+      return String(value);
+    case 'undefined':
+      return 'undefined';
+    case 'symbol':
+      return value.description ? `Symbol(${value.description})` : 'Symbol()';
+    case 'function':
+      return '[function]';
+    case 'object':
+      if (value === null) {
+        return 'null';
+      }
+      try {
+        return JSON.stringify(value) ?? '[unserializable value]';
+      } catch {
+        return '[unserializable value]';
+      }
   }
-  if (value === null) {
-    return 'null';
-  }
-  if (typeof value === 'object') {
-    try {
-      return JSON.stringify(value) ?? '[unserializable value]';
-    } catch {
-      return '[unserializable value]';
-    }
-  }
-
-  return String(value);
 }
 
 function normalizeNodeKey(value: string): string {
