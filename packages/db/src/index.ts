@@ -1,4 +1,5 @@
 export { createDatabase, type AlphredDatabase } from './connection.js';
+export { and, asc, desc, eq, inArray, sql } from 'drizzle-orm';
 export { migrateDatabase } from './migrate.js';
 export * from './runNodeLifecycle.js';
 export * from './repositories.js';

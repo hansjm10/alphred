@@ -1,0 +1,16 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "baseUrl": ".",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "noImplicitOverride": false,
+    "paths": {
+      "@alphred/agents": ["../../packages/agents/src/index.ts"],
+      "@alphred/core": ["../../packages/core/src/index.ts"],
+      "@alphred/db": ["../../packages/db/src/index.ts"],
+      "@alphred/git": ["../../packages/git/src/index.ts"],
+      "@alphred/shared": ["../../packages/shared/src/index.ts"]
+    }
+  }
+}
