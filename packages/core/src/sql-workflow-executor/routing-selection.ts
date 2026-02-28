@@ -232,6 +232,7 @@ export function loadLatestArtifactsByRunNodeId(
       id: phaseArtifacts.id,
       runNodeId: phaseArtifacts.runNodeId,
       createdAt: phaseArtifacts.createdAt,
+      metadata: phaseArtifacts.metadata,
     })
     .from(phaseArtifacts)
     .where(eq(phaseArtifacts.workflowRunId, workflowRunId))
@@ -240,6 +241,11 @@ export function loadLatestArtifactsByRunNodeId(
 
   const latestByRunNodeId = new Map<number, LatestArtifact>();
   for (const row of rows) {
+    const metadata = isRecord(row.metadata) ? row.metadata : null;
+    if (metadata?.kind === FAILED_COMMAND_OUTPUT_ARTIFACT_KIND) {
+      continue;
+    }
+
     latestByRunNodeId.set(row.runNodeId, {
       id: row.id,
       createdAt: row.createdAt,
