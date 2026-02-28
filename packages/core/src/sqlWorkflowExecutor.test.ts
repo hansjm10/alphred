@@ -9034,6 +9034,30 @@ describe('createSqlWorkflowExecutor', () => {
         })
         .run().lastInsertRowid,
     );
+    db.insert(runNodeEdges)
+      .values([
+        {
+          workflowRunId: runId,
+          sourceRunNodeId: breakdownRunNodeId,
+          targetRunNodeId: childRunNodeId,
+          routeOn: 'success',
+          auto: 1,
+          guardExpression: null,
+          priority: 1,
+          edgeKind: 'dynamic_spawner_to_child',
+        },
+        {
+          workflowRunId: runId,
+          sourceRunNodeId: childRunNodeId,
+          targetRunNodeId: finalReviewRunNodeId,
+          routeOn: 'terminal',
+          auto: 1,
+          guardExpression: null,
+          priority: 0,
+          edgeKind: 'dynamic_child_to_join',
+        },
+      ])
+      .run();
 
     transitionRunNodeStatus(db, {
       runNodeId: childRunNodeId,
