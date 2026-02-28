@@ -1,5 +1,27 @@
 import type { AlphredDatabase } from './connection.js';
-import { sql } from 'drizzle-orm';
+import { sql, type SQL } from 'drizzle-orm';
+
+type MigrationExecutor = Pick<AlphredDatabase, 'get' | 'run'>;
+
+function addColumnIfMissing(
+  tx: MigrationExecutor,
+  params: {
+    existsQuery: SQL<unknown>;
+    alterQuery: SQL<unknown>;
+    postAddQueries?: readonly SQL<unknown>[];
+  },
+): boolean {
+  const columnExists = (tx.get<{ count: number }>(params.existsQuery)?.count ?? 0) > 0;
+  if (columnExists) {
+    return false;
+  }
+
+  tx.run(params.alterQuery);
+  for (const postAddQuery of params.postAddQueries ?? []) {
+    tx.run(postAddQuery);
+  }
+  return true;
+}
 
 export function migrateDatabase(db: AlphredDatabase): void {
   db.transaction((tx) => {
@@ -17,27 +39,18 @@ export function migrateDatabase(db: AlphredDatabase): void {
     CONSTRAINT workflow_trees_status_ck
       CHECK (status IN ('draft', 'published'))
   )`);
-  const hasWorkflowTreeStatusColumn =
-    tx.get<{ count: number }>(
-      sql`SELECT COUNT(*) AS count FROM pragma_table_info('workflow_trees') WHERE name = 'status'`,
-    )?.count ?? 0;
-  if (hasWorkflowTreeStatusColumn === 0) {
-    tx.run(sql`ALTER TABLE workflow_trees ADD COLUMN status TEXT NOT NULL DEFAULT 'published'`);
-  }
-  const hasWorkflowTreeVersionNotesColumn =
-    tx.get<{ count: number }>(
-      sql`SELECT COUNT(*) AS count FROM pragma_table_info('workflow_trees') WHERE name = 'version_notes'`,
-    )?.count ?? 0;
-  if (hasWorkflowTreeVersionNotesColumn === 0) {
-    tx.run(sql`ALTER TABLE workflow_trees ADD COLUMN version_notes TEXT`);
-  }
-  const hasWorkflowTreeDraftRevisionColumn =
-    tx.get<{ count: number }>(
-      sql`SELECT COUNT(*) AS count FROM pragma_table_info('workflow_trees') WHERE name = 'draft_revision'`,
-    )?.count ?? 0;
-  if (hasWorkflowTreeDraftRevisionColumn === 0) {
-    tx.run(sql`ALTER TABLE workflow_trees ADD COLUMN draft_revision INTEGER NOT NULL DEFAULT 0`);
-  }
+  addColumnIfMissing(tx, {
+    existsQuery: sql`SELECT COUNT(*) AS count FROM pragma_table_info('workflow_trees') WHERE name = 'status'`,
+    alterQuery: sql`ALTER TABLE workflow_trees ADD COLUMN status TEXT NOT NULL DEFAULT 'published'`,
+  });
+  addColumnIfMissing(tx, {
+    existsQuery: sql`SELECT COUNT(*) AS count FROM pragma_table_info('workflow_trees') WHERE name = 'version_notes'`,
+    alterQuery: sql`ALTER TABLE workflow_trees ADD COLUMN version_notes TEXT`,
+  });
+  addColumnIfMissing(tx, {
+    existsQuery: sql`SELECT COUNT(*) AS count FROM pragma_table_info('workflow_trees') WHERE name = 'draft_revision'`,
+    alterQuery: sql`ALTER TABLE workflow_trees ADD COLUMN draft_revision INTEGER NOT NULL DEFAULT 0`,
+  });
   tx.run(sql`CREATE UNIQUE INDEX IF NOT EXISTS workflow_trees_tree_key_version_uq
     ON workflow_trees(tree_key, version)`);
   tx.run(sql`CREATE UNIQUE INDEX IF NOT EXISTS workflow_trees_tree_key_single_draft_uq
@@ -94,13 +107,10 @@ export function migrateDatabase(db: AlphredDatabase): void {
     CONSTRAINT repositories_clone_status_ck
       CHECK (clone_status IN ('pending', 'cloned', 'error'))
   )`);
-  const hasBranchTemplateColumn =
-    tx.get<{ count: number }>(
-      sql`SELECT COUNT(*) AS count FROM pragma_table_info('repositories') WHERE name = 'branch_template'`,
-    )?.count ?? 0;
-  if (hasBranchTemplateColumn === 0) {
-    tx.run(sql`ALTER TABLE repositories ADD COLUMN branch_template TEXT`);
-  }
+  addColumnIfMissing(tx, {
+    existsQuery: sql`SELECT COUNT(*) AS count FROM pragma_table_info('repositories') WHERE name = 'branch_template'`,
+    alterQuery: sql`ALTER TABLE repositories ADD COLUMN branch_template TEXT`,
+  });
   tx.run(sql`CREATE UNIQUE INDEX IF NOT EXISTS repositories_name_uq
     ON repositories(name)`);
   tx.run(sql`DROP INDEX IF EXISTS repositories_name_idx`);
@@ -227,62 +237,38 @@ export function migrateDatabase(db: AlphredDatabase): void {
     CONSTRAINT tree_nodes_max_retries_ck
       CHECK (max_retries >= 0)
   )`);
-  const hasTreeNodesDisplayNameColumn =
-    tx.get<{ count: number }>(
-      sql`SELECT COUNT(*) AS count FROM pragma_table_info('tree_nodes') WHERE name = 'display_name'`,
-    )?.count ?? 0;
-  if (hasTreeNodesDisplayNameColumn === 0) {
-    tx.run(sql`ALTER TABLE tree_nodes ADD COLUMN display_name TEXT`);
-  }
-  const hasTreeNodesPositionXColumn =
-    tx.get<{ count: number }>(
-      sql`SELECT COUNT(*) AS count FROM pragma_table_info('tree_nodes') WHERE name = 'position_x'`,
-    )?.count ?? 0;
-  if (hasTreeNodesPositionXColumn === 0) {
-    tx.run(sql`ALTER TABLE tree_nodes ADD COLUMN position_x INTEGER`);
-  }
-  const hasTreeNodesPositionYColumn =
-    tx.get<{ count: number }>(
-      sql`SELECT COUNT(*) AS count FROM pragma_table_info('tree_nodes') WHERE name = 'position_y'`,
-    )?.count ?? 0;
-  if (hasTreeNodesPositionYColumn === 0) {
-    tx.run(sql`ALTER TABLE tree_nodes ADD COLUMN position_y INTEGER`);
-  }
-  const hasTreeNodesModelColumn =
-    tx.get<{ count: number }>(
-      sql`SELECT COUNT(*) AS count FROM pragma_table_info('tree_nodes') WHERE name = 'model'`,
-    )?.count ?? 0;
-  if (hasTreeNodesModelColumn === 0) {
-    tx.run(sql`ALTER TABLE tree_nodes ADD COLUMN model TEXT`);
-  }
-  const hasTreeNodesExecutionPermissionsColumn =
-    tx.get<{ count: number }>(
-      sql`SELECT COUNT(*) AS count FROM pragma_table_info('tree_nodes') WHERE name = 'execution_permissions'`,
-    )?.count ?? 0;
-  if (hasTreeNodesExecutionPermissionsColumn === 0) {
-    tx.run(sql`ALTER TABLE tree_nodes ADD COLUMN execution_permissions TEXT`);
-  }
-  const hasTreeNodesErrorHandlerConfigColumn =
-    tx.get<{ count: number }>(
-      sql`SELECT COUNT(*) AS count FROM pragma_table_info('tree_nodes') WHERE name = 'error_handler_config'`,
-    )?.count ?? 0;
-  if (hasTreeNodesErrorHandlerConfigColumn === 0) {
-    tx.run(sql`ALTER TABLE tree_nodes ADD COLUMN error_handler_config TEXT`);
-  }
-  const hasTreeNodesNodeRoleColumn =
-    tx.get<{ count: number }>(
-      sql`SELECT COUNT(*) AS count FROM pragma_table_info('tree_nodes') WHERE name = 'node_role'`,
-    )?.count ?? 0;
-  if (hasTreeNodesNodeRoleColumn === 0) {
-    tx.run(sql`ALTER TABLE tree_nodes ADD COLUMN node_role TEXT NOT NULL DEFAULT 'standard'`);
-  }
-  const hasTreeNodesMaxChildrenColumn =
-    tx.get<{ count: number }>(
-      sql`SELECT COUNT(*) AS count FROM pragma_table_info('tree_nodes') WHERE name = 'max_children'`,
-    )?.count ?? 0;
-  if (hasTreeNodesMaxChildrenColumn === 0) {
-    tx.run(sql`ALTER TABLE tree_nodes ADD COLUMN max_children INTEGER NOT NULL DEFAULT 12`);
-  }
+  addColumnIfMissing(tx, {
+    existsQuery: sql`SELECT COUNT(*) AS count FROM pragma_table_info('tree_nodes') WHERE name = 'display_name'`,
+    alterQuery: sql`ALTER TABLE tree_nodes ADD COLUMN display_name TEXT`,
+  });
+  addColumnIfMissing(tx, {
+    existsQuery: sql`SELECT COUNT(*) AS count FROM pragma_table_info('tree_nodes') WHERE name = 'position_x'`,
+    alterQuery: sql`ALTER TABLE tree_nodes ADD COLUMN position_x INTEGER`,
+  });
+  addColumnIfMissing(tx, {
+    existsQuery: sql`SELECT COUNT(*) AS count FROM pragma_table_info('tree_nodes') WHERE name = 'position_y'`,
+    alterQuery: sql`ALTER TABLE tree_nodes ADD COLUMN position_y INTEGER`,
+  });
+  addColumnIfMissing(tx, {
+    existsQuery: sql`SELECT COUNT(*) AS count FROM pragma_table_info('tree_nodes') WHERE name = 'model'`,
+    alterQuery: sql`ALTER TABLE tree_nodes ADD COLUMN model TEXT`,
+  });
+  addColumnIfMissing(tx, {
+    existsQuery: sql`SELECT COUNT(*) AS count FROM pragma_table_info('tree_nodes') WHERE name = 'execution_permissions'`,
+    alterQuery: sql`ALTER TABLE tree_nodes ADD COLUMN execution_permissions TEXT`,
+  });
+  addColumnIfMissing(tx, {
+    existsQuery: sql`SELECT COUNT(*) AS count FROM pragma_table_info('tree_nodes') WHERE name = 'error_handler_config'`,
+    alterQuery: sql`ALTER TABLE tree_nodes ADD COLUMN error_handler_config TEXT`,
+  });
+  addColumnIfMissing(tx, {
+    existsQuery: sql`SELECT COUNT(*) AS count FROM pragma_table_info('tree_nodes') WHERE name = 'node_role'`,
+    alterQuery: sql`ALTER TABLE tree_nodes ADD COLUMN node_role TEXT NOT NULL DEFAULT 'standard'`,
+  });
+  addColumnIfMissing(tx, {
+    existsQuery: sql`SELECT COUNT(*) AS count FROM pragma_table_info('tree_nodes') WHERE name = 'max_children'`,
+    alterQuery: sql`ALTER TABLE tree_nodes ADD COLUMN max_children INTEGER NOT NULL DEFAULT 12`,
+  });
   tx.run(sql`UPDATE tree_nodes
     SET node_role = COALESCE(node_role, 'standard'),
         max_children = COALESCE(max_children, 12)`);
@@ -481,152 +467,105 @@ export function migrateDatabase(db: AlphredDatabase): void {
     ON run_nodes(node_key)`);
   tx.run(sql`CREATE INDEX IF NOT EXISTS run_nodes_created_at_idx
     ON run_nodes(created_at)`);
-  const hasRunNodesNodeRoleColumn =
-    tx.get<{ count: number }>(
-      sql`SELECT COUNT(*) AS count FROM pragma_table_info('run_nodes') WHERE name = 'node_role'`,
-    )?.count ?? 0;
-  const addedRunNodesNodeRoleColumn = hasRunNodesNodeRoleColumn === 0;
-  if (addedRunNodesNodeRoleColumn) {
-    tx.run(sql`ALTER TABLE run_nodes ADD COLUMN node_role TEXT NOT NULL DEFAULT 'standard'`);
-  }
-  const hasRunNodesNodeTypeColumn =
-    tx.get<{ count: number }>(
-      sql`SELECT COUNT(*) AS count FROM pragma_table_info('run_nodes') WHERE name = 'node_type'`,
-    )?.count ?? 0;
-  const addedRunNodesNodeTypeColumn = hasRunNodesNodeTypeColumn === 0;
-  if (addedRunNodesNodeTypeColumn) {
-    tx.run(sql`ALTER TABLE run_nodes ADD COLUMN node_type TEXT NOT NULL DEFAULT 'agent'`);
-  }
-  const hasRunNodesProviderColumn =
-    tx.get<{ count: number }>(
-      sql`SELECT COUNT(*) AS count FROM pragma_table_info('run_nodes') WHERE name = 'provider'`,
-    )?.count ?? 0;
-  if (hasRunNodesProviderColumn === 0) {
-    tx.run(sql`ALTER TABLE run_nodes ADD COLUMN provider TEXT`);
-  }
-  const hasRunNodesModelColumn =
-    tx.get<{ count: number }>(
-      sql`SELECT COUNT(*) AS count FROM pragma_table_info('run_nodes') WHERE name = 'model'`,
-    )?.count ?? 0;
-  if (hasRunNodesModelColumn === 0) {
-    tx.run(sql`ALTER TABLE run_nodes ADD COLUMN model TEXT`);
-  }
-  const hasRunNodesPromptColumn =
-    tx.get<{ count: number }>(
-      sql`SELECT COUNT(*) AS count FROM pragma_table_info('run_nodes') WHERE name = 'prompt'`,
-    )?.count ?? 0;
-  if (hasRunNodesPromptColumn === 0) {
-    tx.run(sql`ALTER TABLE run_nodes ADD COLUMN prompt TEXT`);
-  }
-  const hasRunNodesPromptContentTypeColumn =
-    tx.get<{ count: number }>(
-      sql`SELECT COUNT(*) AS count FROM pragma_table_info('run_nodes') WHERE name = 'prompt_content_type'`,
-    )?.count ?? 0;
-  const addedRunNodesPromptContentTypeColumn = hasRunNodesPromptContentTypeColumn === 0;
-  if (addedRunNodesPromptContentTypeColumn) {
-    tx.run(sql`ALTER TABLE run_nodes ADD COLUMN prompt_content_type TEXT NOT NULL DEFAULT 'markdown'`);
-  }
-  const hasRunNodesExecutionPermissionsColumn =
-    tx.get<{ count: number }>(
-      sql`SELECT COUNT(*) AS count FROM pragma_table_info('run_nodes') WHERE name = 'execution_permissions'`,
-    )?.count ?? 0;
-  if (hasRunNodesExecutionPermissionsColumn === 0) {
-    tx.run(sql`ALTER TABLE run_nodes ADD COLUMN execution_permissions TEXT`);
-  }
-  const hasRunNodesErrorHandlerConfigColumn =
-    tx.get<{ count: number }>(
-      sql`SELECT COUNT(*) AS count FROM pragma_table_info('run_nodes') WHERE name = 'error_handler_config'`,
-    )?.count ?? 0;
-  if (hasRunNodesErrorHandlerConfigColumn === 0) {
-    tx.run(sql`ALTER TABLE run_nodes ADD COLUMN error_handler_config TEXT`);
-  }
-  const hasRunNodesMaxChildrenColumn =
-    tx.get<{ count: number }>(
-      sql`SELECT COUNT(*) AS count FROM pragma_table_info('run_nodes') WHERE name = 'max_children'`,
-    )?.count ?? 0;
-  const addedRunNodesMaxChildrenColumn = hasRunNodesMaxChildrenColumn === 0;
-  if (addedRunNodesMaxChildrenColumn) {
-    tx.run(sql`ALTER TABLE run_nodes ADD COLUMN max_children INTEGER NOT NULL DEFAULT 12`);
-  }
-  const hasRunNodesMaxRetriesColumn =
-    tx.get<{ count: number }>(
-      sql`SELECT COUNT(*) AS count FROM pragma_table_info('run_nodes') WHERE name = 'max_retries'`,
-    )?.count ?? 0;
-  const addedRunNodesMaxRetriesColumn = hasRunNodesMaxRetriesColumn === 0;
-  if (addedRunNodesMaxRetriesColumn) {
-    tx.run(sql`ALTER TABLE run_nodes ADD COLUMN max_retries INTEGER NOT NULL DEFAULT 0`);
-  }
-  const hasRunNodesSpawnerNodeIdColumn =
-    tx.get<{ count: number }>(
-      sql`SELECT COUNT(*) AS count FROM pragma_table_info('run_nodes') WHERE name = 'spawner_node_id'`,
-    )?.count ?? 0;
-  if (hasRunNodesSpawnerNodeIdColumn === 0) {
-    tx.run(sql`ALTER TABLE run_nodes ADD COLUMN spawner_node_id INTEGER`);
-  }
-  const hasRunNodesJoinNodeIdColumn =
-    tx.get<{ count: number }>(
-      sql`SELECT COUNT(*) AS count FROM pragma_table_info('run_nodes') WHERE name = 'join_node_id'`,
-    )?.count ?? 0;
-  if (hasRunNodesJoinNodeIdColumn === 0) {
-    tx.run(sql`ALTER TABLE run_nodes ADD COLUMN join_node_id INTEGER`);
-  }
-  const hasRunNodesLineageDepthColumn =
-    tx.get<{ count: number }>(
-      sql`SELECT COUNT(*) AS count FROM pragma_table_info('run_nodes') WHERE name = 'lineage_depth'`,
-    )?.count ?? 0;
-  if (hasRunNodesLineageDepthColumn === 0) {
-    tx.run(sql`ALTER TABLE run_nodes ADD COLUMN lineage_depth INTEGER NOT NULL DEFAULT 0`);
-  }
-  const hasRunNodesSequencePathColumn =
-    tx.get<{ count: number }>(
-      sql`SELECT COUNT(*) AS count FROM pragma_table_info('run_nodes') WHERE name = 'sequence_path'`,
-    )?.count ?? 0;
-  if (hasRunNodesSequencePathColumn === 0) {
-    tx.run(sql`ALTER TABLE run_nodes ADD COLUMN sequence_path TEXT`);
-  }
   // SQLite exposes DEFAULT values for historical rows after ALTER TABLE ADD COLUMN,
   // so explicitly backfill newly-added NOT NULL columns from source records.
-  if (addedRunNodesNodeRoleColumn) {
-    tx.run(sql`UPDATE run_nodes
-      SET node_role = COALESCE((
-            SELECT tree_nodes.node_role
-            FROM tree_nodes
-            WHERE tree_nodes.id = run_nodes.tree_node_id
-          ), 'standard')`);
-  }
-  if (addedRunNodesNodeTypeColumn) {
-    tx.run(sql`UPDATE run_nodes
-      SET node_type = COALESCE((
-            SELECT tree_nodes.node_type
-            FROM tree_nodes
-            WHERE tree_nodes.id = run_nodes.tree_node_id
-          ), 'agent')`);
-  }
-  if (addedRunNodesPromptContentTypeColumn) {
-    tx.run(sql`UPDATE run_nodes
-      SET prompt_content_type = COALESCE((
-            SELECT prompt_templates.content_type
-            FROM tree_nodes
-            LEFT JOIN prompt_templates ON prompt_templates.id = tree_nodes.prompt_template_id
-            WHERE tree_nodes.id = run_nodes.tree_node_id
-          ), 'markdown')`);
-  }
-  if (addedRunNodesMaxChildrenColumn) {
-    tx.run(sql`UPDATE run_nodes
-      SET max_children = COALESCE((
-            SELECT tree_nodes.max_children
-            FROM tree_nodes
-            WHERE tree_nodes.id = run_nodes.tree_node_id
-          ), 12)`);
-  }
-  if (addedRunNodesMaxRetriesColumn) {
-    tx.run(sql`UPDATE run_nodes
-      SET max_retries = COALESCE((
-            SELECT tree_nodes.max_retries
-            FROM tree_nodes
-            WHERE tree_nodes.id = run_nodes.tree_node_id
-          ), 0)`);
-  }
+  addColumnIfMissing(tx, {
+    existsQuery: sql`SELECT COUNT(*) AS count FROM pragma_table_info('run_nodes') WHERE name = 'node_role'`,
+    alterQuery: sql`ALTER TABLE run_nodes ADD COLUMN node_role TEXT NOT NULL DEFAULT 'standard'`,
+    postAddQueries: [
+      sql`UPDATE run_nodes
+        SET node_role = COALESCE((
+              SELECT tree_nodes.node_role
+              FROM tree_nodes
+              WHERE tree_nodes.id = run_nodes.tree_node_id
+            ), 'standard')`,
+    ],
+  });
+  addColumnIfMissing(tx, {
+    existsQuery: sql`SELECT COUNT(*) AS count FROM pragma_table_info('run_nodes') WHERE name = 'node_type'`,
+    alterQuery: sql`ALTER TABLE run_nodes ADD COLUMN node_type TEXT NOT NULL DEFAULT 'agent'`,
+    postAddQueries: [
+      sql`UPDATE run_nodes
+        SET node_type = COALESCE((
+              SELECT tree_nodes.node_type
+              FROM tree_nodes
+              WHERE tree_nodes.id = run_nodes.tree_node_id
+            ), 'agent')`,
+    ],
+  });
+  addColumnIfMissing(tx, {
+    existsQuery: sql`SELECT COUNT(*) AS count FROM pragma_table_info('run_nodes') WHERE name = 'provider'`,
+    alterQuery: sql`ALTER TABLE run_nodes ADD COLUMN provider TEXT`,
+  });
+  addColumnIfMissing(tx, {
+    existsQuery: sql`SELECT COUNT(*) AS count FROM pragma_table_info('run_nodes') WHERE name = 'model'`,
+    alterQuery: sql`ALTER TABLE run_nodes ADD COLUMN model TEXT`,
+  });
+  addColumnIfMissing(tx, {
+    existsQuery: sql`SELECT COUNT(*) AS count FROM pragma_table_info('run_nodes') WHERE name = 'prompt'`,
+    alterQuery: sql`ALTER TABLE run_nodes ADD COLUMN prompt TEXT`,
+  });
+  addColumnIfMissing(tx, {
+    existsQuery: sql`SELECT COUNT(*) AS count FROM pragma_table_info('run_nodes') WHERE name = 'prompt_content_type'`,
+    alterQuery: sql`ALTER TABLE run_nodes ADD COLUMN prompt_content_type TEXT NOT NULL DEFAULT 'markdown'`,
+    postAddQueries: [
+      sql`UPDATE run_nodes
+        SET prompt_content_type = COALESCE((
+              SELECT prompt_templates.content_type
+              FROM tree_nodes
+              LEFT JOIN prompt_templates ON prompt_templates.id = tree_nodes.prompt_template_id
+              WHERE tree_nodes.id = run_nodes.tree_node_id
+            ), 'markdown')`,
+    ],
+  });
+  addColumnIfMissing(tx, {
+    existsQuery: sql`SELECT COUNT(*) AS count FROM pragma_table_info('run_nodes') WHERE name = 'execution_permissions'`,
+    alterQuery: sql`ALTER TABLE run_nodes ADD COLUMN execution_permissions TEXT`,
+  });
+  addColumnIfMissing(tx, {
+    existsQuery: sql`SELECT COUNT(*) AS count FROM pragma_table_info('run_nodes') WHERE name = 'error_handler_config'`,
+    alterQuery: sql`ALTER TABLE run_nodes ADD COLUMN error_handler_config TEXT`,
+  });
+  addColumnIfMissing(tx, {
+    existsQuery: sql`SELECT COUNT(*) AS count FROM pragma_table_info('run_nodes') WHERE name = 'max_children'`,
+    alterQuery: sql`ALTER TABLE run_nodes ADD COLUMN max_children INTEGER NOT NULL DEFAULT 12`,
+    postAddQueries: [
+      sql`UPDATE run_nodes
+        SET max_children = COALESCE((
+              SELECT tree_nodes.max_children
+              FROM tree_nodes
+              WHERE tree_nodes.id = run_nodes.tree_node_id
+            ), 12)`,
+    ],
+  });
+  addColumnIfMissing(tx, {
+    existsQuery: sql`SELECT COUNT(*) AS count FROM pragma_table_info('run_nodes') WHERE name = 'max_retries'`,
+    alterQuery: sql`ALTER TABLE run_nodes ADD COLUMN max_retries INTEGER NOT NULL DEFAULT 0`,
+    postAddQueries: [
+      sql`UPDATE run_nodes
+        SET max_retries = COALESCE((
+              SELECT tree_nodes.max_retries
+              FROM tree_nodes
+              WHERE tree_nodes.id = run_nodes.tree_node_id
+            ), 0)`,
+    ],
+  });
+  addColumnIfMissing(tx, {
+    existsQuery: sql`SELECT COUNT(*) AS count FROM pragma_table_info('run_nodes') WHERE name = 'spawner_node_id'`,
+    alterQuery: sql`ALTER TABLE run_nodes ADD COLUMN spawner_node_id INTEGER`,
+  });
+  addColumnIfMissing(tx, {
+    existsQuery: sql`SELECT COUNT(*) AS count FROM pragma_table_info('run_nodes') WHERE name = 'join_node_id'`,
+    alterQuery: sql`ALTER TABLE run_nodes ADD COLUMN join_node_id INTEGER`,
+  });
+  addColumnIfMissing(tx, {
+    existsQuery: sql`SELECT COUNT(*) AS count FROM pragma_table_info('run_nodes') WHERE name = 'lineage_depth'`,
+    alterQuery: sql`ALTER TABLE run_nodes ADD COLUMN lineage_depth INTEGER NOT NULL DEFAULT 0`,
+  });
+  addColumnIfMissing(tx, {
+    existsQuery: sql`SELECT COUNT(*) AS count FROM pragma_table_info('run_nodes') WHERE name = 'sequence_path'`,
+    alterQuery: sql`ALTER TABLE run_nodes ADD COLUMN sequence_path TEXT`,
+  });
   tx.run(sql`UPDATE run_nodes
     SET node_role = COALESCE(node_role, (
           SELECT tree_nodes.node_role
@@ -919,20 +858,14 @@ export function migrateDatabase(db: AlphredDatabase): void {
     CONSTRAINT run_node_edges_kind_ck
       CHECK (edge_kind IN ('tree', 'dynamic_spawner_to_child', 'dynamic_child_to_join'))
   )`);
-  const hasRunNodeEdgesAutoColumn =
-    tx.get<{ count: number }>(
-      sql`SELECT COUNT(*) AS count FROM pragma_table_info('run_node_edges') WHERE name = 'auto'`,
-    )?.count ?? 0;
-  if (hasRunNodeEdgesAutoColumn === 0) {
-    tx.run(sql`ALTER TABLE run_node_edges ADD COLUMN auto INTEGER NOT NULL DEFAULT 1`);
-  }
-  const hasRunNodeEdgesGuardExpressionColumn =
-    tx.get<{ count: number }>(
-      sql`SELECT COUNT(*) AS count FROM pragma_table_info('run_node_edges') WHERE name = 'guard_expression'`,
-    )?.count ?? 0;
-  if (hasRunNodeEdgesGuardExpressionColumn === 0) {
-    tx.run(sql`ALTER TABLE run_node_edges ADD COLUMN guard_expression TEXT`);
-  }
+  addColumnIfMissing(tx, {
+    existsQuery: sql`SELECT COUNT(*) AS count FROM pragma_table_info('run_node_edges') WHERE name = 'auto'`,
+    alterQuery: sql`ALTER TABLE run_node_edges ADD COLUMN auto INTEGER NOT NULL DEFAULT 1`,
+  });
+  addColumnIfMissing(tx, {
+    existsQuery: sql`SELECT COUNT(*) AS count FROM pragma_table_info('run_node_edges') WHERE name = 'guard_expression'`,
+    alterQuery: sql`ALTER TABLE run_node_edges ADD COLUMN guard_expression TEXT`,
+  });
   tx.run(sql`CREATE UNIQUE INDEX IF NOT EXISTS run_node_edges_unique_uq
     ON run_node_edges(workflow_run_id, source_run_node_id, route_on, priority, target_run_node_id)`);
   tx.run(sql`CREATE INDEX IF NOT EXISTS run_node_edges_run_id_target_idx

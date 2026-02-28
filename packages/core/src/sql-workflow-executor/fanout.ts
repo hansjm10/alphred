@@ -41,12 +41,27 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
+function formatUnexpectedValue(value: unknown): string {
+  if (typeof value === 'string') {
+    return value;
+  }
+  if (value === null) {
+    return 'null';
+  }
+  if (typeof value === 'object') {
+    try {
+      return JSON.stringify(value) ?? '[unserializable value]';
+    } catch {
+      return '[unserializable value]';
+    }
+  }
+
+  return String(value);
+}
+
 function normalizeNodeKey(value: string): string {
-  return value
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '');
+  const segments = value.trim().toLowerCase().match(/[a-z0-9]+/g);
+  return segments?.join('-') ?? '';
 }
 
 function parseOptionalProvider(value: unknown): AgentProviderName | null {
@@ -57,7 +72,7 @@ function parseOptionalProvider(value: unknown): AgentProviderName | null {
     return value;
   }
 
-  throw new Error(`Invalid subtask provider "${String(value)}". Expected "codex" or "claude".`);
+  throw new TypeError(`Invalid subtask provider "${formatUnexpectedValue(value)}". Expected "codex" or "claude".`);
 }
 
 function parseOptionalModel(value: unknown): string | null {
@@ -65,7 +80,7 @@ function parseOptionalModel(value: unknown): string | null {
     return null;
   }
   if (typeof value !== 'string') {
-    throw new Error('Subtask model must be a string when provided.');
+    throw new TypeError('Subtask model must be a string when provided.');
   }
 
   const trimmed = value.trim();
@@ -90,7 +105,7 @@ function parseOptionalMetadata(value: unknown): Record<string, unknown> | null {
 function parseRequiredStringField(record: Record<string, unknown>, fieldName: string): string {
   const value = record[fieldName];
   if (typeof value !== 'string') {
-    throw new Error(`Subtask field "${fieldName}" is required and must be a string.`);
+    throw new TypeError(`Subtask field "${fieldName}" is required and must be a string.`);
   }
   const trimmed = value.trim();
   if (trimmed.length === 0) {
@@ -111,7 +126,7 @@ function resolveSubtaskNodeKey(
     return params.generatedNodeKey;
   }
   if (typeof explicitNodeKey !== 'string') {
-    throw new Error('Subtask field "nodeKey" must be a string when provided.');
+    throw new TypeError('Subtask field "nodeKey" must be a string when provided.');
   }
 
   const normalized = normalizeNodeKey(explicitNodeKey);
@@ -150,7 +165,7 @@ export function parseSpawnerSubtasks(params: {
     throw new Error('SPAWNER_OUTPUT_INVALID: schemaVersion must equal 1.');
   }
   if (!Array.isArray(payload.subtasks)) {
-    throw new Error('SPAWNER_OUTPUT_INVALID: subtasks must be an array.');
+    throw new TypeError('SPAWNER_OUTPUT_INVALID: subtasks must be an array.');
   }
   if (payload.subtasks.length > params.maxChildren) {
     throw new Error(
@@ -202,7 +217,7 @@ export function resolveSpawnerJoinTarget(params: {
   }
 
   const joinTarget = params.latestNodeAttempts.find(node => node.runNodeId === successTargets[0]?.targetNodeId);
-  if (!joinTarget || joinTarget.nodeRole !== 'join') {
+  if (joinTarget?.nodeRole !== 'join') {
     throw new Error(
       `SPAWNER_OUTPUT_INVALID: spawner "${params.spawnerNode.nodeKey}" success target must resolve to a join run node.`,
     );

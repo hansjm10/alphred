@@ -237,7 +237,7 @@ function buildWorkflowFlowNodes(nodes: readonly Node[], topologyById: ReadonlyMa
     const nodeType = nodeData.nodeType;
     const existingClassName = node.className ?? '';
     const style = {
-      ...(node.style ?? {}),
+      ...node.style,
       '--workflow-node-connection-summary': JSON.stringify(
         formatWorkflowNodeConnectionSummary(topologyEntry.incomingCount, topologyEntry.outgoingCount),
       ),

@@ -42,6 +42,73 @@ import type {
 
 const terminalSourceStatuses = new Set(['completed', 'failed', 'skipped', 'cancelled']);
 
+type RoutingSelection = ReturnType<typeof buildRoutingSelection>;
+type JoinBarrier = ReturnType<typeof loadReadyJoinBarriersForJoinNode>[number];
+
+function includesEligibleIncomingRoute(edge: EdgeRow, allowTerminalIncoming: boolean): boolean {
+  return edge.routeOn === 'success' || (allowTerminalIncoming && edge.routeOn === 'terminal');
+}
+
+function isJoinBatchDynamicChildExcluded(params: {
+  targetNode: RunNodeExecutionRow;
+  edge: EdgeRow;
+  sourceNode: RunNodeExecutionRow;
+  joinBatchChildRunNodeIds: ReadonlySet<number> | null;
+}): boolean {
+  return (
+    params.targetNode.nodeRole === 'join' &&
+    params.edge.routeOn === 'terminal' &&
+    params.edge.edgeKind === 'dynamic_child_to_join' &&
+    params.joinBatchChildRunNodeIds !== null &&
+    !params.joinBatchChildRunNodeIds.has(params.sourceNode.runNodeId)
+  );
+}
+
+function resolveEligiblePredecessorNode(params: {
+  targetNode: RunNodeExecutionRow;
+  edge: EdgeRow;
+  allowTerminalIncoming: boolean;
+  routingSelection: RoutingSelection;
+  joinBatchChildRunNodeIds: ReadonlySet<number> | null;
+}): RunNodeExecutionRow | null {
+  if (!includesEligibleIncomingRoute(params.edge, params.allowTerminalIncoming)) {
+    return null;
+  }
+
+  if (
+    params.edge.routeOn === 'success' &&
+    params.routingSelection.selectedEdgeIdBySourceNodeId.get(params.edge.sourceNodeId) !== params.edge.edgeId
+  ) {
+    return null;
+  }
+
+  const sourceNode = params.routingSelection.latestByTreeNodeId.get(params.edge.sourceNodeId);
+  if (!sourceNode) {
+    return null;
+  }
+
+  if (params.edge.routeOn === 'success' && sourceNode.status !== 'completed') {
+    return null;
+  }
+
+  if (params.edge.routeOn === 'terminal' && !terminalSourceStatuses.has(sourceNode.status)) {
+    return null;
+  }
+
+  if (
+    isJoinBatchDynamicChildExcluded({
+      targetNode: params.targetNode,
+      edge: params.edge,
+      sourceNode,
+      joinBatchChildRunNodeIds: params.joinBatchChildRunNodeIds,
+    })
+  ) {
+    return null;
+  }
+
+  return sourceNode;
+}
+
 export function selectDirectPredecessorNodes(
   targetNode: RunNodeExecutionRow,
   latestNodeAttempts: RunNodeExecutionRow[],
@@ -62,41 +129,14 @@ export function selectDirectPredecessorNodes(
   const predecessors: RunNodeExecutionRow[] = [];
   const seenSourceNodeIds = new Set<number>();
   for (const edge of incomingEdges) {
-    if (edge.routeOn !== 'success' && (!allowTerminalIncoming || edge.routeOn !== 'terminal')) {
-      continue;
-    }
-
-    if (
-      edge.routeOn === 'success' &&
-      routingSelection.selectedEdgeIdBySourceNodeId.get(edge.sourceNodeId) !== edge.edgeId
-    ) {
-      continue;
-    }
-
-    if (seenSourceNodeIds.has(edge.sourceNodeId)) {
-      continue;
-    }
-
-    const sourceNode = routingSelection.latestByTreeNodeId.get(edge.sourceNodeId);
-    if (!sourceNode) {
-      continue;
-    }
-
-    if (edge.routeOn === 'success' && sourceNode.status !== 'completed') {
-      continue;
-    }
-
-    if (edge.routeOn === 'terminal' && !terminalSourceStatuses.has(sourceNode.status)) {
-      continue;
-    }
-
-    if (
-      targetNode.nodeRole === 'join' &&
-      edge.routeOn === 'terminal' &&
-      edge.edgeKind === 'dynamic_child_to_join' &&
-      joinBatchChildRunNodeIds !== null &&
-      !joinBatchChildRunNodeIds.has(sourceNode.runNodeId)
-    ) {
+    const sourceNode = resolveEligiblePredecessorNode({
+      targetNode,
+      edge,
+      allowTerminalIncoming,
+      routingSelection,
+      joinBatchChildRunNodeIds,
+    });
+    if (!sourceNode || seenSourceNodeIds.has(edge.sourceNodeId)) {
       continue;
     }
 
@@ -105,6 +145,101 @@ export function selectDirectPredecessorNodes(
   }
 
   return predecessors.sort(compareUpstreamSourceOrder);
+}
+
+function buildLatestChildrenBySpawnerRunNodeId(
+  latestNodeAttempts: RunNodeExecutionRow[],
+  joinRunNodeId: number,
+): Map<number, RunNodeExecutionRow[]> {
+  const latestChildrenBySpawnerRunNodeId = new Map<number, RunNodeExecutionRow[]>();
+  for (const node of latestNodeAttempts) {
+    if (node.spawnerNodeId === null || node.joinNodeId !== joinRunNodeId) {
+      continue;
+    }
+
+    const children = latestChildrenBySpawnerRunNodeId.get(node.spawnerNodeId) ?? [];
+    children.push(node);
+    latestChildrenBySpawnerRunNodeId.set(node.spawnerNodeId, children);
+  }
+
+  for (const children of latestChildrenBySpawnerRunNodeId.values()) {
+    children.sort((left, right) => {
+      if (left.sequenceIndex !== right.sequenceIndex) {
+        return right.sequenceIndex - left.sequenceIndex;
+      }
+      return right.runNodeId - left.runNodeId;
+    });
+  }
+
+  return latestChildrenBySpawnerRunNodeId;
+}
+
+function buildBatchOffsetsByBarrierIdForSpawner(params: {
+  db: AlphredDatabase;
+  workflowRunId: number;
+  spawnerRunNodeId: number;
+  joinRunNodeId: number;
+}): Map<number, number> {
+  const barriersForSpawnerJoin = loadBarriersForSpawnerJoin(params.db, {
+    workflowRunId: params.workflowRunId,
+    spawnerRunNodeId: params.spawnerRunNodeId,
+    joinRunNodeId: params.joinRunNodeId,
+  });
+  const batchOffsetByBarrierId = new Map<number, number>();
+  let consumedChildren = 0;
+  for (let index = barriersForSpawnerJoin.length - 1; index >= 0; index -= 1) {
+    const spawnerJoinBarrier = barriersForSpawnerJoin[index];
+    batchOffsetByBarrierId.set(spawnerJoinBarrier.id, consumedChildren);
+    consumedChildren += spawnerJoinBarrier.expectedChildren;
+  }
+
+  return batchOffsetByBarrierId;
+}
+
+function resolveReadyJoinBarriers(
+  db: AlphredDatabase,
+  workflowRunId: number,
+  joinRunNodeId: number,
+): JoinBarrier[] | null {
+  const readyBarriers = loadReadyJoinBarriersForJoinNode(db, {
+    workflowRunId,
+    joinRunNodeId,
+  });
+  if (readyBarriers.length > 0) {
+    return readyBarriers;
+  }
+
+  const mostRecentBarrier = loadMostRecentJoinBarrier(db, {
+    workflowRunId,
+    joinRunNodeId,
+  });
+  if (!mostRecentBarrier) {
+    return null;
+  }
+
+  return [];
+}
+
+function resolveBatchOffsetsForSpawner(params: {
+  db: AlphredDatabase;
+  workflowRunId: number;
+  joinRunNodeId: number;
+  spawnerRunNodeId: number;
+  batchOffsetsBySpawnerRunNodeId: Map<number, Map<number, number>>;
+}): Map<number, number> {
+  const existing = params.batchOffsetsBySpawnerRunNodeId.get(params.spawnerRunNodeId);
+  if (existing) {
+    return existing;
+  }
+
+  const offsets = buildBatchOffsetsByBarrierIdForSpawner({
+    db: params.db,
+    workflowRunId: params.workflowRunId,
+    spawnerRunNodeId: params.spawnerRunNodeId,
+    joinRunNodeId: params.joinRunNodeId,
+  });
+  params.batchOffsetsBySpawnerRunNodeId.set(params.spawnerRunNodeId, offsets);
+  return offsets;
 }
 
 function resolveJoinBatchChildRunNodeIds(
@@ -120,60 +255,22 @@ function resolveJoinBatchChildRunNodeIds(
   }
 
   const joinRunNodeId = params.targetNode.runNodeId;
-  const readyBarriers = loadReadyJoinBarriersForJoinNode(db, {
-    workflowRunId: params.workflowRunId,
-    joinRunNodeId,
-  });
-  if (readyBarriers.length === 0) {
-    const mostRecentBarrier = loadMostRecentJoinBarrier(db, {
-      workflowRunId: params.workflowRunId,
-      joinRunNodeId,
-    });
-    return mostRecentBarrier ? new Set<number>() : null;
+  const readyBarriers = resolveReadyJoinBarriers(db, params.workflowRunId, joinRunNodeId);
+  if (!readyBarriers) {
+    return null;
   }
 
-  const latestChildrenBySpawnerRunNodeId = new Map<number, RunNodeExecutionRow[]>();
-  for (const node of params.latestNodeAttempts) {
-    if (node.spawnerNodeId === null || node.joinNodeId !== joinRunNodeId) {
-      continue;
-    }
-
-    const children = latestChildrenBySpawnerRunNodeId.get(node.spawnerNodeId);
-    if (children) {
-      children.push(node);
-      continue;
-    }
-
-    latestChildrenBySpawnerRunNodeId.set(node.spawnerNodeId, [node]);
-  }
-  for (const children of latestChildrenBySpawnerRunNodeId.values()) {
-    children.sort((left, right) => {
-      if (left.sequenceIndex !== right.sequenceIndex) {
-        return right.sequenceIndex - left.sequenceIndex;
-      }
-      return right.runNodeId - left.runNodeId;
-    });
-  }
-
-  const batchOffsetByBarrierId = new Map<number, number>();
-  const resolvedSpawnerRunNodeIds = new Set<number>();
+  const latestChildrenBySpawnerRunNodeId = buildLatestChildrenBySpawnerRunNodeId(params.latestNodeAttempts, joinRunNodeId);
+  const batchOffsetsBySpawnerRunNodeId = new Map<number, Map<number, number>>();
   const batchChildRunNodeIds = new Set<number>();
   for (const barrier of readyBarriers) {
-    if (!resolvedSpawnerRunNodeIds.has(barrier.spawnerRunNodeId)) {
-      const barriersForSpawnerJoin = loadBarriersForSpawnerJoin(db, {
-        workflowRunId: params.workflowRunId,
-        spawnerRunNodeId: barrier.spawnerRunNodeId,
-        joinRunNodeId,
-      });
-      let consumedChildren = 0;
-      for (let index = barriersForSpawnerJoin.length - 1; index >= 0; index -= 1) {
-        const spawnerJoinBarrier = barriersForSpawnerJoin[index];
-        batchOffsetByBarrierId.set(spawnerJoinBarrier.id, consumedChildren);
-        consumedChildren += spawnerJoinBarrier.expectedChildren;
-      }
-      resolvedSpawnerRunNodeIds.add(barrier.spawnerRunNodeId);
-    }
-
+    const batchOffsetByBarrierId = resolveBatchOffsetsForSpawner({
+      db,
+      workflowRunId: params.workflowRunId,
+      joinRunNodeId,
+      spawnerRunNodeId: barrier.spawnerRunNodeId,
+      batchOffsetsBySpawnerRunNodeId,
+    });
     const childrenForSpawner = latestChildrenBySpawnerRunNodeId.get(barrier.spawnerRunNodeId) ?? [];
     const batchOffset = batchOffsetByBarrierId.get(barrier.id) ?? 0;
     const batchChildren = childrenForSpawner.slice(batchOffset, batchOffset + barrier.expectedChildren);
@@ -446,10 +543,16 @@ function buildJoinSummaryContextEntry(
           })
         : null;
     const previewSource = failureArtifact?.content ?? reportArtifact?.content ?? '';
-    const preview = previewSource.length === 0 ? 'none' : truncateHeadTail(previewSource, 160).replace(/\s+/g, ' ');
+    const preview =
+      previewSource.length === 0
+        ? 'none'
+        : truncateHeadTail(previewSource, 160)
+            .split(/\s+/)
+            .filter(segment => segment.length > 0)
+            .join(' ');
     const artifactId = failureArtifact?.id ?? reportArtifact?.id ?? null;
     lines.push(
-      `- node_key: ${sourceNode.nodeKey}; run_node_id: ${sourceNode.runNodeId}; status: ${sourceNode.status}; artifact_id: ${artifactId === null ? 'null' : artifactId}; preview: ${preview}`,
+      `- node_key: ${sourceNode.nodeKey}; run_node_id: ${sourceNode.runNodeId}; status: ${sourceNode.status}; artifact_id: ${artifactId ?? 'null'}; preview: ${preview}`,
     );
   }
 

@@ -269,58 +269,60 @@ export function hasFanOutGroupShape(value: unknown): value is DashboardRunDetail
   return true;
 }
 
-export function hasRunNodeShape(value: unknown): value is DashboardRunDetail['nodes'][number] {
-  if (!isRecord(value)) {
-    return false;
-  }
+function hasRunNodeBaseFields(value: Record<string, unknown>): boolean {
+  return (
+    isInteger(value.id) &&
+    isInteger(value.treeNodeId) &&
+    typeof value.nodeKey === 'string' &&
+    typeof value.nodeRole === 'string' &&
+    NODE_ROLES.has(value.nodeRole as DashboardRunDetail['nodes'][number]['nodeRole']) &&
+    (value.spawnerNodeId === null || isInteger(value.spawnerNodeId)) &&
+    (value.joinNodeId === null || isInteger(value.joinNodeId)) &&
+    isInteger(value.lineageDepth) &&
+    value.lineageDepth >= 0 &&
+    isNullableString(value.sequencePath) &&
+    isInteger(value.sequenceIndex) &&
+    isInteger(value.attempt) &&
+    typeof value.status === 'string' &&
+    NODE_STATUSES.has(value.status as DashboardRunDetail['nodes'][number]['status']) &&
+    isNullableString(value.startedAt) &&
+    isNullableString(value.completedAt)
+  );
+}
 
-  if (
-    !isInteger(value.id) ||
-    !isInteger(value.treeNodeId) ||
-    typeof value.nodeKey !== 'string' ||
-    typeof value.nodeRole !== 'string' ||
-    !NODE_ROLES.has(value.nodeRole as DashboardRunDetail['nodes'][number]['nodeRole']) ||
-    !(value.spawnerNodeId === null || isInteger(value.spawnerNodeId)) ||
-    !(value.joinNodeId === null || isInteger(value.joinNodeId)) ||
-    !isInteger(value.lineageDepth) ||
-    value.lineageDepth < 0 ||
-    !isNullableString(value.sequencePath) ||
-    !isInteger(value.sequenceIndex) ||
-    !isInteger(value.attempt) ||
-    typeof value.status !== 'string' ||
-    !NODE_STATUSES.has(value.status as DashboardRunDetail['nodes'][number]['status']) ||
-    !isNullableString(value.startedAt) ||
-    !isNullableString(value.completedAt)
-  ) {
-    return false;
-  }
-
+function hasRunNodeRoleConsistency(value: Record<string, unknown>): boolean {
+  const nodeRole = value.nodeRole as DashboardRunDetail['nodes'][number]['nodeRole'];
+  const lineageDepth = value.lineageDepth as number;
   const hasSpawnerNodeId = value.spawnerNodeId !== null;
   const hasJoinNodeId = value.joinNodeId !== null;
   if (hasSpawnerNodeId !== hasJoinNodeId) {
     return false;
   }
 
-  if ((value.nodeRole === 'spawner' || value.nodeRole === 'join') && (hasSpawnerNodeId || hasJoinNodeId)) {
+  if ((nodeRole === 'spawner' || nodeRole === 'join') && (hasSpawnerNodeId || hasJoinNodeId)) {
     return false;
   }
 
-  if ((value.nodeRole === 'spawner' || value.nodeRole === 'join') && value.lineageDepth !== 0) {
+  if ((nodeRole === 'spawner' || nodeRole === 'join') && lineageDepth !== 0) {
     return false;
   }
 
-  if (value.nodeRole === 'standard' && hasSpawnerNodeId && value.lineageDepth < 1) {
+  if (nodeRole === 'standard' && hasSpawnerNodeId && lineageDepth < 1) {
     return false;
   }
 
-  if (value.nodeRole === 'standard' && !hasSpawnerNodeId && value.lineageDepth !== 0) {
+  if (nodeRole === 'standard' && !hasSpawnerNodeId && lineageDepth !== 0) {
     return false;
   }
 
-  if (value.nodeRole === 'standard' && hasSpawnerNodeId && typeof value.sequencePath !== 'string') {
+  if (nodeRole === 'standard' && hasSpawnerNodeId && typeof value.sequencePath !== 'string') {
     return false;
   }
 
+  return true;
+}
+
+function hasRunNodeRelatedShapes(value: Record<string, unknown>): boolean {
   if (value.latestArtifact !== null && !hasArtifactShape(value.latestArtifact)) {
     return false;
   }
@@ -334,6 +336,22 @@ export function hasRunNodeShape(value: unknown): value is DashboardRunDetail['no
   }
 
   return true;
+}
+
+export function hasRunNodeShape(value: unknown): value is DashboardRunDetail['nodes'][number] {
+  if (!isRecord(value)) {
+    return false;
+  }
+
+  if (!hasRunNodeBaseFields(value)) {
+    return false;
+  }
+
+  if (!hasRunNodeRoleConsistency(value)) {
+    return false;
+  }
+
+  return hasRunNodeRelatedShapes(value);
 }
 
 export function hasWorktreeShape(
