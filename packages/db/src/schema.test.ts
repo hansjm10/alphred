@@ -497,6 +497,60 @@ describe('database schema hardening', () => {
     ).not.toThrow();
   });
 
+  it('refreshes run-node node-key trigger definitions so run cascades with fan-out children succeed', () => {
+    const db = createDatabase(':memory:');
+    migrateDatabase(db);
+    const seed = seedTreeState(db, 'fanout_cascade');
+
+    db.run(sql`DROP TRIGGER IF EXISTS run_nodes_node_key_matches_tree_node_update_ck`);
+    db.run(sql`CREATE TRIGGER run_nodes_node_key_matches_tree_node_update_ck
+      BEFORE UPDATE OF tree_node_id, node_key, spawner_node_id ON run_nodes
+      FOR EACH ROW
+      WHEN (
+        NEW.spawner_node_id IS NULL
+        AND
+        NEW.node_key <> (SELECT node_key FROM tree_nodes WHERE id = NEW.tree_node_id)
+      )
+      BEGIN
+        SELECT RAISE(ABORT, 'run_nodes.node_key must match tree_nodes.node_key for run_nodes.tree_node_id');
+      END`);
+
+    const spawnerNode = db
+      .insert(runNodes)
+      .values({
+        workflowRunId: seed.runId,
+        treeNodeId: seed.sourceNodeId,
+        nodeKey: seed.sourceNodeKey,
+        status: 'pending',
+        sequenceIndex: 1,
+      })
+      .returning({ id: runNodes.id })
+      .get();
+
+    db.insert(runNodes).values({
+      workflowRunId: seed.runId,
+      treeNodeId: seed.targetNodeId,
+      nodeKey: `${seed.targetNodeKey}_fanout_child`,
+      status: 'pending',
+      sequenceIndex: 2,
+      spawnerNodeId: spawnerNode.id,
+    }).run();
+
+    expect(() => db.delete(workflowRuns).where(eq(workflowRuns.id, seed.runId)).run()).toThrow(
+      'run_nodes.node_key must match tree_nodes.node_key for run_nodes.tree_node_id',
+    );
+
+    expect(() => migrateDatabase(db)).not.toThrow();
+
+    expect(() => db.delete(workflowRuns).where(eq(workflowRuns.id, seed.runId)).run()).not.toThrow();
+    const remainingRunNodes = db
+      .select({ id: runNodes.id })
+      .from(runNodes)
+      .where(eq(runNodes.workflowRunId, seed.runId))
+      .all();
+    expect(remainingRunNodes).toHaveLength(0);
+  });
+
   it('supports a full SQL representation of a design tree and execution artifacts', () => {
     const db = createDatabase(':memory:');
     migrateDatabase(db);

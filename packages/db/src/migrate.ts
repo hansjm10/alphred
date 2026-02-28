@@ -687,8 +687,11 @@ export function migrateDatabase(db: AlphredDatabase): void {
       SELECT RAISE(ABORT, 'run_nodes.node_key must match tree_nodes.node_key for run_nodes.tree_node_id');
     END`);
 
-  tx.run(sql`CREATE TRIGGER IF NOT EXISTS run_nodes_node_key_matches_tree_node_update_ck
-    BEFORE UPDATE OF tree_node_id, node_key, spawner_node_id ON run_nodes
+  // Refresh this trigger on every migration run so upgraded databases drop
+  // the legacy definition that fired during spawner_node_id nullification.
+  tx.run(sql`DROP TRIGGER IF EXISTS run_nodes_node_key_matches_tree_node_update_ck`);
+  tx.run(sql`CREATE TRIGGER run_nodes_node_key_matches_tree_node_update_ck
+    BEFORE UPDATE OF tree_node_id, node_key ON run_nodes
     FOR EACH ROW
     WHEN (
       NEW.spawner_node_id IS NULL
@@ -777,6 +780,23 @@ export function migrateDatabase(db: AlphredDatabase): void {
     )
     BEGIN
       SELECT RAISE(ABORT, 'run_nodes.join_node_id must reference a run node in the same workflow_run_id');
+    END`);
+
+  // Clear self-referential links before deleting a parent node so composite
+  // SET NULL FKs do not attempt to null workflow_run_id (which is NOT NULL).
+  tx.run(sql`CREATE TRIGGER IF NOT EXISTS run_nodes_clear_parent_links_before_delete_ck
+    BEFORE DELETE ON run_nodes
+    FOR EACH ROW
+    BEGIN
+      UPDATE run_nodes
+      SET spawner_node_id = NULL
+      WHERE workflow_run_id = OLD.workflow_run_id
+        AND spawner_node_id = OLD.id;
+
+      UPDATE run_nodes
+      SET join_node_id = NULL
+      WHERE workflow_run_id = OLD.workflow_run_id
+        AND join_node_id = OLD.id;
     END`);
 
   tx.run(sql`CREATE TRIGGER IF NOT EXISTS tree_nodes_node_key_update_referenced_by_run_nodes_ck
