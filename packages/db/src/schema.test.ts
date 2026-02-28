@@ -171,6 +171,127 @@ describe('database schema hardening', () => {
     expect(columnNames).toContain('error_handler_config');
   });
 
+  it('backfills run_nodes execution columns from source nodes during legacy upgrades', () => {
+    const db = createDatabase(':memory:');
+
+    db.run(sql`CREATE TABLE workflow_trees (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      tree_key TEXT NOT NULL,
+      version INTEGER NOT NULL,
+      name TEXT NOT NULL,
+      description TEXT,
+      created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+      updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+    )`);
+
+    db.run(sql`CREATE TABLE prompt_templates (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      template_key TEXT NOT NULL,
+      version INTEGER NOT NULL DEFAULT 1,
+      content TEXT NOT NULL,
+      content_type TEXT NOT NULL DEFAULT 'markdown',
+      metadata TEXT,
+      created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+      updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+    )`);
+
+    db.run(sql`CREATE TABLE tree_nodes (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      workflow_tree_id INTEGER NOT NULL REFERENCES workflow_trees(id) ON DELETE CASCADE,
+      node_key TEXT NOT NULL,
+      node_role TEXT NOT NULL DEFAULT 'standard',
+      node_type TEXT NOT NULL,
+      provider TEXT,
+      model TEXT,
+      execution_permissions TEXT,
+      error_handler_config TEXT,
+      prompt_template_id INTEGER,
+      max_children INTEGER NOT NULL DEFAULT 12,
+      max_retries INTEGER NOT NULL DEFAULT 0,
+      sequence_index INTEGER NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+      updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+    )`);
+
+    db.run(sql`CREATE TABLE workflow_runs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      workflow_tree_id INTEGER NOT NULL REFERENCES workflow_trees(id) ON DELETE RESTRICT,
+      status TEXT NOT NULL DEFAULT 'pending',
+      started_at TEXT,
+      completed_at TEXT,
+      created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+      updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+    )`);
+
+    db.run(sql`CREATE TABLE run_nodes (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      workflow_run_id INTEGER NOT NULL REFERENCES workflow_runs(id) ON DELETE CASCADE,
+      tree_node_id INTEGER NOT NULL REFERENCES tree_nodes(id) ON DELETE RESTRICT,
+      node_key TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending',
+      sequence_index INTEGER NOT NULL,
+      attempt INTEGER NOT NULL DEFAULT 1,
+      started_at TEXT,
+      completed_at TEXT,
+      created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+      updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+    )`);
+
+    db.run(sql`INSERT INTO workflow_trees (id, tree_key, version, name)
+      VALUES (1, 'legacy_run_nodes_tree', 1, 'Legacy run_nodes tree')`);
+    db.run(sql`INSERT INTO prompt_templates (id, template_key, version, content, content_type)
+      VALUES (1, 'legacy_run_nodes_prompt', 1, 'Legacy prompt', 'text')`);
+    db.run(sql`INSERT INTO tree_nodes (
+      id,
+      workflow_tree_id,
+      node_key,
+      node_role,
+      node_type,
+      provider,
+      model,
+      prompt_template_id,
+      max_children,
+      max_retries,
+      sequence_index
+    ) VALUES (
+      1,
+      1,
+      'legacy_run_nodes_node',
+      'spawner',
+      'human',
+      'codex',
+      'gpt-5-codex-mini',
+      1,
+      3,
+      7,
+      1
+    )`);
+    db.run(sql`INSERT INTO workflow_runs (id, workflow_tree_id, status)
+      VALUES (1, 1, 'pending')`);
+    db.run(sql`INSERT INTO run_nodes (id, workflow_run_id, tree_node_id, node_key, status, sequence_index)
+      VALUES (1, 1, 1, 'legacy_run_nodes_node', 'pending', 1)`);
+
+    migrateDatabase(db);
+
+    const migratedNode = db.get<{
+      node_role: string;
+      node_type: string;
+      prompt_content_type: string;
+      max_children: number;
+      max_retries: number;
+    }>(sql`SELECT node_role, node_type, prompt_content_type, max_children, max_retries
+      FROM run_nodes
+      WHERE id = 1`);
+
+    expect(migratedNode).toEqual({
+      node_role: 'spawner',
+      node_type: 'human',
+      prompt_content_type: 'text',
+      max_children: 3,
+      max_retries: 7,
+    });
+  });
+
   it('persists nullable and custom tree_nodes.error_handler_config payloads', () => {
     const db = createDatabase(':memory:');
     migrateDatabase(db);

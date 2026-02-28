@@ -485,14 +485,16 @@ export function migrateDatabase(db: AlphredDatabase): void {
     tx.get<{ count: number }>(
       sql`SELECT COUNT(*) AS count FROM pragma_table_info('run_nodes') WHERE name = 'node_role'`,
     )?.count ?? 0;
-  if (hasRunNodesNodeRoleColumn === 0) {
+  const addedRunNodesNodeRoleColumn = hasRunNodesNodeRoleColumn === 0;
+  if (addedRunNodesNodeRoleColumn) {
     tx.run(sql`ALTER TABLE run_nodes ADD COLUMN node_role TEXT NOT NULL DEFAULT 'standard'`);
   }
   const hasRunNodesNodeTypeColumn =
     tx.get<{ count: number }>(
       sql`SELECT COUNT(*) AS count FROM pragma_table_info('run_nodes') WHERE name = 'node_type'`,
     )?.count ?? 0;
-  if (hasRunNodesNodeTypeColumn === 0) {
+  const addedRunNodesNodeTypeColumn = hasRunNodesNodeTypeColumn === 0;
+  if (addedRunNodesNodeTypeColumn) {
     tx.run(sql`ALTER TABLE run_nodes ADD COLUMN node_type TEXT NOT NULL DEFAULT 'agent'`);
   }
   const hasRunNodesProviderColumn =
@@ -520,7 +522,8 @@ export function migrateDatabase(db: AlphredDatabase): void {
     tx.get<{ count: number }>(
       sql`SELECT COUNT(*) AS count FROM pragma_table_info('run_nodes') WHERE name = 'prompt_content_type'`,
     )?.count ?? 0;
-  if (hasRunNodesPromptContentTypeColumn === 0) {
+  const addedRunNodesPromptContentTypeColumn = hasRunNodesPromptContentTypeColumn === 0;
+  if (addedRunNodesPromptContentTypeColumn) {
     tx.run(sql`ALTER TABLE run_nodes ADD COLUMN prompt_content_type TEXT NOT NULL DEFAULT 'markdown'`);
   }
   const hasRunNodesExecutionPermissionsColumn =
@@ -541,14 +544,16 @@ export function migrateDatabase(db: AlphredDatabase): void {
     tx.get<{ count: number }>(
       sql`SELECT COUNT(*) AS count FROM pragma_table_info('run_nodes') WHERE name = 'max_children'`,
     )?.count ?? 0;
-  if (hasRunNodesMaxChildrenColumn === 0) {
+  const addedRunNodesMaxChildrenColumn = hasRunNodesMaxChildrenColumn === 0;
+  if (addedRunNodesMaxChildrenColumn) {
     tx.run(sql`ALTER TABLE run_nodes ADD COLUMN max_children INTEGER NOT NULL DEFAULT 12`);
   }
   const hasRunNodesMaxRetriesColumn =
     tx.get<{ count: number }>(
       sql`SELECT COUNT(*) AS count FROM pragma_table_info('run_nodes') WHERE name = 'max_retries'`,
     )?.count ?? 0;
-  if (hasRunNodesMaxRetriesColumn === 0) {
+  const addedRunNodesMaxRetriesColumn = hasRunNodesMaxRetriesColumn === 0;
+  if (addedRunNodesMaxRetriesColumn) {
     tx.run(sql`ALTER TABLE run_nodes ADD COLUMN max_retries INTEGER NOT NULL DEFAULT 0`);
   }
   const hasRunNodesSpawnerNodeIdColumn =
@@ -578,6 +583,49 @@ export function migrateDatabase(db: AlphredDatabase): void {
     )?.count ?? 0;
   if (hasRunNodesSequencePathColumn === 0) {
     tx.run(sql`ALTER TABLE run_nodes ADD COLUMN sequence_path TEXT`);
+  }
+  // SQLite exposes DEFAULT values for historical rows after ALTER TABLE ADD COLUMN,
+  // so explicitly backfill newly-added NOT NULL columns from source records.
+  if (addedRunNodesNodeRoleColumn) {
+    tx.run(sql`UPDATE run_nodes
+      SET node_role = COALESCE((
+            SELECT tree_nodes.node_role
+            FROM tree_nodes
+            WHERE tree_nodes.id = run_nodes.tree_node_id
+          ), 'standard')`);
+  }
+  if (addedRunNodesNodeTypeColumn) {
+    tx.run(sql`UPDATE run_nodes
+      SET node_type = COALESCE((
+            SELECT tree_nodes.node_type
+            FROM tree_nodes
+            WHERE tree_nodes.id = run_nodes.tree_node_id
+          ), 'agent')`);
+  }
+  if (addedRunNodesPromptContentTypeColumn) {
+    tx.run(sql`UPDATE run_nodes
+      SET prompt_content_type = COALESCE((
+            SELECT prompt_templates.content_type
+            FROM tree_nodes
+            LEFT JOIN prompt_templates ON prompt_templates.id = tree_nodes.prompt_template_id
+            WHERE tree_nodes.id = run_nodes.tree_node_id
+          ), 'markdown')`);
+  }
+  if (addedRunNodesMaxChildrenColumn) {
+    tx.run(sql`UPDATE run_nodes
+      SET max_children = COALESCE((
+            SELECT tree_nodes.max_children
+            FROM tree_nodes
+            WHERE tree_nodes.id = run_nodes.tree_node_id
+          ), 12)`);
+  }
+  if (addedRunNodesMaxRetriesColumn) {
+    tx.run(sql`UPDATE run_nodes
+      SET max_retries = COALESCE((
+            SELECT tree_nodes.max_retries
+            FROM tree_nodes
+            WHERE tree_nodes.id = run_nodes.tree_node_id
+          ), 0)`);
   }
   tx.run(sql`UPDATE run_nodes
     SET node_role = COALESCE(node_role, (
