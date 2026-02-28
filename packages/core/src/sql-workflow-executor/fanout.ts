@@ -211,7 +211,7 @@ export function resolveSpawnerJoinTarget(params: {
   return joinTarget;
 }
 
-function loadExistingNodeKeys(db: AlphredDatabase, workflowRunId: number): Set<string> {
+function loadExistingNodeKeys(db: Pick<AlphredDatabase, 'select'>, workflowRunId: number): Set<string> {
   const rows = db
     .select({
       nodeKey: runNodes.nodeKey,
@@ -223,7 +223,7 @@ function loadExistingNodeKeys(db: AlphredDatabase, workflowRunId: number): Set<s
   return new Set(rows.map(row => row.nodeKey));
 }
 
-function loadMaxSequenceIndex(db: AlphredDatabase, workflowRunId: number): number {
+function loadMaxSequenceIndex(db: Pick<AlphredDatabase, 'select'>, workflowRunId: number): number {
   const row = db
     .select({
       maxSequenceIndex: sql<number>`COALESCE(MAX(${runNodes.sequenceIndex}), 0)`,
@@ -314,119 +314,121 @@ export function spawnDynamicChildrenForSpawner(
     );
   }
 
-  const activeBarrier = loadActiveBarriersForSpawnerJoin(db, {
-    workflowRunId: params.workflowRunId,
-    spawnerRunNodeId: params.spawnerNode.runNodeId,
-    joinRunNodeId: params.joinNode.runNodeId,
-  })[0];
-  if (activeBarrier) {
-    throw new Error(
-      `SPAWNER_OUTPUT_INVALID: spawner "${params.spawnerNode.nodeKey}" cannot emit another fan-out batch while join "${params.joinNode.nodeKey}" barrier id=${activeBarrier.id} remains ${activeBarrier.status}.`,
-    );
-  }
-
-  const existingNodeKeys = loadExistingNodeKeys(db, params.workflowRunId);
-  for (const subtask of params.subtasks) {
-    if (existingNodeKeys.has(subtask.nodeKey)) {
-      throw new Error(`SPAWNER_OUTPUT_INVALID: subtask nodeKey "${subtask.nodeKey}" already exists in this run.`);
-    }
-  }
-
-  const sequenceStart = loadMaxSequenceIndex(db, params.workflowRunId) + 1;
-  const sequencePrefix = params.spawnerNode.sequencePath ?? String(params.spawnerNode.sequenceIndex);
-  const nextLineageDepth = params.spawnerNode.lineageDepth + 1;
-  if (nextLineageDepth > 1) {
-    throw new Error('SPAWNER_DEPTH_EXCEEDED: nested fan-out beyond depth 1 is not allowed in phase 1.');
-  }
-
-  const insertedChildren =
-    params.subtasks.length === 0
-      ? []
-      : db
-          .insert(runNodes)
-          .values(
-            params.subtasks.map((subtask, index) => ({
-              workflowRunId: params.workflowRunId,
-              treeNodeId: params.spawnerNode.treeNodeId,
-              nodeKey: subtask.nodeKey,
-              nodeRole: 'standard',
-              nodeType: 'agent',
-              provider: subtask.provider ?? params.spawnerNode.provider,
-              model: subtask.model ?? params.spawnerNode.model,
-              prompt: subtask.prompt,
-              promptContentType: 'markdown',
-              executionPermissions: params.spawnerNode.executionPermissions,
-              errorHandlerConfig: params.spawnerNode.errorHandlerConfig,
-              maxChildren: 0,
-              maxRetries: params.spawnerNode.maxRetries,
-              spawnerNodeId: params.spawnerNode.runNodeId,
-              joinNodeId: params.joinNode.runNodeId,
-              lineageDepth: nextLineageDepth,
-              sequencePath: `${sequencePrefix}.${index + 1}`,
-              status: 'pending',
-              sequenceIndex: sequenceStart + index,
-              attempt: 1,
-            })),
-          )
-          .returning({
-            id: runNodes.id,
-            sequenceIndex: runNodes.sequenceIndex,
-          })
-          .all();
-
-  if (insertedChildren.length > 0) {
-    const dynamicSpawnerEdgePriorityBase = loadNextSuccessEdgePriorityForSource(db, {
-      workflowRunId: params.workflowRunId,
-      sourceRunNodeId: params.spawnerNode.runNodeId,
-    });
-    db
-      .insert(runNodeEdges)
-      .values(
-        insertedChildren.flatMap((child, index) => [
-          {
-            workflowRunId: params.workflowRunId,
-            sourceRunNodeId: params.spawnerNode.runNodeId,
-            targetRunNodeId: child.id,
-            routeOn: 'success',
-            auto: 1,
-            guardExpression: null,
-            priority: dynamicSpawnerEdgePriorityBase + index,
-            edgeKind: 'dynamic_spawner_to_child',
-          },
-          {
-            workflowRunId: params.workflowRunId,
-            sourceRunNodeId: child.id,
-            targetRunNodeId: params.joinNode.runNodeId,
-            routeOn: 'terminal',
-            auto: 1,
-            guardExpression: null,
-            priority: index,
-            edgeKind: 'dynamic_child_to_join',
-          },
-        ]),
-      )
-      .run();
-  }
-
-  const now = new Date().toISOString();
-  const expectedChildren = params.subtasks.length;
-  const status = expectedChildren === 0 ? 'ready' : 'pending';
-  db.insert(runJoinBarriers)
-    .values({
+  db.transaction(tx => {
+    const activeBarrier = loadActiveBarriersForSpawnerJoin(tx, {
       workflowRunId: params.workflowRunId,
       spawnerRunNodeId: params.spawnerNode.runNodeId,
       joinRunNodeId: params.joinNode.runNodeId,
-      spawnSourceArtifactId: params.spawnSourceArtifactId,
-      expectedChildren,
-      terminalChildren: 0,
-      completedChildren: 0,
-      failedChildren: 0,
-      status,
-      createdAt: now,
-      updatedAt: now,
-      releasedAt: null,
-    })
-    .run();
+    })[0];
+    if (activeBarrier) {
+      throw new Error(
+        `SPAWNER_OUTPUT_INVALID: spawner "${params.spawnerNode.nodeKey}" cannot emit another fan-out batch while join "${params.joinNode.nodeKey}" barrier id=${activeBarrier.id} remains ${activeBarrier.status}.`,
+      );
+    }
+
+    const existingNodeKeys = loadExistingNodeKeys(tx, params.workflowRunId);
+    for (const subtask of params.subtasks) {
+      if (existingNodeKeys.has(subtask.nodeKey)) {
+        throw new Error(`SPAWNER_OUTPUT_INVALID: subtask nodeKey "${subtask.nodeKey}" already exists in this run.`);
+      }
+    }
+
+    const sequenceStart = loadMaxSequenceIndex(tx, params.workflowRunId) + 1;
+    const sequencePrefix = params.spawnerNode.sequencePath ?? String(params.spawnerNode.sequenceIndex);
+    const nextLineageDepth = params.spawnerNode.lineageDepth + 1;
+    if (nextLineageDepth > 1) {
+      throw new Error('SPAWNER_DEPTH_EXCEEDED: nested fan-out beyond depth 1 is not allowed in phase 1.');
+    }
+
+    const insertedChildren =
+      params.subtasks.length === 0
+        ? []
+        : tx
+            .insert(runNodes)
+            .values(
+              params.subtasks.map((subtask, index) => ({
+                workflowRunId: params.workflowRunId,
+                treeNodeId: params.spawnerNode.treeNodeId,
+                nodeKey: subtask.nodeKey,
+                nodeRole: 'standard',
+                nodeType: 'agent',
+                provider: subtask.provider ?? params.spawnerNode.provider,
+                model: subtask.model ?? params.spawnerNode.model,
+                prompt: subtask.prompt,
+                promptContentType: 'markdown',
+                executionPermissions: params.spawnerNode.executionPermissions,
+                errorHandlerConfig: params.spawnerNode.errorHandlerConfig,
+                maxChildren: 0,
+                maxRetries: params.spawnerNode.maxRetries,
+                spawnerNodeId: params.spawnerNode.runNodeId,
+                joinNodeId: params.joinNode.runNodeId,
+                lineageDepth: nextLineageDepth,
+                sequencePath: `${sequencePrefix}.${index + 1}`,
+                status: 'pending',
+                sequenceIndex: sequenceStart + index,
+                attempt: 1,
+              })),
+            )
+            .returning({
+              id: runNodes.id,
+              sequenceIndex: runNodes.sequenceIndex,
+            })
+            .all();
+
+    if (insertedChildren.length > 0) {
+      const dynamicSpawnerEdgePriorityBase = loadNextSuccessEdgePriorityForSource(tx, {
+        workflowRunId: params.workflowRunId,
+        sourceRunNodeId: params.spawnerNode.runNodeId,
+      });
+      tx
+        .insert(runNodeEdges)
+        .values(
+          insertedChildren.flatMap((child, index) => [
+            {
+              workflowRunId: params.workflowRunId,
+              sourceRunNodeId: params.spawnerNode.runNodeId,
+              targetRunNodeId: child.id,
+              routeOn: 'success',
+              auto: 1,
+              guardExpression: null,
+              priority: dynamicSpawnerEdgePriorityBase + index,
+              edgeKind: 'dynamic_spawner_to_child',
+            },
+            {
+              workflowRunId: params.workflowRunId,
+              sourceRunNodeId: child.id,
+              targetRunNodeId: params.joinNode.runNodeId,
+              routeOn: 'terminal',
+              auto: 1,
+              guardExpression: null,
+              priority: index,
+              edgeKind: 'dynamic_child_to_join',
+            },
+          ]),
+        )
+        .run();
+    }
+
+    const now = new Date().toISOString();
+    const expectedChildren = params.subtasks.length;
+    const status = expectedChildren === 0 ? 'ready' : 'pending';
+    tx.insert(runJoinBarriers)
+      .values({
+        workflowRunId: params.workflowRunId,
+        spawnerRunNodeId: params.spawnerNode.runNodeId,
+        joinRunNodeId: params.joinNode.runNodeId,
+        spawnSourceArtifactId: params.spawnSourceArtifactId,
+        expectedChildren,
+        terminalChildren: 0,
+        completedChildren: 0,
+        failedChildren: 0,
+        status,
+        createdAt: now,
+        updatedAt: now,
+        releasedAt: null,
+      })
+      .run();
+  });
 }
 
 export function loadJoinBarrierStatesByJoinRunNodeId(
@@ -597,12 +599,8 @@ function loadBarrierForChildRunNode(
     )
     .get();
   if (!childSpawnerEdge) {
-    const barriers = loadBarriersForSpawnerJoin(db, params);
-    if (barriers.length <= 1) {
-      return barriers[0] ?? null;
-    }
     throw new Error(
-      `JOIN_BARRIER_STATE_INVALID: cannot map child runNodeId=${params.childRunNodeId} because no dynamic spawner edge exists and workflowRunId=${params.workflowRunId}, spawnerRunNodeId=${params.spawnerRunNodeId}, joinRunNodeId=${params.joinRunNodeId} has multiple barriers.`,
+      `JOIN_BARRIER_STATE_INVALID: cannot map child runNodeId=${params.childRunNodeId} because no dynamic spawner edge exists for workflowRunId=${params.workflowRunId}, spawnerRunNodeId=${params.spawnerRunNodeId}, joinRunNodeId=${params.joinRunNodeId}.`,
     );
   }
 
@@ -699,21 +697,26 @@ export function updateJoinBarrierForChildTerminal(
 
   const completedIncrement = params.childTerminalStatus === 'completed' ? 1 : 0;
   const failedIncrement = params.childTerminalStatus === 'failed' ? 1 : 0;
-  const terminalChildren = barrier.terminalChildren + 1;
-  const completedChildren = barrier.completedChildren + completedIncrement;
-  const failedChildren = barrier.failedChildren + failedIncrement;
-  const status = terminalChildren >= barrier.expectedChildren ? 'ready' : barrier.status;
   const now = new Date().toISOString();
 
   db.update(runJoinBarriers)
     .set({
-      terminalChildren,
-      completedChildren,
-      failedChildren,
-      status,
+      terminalChildren: sql<number>`${runJoinBarriers.terminalChildren} + 1`,
+      completedChildren: sql<number>`${runJoinBarriers.completedChildren} + ${completedIncrement}`,
+      failedChildren: sql<number>`${runJoinBarriers.failedChildren} + ${failedIncrement}`,
+      status: sql<JoinBarrierRow['status']>`CASE
+        WHEN ${runJoinBarriers.terminalChildren} + 1 >= ${runJoinBarriers.expectedChildren} THEN 'ready'
+        ELSE ${runJoinBarriers.status}
+      END`,
       updatedAt: now,
     })
-    .where(eq(runJoinBarriers.id, barrier.id))
+    .where(
+      and(
+        eq(runJoinBarriers.id, barrier.id),
+        inArray(runJoinBarriers.status, ['pending', 'ready']),
+        sql`${runJoinBarriers.terminalChildren} < ${runJoinBarriers.expectedChildren}`,
+      ),
+    )
     .run();
 }
 
@@ -756,21 +759,32 @@ export function reopenJoinBarrierForRetriedChild(
     );
   }
 
-  const terminalChildren = barrier.terminalChildren - 1;
-  const completedChildren = barrier.completedChildren - completedDecrement;
-  const failedChildren = barrier.failedChildren - failedDecrement;
-  const status = terminalChildren >= barrier.expectedChildren ? 'ready' : 'pending';
   const now = new Date().toISOString();
 
   db.update(runJoinBarriers)
     .set({
-      terminalChildren,
-      completedChildren,
-      failedChildren,
-      status,
+      terminalChildren: sql<number>`${runJoinBarriers.terminalChildren} - 1`,
+      completedChildren: sql<number>`${runJoinBarriers.completedChildren} - ${completedDecrement}`,
+      failedChildren: sql<number>`${runJoinBarriers.failedChildren} - ${failedDecrement}`,
+      status: sql<JoinBarrierRow['status']>`CASE
+        WHEN ${runJoinBarriers.terminalChildren} - 1 >= ${runJoinBarriers.expectedChildren} THEN 'ready'
+        ELSE 'pending'
+      END`,
       updatedAt: now,
+      releasedAt: sql<string | null>`CASE
+        WHEN ${runJoinBarriers.status} = 'released' THEN NULL
+        ELSE ${runJoinBarriers.releasedAt}
+      END`,
     })
-    .where(eq(runJoinBarriers.id, barrier.id))
+    .where(
+      and(
+        eq(runJoinBarriers.id, barrier.id),
+        inArray(runJoinBarriers.status, ['pending', 'ready', 'released']),
+        sql`${runJoinBarriers.terminalChildren} > 0`,
+        sql`${runJoinBarriers.completedChildren} >= ${completedDecrement}`,
+        sql`${runJoinBarriers.failedChildren} >= ${failedDecrement}`,
+      ),
+    )
     .run();
 }
 
