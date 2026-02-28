@@ -140,7 +140,7 @@ function resolveFailedCommandOutput(event: ProviderEvent): FailedCommandOutput |
     ?? toOptionalString(metadataItem?.aggregatedOutput);
   const combinedOutput = [stdout, stderr].filter(part => part.length > 0).join('\n');
   const selectedOutput = combinedOutput.length > 0 ? combinedOutput : (aggregatedOutput ?? '');
-  const output = sanitizeDiagnosticsString(selectedOutput.length > 0 ? selectedOutput : event.content, redactionState);
+  const output = sanitizeDiagnosticsString(selectedOutput, redactionState);
   const sanitizedCommand = command === null ? null : sanitizeDiagnosticsString(command, redactionState);
 
   return {

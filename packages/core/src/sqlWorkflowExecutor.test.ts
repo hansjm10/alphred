@@ -2413,6 +2413,105 @@ describe('createSqlWorkflowExecutor', () => {
     expect(commandOutputPayload.sequence).toBe(3);
   });
 
+  it('persists empty failed command output when command metadata has no output streams', async () => {
+    const { db, runId, runNodeId } = seedSingleAgentRun();
+    const executor = createSqlWorkflowExecutor(db, {
+      resolveProvider: () =>
+        createProvider([
+          { type: 'system', content: 'start', timestamp: 100 },
+          { type: 'tool_use', content: 'pnpm test:e2e', timestamp: 101, metadata: { itemType: 'command_execution' } },
+          {
+            type: 'tool_result',
+            content: JSON.stringify({
+              command: 'pnpm test:e2e',
+              exit_code: 1,
+            }),
+            timestamp: 102,
+            metadata: { itemType: 'command_execution' },
+          },
+          { type: 'result', content: 'Recovered despite command failure', timestamp: 103 },
+        ]),
+    });
+
+    const execution = await executor.executeRun({
+      workflowRunId: runId,
+      options: {
+        workingDirectory: '/tmp/alphred-worktree',
+      },
+    });
+
+    expect(execution.finalStep).toEqual({
+      outcome: 'run_terminal',
+      workflowRunId: runId,
+      runStatus: 'completed',
+    });
+
+    const diagnosticsRow = db
+      .select({
+        diagnostics: runNodeDiagnostics.diagnostics,
+      })
+      .from(runNodeDiagnostics)
+      .where(eq(runNodeDiagnostics.runNodeId, runNodeId))
+      .orderBy(asc(runNodeDiagnostics.id))
+      .limit(1)
+      .get();
+    const diagnosticsPayload = diagnosticsRow?.diagnostics as
+      | {
+          failedCommandOutputs?: {
+            eventIndex: number;
+            sequence: number;
+            command: string | null;
+            exitCode: number | null;
+            outputChars: number;
+            path: string;
+          }[];
+        }
+      | undefined;
+    expect(diagnosticsPayload?.failedCommandOutputs).toEqual([
+      expect.objectContaining({
+        eventIndex: 2,
+        sequence: 3,
+        command: 'pnpm test:e2e',
+        exitCode: 1,
+        outputChars: 0,
+        path: `/api/dashboard/runs/${runId}/nodes/${runNodeId}/diagnostics/1/commands/2`,
+      }),
+    ]);
+
+    const logArtifacts = db
+      .select({
+        content: phaseArtifacts.content,
+        metadata: phaseArtifacts.metadata,
+      })
+      .from(phaseArtifacts)
+      .where(and(eq(phaseArtifacts.runNodeId, runNodeId), eq(phaseArtifacts.artifactType, 'log')))
+      .orderBy(asc(phaseArtifacts.id))
+      .all();
+    const commandOutputArtifact = logArtifacts.find((artifact) => {
+      const metadata = artifact.metadata as Record<string, unknown> | null;
+      return metadata?.kind === 'failed_command_output_v1';
+    });
+    expect(commandOutputArtifact).toBeDefined();
+    if (!commandOutputArtifact) {
+      throw new Error('Expected failed command output artifact to be persisted.');
+    }
+
+    const commandOutputPayload = JSON.parse(commandOutputArtifact.content) as {
+      command: string | null;
+      exitCode: number;
+      output: string;
+      outputChars: number;
+      eventIndex: number;
+      sequence: number;
+    };
+    expect(commandOutputPayload.command).toBe('pnpm test:e2e');
+    expect(commandOutputPayload.exitCode).toBe(1);
+    expect(commandOutputPayload.output).toBe('');
+    expect(commandOutputPayload.outputChars).toBe(0);
+    expect(commandOutputPayload.eventIndex).toBe(2);
+    expect(commandOutputPayload.sequence).toBe(3);
+  });
+
   it('retains partial stream history and diagnostics payload events when a node fails mid-stream', async () => {
     const { db, runId, runNodeId } = seedSingleAgentRun();
     const timeoutError = new Error('provider timeout while awaiting result');
