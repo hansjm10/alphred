@@ -15,6 +15,7 @@
     "test:e2e:no-test-routes": "pnpm --filter @alphred/dashboard test:e2e:no-test-routes",
     "test:e2e:build-gate": "pnpm --filter @alphred/dashboard test:e2e:build-gate",
     "dev:dashboard": "pnpm --filter @alphred/dashboard dev",
+    "codex:review-fix-loop": "bash ./scripts/codex-review-fix-loop.sh",
     "prepare": "lefthook install"
   },
   "devDependencies": {
