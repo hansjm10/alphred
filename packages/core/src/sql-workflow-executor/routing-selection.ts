@@ -436,7 +436,9 @@ function applyCompletedSourceNodeSelection(params: {
     selectionState,
     sourceNode,
   } = params;
-  const successOutgoingEdges = outgoingEdges.filter(edge => edge.routeOn === 'success');
+  const successOutgoingEdges = outgoingEdges.filter(
+    edge => edge.routeOn === 'success' && edge.edgeKind === 'tree',
+  );
   const routing = resolveCompletedSourceNodeRouting(
     sourceNode,
     successOutgoingEdges,

@@ -5126,6 +5126,233 @@ describe('createSqlWorkflowExecutor', () => {
     expect(resolveProvider).not.toHaveBeenCalled();
   });
 
+  it('fails a guarded spawner no_route attempt even when older dynamic fan-out edges still exist', async () => {
+    const { db, runId, runNodeIdByKey } = seedGuardedDynamicFanOutNoRouteRun();
+    const breakdownRunNodeId = runNodeIdByKey.get('breakdown');
+    const finalReviewRunNodeId = runNodeIdByKey.get('final-review');
+    if (!breakdownRunNodeId || !finalReviewRunNodeId) {
+      throw new Error('Expected guarded dynamic fan-out run nodes to include breakdown and final-review.');
+    }
+
+    transitionWorkflowRunStatus(db, {
+      workflowRunId: runId,
+      expectedFrom: 'pending',
+      to: 'running',
+      occurredAt: '2026-01-01T00:00:00.000Z',
+    });
+    transitionRunNodeStatus(db, {
+      runNodeId: breakdownRunNodeId,
+      expectedFrom: 'pending',
+      to: 'running',
+      occurredAt: '2026-01-01T00:01:00.000Z',
+    });
+    transitionRunNodeStatus(db, {
+      runNodeId: breakdownRunNodeId,
+      expectedFrom: 'running',
+      to: 'completed',
+      occurredAt: '2026-01-01T00:02:00.000Z',
+    });
+    transitionRunNodeStatus(db, {
+      runNodeId: finalReviewRunNodeId,
+      expectedFrom: 'pending',
+      to: 'skipped',
+      occurredAt: '2026-01-01T00:02:30.000Z',
+    });
+
+    const spawnerNode = db
+      .select({
+        treeNodeId: runNodes.treeNodeId,
+      })
+      .from(runNodes)
+      .where(eq(runNodes.id, breakdownRunNodeId))
+      .get();
+    if (!spawnerNode) {
+      throw new Error('Expected breakdown run node to exist.');
+    }
+
+    const dynamicChildRunNodeId = Number(
+      db
+        .insert(runNodes)
+        .values({
+          workflowRunId: runId,
+          treeNodeId: spawnerNode.treeNodeId,
+          nodeKey: 'stale-dynamic-child',
+          nodeRole: 'standard',
+          nodeType: 'agent',
+          provider: 'codex',
+          model: null,
+          prompt: 'Previously spawned child.',
+          promptContentType: 'markdown',
+          executionPermissions: null,
+          errorHandlerConfig: null,
+          maxChildren: 0,
+          maxRetries: 0,
+          spawnerNodeId: breakdownRunNodeId,
+          joinNodeId: finalReviewRunNodeId,
+          lineageDepth: 1,
+          sequencePath: '10.1',
+          status: 'pending',
+          sequenceIndex: 15,
+          attempt: 1,
+          startedAt: null,
+          completedAt: null,
+          createdAt: '2026-01-01T00:01:10.000Z',
+          updatedAt: '2026-01-01T00:01:10.000Z',
+        })
+        .run().lastInsertRowid,
+    );
+
+    db.insert(runNodeEdges)
+      .values([
+        {
+          workflowRunId: runId,
+          sourceRunNodeId: breakdownRunNodeId,
+          targetRunNodeId: dynamicChildRunNodeId,
+          routeOn: 'success',
+          auto: 1,
+          guardExpression: null,
+          priority: 1,
+          edgeKind: 'dynamic_spawner_to_child',
+        },
+        {
+          workflowRunId: runId,
+          sourceRunNodeId: dynamicChildRunNodeId,
+          targetRunNodeId: finalReviewRunNodeId,
+          routeOn: 'terminal',
+          auto: 1,
+          guardExpression: null,
+          priority: 0,
+          edgeKind: 'dynamic_child_to_join',
+        },
+      ])
+      .run();
+
+    transitionRunNodeStatus(db, {
+      runNodeId: dynamicChildRunNodeId,
+      expectedFrom: 'pending',
+      to: 'running',
+      occurredAt: '2026-01-01T00:01:30.000Z',
+    });
+    transitionRunNodeStatus(db, {
+      runNodeId: dynamicChildRunNodeId,
+      expectedFrom: 'running',
+      to: 'completed',
+      occurredAt: '2026-01-01T00:01:45.000Z',
+    });
+
+    db.insert(phaseArtifacts)
+      .values([
+        {
+          workflowRunId: runId,
+          runNodeId: breakdownRunNodeId,
+          artifactType: 'report',
+          contentType: 'json',
+          content: '{"schemaVersion":1,"subtasks":[{"nodeKey":"batch-1-child","title":"Batch 1 Child","prompt":"Do work."}]}',
+          metadata: {
+            routingDecision: 'approved',
+          },
+          createdAt: '2026-01-01T00:02:05.000Z',
+        },
+        {
+          workflowRunId: runId,
+          runNodeId: dynamicChildRunNodeId,
+          artifactType: 'report',
+          contentType: 'markdown',
+          content: 'Child artifact from batch 1.',
+          metadata: {
+            success: true,
+          },
+          createdAt: '2026-01-01T00:02:10.000Z',
+        },
+      ])
+      .run();
+
+    db.insert(routingDecisions)
+      .values({
+        workflowRunId: runId,
+        runNodeId: breakdownRunNodeId,
+        decisionType: 'approved',
+        rawOutput: {
+          source: 'test',
+          routingDecision: 'approved',
+          attempt: 1,
+        },
+        createdAt: '2026-01-01T00:02:15.000Z',
+      })
+      .run();
+
+    db.update(runNodes)
+      .set({
+        attempt: 2,
+        startedAt: '2026-01-01T00:03:00.000Z',
+        completedAt: '2026-01-01T00:03:10.000Z',
+        updatedAt: '2026-01-01T00:03:10.000Z',
+      })
+      .where(eq(runNodes.id, breakdownRunNodeId))
+      .run();
+
+    db.insert(phaseArtifacts)
+      .values({
+        workflowRunId: runId,
+        runNodeId: breakdownRunNodeId,
+        artifactType: 'report',
+        contentType: 'json',
+        content: '{"schemaVersion":1,"subtasks":[{"nodeKey":"batch-2-child","title":"Batch 2 Child","prompt":"Do work."}]}',
+        metadata: {
+          routingDecision: null,
+        },
+        createdAt: '2026-01-01T00:03:15.000Z',
+      })
+      .run();
+
+    db.insert(routingDecisions)
+      .values({
+        workflowRunId: runId,
+        runNodeId: breakdownRunNodeId,
+        decisionType: 'no_route',
+        rationale: 'Seeded stale dynamic-edge regression.',
+        rawOutput: {
+          source: 'test',
+          routingDecision: null,
+          attempt: 2,
+        },
+        createdAt: '2026-01-01T00:03:20.000Z',
+      })
+      .run();
+
+    const resolveProvider = vi.fn(() => createProvider([]));
+    const executor = createSqlWorkflowExecutor(db, {
+      resolveProvider,
+    });
+
+    const result = await executor.executeNextRunnableNode({
+      workflowRunId: runId,
+      options: {
+        workingDirectory: '/tmp/alphred-worktree',
+      },
+    });
+
+    expect(result).toEqual({
+      outcome: 'blocked',
+      workflowRunId: runId,
+      runStatus: 'failed',
+    });
+    expect(resolveProvider).not.toHaveBeenCalled();
+
+    const dynamicChild = db
+      .select({
+        status: runNodes.status,
+        attempt: runNodes.attempt,
+      })
+      .from(runNodes)
+      .where(eq(runNodes.id, dynamicChildRunNodeId))
+      .get();
+    expect(dynamicChild).toEqual({
+      status: 'completed',
+      attempt: 1,
+    });
+  });
+
   it('returns blocked and fails when a completed guarded node has no persisted routing decision', async () => {
     const { db, runId, reviewRunNodeId, approvedRunNodeId, reviseRunNodeId } = seedDecisionRoutingRun();
     transitionRunNodeStatus(db, {
