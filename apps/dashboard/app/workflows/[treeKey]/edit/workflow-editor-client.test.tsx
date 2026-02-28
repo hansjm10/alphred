@@ -426,10 +426,37 @@ describe('WorkflowEditorPageContent', () => {
     render(<WorkflowEditorPageContent initialDraft={createInitialDraft()} />);
 
     const legend = screen.getByLabelText('Transition legend');
+    fireEvent.click(within(legend).getByRole('button', { name: 'Show legend' }));
     expect(within(legend).getByText('success')).toBeInTheDocument();
     expect(within(legend).getByText('failure')).toBeInTheDocument();
     expect(within(legend).getAllByText('auto').length).toBeGreaterThan(0);
     expect(within(legend).getAllByText('guard').length).toBeGreaterThan(0);
+    expect(within(legend).getAllByText('in/out').length).toBeGreaterThan(0);
+  });
+
+  it('allows collapsing and expanding the transition legend', () => {
+    render(<WorkflowEditorPageContent initialDraft={createInitialDraft()} />);
+
+    const legend = screen.getByLabelText('Transition legend');
+    const showLegendButton = within(legend).getByRole('button', { name: 'Show legend' });
+    expect(showLegendButton).toHaveAttribute('aria-expanded', 'false');
+    expect(within(legend).queryByText('success')).toBeNull();
+
+    fireEvent.click(showLegendButton);
+
+    const hideLegendButton = within(legend).getByRole('button', { name: 'Hide legend' });
+    expect(hideLegendButton).toHaveAttribute('aria-expanded', 'true');
+    expect(within(legend).getByText('success')).toBeInTheDocument();
+
+    fireEvent.click(hideLegendButton);
+
+    const showLegendButtonAfterCollapse = within(legend).getByRole('button', { name: 'Show legend' });
+    expect(showLegendButtonAfterCollapse).toHaveAttribute('aria-expanded', 'false');
+    expect(within(legend).queryByText('success')).toBeNull();
+
+    fireEvent.click(showLegendButtonAfterCollapse);
+    expect(within(legend).getByRole('button', { name: 'Hide legend' })).toHaveAttribute('aria-expanded', 'true');
+    expect(within(legend).getByText('success')).toBeInTheDocument();
   });
 
   it('maps success and failure routes to distinct edge styles and minimap semantics', () => {
@@ -491,6 +518,73 @@ describe('WorkflowEditorPageContent', () => {
     expect(nodeColor?.({ id: 'review' })).toBe('#fee2e2');
     expect(nodeStrokeColor?.({ id: 'design' })).toBe('#198038');
     expect(nodeStrokeColor?.({ id: 'review' })).toBe('#da1e28');
+  });
+
+  it('derives topology classes for fan-out sources, join points, and isolated nodes', () => {
+    render(
+      <WorkflowEditorPageContent
+        initialDraft={createInitialDraft({
+          nodes: [
+            createAgentNode({ nodeKey: 'decompose', displayName: 'Decompose', sequenceIndex: 10 }),
+            createAgentNode({ nodeKey: 'subtask-a', displayName: 'Subtask A', sequenceIndex: 20 }),
+            createAgentNode({ nodeKey: 'subtask-b', displayName: 'Subtask B', sequenceIndex: 30 }),
+            createAgentNode({ nodeKey: 'join', displayName: 'Join', sequenceIndex: 40 }),
+            createAgentNode({ nodeKey: 'orphan', displayName: 'Orphan', sequenceIndex: 50 }),
+          ],
+          edges: [
+            createTransitionEdge({
+              sourceNodeKey: 'decompose',
+              targetNodeKey: 'subtask-a',
+              routeOn: 'success',
+              auto: true,
+              priority: 10,
+            }),
+            createTransitionEdge({
+              sourceNodeKey: 'decompose',
+              targetNodeKey: 'subtask-b',
+              routeOn: 'success',
+              auto: true,
+              priority: 20,
+            }),
+            createTransitionEdge({
+              sourceNodeKey: 'subtask-a',
+              targetNodeKey: 'join',
+              routeOn: 'success',
+              auto: true,
+              priority: 30,
+            }),
+            createTransitionEdge({
+              sourceNodeKey: 'subtask-b',
+              targetNodeKey: 'join',
+              routeOn: 'success',
+              auto: true,
+              priority: 40,
+            }),
+          ],
+          initialRunnableNodeKeys: ['decompose', 'orphan'],
+        })}
+      />,
+    );
+
+    const flowNodes = latestReactFlowProps?.nodes as {
+      id: string;
+      className?: string;
+      style?: Record<string, string>;
+    }[];
+    const flowEdges = latestReactFlowProps?.edges as { id: string; className?: string }[];
+    const decomposeNode = flowNodes.find(node => node.id === 'decompose');
+    const joinNode = flowNodes.find(node => node.id === 'join');
+    const orphanNode = flowNodes.find(node => node.id === 'orphan');
+    const fanoutEdge = flowEdges.find(edge => edge.id === 'decompose->subtask-a:10');
+    const intoJoinEdge = flowEdges.find(edge => edge.id === 'subtask-a->join:30');
+
+    expect(decomposeNode?.className).toContain('workflow-flow-node--fanout-source');
+    expect(joinNode?.className).toContain('workflow-flow-node--join-point');
+    expect(orphanNode?.className).toContain('workflow-flow-node--isolated');
+    expect(decomposeNode?.style?.['--workflow-node-connection-summary']).toBe('"in 0 / out 2"');
+    expect(joinNode?.style?.['--workflow-node-connection-summary']).toBe('"in 2 / out 0"');
+    expect(fanoutEdge?.className).toContain('workflow-edge--from-fanout');
+    expect(intoJoinEdge?.className).toContain('workflow-edge--into-join');
   });
 
   it('shows live warnings before manual validation runs', async () => {

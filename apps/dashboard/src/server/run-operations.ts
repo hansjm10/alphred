@@ -6,6 +6,7 @@ import {
   phaseArtifacts,
   repositories as repositoryTable,
   runNodeDiagnostics,
+  runJoinBarriers,
   runNodeStreamEvents,
   routingDecisions,
   runNodes,
@@ -22,6 +23,7 @@ import type {
   DashboardRunDetail,
   DashboardRunLaunchRequest,
   DashboardRunLaunchResult,
+  DashboardFanOutGroupSnapshot,
   DashboardRunNodeDiagnosticsSnapshot,
   DashboardRunNodeSnapshot,
   DashboardRunSummary,
@@ -204,6 +206,11 @@ async function loadRunSummary(db: AlphredDatabase, runId: number): Promise<Dashb
     .select({
       id: runNodes.id,
       nodeKey: runNodes.nodeKey,
+      nodeRole: runNodes.nodeRole,
+      spawnerNodeId: runNodes.spawnerNodeId,
+      joinNodeId: runNodes.joinNodeId,
+      lineageDepth: runNodes.lineageDepth,
+      sequencePath: runNodes.sequencePath,
       attempt: runNodes.attempt,
       sequenceIndex: runNodes.sequenceIndex,
       treeNodeId: runNodes.treeNodeId,
@@ -305,6 +312,11 @@ export function createRunOperations(params: {
           .select({
             id: runNodes.id,
             nodeKey: runNodes.nodeKey,
+            nodeRole: runNodes.nodeRole,
+            spawnerNodeId: runNodes.spawnerNodeId,
+            joinNodeId: runNodes.joinNodeId,
+            lineageDepth: runNodes.lineageDepth,
+            sequencePath: runNodes.sequencePath,
             attempt: runNodes.attempt,
             sequenceIndex: runNodes.sequenceIndex,
             treeNodeId: runNodes.treeNodeId,
@@ -318,6 +330,21 @@ export function createRunOperations(params: {
           .all();
 
         const latestNodes = selectLatestNodeAttempts(runNodeRows);
+        const fanOutBarrierRows = db
+          .select({
+            spawnerNodeId: runJoinBarriers.spawnerRunNodeId,
+            joinNodeId: runJoinBarriers.joinRunNodeId,
+            spawnSourceArtifactId: runJoinBarriers.spawnSourceArtifactId,
+            expectedChildren: runJoinBarriers.expectedChildren,
+            terminalChildren: runJoinBarriers.terminalChildren,
+            completedChildren: runJoinBarriers.completedChildren,
+            failedChildren: runJoinBarriers.failedChildren,
+            status: runJoinBarriers.status,
+          })
+          .from(runJoinBarriers)
+          .where(eq(runJoinBarriers.workflowRunId, runId))
+          .orderBy(asc(runJoinBarriers.id))
+          .all();
 
         const recentArtifacts = db
           .select({
@@ -399,6 +426,48 @@ export function createRunOperations(params: {
           latestDiagnostics: latestDiagnosticsByRunNodeId.get(node.id) ?? null,
         }));
 
+        const fanOutChildNodesByPair = new Map<string, DashboardRunNodeSnapshot[]>();
+        for (const node of nodes) {
+          if (node.spawnerNodeId === null || node.joinNodeId === null) {
+            continue;
+          }
+          const pairKey = `${String(node.spawnerNodeId)}:${String(node.joinNodeId)}`;
+          const existing = fanOutChildNodesByPair.get(pairKey) ?? [];
+          existing.push(node);
+          fanOutChildNodesByPair.set(pairKey, existing);
+        }
+        for (const childNodes of fanOutChildNodesByPair.values()) {
+          childNodes.sort((left, right) => {
+            if (left.sequenceIndex !== right.sequenceIndex) {
+              return left.sequenceIndex - right.sequenceIndex;
+            }
+            return left.id - right.id;
+          });
+        }
+        const fanOutConsumedChildrenByPair = new Map<string, number>();
+
+        const fanOutGroups: DashboardFanOutGroupSnapshot[] = [];
+        for (const row of fanOutBarrierRows) {
+          const pairKey = `${String(row.spawnerNodeId)}:${String(row.joinNodeId)}`;
+          const pairChildren = fanOutChildNodesByPair.get(pairKey) ?? [];
+          const nextChildOffset = fanOutConsumedChildrenByPair.get(pairKey) ?? 0;
+          const expectedChildren = Math.max(row.expectedChildren, 0);
+          const childNodeIds = pairChildren.slice(nextChildOffset, nextChildOffset + expectedChildren).map(node => node.id);
+          fanOutConsumedChildrenByPair.set(pairKey, nextChildOffset + expectedChildren);
+
+          fanOutGroups.push({
+            spawnerNodeId: row.spawnerNodeId,
+            joinNodeId: row.joinNodeId,
+            spawnSourceArtifactId: row.spawnSourceArtifactId,
+            expectedChildren: row.expectedChildren,
+            terminalChildren: row.terminalChildren,
+            completedChildren: row.completedChildren,
+            failedChildren: row.failedChildren,
+            status: row.status as DashboardFanOutGroupSnapshot['status'],
+            childNodeIds,
+          });
+        }
+
         const allRunWorktrees = db
           .select({
             id: runWorktrees.id,
@@ -419,6 +488,7 @@ export function createRunOperations(params: {
         return {
           run: summary,
           nodes,
+          fanOutGroups,
           artifacts: recentArtifacts.map(createArtifactSnapshot),
           routingDecisions: recentDecisions.map(createRoutingDecisionSnapshot),
           diagnostics: recentDiagnosticsSnapshots,

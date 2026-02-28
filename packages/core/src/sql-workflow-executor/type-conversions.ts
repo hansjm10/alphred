@@ -193,15 +193,18 @@ export function compareNodeOrder(a: RunNodeExecutionRow, b: RunNodeExecutionRow)
 }
 
 export function getLatestRunNodeAttempts(rows: RunNodeExecutionRow[]): RunNodeExecutionRow[] {
-  const latestByTreeNodeId = new Map<number, RunNodeExecutionRow>();
+  const latestByLogicalNodeKey = new Map<string, RunNodeExecutionRow>();
   for (const row of rows) {
-    const current = latestByTreeNodeId.get(row.treeNodeId);
+    const spawnerIdentity = row.spawnerNodeId === null ? 'root' : String(row.spawnerNodeId);
+    const joinIdentity = row.joinNodeId === null ? 'none' : String(row.joinNodeId);
+    const logicalNodeKey = `${row.treeNodeId}:${row.nodeKey}:${spawnerIdentity}:${joinIdentity}`;
+    const current = latestByLogicalNodeKey.get(logicalNodeKey);
     if (!current || row.attempt > current.attempt || (row.attempt === current.attempt && row.runNodeId > current.runNodeId)) {
-      latestByTreeNodeId.set(row.treeNodeId, row);
+      latestByLogicalNodeKey.set(logicalNodeKey, row);
     }
   }
 
-  return [...latestByTreeNodeId.values()].sort(compareNodeOrder);
+  return [...latestByLogicalNodeKey.values()].sort(compareNodeOrder);
 }
 
 export function compareUpstreamSourceOrder(a: RunNodeExecutionRow, b: RunNodeExecutionRow): number {

@@ -1,12 +1,9 @@
 import { asc, eq } from 'drizzle-orm';
 import {
-  guardDefinitions,
   phaseArtifacts,
-  promptTemplates,
+  runNodeEdges,
   routingDecisions,
   runNodes,
-  treeEdges,
-  treeNodes,
   workflowRuns,
   type AlphredDatabase,
 } from '@alphred/db';
@@ -51,24 +48,28 @@ export function loadRunNodeExecutionRows(db: AlphredDatabase, workflowRunId: num
       runNodeId: runNodes.id,
       treeNodeId: runNodes.treeNodeId,
       nodeKey: runNodes.nodeKey,
+      nodeRole: runNodes.nodeRole,
       status: runNodes.status,
       sequenceIndex: runNodes.sequenceIndex,
+      sequencePath: runNodes.sequencePath,
+      lineageDepth: runNodes.lineageDepth,
+      spawnerNodeId: runNodes.spawnerNodeId,
+      joinNodeId: runNodes.joinNodeId,
       attempt: runNodes.attempt,
       createdAt: runNodes.createdAt,
       startedAt: runNodes.startedAt,
       completedAt: runNodes.completedAt,
-      maxRetries: treeNodes.maxRetries,
-      nodeType: treeNodes.nodeType,
-      provider: treeNodes.provider,
-      model: treeNodes.model,
-      executionPermissions: treeNodes.executionPermissions,
-      errorHandlerConfig: treeNodes.errorHandlerConfig,
-      prompt: promptTemplates.content,
-      promptContentType: promptTemplates.contentType,
+      maxRetries: runNodes.maxRetries,
+      maxChildren: runNodes.maxChildren,
+      nodeType: runNodes.nodeType,
+      provider: runNodes.provider,
+      model: runNodes.model,
+      executionPermissions: runNodes.executionPermissions,
+      errorHandlerConfig: runNodes.errorHandlerConfig,
+      prompt: runNodes.prompt,
+      promptContentType: runNodes.promptContentType,
     })
     .from(runNodes)
-    .innerJoin(treeNodes, eq(runNodes.treeNodeId, treeNodes.id))
-    .leftJoin(promptTemplates, eq(treeNodes.promptTemplateId, promptTemplates.id))
     .where(eq(runNodes.workflowRunId, workflowRunId))
     .orderBy(asc(runNodes.sequenceIndex), asc(runNodes.nodeKey), asc(runNodes.attempt), asc(runNodes.id))
     .all();
@@ -77,13 +78,19 @@ export function loadRunNodeExecutionRows(db: AlphredDatabase, workflowRunId: num
     runNodeId: row.runNodeId,
     treeNodeId: row.treeNodeId,
     nodeKey: row.nodeKey,
+    nodeRole: row.nodeRole,
     status: toRunNodeStatus(row.status),
     sequenceIndex: row.sequenceIndex,
+    sequencePath: row.sequencePath,
+    lineageDepth: row.lineageDepth,
+    spawnerNodeId: row.spawnerNodeId,
+    joinNodeId: row.joinNodeId,
     attempt: row.attempt,
     createdAt: row.createdAt,
     startedAt: row.startedAt,
     completedAt: row.completedAt,
     maxRetries: row.maxRetries,
+    maxChildren: row.maxChildren,
     nodeType: row.nodeType,
     provider: row.provider,
     model: row.model,
@@ -107,27 +114,44 @@ export function loadRunNodeExecutionRowById(
   return row;
 }
 
-export function loadEdgeRows(db: AlphredDatabase, workflowTreeId: number): EdgeRow[] {
+export function loadEdgeRows(db: AlphredDatabase, workflowRunId: number): EdgeRow[] {
   const rows = db
     .select({
-      edgeId: treeEdges.id,
-      sourceNodeId: treeEdges.sourceNodeId,
-      targetNodeId: treeEdges.targetNodeId,
-      routeOn: treeEdges.routeOn,
-      priority: treeEdges.priority,
-      auto: treeEdges.auto,
-      guardExpression: guardDefinitions.expression,
+      edgeId: runNodeEdges.id,
+      sourceNodeId: runNodeEdges.sourceRunNodeId,
+      targetNodeId: runNodeEdges.targetRunNodeId,
+      routeOn: runNodeEdges.routeOn,
+      priority: runNodeEdges.priority,
+      auto: runNodeEdges.auto,
+      guardExpression: runNodeEdges.guardExpression,
+      edgeKind: runNodeEdges.edgeKind,
     })
-    .from(treeEdges)
-    .leftJoin(guardDefinitions, eq(treeEdges.guardDefinitionId, guardDefinitions.id))
-    .where(eq(treeEdges.workflowTreeId, workflowTreeId))
-    .orderBy(asc(treeEdges.sourceNodeId), asc(treeEdges.routeOn), asc(treeEdges.priority), asc(treeEdges.targetNodeId), asc(treeEdges.id))
+    .from(runNodeEdges)
+    .where(eq(runNodeEdges.workflowRunId, workflowRunId))
+    .orderBy(
+      asc(runNodeEdges.sourceRunNodeId),
+      asc(runNodeEdges.routeOn),
+      asc(runNodeEdges.priority),
+      asc(runNodeEdges.targetRunNodeId),
+      asc(runNodeEdges.id),
+    )
     .all();
 
-  return rows.map(row => ({
-    ...row,
-    routeOn: row.routeOn === 'failure' ? 'failure' : 'success',
-  }));
+  return rows.map(row => {
+    let routeOn: EdgeRow['routeOn'] = 'success';
+    if (row.routeOn === 'failure') {
+      routeOn = 'failure';
+    } else if (row.routeOn === 'terminal') {
+      routeOn = 'terminal';
+    }
+
+    return {
+      ...row,
+      routeOn,
+      edgeKind:
+        row.edgeKind === 'dynamic_spawner_to_child' || row.edgeKind === 'dynamic_child_to_join' ? row.edgeKind : 'tree',
+    };
+  });
 }
 
 export function persistRoutingDecision(
@@ -151,12 +175,20 @@ export function persistRoutingDecision(
     .run();
 }
 
+function loadTreeSuccessOutgoingEdges(params: {
+  runNodeId: number;
+  edgeRows: EdgeRow[];
+}): EdgeRow[] {
+  return params.edgeRows.filter(
+    edge => edge.sourceNodeId === params.runNodeId && edge.routeOn === 'success' && edge.edgeKind === 'tree',
+  );
+}
+
 export function persistCompletedNodeRoutingDecision(
   db: AlphredDatabase,
   params: {
     workflowRunId: number;
     runNodeId: number;
-    treeNodeId: number;
     attempt: number;
     routingDecision: RouteDecisionSignal | null;
     routingDecisionSource: RouteDecisionSource | null;
@@ -165,64 +197,39 @@ export function persistCompletedNodeRoutingDecision(
 ): CompletedNodeRoutingOutcome {
   const decisionSignal = params.routingDecision;
   const routingDecisionSource = params.routingDecisionSource ?? 'provider_result_metadata';
-  const outgoingEdges = params.edgeRows.filter(
-    edge => edge.sourceNodeId === params.treeNodeId && edge.routeOn === 'success',
-  );
+  const outgoingEdges = loadTreeSuccessOutgoingEdges({
+    runNodeId: params.runNodeId,
+    edgeRows: params.edgeRows,
+  });
+  const routingOutcome = resolveCompletedNodeRoutingOutcome({
+    runNodeId: params.runNodeId,
+    routingDecision: decisionSignal,
+    edgeRows: params.edgeRows,
+  });
 
-  if (outgoingEdges.length === 0) {
-    if (!decisionSignal) {
-      return {
-        decisionType: null,
-        selectedEdgeId: null,
-      };
-    }
-
-    persistRoutingDecision(db, {
-      workflowRunId: params.workflowRunId,
-      runNodeId: params.runNodeId,
-      decisionType: decisionSignal,
-      rawOutput: {
-        source: routingDecisionSource,
-        routingDecision: decisionSignal,
-        attempt: params.attempt,
-      },
-    });
-    return {
-      decisionType: decisionSignal,
-      selectedEdgeId: null,
-    };
+  if (routingOutcome.decisionType === null) {
+    return routingOutcome;
   }
 
-  const matchingEdge = selectFirstMatchingOutgoingEdge(outgoingEdges, decisionSignal);
-  if (matchingEdge) {
-    if (!decisionSignal) {
-      return {
-        decisionType: null,
-        selectedEdgeId: matchingEdge.edgeId,
-      };
-    }
-
+  if (routingOutcome.decisionType !== 'no_route') {
     persistRoutingDecision(db, {
       workflowRunId: params.workflowRunId,
       runNodeId: params.runNodeId,
-      decisionType: decisionSignal,
+      decisionType: routingOutcome.decisionType,
       rawOutput: {
         source: routingDecisionSource,
         routingDecision: decisionSignal,
-        selectedEdgeId: matchingEdge.edgeId,
+        ...(routingOutcome.selectedEdgeId === null ? {} : { selectedEdgeId: routingOutcome.selectedEdgeId }),
         attempt: params.attempt,
       },
     });
-    return {
-      decisionType: decisionSignal,
-      selectedEdgeId: matchingEdge.edgeId,
-    };
+    return routingOutcome;
   }
 
   const noRouteRationale =
     decisionSignal === null
-      ? `Node completed with guarded success edges but did not emit a valid result.metadata.routingDecision (tree_node_id=${params.treeNodeId}).`
-      : `Node completed with routingDecision="${decisionSignal}" but no guarded success edge matched (tree_node_id=${params.treeNodeId}).`;
+      ? `Node completed with guarded success edges but did not emit a valid result.metadata.routingDecision (run_node_id=${params.runNodeId}).`
+      : `Node completed with routingDecision="${decisionSignal}" but no guarded success edge matched (run_node_id=${params.runNodeId}).`;
 
   persistRoutingDecision(db, {
     workflowRunId: params.workflowRunId,
@@ -236,6 +243,40 @@ export function persistCompletedNodeRoutingDecision(
       attempt: params.attempt,
     },
   });
+
+  return routingOutcome;
+}
+
+export function resolveCompletedNodeRoutingOutcome(params: {
+  runNodeId: number;
+  routingDecision: RouteDecisionSignal | null;
+  edgeRows: EdgeRow[];
+}): CompletedNodeRoutingOutcome {
+  const outgoingEdges = loadTreeSuccessOutgoingEdges({
+    runNodeId: params.runNodeId,
+    edgeRows: params.edgeRows,
+  });
+  if (outgoingEdges.length === 0) {
+    if (!params.routingDecision) {
+      return {
+        decisionType: null,
+        selectedEdgeId: null,
+      };
+    }
+
+    return {
+      decisionType: params.routingDecision,
+      selectedEdgeId: null,
+    };
+  }
+
+  const matchingEdge = selectFirstMatchingOutgoingEdge(outgoingEdges, params.routingDecision);
+  if (matchingEdge) {
+    return {
+      decisionType: params.routingDecision,
+      selectedEdgeId: matchingEdge.edgeId,
+    };
+  }
 
   return {
     decisionType: 'no_route',

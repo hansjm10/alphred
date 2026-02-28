@@ -304,6 +304,11 @@ export type DashboardRunNodeSnapshot = {
   id: number;
   treeNodeId: number;
   nodeKey: string;
+  nodeRole: 'standard' | 'spawner' | 'join';
+  spawnerNodeId: number | null;
+  joinNodeId: number | null;
+  lineageDepth: number;
+  sequencePath: string | null;
   sequenceIndex: number;
   attempt: number;
   status: DashboardNodeStatus;
@@ -312,6 +317,18 @@ export type DashboardRunNodeSnapshot = {
   latestArtifact: DashboardArtifactSnapshot | null;
   latestRoutingDecision: DashboardRoutingDecisionSnapshot | null;
   latestDiagnostics: DashboardRunNodeDiagnosticsSnapshot | null;
+};
+
+export type DashboardFanOutGroupSnapshot = {
+  spawnerNodeId: number;
+  joinNodeId: number;
+  spawnSourceArtifactId: number;
+  expectedChildren: number;
+  terminalChildren: number;
+  completedChildren: number;
+  failedChildren: number;
+  status: 'pending' | 'ready' | 'released' | 'cancelled';
+  childNodeIds: number[];
 };
 
 export type DashboardRunWorktreeMetadata = {
@@ -329,6 +346,7 @@ export type DashboardRunWorktreeMetadata = {
 export type DashboardRunDetail = {
   run: DashboardRunSummary;
   nodes: DashboardRunNodeSnapshot[];
+  fanOutGroups: DashboardFanOutGroupSnapshot[];
   artifacts: DashboardArtifactSnapshot[];
   routingDecisions: DashboardRoutingDecisionSnapshot[];
   diagnostics: DashboardRunNodeDiagnosticsSnapshot[];

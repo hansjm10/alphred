@@ -365,14 +365,18 @@ export function resolveCompletedSourceNodeRouting(
   };
 }
 
-function selectFirstFailureOutgoingEdge(outgoingEdges: EdgeRow[]): EdgeRow | null {
+function selectFirstFailureOrTerminalOutgoingEdge(outgoingEdges: EdgeRow[]): EdgeRow | null {
+  let terminalEdge: EdgeRow | null = null;
   for (const edge of outgoingEdges) {
     if (edge.routeOn === 'failure') {
       return edge;
     }
+    if (edge.routeOn === 'terminal' && terminalEdge === null) {
+      terminalEdge = edge;
+    }
   }
 
-  return null;
+  return terminalEdge;
 }
 
 function isExecutableFailureRouteTarget(node: RunNodeExecutionRow | undefined): boolean {
@@ -406,15 +410,15 @@ function applyFailedSourceNodeSelection(params: {
   selectionState: RoutingSelectionMutationState;
 }): void {
   const { latestByTreeNodeId, outgoingEdges, selectionState, sourceNode } = params;
-  const selectedFailureEdge = selectFirstFailureOutgoingEdge(outgoingEdges);
+  const selectedFailureEdge = selectFirstFailureOrTerminalOutgoingEdge(outgoingEdges);
   if (!selectedFailureEdge) {
     return;
   }
 
-  selectionState.selectedEdgeIdBySourceNodeId.set(sourceNode.treeNodeId, selectedFailureEdge.edgeId);
+  selectionState.selectedEdgeIdBySourceNodeId.set(sourceNode.runNodeId, selectedFailureEdge.edgeId);
   const targetNode = latestByTreeNodeId.get(selectedFailureEdge.targetNodeId);
   if (isExecutableFailureRouteTarget(targetNode)) {
-    selectionState.handledFailedSourceNodeIds.add(sourceNode.treeNodeId);
+    selectionState.handledFailedSourceNodeIds.add(sourceNode.runNodeId);
   }
 }
 
@@ -432,7 +436,9 @@ function applyCompletedSourceNodeSelection(params: {
     selectionState,
     sourceNode,
   } = params;
-  const successOutgoingEdges = outgoingEdges.filter(edge => edge.routeOn === 'success');
+  const successOutgoingEdges = outgoingEdges.filter(
+    edge => edge.routeOn === 'success' && edge.edgeKind === 'tree',
+  );
   const routing = resolveCompletedSourceNodeRouting(
     sourceNode,
     successOutgoingEdges,
@@ -441,7 +447,7 @@ function applyCompletedSourceNodeSelection(params: {
   );
 
   if (routing.selectedEdgeId !== null) {
-    selectionState.selectedEdgeIdBySourceNodeId.set(sourceNode.treeNodeId, routing.selectedEdgeId);
+    selectionState.selectedEdgeIdBySourceNodeId.set(sourceNode.runNodeId, routing.selectedEdgeId);
   }
 
   if (routing.hasNoRouteDecision) {
@@ -449,7 +455,7 @@ function applyCompletedSourceNodeSelection(params: {
   }
 
   if (routing.hasUnresolvedDecision) {
-    selectionState.unresolvedDecisionSourceNodeIds.add(sourceNode.treeNodeId);
+    selectionState.unresolvedDecisionSourceNodeIds.add(sourceNode.runNodeId);
   }
 }
 
@@ -459,7 +465,7 @@ export function buildRoutingSelection(
   latestRoutingDecisionsByRunNodeId: Map<number, RoutingDecisionRow>,
   latestArtifactsByRunNodeId: Map<number, LatestArtifact>,
 ): RoutingSelection {
-  const latestByTreeNodeId = new Map<number, RunNodeExecutionRow>(latestNodeAttempts.map(row => [row.treeNodeId, row]));
+  const latestByTreeNodeId = new Map<number, RunNodeExecutionRow>(latestNodeAttempts.map(row => [row.runNodeId, row]));
   const incomingEdgesByTargetNodeId = new Map<number, EdgeRow[]>();
   const outgoingEdgesBySourceNodeId = new Map<number, EdgeRow[]>();
   for (const edge of edges) {
@@ -469,7 +475,7 @@ export function buildRoutingSelection(
 
   const selectionState = createRoutingSelectionMutationState();
   for (const sourceNode of latestNodeAttempts) {
-    const outgoingEdges = outgoingEdgesBySourceNodeId.get(sourceNode.treeNodeId) ?? [];
+    const outgoingEdges = outgoingEdgesBySourceNodeId.get(sourceNode.runNodeId) ?? [];
     if (sourceNode.status === 'failed') {
       applyFailedSourceNodeSelection({
         sourceNode,

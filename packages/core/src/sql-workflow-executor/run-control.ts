@@ -1,6 +1,7 @@
 import { and, eq } from 'drizzle-orm';
 import { transitionWorkflowRunStatus, workflowRuns, type AlphredDatabase, type WorkflowRunStatus } from '@alphred/db';
 import { MAX_CONTROL_PRECONDITION_RETRIES } from './constants.js';
+import { reopenJoinBarrierForRetriedChild } from './fanout.js';
 import { loadRunNodeExecutionRows, loadWorkflowRunRow } from './persistence.js';
 import {
   isWorkflowRunTransitionPreconditionFailure,
@@ -238,6 +239,11 @@ export function applyWorkflowRunRetryControl(
             runNodeId: retryTarget.runNodeId,
             currentAttempt: retryTarget.attempt,
             nextAttempt: retryTarget.attempt + 1,
+          });
+          reopenJoinBarrierForRetriedChild(tx, {
+            workflowRunId: run.id,
+            childNode: retryTarget,
+            previousTerminalStatus: 'failed',
           });
           retriedIds.push(retryTarget.runNodeId);
         }

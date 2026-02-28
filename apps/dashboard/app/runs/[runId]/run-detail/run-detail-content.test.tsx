@@ -28,9 +28,37 @@ function createRepository(overrides: Partial<DashboardRepositoryState> = {}): Da
   };
 }
 
-type RunDetailOverrides = Omit<Partial<DashboardRunDetail>, 'run'> & Readonly<{
-  run?: Partial<DashboardRunDetail['run']>;
-}>;
+type RunNodeOverride = Partial<DashboardRunDetail['nodes'][number]>;
+
+type RunDetailOverrides = Omit<Partial<DashboardRunDetail>, 'run' | 'nodes' | 'fanOutGroups'> &
+  Readonly<{
+    run?: Partial<DashboardRunDetail['run']>;
+    nodes?: RunNodeOverride[];
+    fanOutGroups?: DashboardRunDetail['fanOutGroups'];
+  }>;
+
+function toRunNodeSnapshot(node: RunNodeOverride, index: number): DashboardRunDetail['nodes'][number] {
+  const resolvedId = node.id ?? index + 1;
+
+  return {
+    id: resolvedId,
+    treeNodeId: node.treeNodeId ?? resolvedId,
+    nodeKey: node.nodeKey ?? `node-${resolvedId}`,
+    nodeRole: node.nodeRole ?? 'standard',
+    spawnerNodeId: node.spawnerNodeId ?? null,
+    joinNodeId: node.joinNodeId ?? null,
+    lineageDepth: node.lineageDepth ?? 0,
+    sequencePath: node.sequencePath ?? null,
+    sequenceIndex: node.sequenceIndex ?? index,
+    attempt: node.attempt ?? 1,
+    status: node.status ?? 'pending',
+    startedAt: node.startedAt ?? null,
+    completedAt: node.completedAt ?? null,
+    latestArtifact: node.latestArtifact ?? null,
+    latestRoutingDecision: node.latestRoutingDecision ?? null,
+    latestDiagnostics: node.latestDiagnostics ?? null,
+  };
+}
 
 function createRunDetail(overrides: RunDetailOverrides = {}): DashboardRunDetail {
   const defaultDiagnostics: DashboardRunDetail['diagnostics'][number] = {
@@ -101,6 +129,35 @@ function createRunDetail(overrides: RunDetailOverrides = {}): DashboardRunDetail
     },
   };
   const diagnostics = overrides.diagnostics ?? (overrides.nodes === undefined ? [defaultDiagnostics] : []);
+  const defaultNodes: RunNodeOverride[] = [
+    {
+      id: 1,
+      treeNodeId: 1,
+      nodeKey: 'design',
+      sequenceIndex: 0,
+      attempt: 1,
+      status: 'completed',
+      startedAt: '2026-02-18T00:00:10.000Z',
+      completedAt: '2026-02-18T00:00:30.000Z',
+      latestArtifact: null,
+      latestRoutingDecision: null,
+      latestDiagnostics: diagnostics[0] ?? null,
+    },
+    {
+      id: 2,
+      treeNodeId: 2,
+      nodeKey: 'implement',
+      sequenceIndex: 1,
+      attempt: 1,
+      status: 'running',
+      startedAt: '2026-02-18T00:00:35.000Z',
+      completedAt: null,
+      latestArtifact: null,
+      latestRoutingDecision: null,
+      latestDiagnostics: null,
+    },
+  ];
+  const nodes = (overrides.nodes ?? defaultNodes).map((node, index) => toRunNodeSnapshot(node, index));
 
   return {
     run: {
@@ -129,34 +186,8 @@ function createRunDetail(overrides: RunDetailOverrides = {}): DashboardRunDetail
       },
       ...overrides.run,
     },
-    nodes: overrides.nodes ?? [
-      {
-        id: 1,
-        treeNodeId: 1,
-        nodeKey: 'design',
-        sequenceIndex: 0,
-        attempt: 1,
-        status: 'completed',
-        startedAt: '2026-02-18T00:00:10.000Z',
-        completedAt: '2026-02-18T00:00:30.000Z',
-        latestArtifact: null,
-        latestRoutingDecision: null,
-        latestDiagnostics: diagnostics[0] ?? null,
-      },
-      {
-        id: 2,
-        treeNodeId: 2,
-        nodeKey: 'implement',
-        sequenceIndex: 1,
-        attempt: 1,
-        status: 'running',
-        startedAt: '2026-02-18T00:00:35.000Z',
-        completedAt: null,
-        latestArtifact: null,
-        latestRoutingDecision: null,
-        latestDiagnostics: null,
-      },
-    ],
+    nodes,
+    fanOutGroups: overrides.fanOutGroups ?? [],
     artifacts: overrides.artifacts ?? [
       {
         id: 1,
@@ -1163,6 +1194,70 @@ describe('RunDetailContent realtime updates', () => {
       createJsonResponse({
         ...createRunDetail(),
         nodes: [{ id: 1 }],
+      }),
+    );
+
+    render(
+      <RunDetailContent
+        initialDetail={createRunDetail()}
+        repositories={[createRepository()]}
+        pollIntervalMs={50}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText(/Connection interrupted\. Retrying in/i)).toBeInTheDocument();
+    }, { timeout: 2_000 });
+
+    await waitFor(() => {
+      expect(screen.getByText(/Update channel degraded: Realtime run detail response was malformed\./i)).toBeInTheDocument();
+    }, { timeout: 2_000 });
+  });
+
+  it('degrades gracefully when realtime response includes malformed fan-out group snapshots', async () => {
+    fetchMock.mockResolvedValue(
+      createJsonResponse({
+        ...createRunDetail(),
+        fanOutGroups: [
+          {
+            spawnerNodeId: 1,
+          },
+        ],
+      }),
+    );
+
+    render(
+      <RunDetailContent
+        initialDetail={createRunDetail()}
+        repositories={[createRepository()]}
+        pollIntervalMs={50}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText(/Connection interrupted\. Retrying in/i)).toBeInTheDocument();
+    }, { timeout: 2_000 });
+
+    await waitFor(() => {
+      expect(screen.getByText(/Update channel degraded: Realtime run detail response was malformed\./i)).toBeInTheDocument();
+    }, { timeout: 2_000 });
+  });
+
+  it('degrades gracefully when realtime response includes inconsistent node fan-out linkage fields', async () => {
+    const detail = createRunDetail();
+    const malformedNode = {
+      ...detail.nodes[0],
+      nodeRole: 'spawner' as const,
+      spawnerNodeId: 99,
+      joinNodeId: null,
+      lineageDepth: 0,
+      sequencePath: null,
+    };
+
+    fetchMock.mockResolvedValue(
+      createJsonResponse({
+        ...detail,
+        nodes: [malformedNode],
       }),
     );
 

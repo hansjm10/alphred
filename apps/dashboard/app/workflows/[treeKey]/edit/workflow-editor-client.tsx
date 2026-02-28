@@ -8,6 +8,7 @@ import {
   useRef,
   useState,
   useEffect,
+  type CSSProperties,
   type Dispatch,
   type DragEvent,
   type MutableRefObject,
@@ -149,6 +150,19 @@ type PublishSummary = {
   versionNotes: string;
 };
 
+type WorkflowNodeTopology =
+  | 'fanout-source'
+  | 'join-point'
+  | 'isolated'
+  | 'entry'
+  | 'terminal'
+  | 'linear';
+type WorkflowNodeTopologyEntry = {
+  incomingCount: number;
+  outgoingCount: number;
+  topology: WorkflowNodeTopology;
+};
+
 function workflowEditorShellClassName(inspectorDrawerOpen: boolean): string {
   return inspectorDrawerOpen ? 'workflow-editor-shell workflow-editor-shell--drawer-open' : 'workflow-editor-shell';
 }
@@ -159,6 +173,114 @@ function inspectorClassName(inspectorDrawerOpen: boolean): string {
 
 function inspectorTabClassName(activeTab: InspectorTab, tab: InspectorTab): string {
   return activeTab === tab ? 'active' : '';
+}
+
+function workflowTransitionLegendClassName(collapsed: boolean): string {
+  return collapsed ? 'workflow-transition-legend workflow-transition-legend--collapsed' : 'workflow-transition-legend';
+}
+
+function classifyWorkflowNodeTopology(incomingCount: number, outgoingCount: number): WorkflowNodeTopology {
+  if (outgoingCount >= 2) {
+    return 'fanout-source';
+  }
+  if (incomingCount >= 2) {
+    return 'join-point';
+  }
+  if (incomingCount === 0 && outgoingCount === 0) {
+    return 'isolated';
+  }
+  if (incomingCount === 0) {
+    return 'entry';
+  }
+  if (outgoingCount === 0) {
+    return 'terminal';
+  }
+
+  return 'linear';
+}
+
+function buildWorkflowNodeTopologyById(nodes: readonly Node[], edges: readonly Edge[]): Map<string, WorkflowNodeTopologyEntry> {
+  const incomingCounts = new Map<string, number>();
+  const outgoingCounts = new Map<string, number>();
+
+  for (const edge of edges) {
+    incomingCounts.set(edge.target, (incomingCounts.get(edge.target) ?? 0) + 1);
+    outgoingCounts.set(edge.source, (outgoingCounts.get(edge.source) ?? 0) + 1);
+  }
+
+  const topologyById = new Map<string, WorkflowNodeTopologyEntry>();
+  for (const node of nodes) {
+    const incomingCount = incomingCounts.get(node.id) ?? 0;
+    const outgoingCount = outgoingCounts.get(node.id) ?? 0;
+    topologyById.set(node.id, {
+      incomingCount,
+      outgoingCount,
+      topology: classifyWorkflowNodeTopology(incomingCount, outgoingCount),
+    });
+  }
+
+  return topologyById;
+}
+
+function formatWorkflowNodeConnectionSummary(incomingCount: number, outgoingCount: number): string {
+  return `in ${incomingCount} / out ${outgoingCount}`;
+}
+
+function buildWorkflowFlowNodes(nodes: readonly Node[], topologyById: ReadonlyMap<string, WorkflowNodeTopologyEntry>): Node[] {
+  return nodes.map((node) => {
+    const topologyEntry = topologyById.get(node.id) ?? {
+      incomingCount: 0,
+      outgoingCount: 0,
+      topology: 'isolated' as const,
+    };
+    const nodeData = node.data as DashboardWorkflowDraftNode & { label?: string };
+    const nodeType = nodeData.nodeType;
+    const existingClassName = node.className ?? '';
+    const style = {
+      ...node.style,
+      '--workflow-node-connection-summary': JSON.stringify(
+        formatWorkflowNodeConnectionSummary(topologyEntry.incomingCount, topologyEntry.outgoingCount),
+      ),
+    } as CSSProperties;
+
+    return {
+      ...node,
+      className: [
+        existingClassName,
+        'workflow-flow-node',
+        `workflow-flow-node--${topologyEntry.topology}`,
+        `workflow-flow-node--type-${nodeType}`,
+      ]
+        .filter(Boolean)
+        .join(' '),
+      style,
+    };
+  });
+}
+
+function buildWorkflowFlowEdges(
+  edges: readonly Edge[],
+  topologyById: ReadonlyMap<string, WorkflowNodeTopologyEntry>,
+): Edge[] {
+  return edges.map((edge) => {
+    const sourceTopology = topologyById.get(edge.source)?.topology;
+    const targetTopology = topologyById.get(edge.target)?.topology;
+    const additionalClasses = [
+      sourceTopology === 'fanout-source' ? 'workflow-edge--from-fanout' : '',
+      targetTopology === 'join-point' ? 'workflow-edge--into-join' : '',
+    ].filter(Boolean);
+
+    if (additionalClasses.length === 0) {
+      return edge;
+    }
+
+    return {
+      ...edge,
+      className: [edge.className ?? '', ...additionalClasses]
+        .filter(Boolean)
+        .join(' '),
+    };
+  });
 }
 
 function deriveSelectionChangeState(
@@ -820,36 +942,79 @@ function WorkflowContextMenuPanel({
   );
 }
 
-function WorkflowTransitionLegend() {
+function WorkflowTransitionLegend({
+  collapsed,
+  onToggle,
+}: Readonly<{
+  collapsed: boolean;
+  onToggle: () => void;
+}>) {
   return (
-    <aside className="workflow-transition-legend" aria-label="Transition legend">
-      <p className="workflow-transition-legend__title">Transition legend</p>
-      <ul className="workflow-transition-legend__list">
-        <li>
-          <span className="workflow-transition-legend__line workflow-transition-legend__line--success" aria-hidden="true" />
-          <span>
-            <strong>success</strong> route
-          </span>
-        </li>
-        <li>
-          <span className="workflow-transition-legend__line workflow-transition-legend__line--failure" aria-hidden="true" />
-          <span>
-            <strong>failure</strong> route
-          </span>
-        </li>
-        <li>
-          <span className="workflow-transition-legend__chip" aria-hidden="true">auto</span>
-          <span>
-            <strong>auto</strong> transition (unconditional)
-          </span>
-        </li>
-        <li>
-          <span className="workflow-transition-legend__chip" aria-hidden="true">guard</span>
-          <span>
-            <strong>guard</strong> transition (conditional)
-          </span>
-        </li>
-      </ul>
+    <aside className={workflowTransitionLegendClassName(collapsed)} aria-label="Transition legend">
+      <div className="workflow-transition-legend__header">
+        <p className="workflow-transition-legend__title">Transition legend</p>
+        <button
+          type="button"
+          className="workflow-transition-legend__toggle"
+          aria-expanded={!collapsed}
+          aria-controls="workflow-transition-legend-list"
+          onClick={onToggle}
+        >
+          {collapsed ? 'Show legend' : 'Hide legend'}
+        </button>
+      </div>
+      {collapsed ? null : (
+        <ul id="workflow-transition-legend-list" className="workflow-transition-legend__list">
+          <li>
+            <span className="workflow-transition-legend__line workflow-transition-legend__line--success" aria-hidden="true" />
+            <span>
+              <strong>success</strong> route
+            </span>
+          </li>
+          <li>
+            <span className="workflow-transition-legend__line workflow-transition-legend__line--failure" aria-hidden="true" />
+            <span>
+              <strong>failure</strong> route
+            </span>
+          </li>
+          <li>
+            <span className="workflow-transition-legend__chip" aria-hidden="true">auto</span>
+            <span>
+              <strong>auto</strong> transition (unconditional)
+            </span>
+          </li>
+          <li>
+            <span className="workflow-transition-legend__chip" aria-hidden="true">guard</span>
+            <span>
+              <strong>guard</strong> transition (conditional)
+            </span>
+          </li>
+          <li>
+            <span className="workflow-transition-legend__chip workflow-transition-legend__chip--fanout" aria-hidden="true">fan-out</span>
+            <span>
+              <strong>fan-out source</strong> node (&gt;=2 outgoing transitions)
+            </span>
+          </li>
+          <li>
+            <span className="workflow-transition-legend__chip workflow-transition-legend__chip--join" aria-hidden="true">join</span>
+            <span>
+              <strong>join point</strong> node (&gt;=2 incoming transitions)
+            </span>
+          </li>
+          <li>
+            <span className="workflow-transition-legend__chip workflow-transition-legend__chip--isolated" aria-hidden="true">isolated</span>
+            <span>
+              <strong>isolated</strong> node (no incoming or outgoing transitions)
+            </span>
+          </li>
+          <li>
+            <span className="workflow-transition-legend__chip workflow-transition-legend__chip--counts" aria-hidden="true">in/out</span>
+            <span>
+              <strong>in/out</strong> counters on nodes show incoming and outgoing transition totals
+            </span>
+          </li>
+        </ul>
+      )}
     </aside>
   );
 }
@@ -1154,6 +1319,7 @@ function WorkflowEditorLoadedContent({
   const [publishConfirmOpen, setPublishConfirmOpen] = useState(false);
   const [pendingConnectionSourceNodeKey, setPendingConnectionSourceNodeKey] = useState<string | null>(null);
   const [inspectorDrawerOpen, setInspectorDrawerOpen] = useState(false);
+  const [legendCollapsed, setLegendCollapsed] = useState(true);
   const [isCompactViewport, setIsCompactViewport] = useState(false);
   const [contextMenu, setContextMenu] = useState<WorkflowContextMenuState | null>(null);
   const [publishing, setPublishing] = useState(false);
@@ -1320,6 +1486,10 @@ function WorkflowEditorLoadedContent({
   const liveWarnings = useMemo(() => {
     return computeWorkflowLiveWarnings(draftNodesForSave, draftEdgesForSave);
   }, [draftEdgesForSave, draftNodesForSave]);
+
+  const topologyByNodeId = useMemo(() => buildWorkflowNodeTopologyById(nodes, edges), [nodes, edges]);
+  const flowNodes = useMemo(() => buildWorkflowFlowNodes(nodes, topologyByNodeId), [nodes, topologyByNodeId]);
+  const flowEdges = useMemo(() => buildWorkflowFlowEdges(edges, topologyByNodeId), [edges, topologyByNodeId]);
 
   const minimapNodeRouteModes = useMemo(() => {
     const modesByNodeKey = new Map<string, { hasSuccess: boolean; hasFailure: boolean }>();
@@ -1698,10 +1868,13 @@ function WorkflowEditorLoadedContent({
         </aside>
 
         <section className="workflow-editor-canvas" aria-label="Workflow canvas">
-          <WorkflowTransitionLegend />
+          <WorkflowTransitionLegend
+            collapsed={legendCollapsed}
+            onToggle={() => setLegendCollapsed((current) => !current)}
+          />
           <ReactFlow
-            nodes={nodes}
-            edges={edges}
+            nodes={flowNodes}
+            edges={flowEdges}
             onNodesChange={onNodesChange}
             onEdgesChange={onEdgesChange}
             onConnect={onConnect}

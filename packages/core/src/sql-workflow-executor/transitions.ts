@@ -14,6 +14,7 @@ import {
 } from './constants.js';
 import { createEmptyContextManifest } from './context-assembly.js';
 import { persistRunNodeAttemptDiagnostics } from './diagnostics-persistence.js';
+import { loadJoinBarrierStatesByJoinRunNodeId, reopenJoinBarrierForRetriedChild } from './fanout.js';
 import { selectNextRunnableNode } from './node-selection.js';
 import {
   loadEdgeRows,
@@ -176,7 +177,7 @@ export function resolveRunStatusFromNodes(
   latestNodeAttempts: RunNodeExecutionRow[],
   handledFailedSourceNodeIds: ReadonlySet<number> = new Set<number>(),
 ): WorkflowRunStatus {
-  if (latestNodeAttempts.some(node => node.status === 'failed' && !handledFailedSourceNodeIds.has(node.treeNodeId))) {
+  if (latestNodeAttempts.some(node => node.status === 'failed' && !handledFailedSourceNodeIds.has(node.runNodeId))) {
     return 'failed';
   }
 
@@ -350,7 +351,7 @@ export function reactivateSelectedTargetNode(
   }
 
   const targetNode = getLatestRunNodeAttempts(loadRunNodeExecutionRows(db, params.workflowRunId)).find(
-    node => node.treeNodeId === selectedEdge.targetNodeId,
+    node => node.runNodeId === selectedEdge.targetNodeId,
   );
 
   if (!targetNode || targetNode.status === 'pending' || targetNode.status === 'running') {
@@ -362,6 +363,11 @@ export function reactivateSelectedTargetNode(
       runNodeId: targetNode.runNodeId,
       currentAttempt: targetNode.attempt,
       nextAttempt: targetNode.attempt + 1,
+    });
+    reopenJoinBarrierForRetriedChild(db, {
+      workflowRunId: params.workflowRunId,
+      childNode: targetNode,
+      previousTerminalStatus: 'completed',
     });
     return;
   }
@@ -385,14 +391,16 @@ export function failRunOnIterationLimit(
 ): WorkflowRunStatus {
   const message = `Execution loop exceeded maxSteps=${params.maxSteps} for workflow run id=${run.id} (status=${run.status}).`;
   const runNodeRows = loadRunNodeExecutionRows(db, run.id);
-  const edgeRows = loadEdgeRows(db, run.workflowTreeId);
+  const edgeRows = loadEdgeRows(db, run.id);
   const routingDecisionSelection = loadLatestRoutingDecisionsByRunNodeId(db, run.id);
   const latestArtifactsByRunNodeId = loadLatestArtifactsByRunNodeId(db, run.id);
+  const joinBarrierStatesByJoinRunNodeId = loadJoinBarrierStatesByJoinRunNodeId(db, run.id);
   const { nextRunnableNode, latestNodeAttempts } = selectNextRunnableNode(
     runNodeRows,
     edgeRows,
     routingDecisionSelection.latestByRunNodeId,
     latestArtifactsByRunNodeId,
+    joinBarrierStatesByJoinRunNodeId,
   );
 
   const targetedNode =
@@ -468,7 +476,7 @@ export function resolveNoRunnableOutcome(
   const hasPending = latestNodeAttempts.some(node => node.status === 'pending');
   const hasRunning = latestNodeAttempts.some(node => node.status === 'running');
   const hasTerminalFailure = latestNodeAttempts.some(
-    node => node.status === 'failed' && !handledFailedSourceNodeIds.has(node.treeNodeId),
+    node => node.status === 'failed' && !handledFailedSourceNodeIds.has(node.runNodeId),
   );
 
   if (hasNoRouteDecision || hasUnresolvedDecision) {
@@ -532,6 +540,11 @@ export function claimRunnableNode(
         nextAttempt: node.attempt + 1,
         workflowRunId: run.id,
         requiredRunStatuses: runClaimableStatuses,
+      });
+      reopenJoinBarrierForRetriedChild(db, {
+        workflowRunId: run.id,
+        childNode: node,
+        previousTerminalStatus: 'completed',
       });
       transitionRunNodeStatus(db, {
         runNodeId: node.runNodeId,

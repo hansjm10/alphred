@@ -2,6 +2,7 @@ import type { AlphredDatabase } from '@alphred/db';
 import {
   MAX_ERROR_SUMMARY_CHARS,
   CONTEXT_POLICY_VERSION,
+  JOIN_SUMMARY_RESERVED_CHARS,
   MAX_CHARS_PER_ARTIFACT,
   MAX_CONTEXT_CHARS_TOTAL,
   MAX_FAILURE_ROUTE_CONTEXT_CHARS,
@@ -15,6 +16,7 @@ import {
   loadRetryFailureSummaryArtifact,
   loadUpstreamArtifactSelectionByRunNodeId,
 } from './routing-selection.js';
+import { loadBarriersForSpawnerJoin, loadMostRecentJoinBarrier, loadReadyJoinBarriersForJoinNode } from './fanout.js';
 import {
   buildTruncationMetadata,
   compareUpstreamSourceOrder,
@@ -38,12 +40,82 @@ import type {
   UpstreamReportArtifact,
 } from './types.js';
 
+const terminalSourceStatuses = new Set(['completed', 'failed', 'skipped', 'cancelled']);
+
+type RoutingSelection = ReturnType<typeof buildRoutingSelection>;
+type JoinBarrier = ReturnType<typeof loadReadyJoinBarriersForJoinNode>[number];
+
+function includesEligibleIncomingRoute(edge: EdgeRow, allowTerminalIncoming: boolean): boolean {
+  return edge.routeOn === 'success' || (allowTerminalIncoming && edge.routeOn === 'terminal');
+}
+
+function isJoinBatchDynamicChildExcluded(params: {
+  targetNode: RunNodeExecutionRow;
+  edge: EdgeRow;
+  sourceNode: RunNodeExecutionRow;
+  joinBatchChildRunNodeIds: ReadonlySet<number> | null;
+}): boolean {
+  return (
+    params.targetNode.nodeRole === 'join' &&
+    params.edge.routeOn === 'terminal' &&
+    params.edge.edgeKind === 'dynamic_child_to_join' &&
+    params.joinBatchChildRunNodeIds !== null &&
+    !params.joinBatchChildRunNodeIds.has(params.sourceNode.runNodeId)
+  );
+}
+
+function resolveEligiblePredecessorNode(params: {
+  targetNode: RunNodeExecutionRow;
+  edge: EdgeRow;
+  allowTerminalIncoming: boolean;
+  routingSelection: RoutingSelection;
+  joinBatchChildRunNodeIds: ReadonlySet<number> | null;
+}): RunNodeExecutionRow | null {
+  if (!includesEligibleIncomingRoute(params.edge, params.allowTerminalIncoming)) {
+    return null;
+  }
+
+  if (
+    params.edge.routeOn === 'success' &&
+    params.routingSelection.selectedEdgeIdBySourceNodeId.get(params.edge.sourceNodeId) !== params.edge.edgeId
+  ) {
+    return null;
+  }
+
+  const sourceNode = params.routingSelection.latestByTreeNodeId.get(params.edge.sourceNodeId);
+  if (!sourceNode) {
+    return null;
+  }
+
+  if (params.edge.routeOn === 'success' && sourceNode.status !== 'completed') {
+    return null;
+  }
+
+  if (params.edge.routeOn === 'terminal' && !terminalSourceStatuses.has(sourceNode.status)) {
+    return null;
+  }
+
+  if (
+    isJoinBatchDynamicChildExcluded({
+      targetNode: params.targetNode,
+      edge: params.edge,
+      sourceNode,
+      joinBatchChildRunNodeIds: params.joinBatchChildRunNodeIds,
+    })
+  ) {
+    return null;
+  }
+
+  return sourceNode;
+}
+
 export function selectDirectPredecessorNodes(
   targetNode: RunNodeExecutionRow,
   latestNodeAttempts: RunNodeExecutionRow[],
   edgeRows: EdgeRow[],
   latestRoutingDecisionsByRunNodeId: Map<number, RoutingDecisionRow>,
   latestArtifactsByRunNodeId: Map<number, LatestArtifact>,
+  joinBatchChildRunNodeIds: ReadonlySet<number> | null = null,
 ): RunNodeExecutionRow[] {
   const routingSelection = buildRoutingSelection(
     latestNodeAttempts,
@@ -51,25 +123,20 @@ export function selectDirectPredecessorNodes(
     latestRoutingDecisionsByRunNodeId,
     latestArtifactsByRunNodeId,
   );
-  const incomingEdges = routingSelection.incomingEdgesByTargetNodeId.get(targetNode.treeNodeId) ?? [];
+  const incomingEdges = routingSelection.incomingEdgesByTargetNodeId.get(targetNode.runNodeId) ?? [];
+  const allowTerminalIncoming = targetNode.nodeRole === 'join';
 
   const predecessors: RunNodeExecutionRow[] = [];
   const seenSourceNodeIds = new Set<number>();
   for (const edge of incomingEdges) {
-    if (edge.routeOn !== 'success') {
-      continue;
-    }
-
-    if (routingSelection.selectedEdgeIdBySourceNodeId.get(edge.sourceNodeId) !== edge.edgeId) {
-      continue;
-    }
-
-    if (seenSourceNodeIds.has(edge.sourceNodeId)) {
-      continue;
-    }
-
-    const sourceNode = routingSelection.latestByTreeNodeId.get(edge.sourceNodeId);
-    if (sourceNode?.status !== 'completed') {
+    const sourceNode = resolveEligiblePredecessorNode({
+      targetNode,
+      edge,
+      allowTerminalIncoming,
+      routingSelection,
+      joinBatchChildRunNodeIds,
+    });
+    if (!sourceNode || seenSourceNodeIds.has(edge.sourceNodeId)) {
       continue;
     }
 
@@ -78,6 +145,142 @@ export function selectDirectPredecessorNodes(
   }
 
   return predecessors.sort(compareUpstreamSourceOrder);
+}
+
+function buildLatestChildrenBySpawnerRunNodeId(
+  latestNodeAttempts: RunNodeExecutionRow[],
+  joinRunNodeId: number,
+): Map<number, RunNodeExecutionRow[]> {
+  const latestChildrenBySpawnerRunNodeId = new Map<number, RunNodeExecutionRow[]>();
+  for (const node of latestNodeAttempts) {
+    if (node.spawnerNodeId === null || node.joinNodeId !== joinRunNodeId) {
+      continue;
+    }
+
+    const children = latestChildrenBySpawnerRunNodeId.get(node.spawnerNodeId) ?? [];
+    children.push(node);
+    latestChildrenBySpawnerRunNodeId.set(node.spawnerNodeId, children);
+  }
+
+  for (const children of latestChildrenBySpawnerRunNodeId.values()) {
+    children.sort((left, right) => {
+      if (left.sequenceIndex !== right.sequenceIndex) {
+        return right.sequenceIndex - left.sequenceIndex;
+      }
+      return right.runNodeId - left.runNodeId;
+    });
+  }
+
+  return latestChildrenBySpawnerRunNodeId;
+}
+
+function buildBatchOffsetsByBarrierIdForSpawner(params: {
+  db: AlphredDatabase;
+  workflowRunId: number;
+  spawnerRunNodeId: number;
+  joinRunNodeId: number;
+}): Map<number, number> {
+  const barriersForSpawnerJoin = loadBarriersForSpawnerJoin(params.db, {
+    workflowRunId: params.workflowRunId,
+    spawnerRunNodeId: params.spawnerRunNodeId,
+    joinRunNodeId: params.joinRunNodeId,
+  });
+  const batchOffsetByBarrierId = new Map<number, number>();
+  let consumedChildren = 0;
+  for (let index = barriersForSpawnerJoin.length - 1; index >= 0; index -= 1) {
+    const spawnerJoinBarrier = barriersForSpawnerJoin[index];
+    batchOffsetByBarrierId.set(spawnerJoinBarrier.id, consumedChildren);
+    consumedChildren += spawnerJoinBarrier.expectedChildren;
+  }
+
+  return batchOffsetByBarrierId;
+}
+
+function resolveReadyJoinBarriers(
+  db: AlphredDatabase,
+  workflowRunId: number,
+  joinRunNodeId: number,
+): JoinBarrier[] | null {
+  const readyBarriers = loadReadyJoinBarriersForJoinNode(db, {
+    workflowRunId,
+    joinRunNodeId,
+  });
+  if (readyBarriers.length > 0) {
+    return readyBarriers;
+  }
+
+  const mostRecentBarrier = loadMostRecentJoinBarrier(db, {
+    workflowRunId,
+    joinRunNodeId,
+  });
+  if (!mostRecentBarrier) {
+    return null;
+  }
+
+  return [];
+}
+
+function resolveBatchOffsetsForSpawner(params: {
+  db: AlphredDatabase;
+  workflowRunId: number;
+  joinRunNodeId: number;
+  spawnerRunNodeId: number;
+  batchOffsetsBySpawnerRunNodeId: Map<number, Map<number, number>>;
+}): Map<number, number> {
+  const existing = params.batchOffsetsBySpawnerRunNodeId.get(params.spawnerRunNodeId);
+  if (existing) {
+    return existing;
+  }
+
+  const offsets = buildBatchOffsetsByBarrierIdForSpawner({
+    db: params.db,
+    workflowRunId: params.workflowRunId,
+    spawnerRunNodeId: params.spawnerRunNodeId,
+    joinRunNodeId: params.joinRunNodeId,
+  });
+  params.batchOffsetsBySpawnerRunNodeId.set(params.spawnerRunNodeId, offsets);
+  return offsets;
+}
+
+function resolveJoinBatchChildRunNodeIds(
+  db: AlphredDatabase,
+  params: {
+    workflowRunId: number;
+    targetNode: RunNodeExecutionRow;
+    latestNodeAttempts: RunNodeExecutionRow[];
+  },
+): Set<number> | null {
+  if (params.targetNode.nodeRole !== 'join') {
+    return null;
+  }
+
+  const joinRunNodeId = params.targetNode.runNodeId;
+  const readyBarriers = resolveReadyJoinBarriers(db, params.workflowRunId, joinRunNodeId);
+  if (!readyBarriers) {
+    return null;
+  }
+
+  const latestChildrenBySpawnerRunNodeId = buildLatestChildrenBySpawnerRunNodeId(params.latestNodeAttempts, joinRunNodeId);
+  const batchOffsetsBySpawnerRunNodeId = new Map<number, Map<number, number>>();
+  const batchChildRunNodeIds = new Set<number>();
+  for (const barrier of readyBarriers) {
+    const batchOffsetByBarrierId = resolveBatchOffsetsForSpawner({
+      db,
+      workflowRunId: params.workflowRunId,
+      joinRunNodeId,
+      spawnerRunNodeId: barrier.spawnerRunNodeId,
+      batchOffsetsBySpawnerRunNodeId,
+    });
+    const childrenForSpawner = latestChildrenBySpawnerRunNodeId.get(barrier.spawnerRunNodeId) ?? [];
+    const batchOffset = batchOffsetByBarrierId.get(barrier.id) ?? 0;
+    const batchChildren = childrenForSpawner.slice(batchOffset, batchOffset + barrier.expectedChildren);
+
+    for (const childNode of batchChildren) {
+      batchChildRunNodeIds.add(childNode.runNodeId);
+    }
+  }
+
+  return batchChildRunNodeIds;
 }
 
 export function resolveIncludedContentForContextCandidate(
@@ -227,6 +430,138 @@ function collectContextEnvelopeCandidates(
   }
 
   return candidateEntries;
+}
+
+function prioritizeJoinCandidateEntries(
+  targetNode: RunNodeExecutionRow,
+  directPredecessors: RunNodeExecutionRow[],
+  candidateEntries: ContextEnvelopeCandidate[],
+): ContextEnvelopeCandidate[] {
+  if (targetNode.nodeRole !== 'join') {
+    return candidateEntries;
+  }
+
+  const statusByRunNodeId = new Map<number, RunNodeExecutionRow['status']>(
+    directPredecessors.map(node => [node.runNodeId, node.status]),
+  );
+  return [...candidateEntries].sort((left, right) => {
+    const leftFailed = statusByRunNodeId.get(left.sourceRunNodeId) === 'failed' ? 0 : 1;
+    const rightFailed = statusByRunNodeId.get(right.sourceRunNodeId) === 'failed' ? 0 : 1;
+    if (leftFailed !== rightFailed) {
+      return leftFailed - rightFailed;
+    }
+
+    if (left.createdAt !== right.createdAt) {
+      return left.createdAt > right.createdAt ? -1 : 1;
+    }
+
+    return left.sourceRunNodeId - right.sourceRunNodeId;
+  });
+}
+
+type JoinSummaryContextEntry = {
+  entry: string;
+  includedChars: number;
+};
+
+function buildJoinSummaryContextEntry(
+  db: AlphredDatabase,
+  params: {
+    workflowRunId: number;
+    targetNode: RunNodeExecutionRow;
+    directPredecessors: RunNodeExecutionRow[];
+    latestReportsByRunNodeId: Map<number, UpstreamReportArtifact>;
+  },
+): JoinSummaryContextEntry | null {
+  if (params.targetNode.nodeRole !== 'join') {
+    return null;
+  }
+
+  const readyBarriers = loadReadyJoinBarriersForJoinNode(db, {
+    workflowRunId: params.workflowRunId,
+    joinRunNodeId: params.targetNode.runNodeId,
+  });
+  const summaryBarriers =
+    readyBarriers.length > 0
+      ? readyBarriers
+      : (() => {
+          const mostRecentBarrier = loadMostRecentJoinBarrier(db, {
+            workflowRunId: params.workflowRunId,
+            joinRunNodeId: params.targetNode.runNodeId,
+          });
+          return mostRecentBarrier ? [mostRecentBarrier] : [];
+        })();
+  if (summaryBarriers.length === 0) {
+    return null;
+  }
+
+  let totalExpectedChildren = 0;
+  let totalTerminalChildren = 0;
+  let totalCompletedChildren = 0;
+  let totalFailedChildren = 0;
+  const spawnerRunNodeIds = new Set<number>();
+  for (const barrier of summaryBarriers) {
+    spawnerRunNodeIds.add(barrier.spawnerRunNodeId);
+    totalExpectedChildren += barrier.expectedChildren;
+    totalTerminalChildren += barrier.terminalChildren;
+    totalCompletedChildren += barrier.completedChildren;
+    totalFailedChildren += barrier.failedChildren;
+  }
+  const sortedSpawnerRunNodeIds = [...spawnerRunNodeIds].sort((left, right) => left - right);
+  const primarySpawnerRunNodeId = Math.min(...sortedSpawnerRunNodeIds);
+
+  const lines: string[] = [
+    'ALPHRED_JOIN_SUBTASKS v1',
+    `join_run_node_id: ${params.targetNode.runNodeId}`,
+    `spawner_run_node_id: ${primarySpawnerRunNodeId}`,
+    `spawner_run_node_ids: ${sortedSpawnerRunNodeIds.join(',')}`,
+    `subtasks.total: ${totalExpectedChildren}`,
+    `subtasks.terminal: ${totalTerminalChildren}`,
+    `subtasks.succeeded: ${totalCompletedChildren}`,
+    `subtasks.failed: ${totalFailedChildren}`,
+    'subtask_rows:',
+  ];
+
+  const sortedSubtaskPredecessors = params.directPredecessors
+    .filter(sourceNode => {
+      const spawnerNodeId = sourceNode.spawnerNodeId;
+      return (
+        spawnerNodeId !== null &&
+        sourceNode.joinNodeId === params.targetNode.runNodeId &&
+        spawnerRunNodeIds.has(spawnerNodeId)
+      );
+    })
+    .sort(compareUpstreamSourceOrder);
+
+  for (const sourceNode of sortedSubtaskPredecessors) {
+    const reportArtifact = params.latestReportsByRunNodeId.get(sourceNode.runNodeId) ?? null;
+    const failureArtifact =
+      sourceNode.status === 'failed'
+        ? loadLatestFailureArtifact(db, {
+            workflowRunId: params.workflowRunId,
+            runNodeId: sourceNode.runNodeId,
+          })
+        : null;
+    const previewSource = failureArtifact?.content ?? reportArtifact?.content ?? '';
+    const preview =
+      previewSource.length === 0
+        ? 'none'
+        : truncateHeadTail(previewSource, 160)
+            .split(/\s+/)
+            .filter(segment => segment.length > 0)
+            .join(' ');
+    const artifactId = failureArtifact?.id ?? reportArtifact?.id ?? null;
+    lines.push(
+      `- node_key: ${sourceNode.nodeKey}; run_node_id: ${sourceNode.runNodeId}; status: ${sourceNode.status}; artifact_id: ${artifactId ?? 'null'}; preview: ${preview}`,
+    );
+  }
+
+  const rawSummary = lines.join('\n');
+  const includedSummary = truncateHeadTail(rawSummary, JOIN_SUMMARY_RESERVED_CHARS);
+  return {
+    entry: includedSummary,
+    includedChars: includedSummary.length,
+  };
 }
 
 function loadFailureRouteArtifacts(
@@ -449,13 +784,18 @@ function buildContextEntries(params: {
   workflowRunId: number;
   targetNodeKey: string;
   failureRouteContextEntry: FailureRouteContextEntry | null;
+  joinSummaryEntry: JoinSummaryContextEntry | null;
   includedEntries: ContextEnvelopeEntry[];
   retrySummaryEntry: RetrySummaryContextEntry | null;
 }): string[] {
-  const { failureRouteContextEntry, includedEntries, retrySummaryEntry, targetNodeKey, workflowRunId } = params;
+  const { failureRouteContextEntry, includedEntries, joinSummaryEntry, retrySummaryEntry, targetNodeKey, workflowRunId } =
+    params;
   const contextEntries: string[] = [];
   if (failureRouteContextEntry) {
     contextEntries.push(failureRouteContextEntry.entry);
+  }
+  if (joinSummaryEntry) {
+    contextEntries.push(joinSummaryEntry.entry);
   }
   contextEntries.push(
     ...includedEntries.map(entry =>
@@ -552,18 +892,25 @@ export function assembleUpstreamArtifactContext(
     latestArtifactsByRunNodeId: Map<number, LatestArtifact>;
   },
 ): AssembledUpstreamContext {
+  const joinBatchChildRunNodeIds = resolveJoinBatchChildRunNodeIds(db, {
+    workflowRunId: params.workflowRunId,
+    targetNode: params.targetNode,
+    latestNodeAttempts: params.latestNodeAttempts,
+  });
   const directPredecessors = selectDirectPredecessorNodes(
     params.targetNode,
     params.latestNodeAttempts,
     params.edgeRows,
     params.latestRoutingDecisionsByRunNodeId,
     params.latestArtifactsByRunNodeId,
+    joinBatchChildRunNodeIds,
   );
   const predecessorRunNodeIds = directPredecessors.map(node => node.runNodeId);
   const artifactSelection = loadUpstreamArtifactSelectionByRunNodeId(db, params.workflowRunId, predecessorRunNodeIds);
-  const candidateEntries = collectContextEnvelopeCandidates(
+  const candidateEntries = prioritizeJoinCandidateEntries(
+    params.targetNode,
     directPredecessors,
-    artifactSelection.latestReportsByRunNodeId,
+    collectContextEnvelopeCandidates(directPredecessors, artifactSelection.latestReportsByRunNodeId),
   );
 
   const routingSelection = buildRoutingSelection(
@@ -572,7 +919,7 @@ export function assembleUpstreamArtifactContext(
     params.latestRoutingDecisionsByRunNodeId,
     params.latestArtifactsByRunNodeId,
   );
-  const incomingEdges = routingSelection.incomingEdgesByTargetNodeId.get(params.targetNode.treeNodeId) ?? [];
+  const incomingEdges = routingSelection.incomingEdgesByTargetNodeId.get(params.targetNode.runNodeId) ?? [];
   const failureRouteSourceNode = selectFailureRouteSourceNode({
     targetNode: params.targetNode,
     incomingEdges,
@@ -596,12 +943,22 @@ export function assembleUpstreamArtifactContext(
     targetNode: params.targetNode,
     targetAttempt: params.targetAttempt,
   });
-  const reservedChars = (failureRouteContextEntry?.includedChars ?? 0) + (retrySummaryEntry?.includedChars ?? 0);
+  const joinSummaryEntry = buildJoinSummaryContextEntry(db, {
+    workflowRunId: params.workflowRunId,
+    targetNode: params.targetNode,
+    directPredecessors,
+    latestReportsByRunNodeId: artifactSelection.latestReportsByRunNodeId,
+  });
+  const reservedChars =
+    (failureRouteContextEntry?.includedChars ?? 0) +
+    (retrySummaryEntry?.includedChars ?? 0) +
+    (joinSummaryEntry?.includedChars ?? 0);
   const includedCandidateContext = includeContextCandidates(candidateEntries, reservedChars);
   const contextEntries = buildContextEntries({
     workflowRunId: params.workflowRunId,
     targetNodeKey: params.targetNode.nodeKey,
     failureRouteContextEntry,
+    joinSummaryEntry,
     includedEntries: includedCandidateContext.includedEntries,
     retrySummaryEntry,
   });

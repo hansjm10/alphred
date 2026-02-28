@@ -20,6 +20,14 @@ import {
 import { assembleUpstreamArtifactContext } from './context-assembly.js';
 import { toErrorMessage } from './diagnostics-collection.js';
 import {
+  loadJoinBarrierStatesByJoinRunNodeId,
+  parseSpawnerSubtasks,
+  releaseReadyJoinBarriersForJoinNode,
+  resolveSpawnerJoinTarget,
+  spawnDynamicChildrenForSpawner,
+  updateJoinBarrierForChildTerminal,
+} from './fanout.js';
+import {
   persistRunNodeAttemptDiagnostics,
   persistRunNodeStreamEvent,
   resolveNextRunNodeStreamSequence,
@@ -35,6 +43,7 @@ import {
   persistFailureArtifact,
   persistNoteArtifact,
   persistSuccessArtifact,
+  resolveCompletedNodeRoutingOutcome,
 } from './persistence.js';
 import {
   buildRoutingSelection,
@@ -67,7 +76,7 @@ import type {
 const routingDecisionSignalSet: ReadonlySet<RoutingDecisionSignal> = new Set(routingDecisionSignals);
 
 function loadGuardedSuccessOutgoingEdges(node: RunNodeExecutionRow, edgeRows: EdgeRow[]): EdgeRow[] {
-  return edgeRows.filter(edge => edge.sourceNodeId === node.treeNodeId && edge.routeOn === 'success' && edge.auto === 0);
+  return edgeRows.filter(edge => edge.sourceNodeId === node.runNodeId && edge.routeOn === 'success' && edge.auto === 0);
 }
 
 function collectGuardDecisionSignals(
@@ -236,14 +245,23 @@ export function resolveFailureReason(persistedNodeStatus: RunNodeStatus, canRetr
   return 'retry_limit_exceeded';
 }
 
-function selectFailureRouteEdgeForSourceNode(edgeRows: EdgeRow[], sourceTreeNodeId: number): EdgeRow | null {
+function selectFailureRouteEdgeForSourceNode(edgeRows: EdgeRow[], sourceRunNodeId: number): EdgeRow | null {
+  let terminalEdge: EdgeRow | null = null;
   for (const edge of edgeRows) {
-    if (edge.sourceNodeId === sourceTreeNodeId && edge.routeOn === 'failure') {
+    if (edge.sourceNodeId !== sourceRunNodeId) {
+      continue;
+    }
+
+    if (edge.routeOn === 'failure') {
       return edge;
+    }
+
+    if (edge.routeOn === 'terminal' && terminalEdge === null) {
+      terminalEdge = edge;
     }
   }
 
-  return null;
+  return terminalEdge;
 }
 
 type RetryState = {
@@ -548,6 +566,24 @@ export function handleClaimedNodeSuccess(
   params: ClaimedNodeSuccessParams,
 ): ClaimedNodeSuccess {
   const { currentAttempt, contextManifest, phaseResult } = params;
+  const latestNodeAttempts = getLatestRunNodeAttempts(loadRunNodeExecutionRows(db, run.id));
+  const shouldSpawnChildren = node.nodeRole === 'spawner';
+  const spawnedSubtasks = shouldSpawnChildren
+    ? parseSpawnerSubtasks({
+        report: phaseResult.report,
+        spawnerNodeKey: node.nodeKey,
+        maxChildren: node.maxChildren,
+        lineageDepth: node.lineageDepth,
+        batchOrdinal: currentAttempt,
+      })
+    : [];
+  const joinNode = shouldSpawnChildren
+    ? resolveSpawnerJoinTarget({
+        spawnerNode: node,
+        latestNodeAttempts,
+        edgeRows,
+      })
+    : null;
 
   const artifactId = persistSuccessArtifact(db, {
     workflowRunId: run.id,
@@ -567,10 +603,25 @@ export function handleClaimedNodeSuccess(
     },
   });
 
+  const routingOutcomePreview = resolveCompletedNodeRoutingOutcome({
+    runNodeId: node.runNodeId,
+    routingDecision: phaseResult.routingDecision,
+    edgeRows,
+  });
+
+  if (shouldSpawnChildren && joinNode && routingOutcomePreview.decisionType !== 'no_route') {
+    spawnDynamicChildrenForSpawner(db, {
+      workflowRunId: run.id,
+      spawnerNode: node,
+      joinNode,
+      spawnSourceArtifactId: artifactId,
+      subtasks: spawnedSubtasks,
+    });
+  }
+
   const routingOutcome = persistCompletedNodeRoutingDecision(db, {
     workflowRunId: run.id,
     runNodeId: node.runNodeId,
-    treeNodeId: node.treeNodeId,
     attempt: currentAttempt,
     routingDecision: phaseResult.routingDecision,
     routingDecisionSource: phaseResult.routingDecisionSource,
@@ -582,6 +633,17 @@ export function handleClaimedNodeSuccess(
     expectedFrom: 'running',
     to: 'completed',
   });
+  updateJoinBarrierForChildTerminal(db, {
+    workflowRunId: run.id,
+    childNode: node,
+    childTerminalStatus: 'completed',
+  });
+  if (node.nodeRole === 'join') {
+    releaseReadyJoinBarriersForJoinNode(db, {
+      workflowRunId: run.id,
+      joinRunNodeId: node.runNodeId,
+    });
+  }
 
   const persistedNode = loadRunNodeExecutionRowById(db, run.id, node.runNodeId);
   persistRunNodeAttemptDiagnostics(db, {
@@ -607,7 +669,8 @@ export function handleClaimedNodeSuccess(
       selectedEdgeId: routingOutcome.selectedEdgeId,
       edgeRows,
     });
-    markUnreachablePendingNodesAsSkipped(db, run.id, edgeRows);
+    const joinBarrierStatesByJoinRunNodeId = loadJoinBarrierStatesByJoinRunNodeId(db, run.id);
+    markUnreachablePendingNodesAsSkipped(db, run.id, edgeRows, joinBarrierStatesByJoinRunNodeId);
     const latestAfterSuccess = getLatestRunNodeAttempts(loadRunNodeExecutionRows(db, run.id));
     const latestRoutingDecisionsAfterSuccess = loadLatestRoutingDecisionsByRunNodeId(db, run.id);
     const latestArtifactsAfterSuccess = loadLatestArtifactsByRunNodeId(db, run.id);
@@ -712,7 +775,7 @@ function loadFailureRouteTargetNode(
 
   return (
     getLatestRunNodeAttempts(loadRunNodeExecutionRows(db, workflowRunId)).find(
-      latestNode => latestNode.treeNodeId === failureRouteEdge.targetNodeId,
+      latestNode => latestNode.runNodeId === failureRouteEdge.targetNodeId,
     ) ?? null
   );
 }
@@ -752,7 +815,7 @@ function resolveFailureRouteDiagnostics(params: {
   failureRouteDiagnostics: RunNodeFailureRouteDiagnostics | undefined;
 } {
   const { db, edgeRows, executionScope, latestRunStatus, node, retryState, run } = params;
-  const failureRouteEdge = retryState.canRetry ? null : selectFailureRouteEdgeForSourceNode(edgeRows, node.treeNodeId);
+  const failureRouteEdge = retryState.canRetry ? null : selectFailureRouteEdgeForSourceNode(edgeRows, node.runNodeId);
   const failureRouteTargetNode = loadFailureRouteTargetNode(db, run.id, failureRouteEdge);
   const failureRouteStatus = resolveFailureRouteStatus({
     retryState,
@@ -904,7 +967,8 @@ function resolveSelectedFailureRouteOutcome(
     selectedEdgeId: failureRouteEdge.edgeId,
     edgeRows,
   });
-  markUnreachablePendingNodesAsSkipped(db, run.id, edgeRows);
+  const joinBarrierStatesByJoinRunNodeId = loadJoinBarrierStatesByJoinRunNodeId(db, run.id);
+  markUnreachablePendingNodesAsSkipped(db, run.id, edgeRows, joinBarrierStatesByJoinRunNodeId);
 
   const latestAfterFailureRoute = getLatestRunNodeAttempts(loadRunNodeExecutionRows(db, run.id));
   const latestRoutingDecisionsAfterFailureRoute = loadLatestRoutingDecisionsByRunNodeId(db, run.id);
@@ -1034,21 +1098,33 @@ export async function handleClaimedNodeFailure(
     retryState,
     retryEligible,
   });
+  const updateJoinBarrierFromLatestNodeStatus = (): void => {
+    const latestNode = loadRunNodeExecutionRowById(db, run.id, node.runNodeId);
+    updateJoinBarrierForChildTerminal(db, {
+      workflowRunId: run.id,
+      childNode: latestNode,
+      childTerminalStatus: latestNode.status,
+    });
+  };
   if (retryOutcome) {
+    updateJoinBarrierFromLatestNodeStatus();
     return retryOutcome;
   }
 
   if (failureRouteDiagnostics?.status === 'selected' && failureRouteEdge) {
-    return resolveSelectedFailureRouteOutcome(db, {
+    const failureRouteOutcome = resolveSelectedFailureRouteOutcome(db, {
       run,
       edgeRows,
       failureRouteEdge,
       persistedNode,
       artifactId,
     });
+    updateJoinBarrierFromLatestNodeStatus();
+    return failureRouteOutcome;
   }
 
   const runStatus = transitionRunToCurrentForExecutor(db, run.id, 'failed');
+  updateJoinBarrierFromLatestNodeStatus();
   return {
     artifactId,
     runStatus,

@@ -1,5 +1,27 @@
 import type { AlphredDatabase } from './connection.js';
-import { sql } from 'drizzle-orm';
+import { sql, type SQL } from 'drizzle-orm';
+
+type MigrationExecutor = Pick<AlphredDatabase, 'get' | 'run'>;
+
+function addColumnIfMissing(
+  tx: MigrationExecutor,
+  params: {
+    existsQuery: SQL<unknown>;
+    alterQuery: SQL<unknown>;
+    postAddQueries?: readonly SQL<unknown>[];
+  },
+): boolean {
+  const columnExists = (tx.get<{ count: number }>(params.existsQuery)?.count ?? 0) > 0;
+  if (columnExists) {
+    return false;
+  }
+
+  tx.run(params.alterQuery);
+  for (const postAddQuery of params.postAddQueries ?? []) {
+    tx.run(postAddQuery);
+  }
+  return true;
+}
 
 export function migrateDatabase(db: AlphredDatabase): void {
   db.transaction((tx) => {
@@ -17,27 +39,18 @@ export function migrateDatabase(db: AlphredDatabase): void {
     CONSTRAINT workflow_trees_status_ck
       CHECK (status IN ('draft', 'published'))
   )`);
-  const hasWorkflowTreeStatusColumn =
-    tx.get<{ count: number }>(
-      sql`SELECT COUNT(*) AS count FROM pragma_table_info('workflow_trees') WHERE name = 'status'`,
-    )?.count ?? 0;
-  if (hasWorkflowTreeStatusColumn === 0) {
-    tx.run(sql`ALTER TABLE workflow_trees ADD COLUMN status TEXT NOT NULL DEFAULT 'published'`);
-  }
-  const hasWorkflowTreeVersionNotesColumn =
-    tx.get<{ count: number }>(
-      sql`SELECT COUNT(*) AS count FROM pragma_table_info('workflow_trees') WHERE name = 'version_notes'`,
-    )?.count ?? 0;
-  if (hasWorkflowTreeVersionNotesColumn === 0) {
-    tx.run(sql`ALTER TABLE workflow_trees ADD COLUMN version_notes TEXT`);
-  }
-  const hasWorkflowTreeDraftRevisionColumn =
-    tx.get<{ count: number }>(
-      sql`SELECT COUNT(*) AS count FROM pragma_table_info('workflow_trees') WHERE name = 'draft_revision'`,
-    )?.count ?? 0;
-  if (hasWorkflowTreeDraftRevisionColumn === 0) {
-    tx.run(sql`ALTER TABLE workflow_trees ADD COLUMN draft_revision INTEGER NOT NULL DEFAULT 0`);
-  }
+  addColumnIfMissing(tx, {
+    existsQuery: sql`SELECT COUNT(*) AS count FROM pragma_table_info('workflow_trees') WHERE name = 'status'`,
+    alterQuery: sql`ALTER TABLE workflow_trees ADD COLUMN status TEXT NOT NULL DEFAULT 'published'`,
+  });
+  addColumnIfMissing(tx, {
+    existsQuery: sql`SELECT COUNT(*) AS count FROM pragma_table_info('workflow_trees') WHERE name = 'version_notes'`,
+    alterQuery: sql`ALTER TABLE workflow_trees ADD COLUMN version_notes TEXT`,
+  });
+  addColumnIfMissing(tx, {
+    existsQuery: sql`SELECT COUNT(*) AS count FROM pragma_table_info('workflow_trees') WHERE name = 'draft_revision'`,
+    alterQuery: sql`ALTER TABLE workflow_trees ADD COLUMN draft_revision INTEGER NOT NULL DEFAULT 0`,
+  });
   tx.run(sql`CREATE UNIQUE INDEX IF NOT EXISTS workflow_trees_tree_key_version_uq
     ON workflow_trees(tree_key, version)`);
   tx.run(sql`CREATE UNIQUE INDEX IF NOT EXISTS workflow_trees_tree_key_single_draft_uq
@@ -94,13 +107,10 @@ export function migrateDatabase(db: AlphredDatabase): void {
     CONSTRAINT repositories_clone_status_ck
       CHECK (clone_status IN ('pending', 'cloned', 'error'))
   )`);
-  const hasBranchTemplateColumn =
-    tx.get<{ count: number }>(
-      sql`SELECT COUNT(*) AS count FROM pragma_table_info('repositories') WHERE name = 'branch_template'`,
-    )?.count ?? 0;
-  if (hasBranchTemplateColumn === 0) {
-    tx.run(sql`ALTER TABLE repositories ADD COLUMN branch_template TEXT`);
-  }
+  addColumnIfMissing(tx, {
+    existsQuery: sql`SELECT COUNT(*) AS count FROM pragma_table_info('repositories') WHERE name = 'branch_template'`,
+    alterQuery: sql`ALTER TABLE repositories ADD COLUMN branch_template TEXT`,
+  });
   tx.run(sql`CREATE UNIQUE INDEX IF NOT EXISTS repositories_name_uq
     ON repositories(name)`);
   tx.run(sql`DROP INDEX IF EXISTS repositories_name_idx`);
@@ -206,6 +216,8 @@ export function migrateDatabase(db: AlphredDatabase): void {
     execution_permissions TEXT,
     error_handler_config TEXT,
     prompt_template_id INTEGER REFERENCES prompt_templates(id) ON DELETE RESTRICT,
+    node_role TEXT NOT NULL DEFAULT 'standard',
+    max_children INTEGER NOT NULL DEFAULT 12,
     max_retries INTEGER NOT NULL DEFAULT 0,
     sequence_index INTEGER NOT NULL,
     position_x INTEGER,
@@ -214,53 +226,52 @@ export function migrateDatabase(db: AlphredDatabase): void {
     updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
     CONSTRAINT tree_nodes_node_type_ck
       CHECK (node_type IN ('agent', 'human', 'tool')),
+    CONSTRAINT tree_nodes_node_role_ck
+      CHECK (node_role IN ('standard', 'spawner', 'join')),
+    CONSTRAINT tree_nodes_node_role_agent_ck
+      CHECK ((node_role NOT IN ('spawner', 'join')) OR (node_type = 'agent')),
     CONSTRAINT tree_nodes_provider_for_agent_ck
       CHECK ((node_type <> 'agent') OR (provider IS NOT NULL)),
+    CONSTRAINT tree_nodes_max_children_ck
+      CHECK (max_children >= 0),
     CONSTRAINT tree_nodes_max_retries_ck
       CHECK (max_retries >= 0)
   )`);
-  const hasTreeNodesDisplayNameColumn =
-    tx.get<{ count: number }>(
-      sql`SELECT COUNT(*) AS count FROM pragma_table_info('tree_nodes') WHERE name = 'display_name'`,
-    )?.count ?? 0;
-  if (hasTreeNodesDisplayNameColumn === 0) {
-    tx.run(sql`ALTER TABLE tree_nodes ADD COLUMN display_name TEXT`);
-  }
-  const hasTreeNodesPositionXColumn =
-    tx.get<{ count: number }>(
-      sql`SELECT COUNT(*) AS count FROM pragma_table_info('tree_nodes') WHERE name = 'position_x'`,
-    )?.count ?? 0;
-  if (hasTreeNodesPositionXColumn === 0) {
-    tx.run(sql`ALTER TABLE tree_nodes ADD COLUMN position_x INTEGER`);
-  }
-  const hasTreeNodesPositionYColumn =
-    tx.get<{ count: number }>(
-      sql`SELECT COUNT(*) AS count FROM pragma_table_info('tree_nodes') WHERE name = 'position_y'`,
-    )?.count ?? 0;
-  if (hasTreeNodesPositionYColumn === 0) {
-    tx.run(sql`ALTER TABLE tree_nodes ADD COLUMN position_y INTEGER`);
-  }
-  const hasTreeNodesModelColumn =
-    tx.get<{ count: number }>(
-      sql`SELECT COUNT(*) AS count FROM pragma_table_info('tree_nodes') WHERE name = 'model'`,
-    )?.count ?? 0;
-  if (hasTreeNodesModelColumn === 0) {
-    tx.run(sql`ALTER TABLE tree_nodes ADD COLUMN model TEXT`);
-  }
-  const hasTreeNodesExecutionPermissionsColumn =
-    tx.get<{ count: number }>(
-      sql`SELECT COUNT(*) AS count FROM pragma_table_info('tree_nodes') WHERE name = 'execution_permissions'`,
-    )?.count ?? 0;
-  if (hasTreeNodesExecutionPermissionsColumn === 0) {
-    tx.run(sql`ALTER TABLE tree_nodes ADD COLUMN execution_permissions TEXT`);
-  }
-  const hasTreeNodesErrorHandlerConfigColumn =
-    tx.get<{ count: number }>(
-      sql`SELECT COUNT(*) AS count FROM pragma_table_info('tree_nodes') WHERE name = 'error_handler_config'`,
-    )?.count ?? 0;
-  if (hasTreeNodesErrorHandlerConfigColumn === 0) {
-    tx.run(sql`ALTER TABLE tree_nodes ADD COLUMN error_handler_config TEXT`);
-  }
+  addColumnIfMissing(tx, {
+    existsQuery: sql`SELECT COUNT(*) AS count FROM pragma_table_info('tree_nodes') WHERE name = 'display_name'`,
+    alterQuery: sql`ALTER TABLE tree_nodes ADD COLUMN display_name TEXT`,
+  });
+  addColumnIfMissing(tx, {
+    existsQuery: sql`SELECT COUNT(*) AS count FROM pragma_table_info('tree_nodes') WHERE name = 'position_x'`,
+    alterQuery: sql`ALTER TABLE tree_nodes ADD COLUMN position_x INTEGER`,
+  });
+  addColumnIfMissing(tx, {
+    existsQuery: sql`SELECT COUNT(*) AS count FROM pragma_table_info('tree_nodes') WHERE name = 'position_y'`,
+    alterQuery: sql`ALTER TABLE tree_nodes ADD COLUMN position_y INTEGER`,
+  });
+  addColumnIfMissing(tx, {
+    existsQuery: sql`SELECT COUNT(*) AS count FROM pragma_table_info('tree_nodes') WHERE name = 'model'`,
+    alterQuery: sql`ALTER TABLE tree_nodes ADD COLUMN model TEXT`,
+  });
+  addColumnIfMissing(tx, {
+    existsQuery: sql`SELECT COUNT(*) AS count FROM pragma_table_info('tree_nodes') WHERE name = 'execution_permissions'`,
+    alterQuery: sql`ALTER TABLE tree_nodes ADD COLUMN execution_permissions TEXT`,
+  });
+  addColumnIfMissing(tx, {
+    existsQuery: sql`SELECT COUNT(*) AS count FROM pragma_table_info('tree_nodes') WHERE name = 'error_handler_config'`,
+    alterQuery: sql`ALTER TABLE tree_nodes ADD COLUMN error_handler_config TEXT`,
+  });
+  addColumnIfMissing(tx, {
+    existsQuery: sql`SELECT COUNT(*) AS count FROM pragma_table_info('tree_nodes') WHERE name = 'node_role'`,
+    alterQuery: sql`ALTER TABLE tree_nodes ADD COLUMN node_role TEXT NOT NULL DEFAULT 'standard'`,
+  });
+  addColumnIfMissing(tx, {
+    existsQuery: sql`SELECT COUNT(*) AS count FROM pragma_table_info('tree_nodes') WHERE name = 'max_children'`,
+    alterQuery: sql`ALTER TABLE tree_nodes ADD COLUMN max_children INTEGER NOT NULL DEFAULT 12`,
+  });
+  tx.run(sql`UPDATE tree_nodes
+    SET node_role = COALESCE(node_role, 'standard'),
+        max_children = COALESCE(max_children, 12)`);
   tx.run(sql`UPDATE tree_nodes
     SET model = (
       SELECT agent_models.model_key
@@ -386,6 +397,20 @@ export function migrateDatabase(db: AlphredDatabase): void {
     workflow_run_id INTEGER NOT NULL REFERENCES workflow_runs(id) ON DELETE CASCADE,
     tree_node_id INTEGER NOT NULL REFERENCES tree_nodes(id) ON DELETE RESTRICT,
     node_key TEXT NOT NULL,
+    node_role TEXT NOT NULL DEFAULT 'standard',
+    node_type TEXT NOT NULL DEFAULT 'agent',
+    provider TEXT,
+    model TEXT,
+    prompt TEXT,
+    prompt_content_type TEXT NOT NULL DEFAULT 'markdown',
+    execution_permissions TEXT,
+    error_handler_config TEXT,
+    max_children INTEGER NOT NULL DEFAULT 12,
+    max_retries INTEGER NOT NULL DEFAULT 0,
+    spawner_node_id INTEGER,
+    join_node_id INTEGER,
+    lineage_depth INTEGER NOT NULL DEFAULT 0,
+    sequence_path TEXT,
     status TEXT NOT NULL DEFAULT 'pending',
     sequence_index INTEGER NOT NULL,
     attempt INTEGER NOT NULL DEFAULT 1,
@@ -393,6 +418,26 @@ export function migrateDatabase(db: AlphredDatabase): void {
     completed_at TEXT,
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
     updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    CONSTRAINT run_nodes_run_id_spawner_node_id_fk
+      FOREIGN KEY (workflow_run_id, spawner_node_id)
+      REFERENCES run_nodes(workflow_run_id, id)
+      ON DELETE SET NULL,
+    CONSTRAINT run_nodes_run_id_join_node_id_fk
+      FOREIGN KEY (workflow_run_id, join_node_id)
+      REFERENCES run_nodes(workflow_run_id, id)
+      ON DELETE SET NULL,
+    CONSTRAINT run_nodes_node_role_ck
+      CHECK (node_role IN ('standard', 'spawner', 'join')),
+    CONSTRAINT run_nodes_node_type_ck
+      CHECK (node_type IN ('agent', 'human', 'tool')),
+    CONSTRAINT run_nodes_prompt_content_type_ck
+      CHECK (prompt_content_type IN ('text', 'markdown')),
+    CONSTRAINT run_nodes_max_children_ck
+      CHECK (max_children >= 0),
+    CONSTRAINT run_nodes_max_retries_ck
+      CHECK (max_retries >= 0),
+    CONSTRAINT run_nodes_lineage_depth_ck
+      CHECK (lineage_depth >= 0),
     CONSTRAINT run_nodes_status_ck
       CHECK (status IN ('pending', 'running', 'completed', 'failed', 'skipped', 'cancelled')),
     CONSTRAINT run_nodes_attempt_ck
@@ -422,6 +467,164 @@ export function migrateDatabase(db: AlphredDatabase): void {
     ON run_nodes(node_key)`);
   tx.run(sql`CREATE INDEX IF NOT EXISTS run_nodes_created_at_idx
     ON run_nodes(created_at)`);
+  // SQLite exposes DEFAULT values for historical rows after ALTER TABLE ADD COLUMN,
+  // so explicitly backfill newly-added NOT NULL columns from source records.
+  addColumnIfMissing(tx, {
+    existsQuery: sql`SELECT COUNT(*) AS count FROM pragma_table_info('run_nodes') WHERE name = 'node_role'`,
+    alterQuery: sql`ALTER TABLE run_nodes ADD COLUMN node_role TEXT NOT NULL DEFAULT 'standard'`,
+    postAddQueries: [
+      sql`UPDATE run_nodes
+        SET node_role = COALESCE((
+              SELECT tree_nodes.node_role
+              FROM tree_nodes
+              WHERE tree_nodes.id = run_nodes.tree_node_id
+            ), 'standard')`,
+    ],
+  });
+  addColumnIfMissing(tx, {
+    existsQuery: sql`SELECT COUNT(*) AS count FROM pragma_table_info('run_nodes') WHERE name = 'node_type'`,
+    alterQuery: sql`ALTER TABLE run_nodes ADD COLUMN node_type TEXT NOT NULL DEFAULT 'agent'`,
+    postAddQueries: [
+      sql`UPDATE run_nodes
+        SET node_type = COALESCE((
+              SELECT tree_nodes.node_type
+              FROM tree_nodes
+              WHERE tree_nodes.id = run_nodes.tree_node_id
+            ), 'agent')`,
+    ],
+  });
+  addColumnIfMissing(tx, {
+    existsQuery: sql`SELECT COUNT(*) AS count FROM pragma_table_info('run_nodes') WHERE name = 'provider'`,
+    alterQuery: sql`ALTER TABLE run_nodes ADD COLUMN provider TEXT`,
+  });
+  addColumnIfMissing(tx, {
+    existsQuery: sql`SELECT COUNT(*) AS count FROM pragma_table_info('run_nodes') WHERE name = 'model'`,
+    alterQuery: sql`ALTER TABLE run_nodes ADD COLUMN model TEXT`,
+  });
+  addColumnIfMissing(tx, {
+    existsQuery: sql`SELECT COUNT(*) AS count FROM pragma_table_info('run_nodes') WHERE name = 'prompt'`,
+    alterQuery: sql`ALTER TABLE run_nodes ADD COLUMN prompt TEXT`,
+  });
+  addColumnIfMissing(tx, {
+    existsQuery: sql`SELECT COUNT(*) AS count FROM pragma_table_info('run_nodes') WHERE name = 'prompt_content_type'`,
+    alterQuery: sql`ALTER TABLE run_nodes ADD COLUMN prompt_content_type TEXT NOT NULL DEFAULT 'markdown'`,
+    postAddQueries: [
+      sql`UPDATE run_nodes
+        SET prompt_content_type = COALESCE((
+              SELECT prompt_templates.content_type
+              FROM tree_nodes
+              LEFT JOIN prompt_templates ON prompt_templates.id = tree_nodes.prompt_template_id
+              WHERE tree_nodes.id = run_nodes.tree_node_id
+            ), 'markdown')`,
+    ],
+  });
+  addColumnIfMissing(tx, {
+    existsQuery: sql`SELECT COUNT(*) AS count FROM pragma_table_info('run_nodes') WHERE name = 'execution_permissions'`,
+    alterQuery: sql`ALTER TABLE run_nodes ADD COLUMN execution_permissions TEXT`,
+  });
+  addColumnIfMissing(tx, {
+    existsQuery: sql`SELECT COUNT(*) AS count FROM pragma_table_info('run_nodes') WHERE name = 'error_handler_config'`,
+    alterQuery: sql`ALTER TABLE run_nodes ADD COLUMN error_handler_config TEXT`,
+  });
+  addColumnIfMissing(tx, {
+    existsQuery: sql`SELECT COUNT(*) AS count FROM pragma_table_info('run_nodes') WHERE name = 'max_children'`,
+    alterQuery: sql`ALTER TABLE run_nodes ADD COLUMN max_children INTEGER NOT NULL DEFAULT 12`,
+    postAddQueries: [
+      sql`UPDATE run_nodes
+        SET max_children = COALESCE((
+              SELECT tree_nodes.max_children
+              FROM tree_nodes
+              WHERE tree_nodes.id = run_nodes.tree_node_id
+            ), 12)`,
+    ],
+  });
+  addColumnIfMissing(tx, {
+    existsQuery: sql`SELECT COUNT(*) AS count FROM pragma_table_info('run_nodes') WHERE name = 'max_retries'`,
+    alterQuery: sql`ALTER TABLE run_nodes ADD COLUMN max_retries INTEGER NOT NULL DEFAULT 0`,
+    postAddQueries: [
+      sql`UPDATE run_nodes
+        SET max_retries = COALESCE((
+              SELECT tree_nodes.max_retries
+              FROM tree_nodes
+              WHERE tree_nodes.id = run_nodes.tree_node_id
+            ), 0)`,
+    ],
+  });
+  addColumnIfMissing(tx, {
+    existsQuery: sql`SELECT COUNT(*) AS count FROM pragma_table_info('run_nodes') WHERE name = 'spawner_node_id'`,
+    alterQuery: sql`ALTER TABLE run_nodes ADD COLUMN spawner_node_id INTEGER`,
+  });
+  addColumnIfMissing(tx, {
+    existsQuery: sql`SELECT COUNT(*) AS count FROM pragma_table_info('run_nodes') WHERE name = 'join_node_id'`,
+    alterQuery: sql`ALTER TABLE run_nodes ADD COLUMN join_node_id INTEGER`,
+  });
+  addColumnIfMissing(tx, {
+    existsQuery: sql`SELECT COUNT(*) AS count FROM pragma_table_info('run_nodes') WHERE name = 'lineage_depth'`,
+    alterQuery: sql`ALTER TABLE run_nodes ADD COLUMN lineage_depth INTEGER NOT NULL DEFAULT 0`,
+  });
+  addColumnIfMissing(tx, {
+    existsQuery: sql`SELECT COUNT(*) AS count FROM pragma_table_info('run_nodes') WHERE name = 'sequence_path'`,
+    alterQuery: sql`ALTER TABLE run_nodes ADD COLUMN sequence_path TEXT`,
+  });
+  tx.run(sql`UPDATE run_nodes
+    SET node_role = COALESCE(node_role, (
+          SELECT tree_nodes.node_role
+          FROM tree_nodes
+          WHERE tree_nodes.id = run_nodes.tree_node_id
+        ), 'standard'),
+        node_type = COALESCE(node_type, (
+          SELECT tree_nodes.node_type
+          FROM tree_nodes
+          WHERE tree_nodes.id = run_nodes.tree_node_id
+        ), 'agent'),
+        provider = COALESCE(provider, (
+          SELECT tree_nodes.provider
+          FROM tree_nodes
+          WHERE tree_nodes.id = run_nodes.tree_node_id
+        )),
+        model = COALESCE(model, (
+          SELECT tree_nodes.model
+          FROM tree_nodes
+          WHERE tree_nodes.id = run_nodes.tree_node_id
+        )),
+        prompt = COALESCE(prompt, (
+          SELECT prompt_templates.content
+          FROM tree_nodes
+          LEFT JOIN prompt_templates ON prompt_templates.id = tree_nodes.prompt_template_id
+          WHERE tree_nodes.id = run_nodes.tree_node_id
+        )),
+        prompt_content_type = COALESCE(prompt_content_type, (
+          SELECT COALESCE(prompt_templates.content_type, 'markdown')
+          FROM tree_nodes
+          LEFT JOIN prompt_templates ON prompt_templates.id = tree_nodes.prompt_template_id
+          WHERE tree_nodes.id = run_nodes.tree_node_id
+        ), 'markdown'),
+        execution_permissions = COALESCE(execution_permissions, (
+          SELECT tree_nodes.execution_permissions
+          FROM tree_nodes
+          WHERE tree_nodes.id = run_nodes.tree_node_id
+        )),
+        error_handler_config = COALESCE(error_handler_config, (
+          SELECT tree_nodes.error_handler_config
+          FROM tree_nodes
+          WHERE tree_nodes.id = run_nodes.tree_node_id
+        )),
+        max_children = COALESCE(max_children, (
+          SELECT tree_nodes.max_children
+          FROM tree_nodes
+          WHERE tree_nodes.id = run_nodes.tree_node_id
+        ), 12),
+        max_retries = COALESCE(max_retries, (
+          SELECT tree_nodes.max_retries
+          FROM tree_nodes
+          WHERE tree_nodes.id = run_nodes.tree_node_id
+        ), 0),
+        lineage_depth = COALESCE(lineage_depth, 0),
+        sequence_path = COALESCE(sequence_path, CAST(sequence_index AS TEXT))`);
+  tx.run(sql`CREATE INDEX IF NOT EXISTS run_nodes_run_id_spawner_node_idx
+    ON run_nodes(workflow_run_id, spawner_node_id)`);
+  tx.run(sql`CREATE INDEX IF NOT EXISTS run_nodes_run_id_join_node_idx
+    ON run_nodes(workflow_run_id, join_node_id)`);
 
   // Refresh this trigger on every migration run so upgraded databases pick up
   // newly allowed status transitions.
@@ -459,20 +662,30 @@ export function migrateDatabase(db: AlphredDatabase): void {
       SELECT RAISE(ABORT, 'run_nodes must be inserted in pending state with null started_at/completed_at');
     END`);
 
-  tx.run(sql`CREATE TRIGGER IF NOT EXISTS run_nodes_node_key_matches_tree_node_insert_ck
+  // Refresh this trigger on every migration run so upgraded databases drop
+  // legacy definitions that blocked fan-out children on insert.
+  tx.run(sql`DROP TRIGGER IF EXISTS run_nodes_node_key_matches_tree_node_insert_ck`);
+  tx.run(sql`CREATE TRIGGER run_nodes_node_key_matches_tree_node_insert_ck
     BEFORE INSERT ON run_nodes
     FOR EACH ROW
     WHEN (
+      NEW.spawner_node_id IS NULL
+      AND
       NEW.node_key <> (SELECT node_key FROM tree_nodes WHERE id = NEW.tree_node_id)
     )
     BEGIN
       SELECT RAISE(ABORT, 'run_nodes.node_key must match tree_nodes.node_key for run_nodes.tree_node_id');
     END`);
 
-  tx.run(sql`CREATE TRIGGER IF NOT EXISTS run_nodes_node_key_matches_tree_node_update_ck
+  // Refresh this trigger on every migration run so upgraded databases drop
+  // the legacy definition that fired during spawner_node_id nullification.
+  tx.run(sql`DROP TRIGGER IF EXISTS run_nodes_node_key_matches_tree_node_update_ck`);
+  tx.run(sql`CREATE TRIGGER run_nodes_node_key_matches_tree_node_update_ck
     BEFORE UPDATE OF tree_node_id, node_key ON run_nodes
     FOR EACH ROW
     WHEN (
+      NEW.spawner_node_id IS NULL
+      AND
       NEW.node_key <> (SELECT node_key FROM tree_nodes WHERE id = NEW.tree_node_id)
     )
     BEGIN
@@ -497,6 +710,91 @@ export function migrateDatabase(db: AlphredDatabase): void {
     )
     BEGIN
       SELECT RAISE(ABORT, 'run_nodes.workflow_run_id and run_nodes.tree_node_id must share workflow_tree_id');
+    END`);
+
+  tx.run(sql`DROP TRIGGER IF EXISTS run_nodes_spawner_same_run_insert_ck`);
+  tx.run(sql`CREATE TRIGGER run_nodes_spawner_same_run_insert_ck
+    BEFORE INSERT ON run_nodes
+    FOR EACH ROW
+    WHEN (
+      NEW.spawner_node_id IS NOT NULL
+      AND NOT EXISTS (
+        SELECT 1
+        FROM run_nodes
+        WHERE id = NEW.spawner_node_id
+          AND workflow_run_id = NEW.workflow_run_id
+      )
+    )
+    BEGIN
+      SELECT RAISE(ABORT, 'run_nodes.spawner_node_id must reference a run node in the same workflow_run_id');
+    END`);
+
+  tx.run(sql`DROP TRIGGER IF EXISTS run_nodes_spawner_same_run_update_ck`);
+  tx.run(sql`CREATE TRIGGER run_nodes_spawner_same_run_update_ck
+    BEFORE UPDATE OF workflow_run_id, spawner_node_id ON run_nodes
+    FOR EACH ROW
+    WHEN (
+      NEW.spawner_node_id IS NOT NULL
+      AND NOT EXISTS (
+        SELECT 1
+        FROM run_nodes
+        WHERE id = NEW.spawner_node_id
+          AND workflow_run_id = NEW.workflow_run_id
+      )
+    )
+    BEGIN
+      SELECT RAISE(ABORT, 'run_nodes.spawner_node_id must reference a run node in the same workflow_run_id');
+    END`);
+
+  tx.run(sql`DROP TRIGGER IF EXISTS run_nodes_join_same_run_insert_ck`);
+  tx.run(sql`CREATE TRIGGER run_nodes_join_same_run_insert_ck
+    BEFORE INSERT ON run_nodes
+    FOR EACH ROW
+    WHEN (
+      NEW.join_node_id IS NOT NULL
+      AND NOT EXISTS (
+        SELECT 1
+        FROM run_nodes
+        WHERE id = NEW.join_node_id
+          AND workflow_run_id = NEW.workflow_run_id
+      )
+    )
+    BEGIN
+      SELECT RAISE(ABORT, 'run_nodes.join_node_id must reference a run node in the same workflow_run_id');
+    END`);
+
+  tx.run(sql`DROP TRIGGER IF EXISTS run_nodes_join_same_run_update_ck`);
+  tx.run(sql`CREATE TRIGGER run_nodes_join_same_run_update_ck
+    BEFORE UPDATE OF workflow_run_id, join_node_id ON run_nodes
+    FOR EACH ROW
+    WHEN (
+      NEW.join_node_id IS NOT NULL
+      AND NOT EXISTS (
+        SELECT 1
+        FROM run_nodes
+        WHERE id = NEW.join_node_id
+          AND workflow_run_id = NEW.workflow_run_id
+      )
+    )
+    BEGIN
+      SELECT RAISE(ABORT, 'run_nodes.join_node_id must reference a run node in the same workflow_run_id');
+    END`);
+
+  // Clear self-referential links before deleting a parent node so composite
+  // SET NULL FKs do not attempt to null workflow_run_id (which is NOT NULL).
+  tx.run(sql`CREATE TRIGGER IF NOT EXISTS run_nodes_clear_parent_links_before_delete_ck
+    BEFORE DELETE ON run_nodes
+    FOR EACH ROW
+    BEGIN
+      UPDATE run_nodes
+      SET spawner_node_id = NULL
+      WHERE workflow_run_id = OLD.workflow_run_id
+        AND spawner_node_id = OLD.id;
+
+      UPDATE run_nodes
+      SET join_node_id = NULL
+      WHERE workflow_run_id = OLD.workflow_run_id
+        AND join_node_id = OLD.id;
     END`);
 
   tx.run(sql`CREATE TRIGGER IF NOT EXISTS tree_nodes_node_key_update_referenced_by_run_nodes_ck
@@ -531,6 +829,171 @@ export function migrateDatabase(db: AlphredDatabase): void {
     BEGIN
       SELECT RAISE(ABORT, 'workflow_runs.workflow_tree_id must match workflow_tree_id for linked run_nodes');
     END`);
+
+  tx.run(sql`CREATE TABLE IF NOT EXISTS run_node_edges (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    workflow_run_id INTEGER NOT NULL REFERENCES workflow_runs(id) ON DELETE CASCADE,
+    source_run_node_id INTEGER NOT NULL REFERENCES run_nodes(id) ON DELETE CASCADE,
+    target_run_node_id INTEGER NOT NULL REFERENCES run_nodes(id) ON DELETE CASCADE,
+    route_on TEXT NOT NULL DEFAULT 'success',
+    auto INTEGER NOT NULL DEFAULT 1,
+    guard_expression TEXT,
+    priority INTEGER NOT NULL DEFAULT 0,
+    edge_kind TEXT NOT NULL DEFAULT 'tree',
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    CONSTRAINT run_node_edges_source_run_node_fk
+      FOREIGN KEY (workflow_run_id, source_run_node_id)
+      REFERENCES run_nodes(workflow_run_id, id)
+      ON DELETE CASCADE,
+    CONSTRAINT run_node_edges_target_run_node_fk
+      FOREIGN KEY (workflow_run_id, target_run_node_id)
+      REFERENCES run_nodes(workflow_run_id, id)
+      ON DELETE CASCADE,
+    CONSTRAINT run_node_edges_route_on_ck
+      CHECK (route_on IN ('success', 'failure', 'terminal')),
+    CONSTRAINT run_node_edges_auto_bool_ck
+      CHECK (auto IN (0, 1)),
+    CONSTRAINT run_node_edges_priority_ck
+      CHECK (priority >= 0),
+    CONSTRAINT run_node_edges_kind_ck
+      CHECK (edge_kind IN ('tree', 'dynamic_spawner_to_child', 'dynamic_child_to_join'))
+  )`);
+  addColumnIfMissing(tx, {
+    existsQuery: sql`SELECT COUNT(*) AS count FROM pragma_table_info('run_node_edges') WHERE name = 'auto'`,
+    alterQuery: sql`ALTER TABLE run_node_edges ADD COLUMN auto INTEGER NOT NULL DEFAULT 1`,
+  });
+  addColumnIfMissing(tx, {
+    existsQuery: sql`SELECT COUNT(*) AS count FROM pragma_table_info('run_node_edges') WHERE name = 'guard_expression'`,
+    alterQuery: sql`ALTER TABLE run_node_edges ADD COLUMN guard_expression TEXT`,
+  });
+  tx.run(sql`CREATE UNIQUE INDEX IF NOT EXISTS run_node_edges_unique_uq
+    ON run_node_edges(workflow_run_id, source_run_node_id, route_on, priority, target_run_node_id)`);
+  tx.run(sql`CREATE INDEX IF NOT EXISTS run_node_edges_run_id_target_idx
+    ON run_node_edges(workflow_run_id, target_run_node_id)`);
+  tx.run(sql`CREATE INDEX IF NOT EXISTS run_node_edges_run_id_source_idx
+    ON run_node_edges(workflow_run_id, source_run_node_id)`);
+  tx.run(sql`CREATE INDEX IF NOT EXISTS run_node_edges_created_at_idx
+    ON run_node_edges(created_at)`);
+  // Backfill runtime edges for pre-existing runs so upgraded in-flight runs keep
+  // dependency ordering when edge loading switches to run_node_edges.
+  tx.run(sql`INSERT OR IGNORE INTO run_node_edges (
+      workflow_run_id,
+      source_run_node_id,
+      target_run_node_id,
+      route_on,
+      auto,
+      guard_expression,
+      priority,
+      edge_kind
+    )
+    SELECT
+      source_nodes.workflow_run_id,
+      source_nodes.id,
+      target_nodes.id,
+      tree_edges.route_on,
+      tree_edges.auto,
+      guard_definitions.expression,
+      tree_edges.priority,
+      'tree'
+    FROM run_nodes AS source_nodes
+    INNER JOIN run_nodes AS target_nodes
+      ON target_nodes.workflow_run_id = source_nodes.workflow_run_id
+    INNER JOIN workflow_runs
+      ON workflow_runs.id = source_nodes.workflow_run_id
+    INNER JOIN tree_edges
+      ON tree_edges.workflow_tree_id = workflow_runs.workflow_tree_id
+      AND tree_edges.source_node_id = source_nodes.tree_node_id
+      AND tree_edges.target_node_id = target_nodes.tree_node_id
+    LEFT JOIN guard_definitions
+      ON guard_definitions.id = tree_edges.guard_definition_id
+    WHERE
+      source_nodes.spawner_node_id IS NULL
+      AND target_nodes.spawner_node_id IS NULL
+      AND NOT EXISTS (
+        SELECT 1
+        FROM run_nodes AS newer_source
+        WHERE
+          newer_source.workflow_run_id = source_nodes.workflow_run_id
+          AND newer_source.tree_node_id = source_nodes.tree_node_id
+          AND newer_source.spawner_node_id IS NULL
+          AND (
+            newer_source.attempt > source_nodes.attempt
+            OR (
+              newer_source.attempt = source_nodes.attempt
+              AND newer_source.id > source_nodes.id
+            )
+          )
+      )
+      AND NOT EXISTS (
+        SELECT 1
+        FROM run_nodes AS newer_target
+        WHERE
+          newer_target.workflow_run_id = target_nodes.workflow_run_id
+          AND newer_target.tree_node_id = target_nodes.tree_node_id
+          AND newer_target.spawner_node_id IS NULL
+          AND (
+            newer_target.attempt > target_nodes.attempt
+            OR (
+              newer_target.attempt = target_nodes.attempt
+              AND newer_target.id > target_nodes.id
+            )
+          )
+      )`);
+  tx.run(sql`INSERT OR IGNORE INTO run_node_edges (
+      workflow_run_id,
+      source_run_node_id,
+      target_run_node_id,
+      route_on,
+      auto,
+      guard_expression,
+      priority,
+      edge_kind
+    )
+    SELECT
+      child_nodes.workflow_run_id,
+      child_nodes.spawner_node_id,
+      child_nodes.id,
+      'success',
+      1,
+      NULL,
+      (
+        SELECT COUNT(*)
+        FROM run_nodes AS earlier_child
+        WHERE
+          earlier_child.workflow_run_id = child_nodes.workflow_run_id
+          AND earlier_child.spawner_node_id = child_nodes.spawner_node_id
+          AND (
+            earlier_child.sequence_index < child_nodes.sequence_index
+            OR (
+              earlier_child.sequence_index = child_nodes.sequence_index
+              AND earlier_child.id < child_nodes.id
+            )
+          )
+      ),
+      'dynamic_spawner_to_child'
+    FROM run_nodes AS child_nodes
+    WHERE child_nodes.spawner_node_id IS NOT NULL`);
+  tx.run(sql`INSERT OR IGNORE INTO run_node_edges (
+      workflow_run_id,
+      source_run_node_id,
+      target_run_node_id,
+      route_on,
+      auto,
+      guard_expression,
+      priority,
+      edge_kind
+    )
+    SELECT
+      child_nodes.workflow_run_id,
+      child_nodes.id,
+      child_nodes.join_node_id,
+      'terminal',
+      1,
+      NULL,
+      0,
+      'dynamic_child_to_join'
+    FROM run_nodes AS child_nodes
+    WHERE child_nodes.join_node_id IS NOT NULL`);
 
   tx.run(sql`CREATE TABLE IF NOT EXISTS routing_decisions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -574,6 +1037,74 @@ export function migrateDatabase(db: AlphredDatabase): void {
     ON phase_artifacts(workflow_run_id, created_at)`);
   tx.run(sql`CREATE INDEX IF NOT EXISTS phase_artifacts_created_at_idx
     ON phase_artifacts(created_at)`);
+
+  tx.run(sql`CREATE TABLE IF NOT EXISTS run_join_barriers (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    workflow_run_id INTEGER NOT NULL REFERENCES workflow_runs(id) ON DELETE CASCADE,
+    spawner_run_node_id INTEGER NOT NULL REFERENCES run_nodes(id) ON DELETE CASCADE,
+    join_run_node_id INTEGER NOT NULL REFERENCES run_nodes(id) ON DELETE CASCADE,
+    spawn_source_artifact_id INTEGER NOT NULL REFERENCES phase_artifacts(id) ON DELETE CASCADE,
+    expected_children INTEGER NOT NULL,
+    terminal_children INTEGER NOT NULL DEFAULT 0,
+    completed_children INTEGER NOT NULL DEFAULT 0,
+    failed_children INTEGER NOT NULL DEFAULT 0,
+    status TEXT NOT NULL DEFAULT 'pending',
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    released_at TEXT,
+    CONSTRAINT run_join_barriers_spawner_run_node_fk
+      FOREIGN KEY (workflow_run_id, spawner_run_node_id)
+      REFERENCES run_nodes(workflow_run_id, id)
+      ON DELETE CASCADE,
+    CONSTRAINT run_join_barriers_join_run_node_fk
+      FOREIGN KEY (workflow_run_id, join_run_node_id)
+      REFERENCES run_nodes(workflow_run_id, id)
+      ON DELETE CASCADE,
+    CONSTRAINT run_join_barriers_expected_children_ck
+      CHECK (expected_children >= 0),
+    CONSTRAINT run_join_barriers_terminal_children_ck
+      CHECK (terminal_children >= 0),
+    CONSTRAINT run_join_barriers_completed_children_ck
+      CHECK (completed_children >= 0),
+    CONSTRAINT run_join_barriers_failed_children_ck
+      CHECK (failed_children >= 0),
+    CONSTRAINT run_join_barriers_terminal_within_expected_ck
+      CHECK (terminal_children <= expected_children),
+    CONSTRAINT run_join_barriers_completed_within_expected_ck
+      CHECK (completed_children <= expected_children),
+    CONSTRAINT run_join_barriers_failed_within_expected_ck
+      CHECK (failed_children <= expected_children),
+    CONSTRAINT run_join_barriers_completed_failed_within_terminal_ck
+      CHECK ((completed_children + failed_children) <= terminal_children),
+    CONSTRAINT run_join_barriers_status_ck
+      CHECK (status IN ('pending', 'ready', 'released', 'cancelled'))
+  )`);
+  tx.run(sql`CREATE UNIQUE INDEX IF NOT EXISTS run_join_barriers_spawn_uq
+    ON run_join_barriers(workflow_run_id, spawner_run_node_id, spawn_source_artifact_id)`);
+  tx.run(sql`CREATE INDEX IF NOT EXISTS run_join_barriers_run_id_join_status_idx
+    ON run_join_barriers(workflow_run_id, join_run_node_id, status)`);
+  tx.run(sql`CREATE INDEX IF NOT EXISTS run_join_barriers_created_at_idx
+    ON run_join_barriers(created_at)`);
+
+  tx.run(sql`CREATE TRIGGER IF NOT EXISTS run_join_barriers_source_artifact_same_run_insert_ck
+    BEFORE INSERT ON run_join_barriers
+    FOR EACH ROW
+    WHEN (
+      (SELECT workflow_run_id FROM phase_artifacts WHERE id = NEW.spawn_source_artifact_id) <> NEW.workflow_run_id
+    )
+    BEGIN
+      SELECT RAISE(ABORT, 'run_join_barriers.spawn_source_artifact_id must reference a phase artifact in the same workflow_run_id');
+    END`);
+
+  tx.run(sql`CREATE TRIGGER IF NOT EXISTS run_join_barriers_source_artifact_same_run_update_ck
+    BEFORE UPDATE OF workflow_run_id, spawn_source_artifact_id ON run_join_barriers
+    FOR EACH ROW
+    WHEN (
+      (SELECT workflow_run_id FROM phase_artifacts WHERE id = NEW.spawn_source_artifact_id) <> NEW.workflow_run_id
+    )
+    BEGIN
+      SELECT RAISE(ABORT, 'run_join_barriers.spawn_source_artifact_id must reference a phase artifact in the same workflow_run_id');
+    END`);
 
   tx.run(sql`CREATE TABLE IF NOT EXISTS run_node_diagnostics (
     id INTEGER PRIMARY KEY AUTOINCREMENT,

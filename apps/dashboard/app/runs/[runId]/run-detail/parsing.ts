@@ -13,6 +13,7 @@ import {
   hasArtifactShape,
   hasRoutingDecisionShape,
   hasDiagnosticsShape,
+  hasFanOutGroupShape,
   hasWorktreeShape,
   isRecord,
   isInteger,
@@ -43,6 +44,10 @@ export function parseRunDetailPayload(payload: unknown, expectedRunId: number): 
   }
 
   if (!Array.isArray(payload.nodes) || !payload.nodes.every((node) => hasRunNodeShape(node))) {
+    return null;
+  }
+
+  if (!Array.isArray(payload.fanOutGroups) || !payload.fanOutGroups.every((group) => hasFanOutGroupShape(group))) {
     return null;
   }
 
