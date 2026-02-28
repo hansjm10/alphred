@@ -574,6 +574,7 @@ export function handleClaimedNodeSuccess(
         spawnerNodeKey: node.nodeKey,
         maxChildren: node.maxChildren,
         lineageDepth: node.lineageDepth,
+        batchOrdinal: currentAttempt,
       })
     : [];
   const joinNode = shouldSpawnChildren

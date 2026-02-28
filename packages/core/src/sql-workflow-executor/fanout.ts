@@ -127,9 +127,13 @@ export function parseSpawnerSubtasks(params: {
   spawnerNodeKey: string;
   maxChildren: number;
   lineageDepth: number;
+  batchOrdinal: number;
 }): SpawnerSubtaskSpec[] {
   if (params.lineageDepth > 0) {
     throw new Error('SPAWNER_DEPTH_EXCEEDED: nested fan-out beyond depth 1 is not allowed in phase 1.');
+  }
+  if (!Number.isInteger(params.batchOrdinal) || params.batchOrdinal < 1) {
+    throw new Error('SPAWNER_OUTPUT_INVALID: batchOrdinal must be an integer greater than or equal to 1.');
   }
 
   let payload: unknown;
@@ -154,6 +158,7 @@ export function parseSpawnerSubtasks(params: {
     );
   }
 
+  const generatedNodeKeyPrefix = `${normalizeNodeKey(params.spawnerNodeKey)}__${params.batchOrdinal}`;
   const subtaskSpecs: SpawnerSubtaskSpec[] = [];
   const seenNodeKeys = new Set<string>();
   for (let index = 0; index < payload.subtasks.length; index += 1) {
@@ -162,7 +167,7 @@ export function parseSpawnerSubtasks(params: {
       throw new Error(`SPAWNER_OUTPUT_INVALID: subtasks[${index}] must be an object.`);
     }
 
-    const generatedNodeKey = `${normalizeNodeKey(params.spawnerNodeKey)}__${index + 1}`;
+    const generatedNodeKey = `${generatedNodeKeyPrefix}__${index + 1}`;
     const nodeKey = resolveSubtaskNodeKey(item, { generatedNodeKey });
     if (seenNodeKeys.has(nodeKey)) {
       throw new Error(`SPAWNER_OUTPUT_INVALID: duplicate subtask nodeKey "${nodeKey}".`);

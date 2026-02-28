@@ -12,6 +12,7 @@ import {
 } from '@alphred/db';
 import { describe, expect, it } from 'vitest';
 import {
+  parseSpawnerSubtasks,
   releaseReadyJoinBarriersForJoinNode,
   reopenJoinBarrierForRetriedChild,
   spawnDynamicChildrenForSpawner,
@@ -280,6 +281,98 @@ describe('fanout join barrier guards', () => {
         ],
       }),
     ).toThrow('cannot emit another fan-out batch');
+  });
+
+  it('generates batch-scoped default node keys so repeated spawner batches do not collide', () => {
+    const { db, runId, spawnerNode, joinNode } = seedSpawnerJoinRun();
+    const firstArtifactId = insertSpawnerReportArtifact({
+      db,
+      runId,
+      spawnerRunNodeId: spawnerNode.runNodeId,
+      content: 'first-spawn',
+    });
+    const secondArtifactId = insertSpawnerReportArtifact({
+      db,
+      runId,
+      spawnerRunNodeId: spawnerNode.runNodeId,
+      content: 'second-spawn',
+    });
+    const spawnerReport = JSON.stringify({
+      schemaVersion: 1,
+      subtasks: [
+        {
+          title: 'Child A',
+          prompt: 'Implement child A',
+        },
+        {
+          title: 'Child B',
+          prompt: 'Implement child B',
+        },
+      ],
+    });
+
+    const firstBatchSubtasks = parseSpawnerSubtasks({
+      report: spawnerReport,
+      spawnerNodeKey: spawnerNode.nodeKey,
+      maxChildren: spawnerNode.maxChildren,
+      lineageDepth: spawnerNode.lineageDepth,
+      batchOrdinal: 1,
+    });
+    expect(firstBatchSubtasks.map(subtask => subtask.nodeKey)).toEqual(['breakdown__1__1', 'breakdown__1__2']);
+
+    spawnDynamicChildrenForSpawner(db, {
+      workflowRunId: runId,
+      spawnerNode,
+      joinNode,
+      spawnSourceArtifactId: firstArtifactId,
+      subtasks: firstBatchSubtasks,
+    });
+
+    const firstBatchChildren = loadRunNodeExecutionRows(db, runId).filter(
+      node => node.spawnerNodeId === spawnerNode.runNodeId && node.joinNodeId === joinNode.runNodeId,
+    );
+    expect(firstBatchChildren.map(node => node.nodeKey)).toEqual(['breakdown__1__1', 'breakdown__1__2']);
+
+    for (const childNode of firstBatchChildren) {
+      updateJoinBarrierForChildTerminal(db, {
+        workflowRunId: runId,
+        childNode,
+        childTerminalStatus: 'completed',
+      });
+    }
+    releaseReadyJoinBarriersForJoinNode(db, {
+      workflowRunId: runId,
+      joinRunNodeId: joinNode.runNodeId,
+    });
+
+    const secondBatchSubtasks = parseSpawnerSubtasks({
+      report: spawnerReport,
+      spawnerNodeKey: spawnerNode.nodeKey,
+      maxChildren: spawnerNode.maxChildren,
+      lineageDepth: spawnerNode.lineageDepth,
+      batchOrdinal: 2,
+    });
+    expect(secondBatchSubtasks.map(subtask => subtask.nodeKey)).toEqual(['breakdown__2__1', 'breakdown__2__2']);
+
+    expect(() =>
+      spawnDynamicChildrenForSpawner(db, {
+        workflowRunId: runId,
+        spawnerNode,
+        joinNode,
+        spawnSourceArtifactId: secondArtifactId,
+        subtasks: secondBatchSubtasks,
+      }),
+    ).not.toThrow();
+
+    const allChildren = loadRunNodeExecutionRows(db, runId).filter(
+      node => node.spawnerNodeId === spawnerNode.runNodeId && node.joinNodeId === joinNode.runNodeId,
+    );
+    expect(allChildren.map(node => node.nodeKey)).toEqual([
+      'breakdown__1__1',
+      'breakdown__1__2',
+      'breakdown__2__1',
+      'breakdown__2__2',
+    ]);
   });
 
   it('reopens the retried child barrier without mutating newer barriers', () => {
