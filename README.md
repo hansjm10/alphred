@@ -56,20 +56,6 @@ pnpm test
 pnpm dev:dashboard
 ```
 
-## Codex Review -> Fix Loop
-
-Run a Ralph-style autonomous loop that enforces strict `review -> fix` sequencing:
-
-```bash
-pnpm codex:review-fix-loop -- --base main --max-iterations 20 --yolo
-```
-
-Notes:
-- The loop runs `codex exec review` first, then `codex exec` for fixes, and repeats.
-- Completion is controlled by a required review marker: `<review_status>CLEAN</review_status>`.
-- Logs and last messages are written under `.git/codex-review-fix-loop/<timestamp>/`.
-- Use `--dry-run` to print commands without executing Codex.
-
 ## CLI Commands
 
 Current CLI command contract:
