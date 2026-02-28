@@ -1,5 +1,4 @@
-import { asc } from 'drizzle-orm';
-import { agentModels, type AlphredDatabase } from '@alphred/db';
+import { agentModels, asc, type AlphredDatabase } from '@alphred/db';
 import type {
   DashboardAgentModelOption,
   DashboardAgentProviderOption,

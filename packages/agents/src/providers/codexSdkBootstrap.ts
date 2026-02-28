@@ -176,7 +176,7 @@ function resolveCodexBinaryPath(dependencies: CodexBootstrapDependencies): strin
 }
 
 function createSessionCheckEnv(env: NodeJS.ProcessEnv, codexHome: string): NodeJS.ProcessEnv {
-  const commandEnv: NodeJS.ProcessEnv = {};
+  const commandEnv = {} as NodeJS.ProcessEnv;
   for (const [key, value] of Object.entries(env)) {
     if (value !== undefined) {
       commandEnv[key] = value;
