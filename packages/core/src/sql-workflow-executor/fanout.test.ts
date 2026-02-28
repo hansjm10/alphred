@@ -14,12 +14,14 @@ import {
 } from '@alphred/db';
 import { describe, expect, it } from 'vitest';
 import {
+  loadJoinBarrierStatesByJoinRunNodeId,
   parseSpawnerSubtasks,
   releaseReadyJoinBarriersForJoinNode,
   reopenJoinBarrierForRetriedChild,
   spawnDynamicChildrenForSpawner,
   updateJoinBarrierForChildTerminal,
 } from './fanout.js';
+import { markUnreachablePendingNodesAsSkipped } from './node-selection.js';
 import { loadEdgeRows, loadRunNodeExecutionRows } from './persistence.js';
 import { loadLatestArtifactsByRunNodeId, loadLatestRoutingDecisionsByRunNodeId } from './routing-selection.js';
 import { buildRoutingSelection } from './routing-selection.js';
@@ -543,6 +545,79 @@ describe('fanout join barrier guards', () => {
       .get();
 
     expect(barrierAfterStaleTerminal).toEqual(barrierAfterFirstTerminal);
+  });
+
+  it('counts pending->skipped unreachable fan-out children toward join barrier completion', () => {
+    const { db, runId, spawnerNode, joinNode } = seedSpawnerJoinRun();
+    const artifactId = insertSpawnerReportArtifact({
+      db,
+      runId,
+      spawnerRunNodeId: spawnerNode.runNodeId,
+      content: 'spawn-a',
+    });
+
+    spawnDynamicChildrenForSpawner(db, {
+      workflowRunId: runId,
+      spawnerNode,
+      joinNode,
+      spawnSourceArtifactId: artifactId,
+      subtasks: [
+        {
+          nodeKey: 'child-a',
+          title: 'Child A',
+          prompt: 'Implement child A',
+          provider: null,
+          model: null,
+          metadata: null,
+        },
+      ],
+    });
+
+    const childNode = loadRunNodeExecutionRows(db, runId).find(node => node.nodeKey === 'child-a');
+    if (!childNode) {
+      throw new Error('Expected dynamic child run node to be created.');
+    }
+
+    transitionRunNodeStatus(db, {
+      runNodeId: spawnerNode.runNodeId,
+      expectedFrom: 'pending',
+      to: 'running',
+    });
+    transitionRunNodeStatus(db, {
+      runNodeId: spawnerNode.runNodeId,
+      expectedFrom: 'running',
+      to: 'failed',
+    });
+
+    markUnreachablePendingNodesAsSkipped(
+      db,
+      runId,
+      loadEdgeRows(db, runId),
+      loadJoinBarrierStatesByJoinRunNodeId(db, runId),
+    );
+
+    const skippedChildNode = loadRunNodeExecutionRows(db, runId).find(node => node.runNodeId === childNode.runNodeId);
+    expect(skippedChildNode?.status).toBe('skipped');
+
+    const barrier = db
+      .select({
+        expectedChildren: runJoinBarriers.expectedChildren,
+        terminalChildren: runJoinBarriers.terminalChildren,
+        completedChildren: runJoinBarriers.completedChildren,
+        failedChildren: runJoinBarriers.failedChildren,
+        status: runJoinBarriers.status,
+      })
+      .from(runJoinBarriers)
+      .where(eq(runJoinBarriers.workflowRunId, runId))
+      .get();
+
+    expect(barrier).toEqual({
+      expectedChildren: 1,
+      terminalChildren: 1,
+      completedChildren: 0,
+      failedChildren: 0,
+      status: 'ready',
+    });
   });
 
   it('generates batch-scoped default node keys so repeated spawner batches do not collide', () => {

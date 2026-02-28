@@ -1,4 +1,5 @@
 import { transitionRunNodeStatus, type AlphredDatabase } from '@alphred/db';
+import { updateJoinBarrierForChildTerminal } from './fanout.js';
 import { loadRunNodeExecutionRows } from './persistence.js';
 import { buildRoutingSelection, loadLatestArtifactsByRunNodeId, loadLatestRoutingDecisionsByRunNodeId } from './routing-selection.js';
 import { getLatestRunNodeAttempts } from './type-conversions.js';
@@ -235,6 +236,11 @@ export function markUnreachablePendingNodesAsSkipped(
       runNodeId: unreachablePendingNode.runNodeId,
       expectedFrom: 'pending',
       to: 'skipped',
+    });
+    updateJoinBarrierForChildTerminal(db, {
+      workflowRunId,
+      childNode: unreachablePendingNode,
+      childTerminalStatus: 'skipped',
     });
   }
 }
