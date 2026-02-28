@@ -16,7 +16,7 @@ import {
   loadRetryFailureSummaryArtifact,
   loadUpstreamArtifactSelectionByRunNodeId,
 } from './routing-selection.js';
-import { loadMostRecentJoinBarrier, loadReadyJoinBarriersForJoinNode } from './fanout.js';
+import { loadBarriersForSpawnerJoin, loadMostRecentJoinBarrier, loadReadyJoinBarriersForJoinNode } from './fanout.js';
 import {
   buildTruncationMetadata,
   compareUpstreamSourceOrder,
@@ -119,31 +119,64 @@ function resolveJoinBatchChildRunNodeIds(
     return null;
   }
 
+  const joinRunNodeId = params.targetNode.runNodeId;
   const readyBarriers = loadReadyJoinBarriersForJoinNode(db, {
     workflowRunId: params.workflowRunId,
-    joinRunNodeId: params.targetNode.runNodeId,
+    joinRunNodeId,
   });
   if (readyBarriers.length === 0) {
     const mostRecentBarrier = loadMostRecentJoinBarrier(db, {
       workflowRunId: params.workflowRunId,
-      joinRunNodeId: params.targetNode.runNodeId,
+      joinRunNodeId,
     });
     return mostRecentBarrier ? new Set<number>() : null;
   }
 
+  const latestChildrenBySpawnerRunNodeId = new Map<number, RunNodeExecutionRow[]>();
+  for (const node of params.latestNodeAttempts) {
+    if (node.spawnerNodeId === null || node.joinNodeId !== joinRunNodeId) {
+      continue;
+    }
+
+    const children = latestChildrenBySpawnerRunNodeId.get(node.spawnerNodeId);
+    if (children) {
+      children.push(node);
+      continue;
+    }
+
+    latestChildrenBySpawnerRunNodeId.set(node.spawnerNodeId, [node]);
+  }
+  for (const children of latestChildrenBySpawnerRunNodeId.values()) {
+    children.sort((left, right) => {
+      if (left.sequenceIndex !== right.sequenceIndex) {
+        return right.sequenceIndex - left.sequenceIndex;
+      }
+      return right.runNodeId - left.runNodeId;
+    });
+  }
+
+  const batchOffsetByBarrierId = new Map<number, number>();
+  const resolvedSpawnerRunNodeIds = new Set<number>();
   const batchChildRunNodeIds = new Set<number>();
   for (const barrier of readyBarriers) {
-    const batchChildren = params.latestNodeAttempts
-      .filter(
-        node => node.spawnerNodeId === barrier.spawnerRunNodeId && node.joinNodeId === params.targetNode.runNodeId,
-      )
-      .sort((left, right) => {
-        if (left.sequenceIndex !== right.sequenceIndex) {
-          return right.sequenceIndex - left.sequenceIndex;
-        }
-        return right.runNodeId - left.runNodeId;
-      })
-      .slice(0, barrier.expectedChildren);
+    if (!resolvedSpawnerRunNodeIds.has(barrier.spawnerRunNodeId)) {
+      const barriersForSpawnerJoin = loadBarriersForSpawnerJoin(db, {
+        workflowRunId: params.workflowRunId,
+        spawnerRunNodeId: barrier.spawnerRunNodeId,
+        joinRunNodeId,
+      });
+      let consumedChildren = 0;
+      for (let index = barriersForSpawnerJoin.length - 1; index >= 0; index -= 1) {
+        const spawnerJoinBarrier = barriersForSpawnerJoin[index];
+        batchOffsetByBarrierId.set(spawnerJoinBarrier.id, consumedChildren);
+        consumedChildren += spawnerJoinBarrier.expectedChildren;
+      }
+      resolvedSpawnerRunNodeIds.add(barrier.spawnerRunNodeId);
+    }
+
+    const childrenForSpawner = latestChildrenBySpawnerRunNodeId.get(barrier.spawnerRunNodeId) ?? [];
+    const batchOffset = batchOffsetByBarrierId.get(barrier.id) ?? 0;
+    const batchChildren = childrenForSpawner.slice(batchOffset, batchOffset + barrier.expectedChildren);
 
     for (const childNode of batchChildren) {
       batchChildRunNodeIds.add(childNode.runNodeId);

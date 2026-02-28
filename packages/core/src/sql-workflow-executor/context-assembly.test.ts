@@ -16,7 +16,12 @@ import {
 } from '@alphred/db';
 import { ERROR_HANDLER_SUMMARY_METADATA_KIND } from './constants.js';
 import { assembleUpstreamArtifactContext } from './context-assembly.js';
-import { releaseReadyJoinBarriersForJoinNode, spawnDynamicChildrenForSpawner, updateJoinBarrierForChildTerminal } from './fanout.js';
+import {
+  releaseReadyJoinBarriersForJoinNode,
+  reopenJoinBarrierForRetriedChild,
+  spawnDynamicChildrenForSpawner,
+  updateJoinBarrierForChildTerminal,
+} from './fanout.js';
 import { loadEdgeRows, loadRunNodeExecutionRows } from './persistence.js';
 import { loadLatestArtifactsByRunNodeId, loadLatestRoutingDecisionsByRunNodeId } from './routing-selection.js';
 import { transitionCompletedRunNodeToPendingAttempt, transitionFailedRunNodeToRetryAttempt } from './transitions.js';
@@ -865,6 +870,255 @@ describe('assembleUpstreamArtifactContext join fan-out batching', () => {
     expect(joinedContext).toContain('new-child-a');
     expect(joinedContext).not.toContain('old-child-a');
     expect(joinedContext).not.toContain('old-child-b');
+  });
+
+  it('partitions ready barriers by batch when reopening an older released barrier', () => {
+    const { db, runId } = seedJoinFanoutContextRun();
+    const runNodeIdByKey = createRunNodeIdMap(db, runId);
+    const spawnerRunNodeId = runNodeIdByKey.get('breakdown');
+    const joinRunNodeId = runNodeIdByKey.get('aggregate');
+    if (!spawnerRunNodeId || !joinRunNodeId) {
+      throw new Error('Expected spawner/join run nodes to exist.');
+    }
+
+    const initialNodes = getLatestRunNodeAttempts(loadRunNodeExecutionRows(db, runId));
+    const spawnerNode = initialNodes.find(node => node.runNodeId === spawnerRunNodeId);
+    const joinNode = initialNodes.find(node => node.runNodeId === joinRunNodeId);
+    if (!spawnerNode || !joinNode) {
+      throw new Error('Expected spawner/join run nodes to be materialized.');
+    }
+
+    transitionWorkflowRunStatus(db, {
+      workflowRunId: runId,
+      expectedFrom: 'pending',
+      to: 'running',
+    });
+
+    const firstSpawnArtifactId = insertReportArtifact({
+      db,
+      runId,
+      runNodeId: spawnerRunNodeId,
+      content: 'first fan-out request',
+    });
+    spawnDynamicChildrenForSpawner(db, {
+      workflowRunId: runId,
+      spawnerNode,
+      joinNode,
+      spawnSourceArtifactId: firstSpawnArtifactId,
+      subtasks: [
+        {
+          nodeKey: 'old-child',
+          title: 'Old child',
+          prompt: 'old child',
+          provider: null,
+          model: null,
+          metadata: null,
+        },
+      ],
+    });
+
+    const firstBatchChild = getLatestRunNodeAttempts(loadRunNodeExecutionRows(db, runId)).find(
+      node => node.nodeKey === 'old-child',
+    );
+    if (!firstBatchChild) {
+      throw new Error('Expected first-batch child to be materialized.');
+    }
+
+    transitionRunNodeStatus(db, {
+      runNodeId: firstBatchChild.runNodeId,
+      expectedFrom: 'pending',
+      to: 'running',
+    });
+    transitionRunNodeStatus(db, {
+      runNodeId: firstBatchChild.runNodeId,
+      expectedFrom: 'running',
+      to: 'completed',
+    });
+    const firstBatchInitialArtifactId = insertReportArtifact({
+      db,
+      runId,
+      runNodeId: firstBatchChild.runNodeId,
+      content: 'stale artifact from old child',
+    });
+    updateJoinBarrierForChildTerminal(db, {
+      workflowRunId: runId,
+      childNode: firstBatchChild,
+      childTerminalStatus: 'completed',
+    });
+
+    releaseReadyJoinBarriersForJoinNode(db, {
+      workflowRunId: runId,
+      joinRunNodeId,
+    });
+
+    const secondSpawnArtifactId = insertReportArtifact({
+      db,
+      runId,
+      runNodeId: spawnerRunNodeId,
+      content: 'second fan-out request',
+    });
+    spawnDynamicChildrenForSpawner(db, {
+      workflowRunId: runId,
+      spawnerNode,
+      joinNode,
+      spawnSourceArtifactId: secondSpawnArtifactId,
+      subtasks: [
+        {
+          nodeKey: 'middle-child',
+          title: 'Middle child',
+          prompt: 'middle child',
+          provider: null,
+          model: null,
+          metadata: null,
+        },
+      ],
+    });
+
+    const secondBatchChild = getLatestRunNodeAttempts(loadRunNodeExecutionRows(db, runId)).find(
+      node => node.nodeKey === 'middle-child',
+    );
+    if (!secondBatchChild) {
+      throw new Error('Expected second-batch child to be materialized.');
+    }
+
+    transitionRunNodeStatus(db, {
+      runNodeId: secondBatchChild.runNodeId,
+      expectedFrom: 'pending',
+      to: 'running',
+    });
+    transitionRunNodeStatus(db, {
+      runNodeId: secondBatchChild.runNodeId,
+      expectedFrom: 'running',
+      to: 'completed',
+    });
+    const secondBatchArtifactId = insertReportArtifact({
+      db,
+      runId,
+      runNodeId: secondBatchChild.runNodeId,
+      content: 'stale artifact from middle child',
+    });
+    updateJoinBarrierForChildTerminal(db, {
+      workflowRunId: runId,
+      childNode: secondBatchChild,
+      childTerminalStatus: 'completed',
+    });
+
+    releaseReadyJoinBarriersForJoinNode(db, {
+      workflowRunId: runId,
+      joinRunNodeId,
+    });
+
+    const thirdSpawnArtifactId = insertReportArtifact({
+      db,
+      runId,
+      runNodeId: spawnerRunNodeId,
+      content: 'third fan-out request',
+    });
+    spawnDynamicChildrenForSpawner(db, {
+      workflowRunId: runId,
+      spawnerNode,
+      joinNode,
+      spawnSourceArtifactId: thirdSpawnArtifactId,
+      subtasks: [
+        {
+          nodeKey: 'new-child',
+          title: 'New child',
+          prompt: 'new child',
+          provider: null,
+          model: null,
+          metadata: null,
+        },
+      ],
+    });
+
+    const thirdBatchChild = getLatestRunNodeAttempts(loadRunNodeExecutionRows(db, runId)).find(
+      node => node.nodeKey === 'new-child',
+    );
+    if (!thirdBatchChild) {
+      throw new Error('Expected third-batch child to be materialized.');
+    }
+
+    transitionRunNodeStatus(db, {
+      runNodeId: thirdBatchChild.runNodeId,
+      expectedFrom: 'pending',
+      to: 'running',
+    });
+    transitionRunNodeStatus(db, {
+      runNodeId: thirdBatchChild.runNodeId,
+      expectedFrom: 'running',
+      to: 'completed',
+    });
+    const thirdBatchArtifactId = insertReportArtifact({
+      db,
+      runId,
+      runNodeId: thirdBatchChild.runNodeId,
+      content: 'fresh artifact from new child',
+    });
+    updateJoinBarrierForChildTerminal(db, {
+      workflowRunId: runId,
+      childNode: thirdBatchChild,
+      childTerminalStatus: 'completed',
+    });
+
+    transitionCompletedRunNodeToPendingAttempt(db, {
+      runNodeId: firstBatchChild.runNodeId,
+      currentAttempt: 1,
+      nextAttempt: 2,
+    });
+    reopenJoinBarrierForRetriedChild(db, {
+      workflowRunId: runId,
+      childNode: firstBatchChild,
+      previousTerminalStatus: 'completed',
+    });
+    transitionRunNodeStatus(db, {
+      runNodeId: firstBatchChild.runNodeId,
+      expectedFrom: 'pending',
+      to: 'running',
+    });
+    transitionRunNodeStatus(db, {
+      runNodeId: firstBatchChild.runNodeId,
+      expectedFrom: 'running',
+      to: 'completed',
+    });
+    const firstBatchRetryArtifactId = insertReportArtifact({
+      db,
+      runId,
+      runNodeId: firstBatchChild.runNodeId,
+      content: 'fresh artifact from old child retry',
+    });
+    updateJoinBarrierForChildTerminal(db, {
+      workflowRunId: runId,
+      childNode: firstBatchChild,
+      childTerminalStatus: 'completed',
+    });
+
+    const latestNodeAttempts = getLatestRunNodeAttempts(loadRunNodeExecutionRows(db, runId));
+    const latestJoinNode = latestNodeAttempts.find(node => node.runNodeId === joinRunNodeId);
+    if (!latestJoinNode) {
+      throw new Error('Expected join run node to exist.');
+    }
+
+    const assembly = assembleUpstreamArtifactContext(db, {
+      workflowRunId: runId,
+      targetNode: latestJoinNode,
+      targetAttempt: latestJoinNode.attempt,
+      latestNodeAttempts,
+      edgeRows: loadEdgeRows(db, runId),
+      latestRoutingDecisionsByRunNodeId: loadLatestRoutingDecisionsByRunNodeId(db, runId).latestByRunNodeId,
+      latestArtifactsByRunNodeId: loadLatestArtifactsByRunNodeId(db, runId),
+    });
+
+    expect(assembly.manifest.included_source_node_keys).toContain('old-child');
+    expect(assembly.manifest.included_source_node_keys).toContain('new-child');
+    expect(assembly.manifest.included_source_node_keys).not.toContain('middle-child');
+    expect(assembly.manifest.included_artifact_ids).toContain(firstBatchRetryArtifactId);
+    expect(assembly.manifest.included_artifact_ids).toContain(thirdBatchArtifactId);
+    expect(assembly.manifest.included_artifact_ids).not.toContain(firstBatchInitialArtifactId);
+    expect(assembly.manifest.included_artifact_ids).not.toContain(secondBatchArtifactId);
+    const joinedContext = assembly.contextEntries.join('\n');
+    expect(joinedContext).toContain('old-child');
+    expect(joinedContext).toContain('new-child');
+    expect(joinedContext).not.toContain('middle-child');
   });
 
   it('includes terminal children from all ready barriers when assembling join context', () => {

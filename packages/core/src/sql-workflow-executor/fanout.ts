@@ -530,7 +530,7 @@ export function loadMostRecentJoinBarrier(
   };
 }
 
-function loadBarriersForSpawnerJoin(
+export function loadBarriersForSpawnerJoin(
   db: Pick<AlphredDatabase, 'select'>,
   params: {
     workflowRunId: number;
