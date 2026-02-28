@@ -11,6 +11,7 @@
 .codex/
 .mcp.json
 .playwright-mcp/
+.playwright-cli/
 
 # Node
 node_modules/
