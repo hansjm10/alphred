@@ -800,7 +800,7 @@ export function createRunOperations(params: {
           );
         }
 
-        const logArtifacts = db
+        const matchingArtifact = db
           .select({
             id: phaseArtifacts.id,
             contentType: phaseArtifacts.contentType,
@@ -814,22 +814,14 @@ export function createRunOperations(params: {
               eq(phaseArtifacts.workflowRunId, params.runId),
               eq(phaseArtifacts.runNodeId, params.runNodeId),
               eq(phaseArtifacts.artifactType, 'log'),
+              sql`coalesce(json_extract(${phaseArtifacts.metadata}, '$.kind'), '') = ${FAILED_COMMAND_OUTPUT_ARTIFACT_KIND}`,
+              sql`json_extract(${phaseArtifacts.metadata}, '$.attempt') = ${params.attempt}`,
+              sql`json_extract(${phaseArtifacts.metadata}, '$.eventIndex') = ${params.eventIndex}`,
             ),
           )
           .orderBy(desc(phaseArtifacts.id))
-          .all();
-
-        const matchingArtifact = logArtifacts.find((artifact) => {
-          const metadata = isRecord(artifact.metadata) ? artifact.metadata : null;
-          if (!metadata || metadata.kind !== FAILED_COMMAND_OUTPUT_ARTIFACT_KIND) {
-            return false;
-          }
-
-          return (
-            toOptionalNonNegativeInteger(metadata.attempt) === params.attempt
-            && toOptionalNonNegativeInteger(metadata.eventIndex) === params.eventIndex
-          );
-        });
+          .limit(1)
+          .get();
 
         if (!matchingArtifact) {
           throw new DashboardIntegrationError(

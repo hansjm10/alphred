@@ -329,15 +329,12 @@ export function persistRunNodeAttemptDiagnostics(
     return;
   }
 
-  const failedCommandOutputs =
-    params.outcome === 'failed'
-      ? persistFailedCommandOutputs(db, {
-          workflowRunId: params.workflowRunId,
-          runNodeId: params.node.runNodeId,
-          attempt: params.attempt,
-          events: params.events,
-        })
-      : [];
+  const failedCommandOutputs = persistFailedCommandOutputs(db, {
+    workflowRunId: params.workflowRunId,
+    runNodeId: params.node.runNodeId,
+    attempt: params.attempt,
+    events: params.events,
+  });
   const diagnostics = buildDiagnosticsPayload({
     ...params,
     failedCommandOutputs,
