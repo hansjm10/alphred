@@ -14,6 +14,14 @@ import {
 } from './types';
 import type { DiagnosticErrorClassification } from './types';
 
+const NODE_ROLES = new Set<DashboardRunDetail['nodes'][number]['nodeRole']>(['standard', 'spawner', 'join']);
+const FAN_OUT_GROUP_STATUSES = new Set<DashboardRunDetail['fanOutGroups'][number]['status']>([
+  'pending',
+  'ready',
+  'released',
+  'cancelled',
+]);
+
 export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
 }
@@ -218,6 +226,49 @@ export function hasDiagnosticsShape(value: unknown): value is DashboardRunDetail
   return true;
 }
 
+export function hasFanOutGroupShape(value: unknown): value is DashboardRunDetail['fanOutGroups'][number] {
+  if (!isRecord(value)) {
+    return false;
+  }
+
+  if (
+    !isInteger(value.spawnerNodeId) ||
+    !isInteger(value.joinNodeId) ||
+    !isInteger(value.spawnSourceArtifactId) ||
+    !isInteger(value.expectedChildren) ||
+    !isInteger(value.terminalChildren) ||
+    !isInteger(value.completedChildren) ||
+    !isInteger(value.failedChildren) ||
+    value.expectedChildren < 0 ||
+    value.terminalChildren < 0 ||
+    value.completedChildren < 0 ||
+    value.failedChildren < 0 ||
+    typeof value.status !== 'string' ||
+    !FAN_OUT_GROUP_STATUSES.has(value.status as DashboardRunDetail['fanOutGroups'][number]['status']) ||
+    !Array.isArray(value.childNodeIds) ||
+    !value.childNodeIds.every(isInteger)
+  ) {
+    return false;
+  }
+
+  const uniqueChildNodeIds = new Set<number>(value.childNodeIds);
+  if (uniqueChildNodeIds.size !== value.childNodeIds.length) {
+    return false;
+  }
+
+  if (
+    value.terminalChildren > value.expectedChildren ||
+    value.completedChildren > value.terminalChildren ||
+    value.failedChildren > value.terminalChildren ||
+    value.completedChildren + value.failedChildren > value.terminalChildren ||
+    value.childNodeIds.length > value.expectedChildren
+  ) {
+    return false;
+  }
+
+  return true;
+}
+
 export function hasRunNodeShape(value: unknown): value is DashboardRunDetail['nodes'][number] {
   if (!isRecord(value)) {
     return false;
@@ -227,6 +278,13 @@ export function hasRunNodeShape(value: unknown): value is DashboardRunDetail['no
     !isInteger(value.id) ||
     !isInteger(value.treeNodeId) ||
     typeof value.nodeKey !== 'string' ||
+    typeof value.nodeRole !== 'string' ||
+    !NODE_ROLES.has(value.nodeRole as DashboardRunDetail['nodes'][number]['nodeRole']) ||
+    !(value.spawnerNodeId === null || isInteger(value.spawnerNodeId)) ||
+    !(value.joinNodeId === null || isInteger(value.joinNodeId)) ||
+    !isInteger(value.lineageDepth) ||
+    value.lineageDepth < 0 ||
+    !isNullableString(value.sequencePath) ||
     !isInteger(value.sequenceIndex) ||
     !isInteger(value.attempt) ||
     typeof value.status !== 'string' ||
@@ -234,6 +292,32 @@ export function hasRunNodeShape(value: unknown): value is DashboardRunDetail['no
     !isNullableString(value.startedAt) ||
     !isNullableString(value.completedAt)
   ) {
+    return false;
+  }
+
+  const hasSpawnerNodeId = value.spawnerNodeId !== null;
+  const hasJoinNodeId = value.joinNodeId !== null;
+  if (hasSpawnerNodeId !== hasJoinNodeId) {
+    return false;
+  }
+
+  if ((value.nodeRole === 'spawner' || value.nodeRole === 'join') && (hasSpawnerNodeId || hasJoinNodeId)) {
+    return false;
+  }
+
+  if ((value.nodeRole === 'spawner' || value.nodeRole === 'join') && value.lineageDepth !== 0) {
+    return false;
+  }
+
+  if (value.nodeRole === 'standard' && hasSpawnerNodeId && value.lineageDepth < 1) {
+    return false;
+  }
+
+  if (value.nodeRole === 'standard' && !hasSpawnerNodeId && value.lineageDepth !== 0) {
+    return false;
+  }
+
+  if (value.nodeRole === 'standard' && hasSpawnerNodeId && typeof value.sequencePath !== 'string') {
     return false;
   }
 

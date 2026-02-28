@@ -1214,6 +1214,70 @@ describe('RunDetailContent realtime updates', () => {
     }, { timeout: 2_000 });
   });
 
+  it('degrades gracefully when realtime response includes malformed fan-out group snapshots', async () => {
+    fetchMock.mockResolvedValue(
+      createJsonResponse({
+        ...createRunDetail(),
+        fanOutGroups: [
+          {
+            spawnerNodeId: 1,
+          },
+        ],
+      }),
+    );
+
+    render(
+      <RunDetailContent
+        initialDetail={createRunDetail()}
+        repositories={[createRepository()]}
+        pollIntervalMs={50}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText(/Connection interrupted\. Retrying in/i)).toBeInTheDocument();
+    }, { timeout: 2_000 });
+
+    await waitFor(() => {
+      expect(screen.getByText(/Update channel degraded: Realtime run detail response was malformed\./i)).toBeInTheDocument();
+    }, { timeout: 2_000 });
+  });
+
+  it('degrades gracefully when realtime response includes inconsistent node fan-out linkage fields', async () => {
+    const detail = createRunDetail();
+    const malformedNode = {
+      ...detail.nodes[0],
+      nodeRole: 'spawner' as const,
+      spawnerNodeId: 99,
+      joinNodeId: null,
+      lineageDepth: 0,
+      sequencePath: null,
+    };
+
+    fetchMock.mockResolvedValue(
+      createJsonResponse({
+        ...detail,
+        nodes: [malformedNode],
+      }),
+    );
+
+    render(
+      <RunDetailContent
+        initialDetail={createRunDetail()}
+        repositories={[createRepository()]}
+        pollIntervalMs={50}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText(/Connection interrupted\. Retrying in/i)).toBeInTheDocument();
+    }, { timeout: 2_000 });
+
+    await waitFor(() => {
+      expect(screen.getByText(/Update channel degraded: Realtime run detail response was malformed\./i)).toBeInTheDocument();
+    }, { timeout: 2_000 });
+  });
+
   it('clears degraded warning when realtime is disabled after an error', async () => {
     const initialDetail = createRunDetail();
     fetchMock.mockRejectedValue(new Error('network down'));
