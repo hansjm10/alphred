@@ -1012,5 +1012,15 @@ describe('assembleUpstreamArtifactContext join fan-out batching', () => {
     const joinedContext = assembly.contextEntries.join('\n');
     expect(joinedContext).toContain('a-child');
     expect(joinedContext).toContain('b-child');
+    const joinSummaryEntry = assembly.contextEntries.find(entry => entry.includes('ALPHRED_JOIN_SUBTASKS v1'));
+    if (!joinSummaryEntry) {
+      throw new Error('Expected join summary context entry to be included.');
+    }
+    const expectedSpawnerRunNodeIds = [spawnerARunNodeId, spawnerBRunNodeId].sort((left, right) => left - right).join(',');
+    expect(joinSummaryEntry).toContain(`spawner_run_node_ids: ${expectedSpawnerRunNodeIds}`);
+    expect(joinSummaryEntry).toContain('subtasks.total: 2');
+    expect(joinSummaryEntry).toContain('subtasks.terminal: 2');
+    expect(joinSummaryEntry).toContain('subtasks.succeeded: 2');
+    expect(joinSummaryEntry).toContain('subtasks.failed: 0');
   });
 });

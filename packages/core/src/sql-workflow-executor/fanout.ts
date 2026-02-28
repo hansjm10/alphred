@@ -552,6 +552,48 @@ function loadActiveBarrierForChild(
   return activeBarriers[0] ?? null;
 }
 
+function loadMostRecentBarrierForChild(
+  db: Pick<AlphredDatabase, 'select'>,
+  params: {
+    workflowRunId: number;
+    spawnerRunNodeId: number;
+    joinRunNodeId: number;
+  },
+): JoinBarrierRow | null {
+  const row = db
+    .select({
+      id: runJoinBarriers.id,
+      workflowRunId: runJoinBarriers.workflowRunId,
+      spawnerRunNodeId: runJoinBarriers.spawnerRunNodeId,
+      joinRunNodeId: runJoinBarriers.joinRunNodeId,
+      spawnSourceArtifactId: runJoinBarriers.spawnSourceArtifactId,
+      expectedChildren: runJoinBarriers.expectedChildren,
+      terminalChildren: runJoinBarriers.terminalChildren,
+      completedChildren: runJoinBarriers.completedChildren,
+      failedChildren: runJoinBarriers.failedChildren,
+      status: runJoinBarriers.status,
+    })
+    .from(runJoinBarriers)
+    .where(
+      and(
+        eq(runJoinBarriers.workflowRunId, params.workflowRunId),
+        eq(runJoinBarriers.spawnerRunNodeId, params.spawnerRunNodeId),
+        eq(runJoinBarriers.joinRunNodeId, params.joinRunNodeId),
+      ),
+    )
+    .orderBy(desc(runJoinBarriers.id))
+    .get();
+
+  if (!row) {
+    return null;
+  }
+
+  return {
+    ...row,
+    status: parseJoinBarrierStatus(row.status),
+  };
+}
+
 export function updateJoinBarrierForChildTerminal(
   db: Pick<AlphredDatabase, 'select' | 'update'>,
   params: {
@@ -620,7 +662,7 @@ export function reopenJoinBarrierForRetriedChild(
     return;
   }
 
-  const barrier = loadActiveBarrierForChild(db, {
+  const barrier = loadMostRecentBarrierForChild(db, {
     workflowRunId: params.workflowRunId,
     spawnerRunNodeId,
     joinRunNodeId,

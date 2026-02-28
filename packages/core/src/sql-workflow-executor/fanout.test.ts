@@ -12,6 +12,7 @@ import {
 } from '@alphred/db';
 import { describe, expect, it } from 'vitest';
 import {
+  releaseReadyJoinBarriersForJoinNode,
   reopenJoinBarrierForRetriedChild,
   spawnDynamicChildrenForSpawner,
   updateJoinBarrierForChildTerminal,
@@ -380,6 +381,96 @@ describe('fanout join barrier guards', () => {
       workflowRunId: runId,
       childNode,
       childTerminalStatus: 'failed',
+    });
+
+    reopenJoinBarrierForRetriedChild(db, {
+      workflowRunId: runId,
+      childNode,
+      previousTerminalStatus: 'failed',
+    });
+
+    const reopenedBarrier = db
+      .select({
+        terminalChildren: runJoinBarriers.terminalChildren,
+        completedChildren: runJoinBarriers.completedChildren,
+        failedChildren: runJoinBarriers.failedChildren,
+        status: runJoinBarriers.status,
+      })
+      .from(runJoinBarriers)
+      .where(eq(runJoinBarriers.workflowRunId, runId))
+      .get();
+
+    expect(reopenedBarrier).toEqual({
+      terminalChildren: 0,
+      completedChildren: 0,
+      failedChildren: 0,
+      status: 'pending',
+    });
+
+    updateJoinBarrierForChildTerminal(db, {
+      workflowRunId: runId,
+      childNode,
+      childTerminalStatus: 'completed',
+    });
+
+    const completedBarrier = db
+      .select({
+        terminalChildren: runJoinBarriers.terminalChildren,
+        completedChildren: runJoinBarriers.completedChildren,
+        failedChildren: runJoinBarriers.failedChildren,
+        status: runJoinBarriers.status,
+      })
+      .from(runJoinBarriers)
+      .where(eq(runJoinBarriers.workflowRunId, runId))
+      .get();
+
+    expect(completedBarrier).toEqual({
+      terminalChildren: 1,
+      completedChildren: 1,
+      failedChildren: 0,
+      status: 'ready',
+    });
+  });
+
+  it('reopens a released barrier when a failed child is retried', () => {
+    const { db, runId, spawnerNode, joinNode } = seedSpawnerJoinRun();
+    const artifactId = insertSpawnerReportArtifact({
+      db,
+      runId,
+      spawnerRunNodeId: spawnerNode.runNodeId,
+      content: 'spawn-a',
+    });
+
+    spawnDynamicChildrenForSpawner(db, {
+      workflowRunId: runId,
+      spawnerNode,
+      joinNode,
+      spawnSourceArtifactId: artifactId,
+      subtasks: [
+        {
+          nodeKey: 'child-a',
+          title: 'Child A',
+          prompt: 'Implement child A',
+          provider: null,
+          model: null,
+          metadata: null,
+        },
+      ],
+    });
+
+    const childNode = loadRunNodeExecutionRows(db, runId).find(node => node.nodeKey === 'child-a');
+    if (!childNode) {
+      throw new Error('Expected dynamic child run node to be created.');
+    }
+
+    updateJoinBarrierForChildTerminal(db, {
+      workflowRunId: runId,
+      childNode,
+      childTerminalStatus: 'failed',
+    });
+    releaseReadyJoinBarriersForJoinNode(db, {
+      workflowRunId: runId,
+      joinRunNodeId: joinNode.runNodeId,
     });
 
     reopenJoinBarrierForRetriedChild(db, {

@@ -347,22 +347,48 @@ function buildJoinSummaryContextEntry(
     return null;
   }
 
-  const barrier = loadMostRecentJoinBarrier(db, {
+  const readyBarriers = loadReadyJoinBarriersForJoinNode(db, {
     workflowRunId: params.workflowRunId,
     joinRunNodeId: params.targetNode.runNodeId,
   });
-  if (!barrier) {
+  const summaryBarriers =
+    readyBarriers.length > 0
+      ? readyBarriers
+      : (() => {
+          const mostRecentBarrier = loadMostRecentJoinBarrier(db, {
+            workflowRunId: params.workflowRunId,
+            joinRunNodeId: params.targetNode.runNodeId,
+          });
+          return mostRecentBarrier ? [mostRecentBarrier] : [];
+        })();
+  if (summaryBarriers.length === 0) {
     return null;
   }
+
+  let totalExpectedChildren = 0;
+  let totalTerminalChildren = 0;
+  let totalCompletedChildren = 0;
+  let totalFailedChildren = 0;
+  const spawnerRunNodeIds = new Set<number>();
+  for (const barrier of summaryBarriers) {
+    spawnerRunNodeIds.add(barrier.spawnerRunNodeId);
+    totalExpectedChildren += barrier.expectedChildren;
+    totalTerminalChildren += barrier.terminalChildren;
+    totalCompletedChildren += barrier.completedChildren;
+    totalFailedChildren += barrier.failedChildren;
+  }
+  const sortedSpawnerRunNodeIds = [...spawnerRunNodeIds].sort((left, right) => left - right);
+  const primarySpawnerRunNodeId = Math.min(...sortedSpawnerRunNodeIds);
 
   const lines: string[] = [
     'ALPHRED_JOIN_SUBTASKS v1',
     `join_run_node_id: ${params.targetNode.runNodeId}`,
-    `spawner_run_node_id: ${barrier.spawnerRunNodeId}`,
-    `subtasks.total: ${barrier.expectedChildren}`,
-    `subtasks.terminal: ${barrier.terminalChildren}`,
-    `subtasks.succeeded: ${barrier.completedChildren}`,
-    `subtasks.failed: ${barrier.failedChildren}`,
+    `spawner_run_node_id: ${primarySpawnerRunNodeId}`,
+    `spawner_run_node_ids: ${sortedSpawnerRunNodeIds.join(',')}`,
+    `subtasks.total: ${totalExpectedChildren}`,
+    `subtasks.terminal: ${totalTerminalChildren}`,
+    `subtasks.succeeded: ${totalCompletedChildren}`,
+    `subtasks.failed: ${totalFailedChildren}`,
     'subtask_rows:',
   ];
 
