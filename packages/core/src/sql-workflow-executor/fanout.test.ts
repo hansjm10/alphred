@@ -1,4 +1,4 @@
-import { eq } from 'drizzle-orm';
+import { asc, eq } from 'drizzle-orm';
 import {
   createDatabase,
   materializeWorkflowRunFromTree,
@@ -282,7 +282,7 @@ describe('fanout join barrier guards', () => {
     ).toThrow('cannot emit another fan-out batch');
   });
 
-  it('fails fast when child barrier updates are ambiguous across active barriers', () => {
+  it('reopens the retried child barrier without mutating newer barriers', () => {
     const { db, runId, spawnerNode, joinNode } = seedSpawnerJoinRun();
     const firstArtifactId = insertSpawnerReportArtifact({
       db,
@@ -297,53 +297,105 @@ describe('fanout join barrier guards', () => {
       content: 'spawn-b',
     });
 
-    db.insert(runJoinBarriers)
-      .values([
+    spawnDynamicChildrenForSpawner(db, {
+      workflowRunId: runId,
+      spawnerNode,
+      joinNode,
+      spawnSourceArtifactId: firstArtifactId,
+      subtasks: [
         {
-          workflowRunId: runId,
-          spawnerRunNodeId: spawnerNode.runNodeId,
-          joinRunNodeId: joinNode.runNodeId,
-          spawnSourceArtifactId: firstArtifactId,
-          expectedChildren: 1,
-          terminalChildren: 0,
-          completedChildren: 0,
-          failedChildren: 0,
-          status: 'pending',
+          nodeKey: 'first-child',
+          title: 'First Child',
+          prompt: 'Implement first child',
+          provider: null,
+          model: null,
+          metadata: null,
         },
-        {
-          workflowRunId: runId,
-          spawnerRunNodeId: spawnerNode.runNodeId,
-          joinRunNodeId: joinNode.runNodeId,
-          spawnSourceArtifactId: secondArtifactId,
-          expectedChildren: 1,
-          terminalChildren: 0,
-          completedChildren: 0,
-          failedChildren: 0,
-          status: 'pending',
-        },
-      ])
-      .run();
+      ],
+    });
 
-    expect(() =>
-      updateJoinBarrierForChildTerminal(db, {
-        workflowRunId: runId,
-        childNode: {
-          spawnerNodeId: spawnerNode.runNodeId,
-          joinNodeId: joinNode.runNodeId,
+    const firstChild = loadRunNodeExecutionRows(db, runId).find(node => node.nodeKey === 'first-child');
+    if (!firstChild) {
+      throw new Error('Expected first dynamic child run node to be created.');
+    }
+
+    updateJoinBarrierForChildTerminal(db, {
+      workflowRunId: runId,
+      childNode: firstChild,
+      childTerminalStatus: 'failed',
+    });
+    releaseReadyJoinBarriersForJoinNode(db, {
+      workflowRunId: runId,
+      joinRunNodeId: joinNode.runNodeId,
+    });
+
+    spawnDynamicChildrenForSpawner(db, {
+      workflowRunId: runId,
+      spawnerNode,
+      joinNode,
+      spawnSourceArtifactId: secondArtifactId,
+      subtasks: [
+        {
+          nodeKey: 'second-child',
+          title: 'Second Child',
+          prompt: 'Implement second child',
+          provider: null,
+          model: null,
+          metadata: null,
         },
-        childTerminalStatus: 'failed',
-      }),
-    ).toThrow('multiple active barriers');
+      ],
+    });
+
+    const secondChild = loadRunNodeExecutionRows(db, runId).find(node => node.nodeKey === 'second-child');
+    if (!secondChild) {
+      throw new Error('Expected second dynamic child run node to be created.');
+    }
+
+    updateJoinBarrierForChildTerminal(db, {
+      workflowRunId: runId,
+      childNode: secondChild,
+      childTerminalStatus: 'completed',
+    });
+    reopenJoinBarrierForRetriedChild(db, {
+      workflowRunId: runId,
+      childNode: firstChild,
+      previousTerminalStatus: 'failed',
+    });
+    updateJoinBarrierForChildTerminal(db, {
+      workflowRunId: runId,
+      childNode: firstChild,
+      childTerminalStatus: 'completed',
+    });
 
     const barriers = db
       .select({
+        expectedChildren: runJoinBarriers.expectedChildren,
         terminalChildren: runJoinBarriers.terminalChildren,
+        completedChildren: runJoinBarriers.completedChildren,
+        failedChildren: runJoinBarriers.failedChildren,
+        status: runJoinBarriers.status,
       })
       .from(runJoinBarriers)
       .where(eq(runJoinBarriers.workflowRunId, runId))
+      .orderBy(asc(runJoinBarriers.id))
       .all();
 
-    expect(barriers.map(barrier => barrier.terminalChildren)).toEqual([0, 0]);
+    expect(barriers).toEqual([
+      {
+        expectedChildren: 1,
+        terminalChildren: 1,
+        completedChildren: 1,
+        failedChildren: 0,
+        status: 'ready',
+      },
+      {
+        expectedChildren: 1,
+        terminalChildren: 1,
+        completedChildren: 1,
+        failedChildren: 0,
+        status: 'ready',
+      },
+    ]);
   });
 
   it('reopens a ready barrier when a failed child is retried', () => {

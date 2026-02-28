@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, inArray, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, lte, sql } from 'drizzle-orm';
 import { runJoinBarriers, runNodeEdges, runNodes, type AlphredDatabase, type RunNodeStatus } from '@alphred/db';
 import type { AgentProviderName } from '@alphred/shared';
 import type { EdgeRow, RunNodeExecutionRow } from './types.js';
@@ -530,37 +530,15 @@ export function loadMostRecentJoinBarrier(
   };
 }
 
-function loadActiveBarrierForChild(
+function loadBarriersForSpawnerJoin(
   db: Pick<AlphredDatabase, 'select'>,
   params: {
     workflowRunId: number;
     spawnerRunNodeId: number;
     joinRunNodeId: number;
   },
-): JoinBarrierRow | null {
-  const activeBarriers = loadActiveBarriersForSpawnerJoin(db, params);
-  if (activeBarriers.length === 0) {
-    return null;
-  }
-
-  if (activeBarriers.length > 1) {
-    throw new Error(
-      `JOIN_BARRIER_STATE_INVALID: found multiple active barriers for workflowRunId=${params.workflowRunId}, spawnerRunNodeId=${params.spawnerRunNodeId}, joinRunNodeId=${params.joinRunNodeId}.`,
-    );
-  }
-
-  return activeBarriers[0] ?? null;
-}
-
-function loadMostRecentBarrierForChild(
-  db: Pick<AlphredDatabase, 'select'>,
-  params: {
-    workflowRunId: number;
-    spawnerRunNodeId: number;
-    joinRunNodeId: number;
-  },
-): JoinBarrierRow | null {
-  const row = db
+): JoinBarrierRow[] {
+  return db
     .select({
       id: runJoinBarriers.id,
       workflowRunId: runJoinBarriers.workflowRunId,
@@ -581,24 +559,110 @@ function loadMostRecentBarrierForChild(
         eq(runJoinBarriers.joinRunNodeId, params.joinRunNodeId),
       ),
     )
-    .orderBy(desc(runJoinBarriers.id))
-    .get();
+    .orderBy(asc(runJoinBarriers.id))
+    .all()
+    .map(row => ({
+      ...row,
+      status: parseJoinBarrierStatus(row.status),
+    }));
+}
 
-  if (!row) {
+function loadBarrierForChildRunNode(
+  db: Pick<AlphredDatabase, 'select'>,
+  params: {
+    workflowRunId: number;
+    childRunNodeId: number;
+    spawnerRunNodeId: number;
+    joinRunNodeId: number;
+  },
+): JoinBarrierRow | null {
+  const childSpawnerEdge = db
+    .select({
+      priority: runNodeEdges.priority,
+    })
+    .from(runNodeEdges)
+    .where(
+      and(
+        eq(runNodeEdges.workflowRunId, params.workflowRunId),
+        eq(runNodeEdges.sourceRunNodeId, params.spawnerRunNodeId),
+        eq(runNodeEdges.targetRunNodeId, params.childRunNodeId),
+        eq(runNodeEdges.routeOn, 'success'),
+        eq(runNodeEdges.edgeKind, 'dynamic_spawner_to_child'),
+      ),
+    )
+    .get();
+  if (!childSpawnerEdge) {
+    const barriers = loadBarriersForSpawnerJoin(db, params);
+    if (barriers.length <= 1) {
+      return barriers[0] ?? null;
+    }
+    throw new Error(
+      `JOIN_BARRIER_STATE_INVALID: cannot map child runNodeId=${params.childRunNodeId} because no dynamic spawner edge exists and workflowRunId=${params.workflowRunId}, spawnerRunNodeId=${params.spawnerRunNodeId}, joinRunNodeId=${params.joinRunNodeId} has multiple barriers.`,
+    );
+  }
+
+  const childOrdinalRow = db
+    .select({
+      value: sql<number>`COUNT(*)`,
+    })
+    .from(runNodeEdges)
+    .where(
+      and(
+        eq(runNodeEdges.workflowRunId, params.workflowRunId),
+        eq(runNodeEdges.sourceRunNodeId, params.spawnerRunNodeId),
+        eq(runNodeEdges.routeOn, 'success'),
+        eq(runNodeEdges.edgeKind, 'dynamic_spawner_to_child'),
+        lte(runNodeEdges.priority, childSpawnerEdge.priority),
+      ),
+    )
+    .get();
+  const childOrdinal = childOrdinalRow?.value ?? 0;
+  if (childOrdinal <= 0) {
+    throw new Error(
+      `JOIN_BARRIER_STATE_INVALID: missing child ordinal for workflowRunId=${params.workflowRunId}, childRunNodeId=${params.childRunNodeId}.`,
+    );
+  }
+
+  const barriers = loadBarriersForSpawnerJoin(db, params);
+  if (barriers.length === 0) {
     return null;
   }
 
-  return {
-    ...row,
-    status: parseJoinBarrierStatus(row.status),
-  };
+  let accumulatedChildren = 0;
+  for (const barrier of barriers) {
+    accumulatedChildren += barrier.expectedChildren;
+    if (childOrdinal <= accumulatedChildren) {
+      return barrier;
+    }
+  }
+
+  throw new Error(
+    `JOIN_BARRIER_STATE_INVALID: cannot map child runNodeId=${params.childRunNodeId} to join barrier for workflowRunId=${params.workflowRunId}, spawnerRunNodeId=${params.spawnerRunNodeId}, joinRunNodeId=${params.joinRunNodeId}.`,
+  );
+}
+
+function loadMutableBarrierForChildRunNode(
+  db: Pick<AlphredDatabase, 'select'>,
+  params: {
+    workflowRunId: number;
+    childRunNodeId: number;
+    spawnerRunNodeId: number;
+    joinRunNodeId: number;
+  },
+): JoinBarrierRow | null {
+  const barrier = loadBarrierForChildRunNode(db, params);
+  if (!barrier || barrier.status === 'cancelled') {
+    return null;
+  }
+
+  return barrier;
 }
 
 export function updateJoinBarrierForChildTerminal(
   db: Pick<AlphredDatabase, 'select' | 'update'>,
   params: {
     workflowRunId: number;
-    childNode: Pick<RunNodeExecutionRow, 'spawnerNodeId' | 'joinNodeId'>;
+    childNode: Pick<RunNodeExecutionRow, 'runNodeId' | 'spawnerNodeId' | 'joinNodeId'>;
     childTerminalStatus: RunNodeStatus;
   },
 ): void {
@@ -612,12 +676,16 @@ export function updateJoinBarrierForChildTerminal(
     return;
   }
 
-  const barrier = loadActiveBarrierForChild(db, {
+  const barrier = loadMutableBarrierForChildRunNode(db, {
     workflowRunId: params.workflowRunId,
+    childRunNodeId: params.childNode.runNodeId,
     spawnerRunNodeId,
     joinRunNodeId,
   });
   if (!barrier) {
+    return;
+  }
+  if (barrier.status === 'released') {
     return;
   }
   if (barrier.terminalChildren >= barrier.expectedChildren) {
@@ -648,7 +716,7 @@ export function reopenJoinBarrierForRetriedChild(
   db: Pick<AlphredDatabase, 'select' | 'update'>,
   params: {
     workflowRunId: number;
-    childNode: Pick<RunNodeExecutionRow, 'spawnerNodeId' | 'joinNodeId'>;
+    childNode: Pick<RunNodeExecutionRow, 'runNodeId' | 'spawnerNodeId' | 'joinNodeId'>;
     previousTerminalStatus: RunNodeStatus;
   },
 ): void {
@@ -662,8 +730,9 @@ export function reopenJoinBarrierForRetriedChild(
     return;
   }
 
-  const barrier = loadMostRecentBarrierForChild(db, {
+  const barrier = loadMutableBarrierForChildRunNode(db, {
     workflowRunId: params.workflowRunId,
+    childRunNodeId: params.childNode.runNodeId,
     spawnerRunNodeId,
     joinRunNodeId,
   });
