@@ -229,6 +229,16 @@ export type DiagnosticToolEvent = {
   summary: string;
 };
 
+export type DiagnosticCommandOutputReference = {
+  eventIndex: number;
+  sequence: number;
+  artifactId: number;
+  command: string | null;
+  exitCode: number | null;
+  outputChars: number;
+  path: string;
+};
+
 export type DiagnosticErrorDetails = {
   name: string;
   message: string;
@@ -286,6 +296,7 @@ export type RunNodeDiagnosticsPayload = {
   eventTypeCounts: Partial<Record<ProviderEventType, number>>;
   events: DiagnosticEvent[];
   toolEvents: DiagnosticToolEvent[];
+  failedCommandOutputs?: DiagnosticCommandOutputReference[];
   routingDecision: RouteDecisionSignal | null;
   failureRoute?: RunNodeFailureRouteDiagnostics;
   error: DiagnosticErrorDetails | null;

@@ -459,6 +459,7 @@ Run detail includes:
 - `artifacts`: latest artifact previews for run triage.
 - `routingDecisions`: latest routing decisions.
 - `diagnostics`: persisted per-node/per-attempt diagnostics payloads for post-run inspection (inspection-only, not execution context).
+  - Failed command executions can expose `diagnostics[].diagnostics.failedCommandOutputs[]` references with deterministic fetch paths for full command output.
 
 ### `POST /runs/[runId]/actions/[action]`
 
@@ -515,6 +516,26 @@ SSE transport events (`transport=sse`):
 - `stream_state`: connection and node status updates.
 - `stream_end`: terminal closure for the selected node attempt.
 - `stream_error`: stream-channel failure details.
+
+### `GET /runs/[runId]/nodes/[runNodeId]/diagnostics/[attempt]/commands/[eventIndex]`
+
+Gets full persisted output for a failed command-execution event within a run-node attempt.
+
+Path parameters:
+- `runId`: positive integer.
+- `runNodeId`: positive integer.
+- `attempt`: positive integer run-node attempt.
+- `eventIndex`: non-negative integer diagnostics event index.
+
+Response `200`: full command output payload including:
+- `command`, `exitCode`
+- non-truncated `output`
+- optional `stdout` / `stderr` when available
+- `artifactId` and `createdAt` metadata
+
+Error semantics:
+- `400 invalid_request` for malformed ids/index values.
+- `404 not_found` when run/run-node does not exist or no failed command output was persisted for that attempt + event index.
 
 ### `GET /runs/[runId]/worktrees`
 

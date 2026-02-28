@@ -15,6 +15,7 @@ import {
 import { isRecord, truncateHeadTail } from './type-conversions.js';
 import type {
   ContextHandoffManifest,
+  DiagnosticCommandOutputReference,
   DiagnosticErrorDetails,
   DiagnosticEvent,
   DiagnosticToolEvent,
@@ -433,6 +434,7 @@ export function buildDiagnosticsPayload(params: {
   tokensUsed: number;
   events: ProviderEvent[];
   routingDecision: RouteDecisionSignal | null;
+  failedCommandOutputs?: DiagnosticCommandOutputReference[];
   failureRoute?: RunNodeFailureRouteDiagnostics;
   error: unknown;
   errorHandler?: RunNodeErrorHandlerDiagnostics;
@@ -487,6 +489,9 @@ export function buildDiagnosticsPayload(params: {
     eventTypeCounts: eventBuild.eventTypeCounts,
     events: retainedEvents,
     toolEvents,
+    ...(params.failedCommandOutputs === undefined || params.failedCommandOutputs.length === 0
+      ? {}
+      : { failedCommandOutputs: params.failedCommandOutputs }),
     routingDecision: params.routingDecision,
     ...(params.failureRoute === undefined ? {} : { failureRoute: params.failureRoute }),
     error: errorDetails,

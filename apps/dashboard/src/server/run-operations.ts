@@ -32,6 +32,7 @@ import type {
   DashboardRunNodeSnapshot,
   DashboardRunSummary,
   DashboardRunNodeStreamSnapshot,
+  DashboardRunNodeDiagnosticCommandOutput,
   DashboardRunWorktreeMetadata,
   DashboardArtifactSnapshot,
   DashboardRoutingDecisionSnapshot,
@@ -57,6 +58,7 @@ import { ensureRepositoryAuth, type RepositoryOperationsDependencies } from './r
 const BACKGROUND_RUN_STATUS: RunStatus = 'running';
 const RECENT_SNAPSHOT_LIMIT = 30;
 const MAX_STREAM_SNAPSHOT_EVENTS = 500;
+const FAILED_COMMAND_OUTPUT_ARTIFACT_KIND = 'failed_command_output_v1';
 
 type WithDatabase = <T>(operation: (db: AlphredDatabase) => Promise<T> | T) => Promise<T>;
 
@@ -124,6 +126,12 @@ export type RunOperations = {
     lastEventSequence?: number;
     limit?: number;
   }) => Promise<DashboardRunNodeStreamSnapshot>;
+  getRunNodeDiagnosticCommandOutput: (params: {
+    runId: number;
+    runNodeId: number;
+    attempt: number;
+    eventIndex: number;
+  }) => Promise<DashboardRunNodeDiagnosticCommandOutput>;
   getRunWorktrees: (runId: number) => Promise<DashboardRunWorktreeMetadata[]>;
   launchWorkflowRun: (request: DashboardRunLaunchRequest) => Promise<DashboardRunLaunchResult>;
   controlWorkflowRun: (runId: number, action: DashboardRunControlAction) => Promise<DashboardRunControlResult>;
@@ -165,6 +173,66 @@ function normalizeLaunchNodeSelector(
   throw new DashboardIntegrationError('invalid_request', 'nodeSelector.type must be "next_runnable" or "node_key".', {
     status: 400,
   });
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function toOptionalNonNegativeInteger(value: unknown): number | null {
+  if (!Number.isInteger(value) || (value as number) < 0) {
+    return null;
+  }
+
+  return value as number;
+}
+
+function toOptionalString(value: unknown): string | null {
+  if (typeof value !== 'string') {
+    return null;
+  }
+
+  return value;
+}
+
+function parseFailedCommandOutputContent(
+  content: string,
+): {
+  output: string;
+  stdout: string | null;
+  stderr: string | null;
+  command: string | null;
+  exitCode: number | null;
+  outputChars: number | null;
+} {
+  let parsed: Record<string, unknown> | null = null;
+  try {
+    const candidate = JSON.parse(content) as unknown;
+    parsed = isRecord(candidate) ? candidate : null;
+  } catch {
+    parsed = null;
+  }
+
+  if (!parsed) {
+    return {
+      output: content,
+      stdout: null,
+      stderr: null,
+      command: null,
+      exitCode: null,
+      outputChars: null,
+    };
+  }
+
+  const output = toOptionalString(parsed.output) ?? content;
+  return {
+    output,
+    stdout: toOptionalString(parsed.stdout),
+    stderr: toOptionalString(parsed.stderr),
+    command: toOptionalString(parsed.command),
+    exitCode: Number.isInteger(parsed.exitCode) ? (parsed.exitCode as number) : null,
+    outputChars: toOptionalNonNegativeInteger(parsed.outputChars),
+  };
 }
 
 async function loadRunSummary(db: AlphredDatabase, runId: number): Promise<DashboardRunSummary> {
@@ -360,7 +428,12 @@ export function createRunOperations(params: {
             createdAt: phaseArtifacts.createdAt,
           })
           .from(phaseArtifacts)
-          .where(eq(phaseArtifacts.workflowRunId, runId))
+          .where(
+            and(
+              eq(phaseArtifacts.workflowRunId, runId),
+              sql`coalesce(json_extract(${phaseArtifacts.metadata}, '$.kind'), '') <> ${FAILED_COMMAND_OUTPUT_ARTIFACT_KIND}`,
+            ),
+          )
           .orderBy(desc(phaseArtifacts.createdAt), desc(phaseArtifacts.id))
           .limit(RECENT_SNAPSHOT_LIMIT)
           .all();
@@ -664,6 +737,131 @@ export function createRunOperations(params: {
           ended,
           latestSequence: latestEvent?.sequence ?? 0,
           events,
+        };
+      });
+    },
+
+    getRunNodeDiagnosticCommandOutput(params: {
+      runId: number;
+      runNodeId: number;
+      attempt: number;
+      eventIndex: number;
+    }): Promise<DashboardRunNodeDiagnosticCommandOutput> {
+      if (!Number.isInteger(params.runId) || params.runId < 1) {
+        throw new DashboardIntegrationError('invalid_request', 'Run id must be a positive integer.', {
+          status: 400,
+        });
+      }
+
+      if (!Number.isInteger(params.runNodeId) || params.runNodeId < 1) {
+        throw new DashboardIntegrationError('invalid_request', 'Run node id must be a positive integer.', {
+          status: 400,
+        });
+      }
+
+      if (!Number.isInteger(params.attempt) || params.attempt < 1) {
+        throw new DashboardIntegrationError('invalid_request', 'Attempt must be a positive integer.', {
+          status: 400,
+        });
+      }
+
+      if (!Number.isInteger(params.eventIndex) || params.eventIndex < 0) {
+        throw new DashboardIntegrationError('invalid_request', 'eventIndex must be a non-negative integer.', {
+          status: 400,
+        });
+      }
+
+      return withDatabase(async db => {
+        const run = db
+          .select({
+            id: workflowRuns.id,
+          })
+          .from(workflowRuns)
+          .where(eq(workflowRuns.id, params.runId))
+          .get();
+        if (!run) {
+          throw new DashboardIntegrationError('not_found', `Workflow run ${params.runId} was not found.`, {
+            status: 404,
+          });
+        }
+
+        const runNode = db
+          .select({
+            id: runNodes.id,
+          })
+          .from(runNodes)
+          .where(and(eq(runNodes.id, params.runNodeId), eq(runNodes.workflowRunId, params.runId)))
+          .get();
+        if (!runNode) {
+          throw new DashboardIntegrationError(
+            'not_found',
+            `Run node ${params.runNodeId} was not found in run ${params.runId}.`,
+            { status: 404 },
+          );
+        }
+
+        const logArtifacts = db
+          .select({
+            id: phaseArtifacts.id,
+            contentType: phaseArtifacts.contentType,
+            content: phaseArtifacts.content,
+            metadata: phaseArtifacts.metadata,
+            createdAt: phaseArtifacts.createdAt,
+          })
+          .from(phaseArtifacts)
+          .where(
+            and(
+              eq(phaseArtifacts.workflowRunId, params.runId),
+              eq(phaseArtifacts.runNodeId, params.runNodeId),
+              eq(phaseArtifacts.artifactType, 'log'),
+            ),
+          )
+          .orderBy(desc(phaseArtifacts.id))
+          .all();
+
+        const matchingArtifact = logArtifacts.find((artifact) => {
+          const metadata = isRecord(artifact.metadata) ? artifact.metadata : null;
+          if (!metadata || metadata.kind !== FAILED_COMMAND_OUTPUT_ARTIFACT_KIND) {
+            return false;
+          }
+
+          return (
+            toOptionalNonNegativeInteger(metadata.attempt) === params.attempt
+            && toOptionalNonNegativeInteger(metadata.eventIndex) === params.eventIndex
+          );
+        });
+
+        if (!matchingArtifact) {
+          throw new DashboardIntegrationError(
+            'not_found',
+            `No failed command output was found for run ${params.runId}, node ${params.runNodeId}, attempt ${params.attempt}, eventIndex ${params.eventIndex}.`,
+            { status: 404 },
+          );
+        }
+
+        const metadata = isRecord(matchingArtifact.metadata) ? matchingArtifact.metadata : null;
+        const parsedOutput = parseFailedCommandOutputContent(matchingArtifact.content);
+        const sequence = toOptionalNonNegativeInteger(metadata?.sequence) ?? (params.eventIndex + 1);
+        const outputChars =
+          toOptionalNonNegativeInteger(metadata?.outputChars)
+          ?? parsedOutput.outputChars
+          ?? parsedOutput.output.length;
+        const metadataExitCode = metadata && Number.isInteger(metadata.exitCode) ? (metadata.exitCode as number) : null;
+
+        return {
+          workflowRunId: params.runId,
+          runNodeId: params.runNodeId,
+          attempt: params.attempt,
+          eventIndex: params.eventIndex,
+          sequence,
+          artifactId: matchingArtifact.id,
+          command: toOptionalString(metadata?.command) ?? parsedOutput.command,
+          exitCode: metadataExitCode ?? parsedOutput.exitCode,
+          outputChars,
+          output: parsedOutput.output,
+          stdout: parsedOutput.stdout,
+          stderr: parsedOutput.stderr,
+          createdAt: matchingArtifact.createdAt,
         };
       });
     },

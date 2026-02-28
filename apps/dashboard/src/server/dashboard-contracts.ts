@@ -212,6 +212,16 @@ export type DashboardRunNodeDiagnosticToolEvent = {
   summary: string;
 };
 
+export type DashboardRunNodeFailedCommandOutputReference = {
+  eventIndex: number;
+  sequence: number;
+  artifactId: number;
+  command: string | null;
+  exitCode: number | null;
+  outputChars: number;
+  path: string;
+};
+
 export type DashboardRunNodeStreamEvent = {
   id: number;
   workflowRunId: number;
@@ -269,6 +279,7 @@ export type DashboardRunNodeDiagnosticPayload = {
   eventTypeCounts: Partial<Record<DashboardRunNodeDiagnosticEvent['type'], number>>;
   events: DashboardRunNodeDiagnosticEvent[];
   toolEvents: DashboardRunNodeDiagnosticToolEvent[];
+  failedCommandOutputs?: DashboardRunNodeFailedCommandOutputReference[];
   routingDecision: 'approved' | 'changes_requested' | 'blocked' | 'retry' | null;
   failureRoute?: {
     attempted: boolean;
@@ -283,6 +294,22 @@ export type DashboardRunNodeDiagnosticPayload = {
     classification: 'provider_result_missing' | 'timeout' | 'aborted' | 'unknown';
     stackPreview: string | null;
   } | null;
+};
+
+export type DashboardRunNodeDiagnosticCommandOutput = {
+  workflowRunId: number;
+  runNodeId: number;
+  attempt: number;
+  eventIndex: number;
+  sequence: number;
+  artifactId: number;
+  command: string | null;
+  exitCode: number | null;
+  outputChars: number;
+  output: string;
+  stdout: string | null;
+  stderr: string | null;
+  createdAt: string;
 };
 
 export type DashboardRunNodeDiagnosticsSnapshot = {

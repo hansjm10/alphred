@@ -2212,6 +2212,109 @@ describe('createSqlWorkflowExecutor', () => {
     expect(payload.summary.droppedEventCount).toBe(0);
   });
 
+  it('persists full failed command output with deterministic diagnostics retrieval references', async () => {
+    const { db, runId, runNodeId } = seedSingleAgentRun();
+    const longOutput = `config.webServer failed to launch.\n${'stderr-line\n'.repeat(800)}`;
+    const executor = createSqlWorkflowExecutor(db, {
+      resolveProvider: () =>
+        createProvider([
+          { type: 'system', content: 'start', timestamp: 100 },
+          { type: 'tool_use', content: 'pnpm test:e2e', timestamp: 101, metadata: { itemType: 'command_execution' } },
+          {
+            type: 'tool_result',
+            content: JSON.stringify({
+              command: 'pnpm test:e2e',
+              output: longOutput,
+              exit_code: 1,
+            }),
+            timestamp: 102,
+            metadata: { itemType: 'command_execution' },
+          },
+        ]),
+    });
+
+    const execution = await executor.executeRun({
+      workflowRunId: runId,
+      options: {
+        workingDirectory: '/tmp/alphred-worktree',
+      },
+    });
+
+    expect(execution.finalStep).toEqual({
+      outcome: 'run_terminal',
+      workflowRunId: runId,
+      runStatus: 'failed',
+    });
+
+    const diagnosticsRow = db
+      .select({
+        diagnostics: runNodeDiagnostics.diagnostics,
+      })
+      .from(runNodeDiagnostics)
+      .where(eq(runNodeDiagnostics.runNodeId, runNodeId))
+      .orderBy(asc(runNodeDiagnostics.id))
+      .limit(1)
+      .get();
+    const diagnosticsPayload = diagnosticsRow?.diagnostics as
+      | {
+          failedCommandOutputs?: {
+            eventIndex: number;
+            sequence: number;
+            command: string | null;
+            exitCode: number | null;
+            outputChars: number;
+            path: string;
+          }[];
+          events: { type: string; contentPreview: string }[];
+        }
+      | undefined;
+
+    expect(diagnosticsPayload?.failedCommandOutputs).toEqual([
+      expect.objectContaining({
+        eventIndex: 2,
+        sequence: 3,
+        command: 'pnpm test:e2e',
+        exitCode: 1,
+        outputChars: longOutput.length,
+        path: `/api/dashboard/runs/${runId}/nodes/${runNodeId}/diagnostics/1/commands/2`,
+      }),
+    ]);
+    const toolResultEvent = diagnosticsPayload?.events.find(event => event.type === 'tool_result');
+    expect(toolResultEvent?.contentPreview.length).toBeLessThanOrEqual(600);
+
+    const logArtifacts = db
+      .select({
+        id: phaseArtifacts.id,
+        contentType: phaseArtifacts.contentType,
+        content: phaseArtifacts.content,
+        metadata: phaseArtifacts.metadata,
+      })
+      .from(phaseArtifacts)
+      .where(and(eq(phaseArtifacts.runNodeId, runNodeId), eq(phaseArtifacts.artifactType, 'log')))
+      .orderBy(asc(phaseArtifacts.id))
+      .all();
+    const commandOutputArtifact = logArtifacts.find((artifact) => {
+      const metadata = artifact.metadata as Record<string, unknown> | null;
+      return metadata?.kind === 'failed_command_output_v1';
+    });
+    expect(commandOutputArtifact).toBeDefined();
+    if (!commandOutputArtifact) {
+      throw new Error('Expected failed command output artifact to be persisted.');
+    }
+
+    expect(commandOutputArtifact.contentType).toBe('json');
+    const commandOutputPayload = JSON.parse(commandOutputArtifact.content) as {
+      output: string;
+      outputChars: number;
+      eventIndex: number;
+      sequence: number;
+    };
+    expect(commandOutputPayload.output).toBe(longOutput);
+    expect(commandOutputPayload.outputChars).toBe(longOutput.length);
+    expect(commandOutputPayload.eventIndex).toBe(2);
+    expect(commandOutputPayload.sequence).toBe(3);
+  });
+
   it('retains partial stream history and diagnostics payload events when a node fails mid-stream', async () => {
     const { db, runId, runNodeId } = seedSingleAgentRun();
     const timeoutError = new Error('provider timeout while awaiting result');
