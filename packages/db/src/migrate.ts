@@ -675,7 +675,10 @@ export function migrateDatabase(db: AlphredDatabase): void {
       SELECT RAISE(ABORT, 'run_nodes must be inserted in pending state with null started_at/completed_at');
     END`);
 
-  tx.run(sql`CREATE TRIGGER IF NOT EXISTS run_nodes_node_key_matches_tree_node_insert_ck
+  // Refresh this trigger on every migration run so upgraded databases drop
+  // legacy definitions that blocked fan-out children on insert.
+  tx.run(sql`DROP TRIGGER IF EXISTS run_nodes_node_key_matches_tree_node_insert_ck`);
+  tx.run(sql`CREATE TRIGGER run_nodes_node_key_matches_tree_node_insert_ck
     BEFORE INSERT ON run_nodes
     FOR EACH ROW
     WHEN (

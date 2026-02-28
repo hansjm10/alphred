@@ -551,6 +551,59 @@ describe('database schema hardening', () => {
     expect(remainingRunNodes).toHaveLength(0);
   });
 
+  it('refreshes the run-node insert node-key trigger so fan-out child inserts succeed after upgrade', () => {
+    const db = createDatabase(':memory:');
+    migrateDatabase(db);
+    const seed = seedTreeState(db, 'fanout_insert_upgrade');
+
+    db.run(sql`DROP TRIGGER IF EXISTS run_nodes_node_key_matches_tree_node_insert_ck`);
+    db.run(sql`CREATE TRIGGER run_nodes_node_key_matches_tree_node_insert_ck
+      BEFORE INSERT ON run_nodes
+      FOR EACH ROW
+      WHEN (
+        NEW.node_key <> (SELECT node_key FROM tree_nodes WHERE id = NEW.tree_node_id)
+      )
+      BEGIN
+        SELECT RAISE(ABORT, 'run_nodes.node_key must match tree_nodes.node_key for run_nodes.tree_node_id');
+      END`);
+
+    const spawnerNode = db
+      .insert(runNodes)
+      .values({
+        workflowRunId: seed.runId,
+        treeNodeId: seed.sourceNodeId,
+        nodeKey: seed.sourceNodeKey,
+        status: 'pending',
+        sequenceIndex: 1,
+      })
+      .returning({ id: runNodes.id })
+      .get();
+
+    expect(() =>
+      db.insert(runNodes).values({
+        workflowRunId: seed.runId,
+        treeNodeId: seed.targetNodeId,
+        nodeKey: `${seed.targetNodeKey}_fanout_child`,
+        status: 'pending',
+        sequenceIndex: 2,
+        spawnerNodeId: spawnerNode.id,
+      }).run(),
+    ).toThrow('run_nodes.node_key must match tree_nodes.node_key for run_nodes.tree_node_id');
+
+    expect(() => migrateDatabase(db)).not.toThrow();
+
+    expect(() =>
+      db.insert(runNodes).values({
+        workflowRunId: seed.runId,
+        treeNodeId: seed.targetNodeId,
+        nodeKey: `${seed.targetNodeKey}_fanout_child`,
+        status: 'pending',
+        sequenceIndex: 2,
+        spawnerNodeId: spawnerNode.id,
+      }).run(),
+    ).not.toThrow();
+  });
+
   it('supports a full SQL representation of a design tree and execution artifacts', () => {
     const db = createDatabase(':memory:');
     migrateDatabase(db);
