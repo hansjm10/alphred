@@ -332,6 +332,7 @@ function EventListPane(props: Readonly<{
   const eventButtonRefs = useRef(new Map<number, HTMLButtonElement>());
   const hasLoadedStreamEventsRef = useRef<boolean>(streamEvents.length > 0);
   const hasStartedStreamInitializationRef = useRef<boolean>(streamEvents.length > 0);
+  const previousLatestFilteredEventSequenceRef = useRef<number | null>(null);
 
   const filteredEvents = useMemo(
     () => streamEvents.filter(event => eventMatchesInspectorFilter(event, eventTypeFilter, eventSearchQuery)),
@@ -363,6 +364,7 @@ function EventListPane(props: Readonly<{
 
   useEffect(() => {
     if (filteredEvents.length === 0) {
+      previousLatestFilteredEventSequenceRef.current = null;
       const waitingForInitialStreamLoad =
         selectedEventSequence !== null &&
         !hasLoadedStreamEventsRef.current &&
@@ -375,16 +377,21 @@ function EventListPane(props: Readonly<{
     }
 
     const latestEventSequence = filteredEvents.at(-1)?.sequence ?? null;
-    const shouldFollowLatestEvent = streamAutoScroll && streamConnectionState === 'live';
-    if (shouldFollowLatestEvent) {
-      if (selectedEventSequence !== latestEventSequence) {
-        onSelectedEventSequenceChange(latestEventSequence);
-      }
-      return;
-    }
-
     const hasSelectedEvent =
       selectedEventSequence !== null && filteredEvents.some(event => event.sequence === selectedEventSequence);
+    const shouldFollowLatestEvent = streamAutoScroll && streamConnectionState === 'live';
+    if (shouldFollowLatestEvent) {
+      const observedLatestEventSequence = previousLatestFilteredEventSequenceRef.current;
+      const hasNewLatestEvent = observedLatestEventSequence !== null && observedLatestEventSequence !== latestEventSequence;
+      const shouldSelectLatestEvent = selectedEventSequence === null || !hasSelectedEvent || hasNewLatestEvent;
+
+      if (shouldSelectLatestEvent && selectedEventSequence !== latestEventSequence) {
+        onSelectedEventSequenceChange(latestEventSequence);
+      }
+      previousLatestFilteredEventSequenceRef.current = latestEventSequence;
+      return;
+    }
+    previousLatestFilteredEventSequenceRef.current = latestEventSequence;
 
     if (hasSelectedEvent) {
       return;

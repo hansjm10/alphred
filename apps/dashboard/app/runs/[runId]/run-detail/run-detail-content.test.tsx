@@ -1430,7 +1430,7 @@ describe('RunDetailContent realtime updates', () => {
     });
   });
 
-  it('keeps stream event windowing while auto-scroll follows latest live events', async () => {
+  it('keeps explicit selection until a new live event arrives while auto-scroll remains enabled', async () => {
     vi.stubGlobal('EventSource', MockEventSource as unknown as typeof EventSource);
     const initialEvents = Array.from({ length: 120 }, (_, index) =>
       createStreamEvent({
@@ -1479,7 +1479,15 @@ describe('RunDetailContent realtime updates', () => {
     });
 
     await user.click(within(streamEventList).getByText('event 1'));
+    await act(async () => {
+      await Promise.resolve();
+    });
+
     expect(window.location.search).toContain('streamEventSequence=1');
+    const firstEventButton = within(streamEventList).getByText('event 1').closest('button');
+    const initialLatestEventButton = within(streamEventList).getByText('event 120').closest('button');
+    expect(firstEventButton).toHaveAttribute('aria-pressed', 'true');
+    expect(initialLatestEventButton).toHaveAttribute('aria-pressed', 'false');
 
     for (let sequence = 121; sequence <= 130; sequence += 1) {
       source.emit('stream_event', createStreamEvent({ sequence, contentPreview: `event ${sequence}` }));
