@@ -4,6 +4,7 @@ import type { DashboardRunDetail, DashboardRunNodeStreamEvent } from '../../../.
 import { formatLastUpdated, formatStreamTimestamp } from './formatting';
 import { mergeAgentStreamEvents } from './realtime';
 import {
+  type AgentStreamTarget,
   type AgentStreamConnectionState,
   type StateSetter,
 } from './types';
@@ -30,6 +31,7 @@ type RunAgentStreamCardProps = Readonly<{
   streamEventListRef: { current: HTMLOListElement | null };
   selectedEventSequence: number | null;
   onSelectedEventSequenceChange: (sequence: number | null) => void;
+  onSelectStreamTarget: (target: AgentStreamTarget) => void;
   setStreamAutoScroll: StateSetter<boolean>;
   setStreamBufferedEvents: StateSetter<DashboardRunNodeStreamEvent[]>;
   setStreamEvents: StateSetter<DashboardRunNodeStreamEvent[]>;
@@ -39,12 +41,71 @@ function formatTokenCount(value: number): string {
   return new Intl.NumberFormat(undefined, { maximumFractionDigits: 0 }).format(value);
 }
 
+type TokenBreakdown = Readonly<{
+  inputTokens: number | null;
+  outputTokens: number | null;
+  cachedInputTokens: number | null;
+}>;
+
+function toNonNegativeInteger(value: unknown): number | null {
+  if (typeof value !== 'number' || !Number.isFinite(value) || !Number.isInteger(value) || value < 0) {
+    return null;
+  }
+
+  return value;
+}
+
+function firstTokenCountFromRecord(metadata: Record<string, unknown>, keys: readonly string[]): number | null {
+  for (const key of keys) {
+    if (!(key in metadata)) {
+      continue;
+    }
+
+    const parsed = toNonNegativeInteger(metadata[key]);
+    if (parsed !== null) {
+      return parsed;
+    }
+  }
+
+  return null;
+}
+
+function extractTokenBreakdown(metadata: Record<string, unknown> | null): TokenBreakdown | null {
+  if (!metadata) {
+    return null;
+  }
+
+  const nestedUsage = metadata.usage && typeof metadata.usage === 'object' ? metadata.usage as Record<string, unknown> : null;
+
+  const inputTokens =
+    firstTokenCountFromRecord(metadata, ['input_tokens', 'inputTokens']) ??
+    (nestedUsage ? firstTokenCountFromRecord(nestedUsage, ['input_tokens', 'inputTokens']) : null);
+  const outputTokens =
+    firstTokenCountFromRecord(metadata, ['output_tokens', 'outputTokens']) ??
+    (nestedUsage ? firstTokenCountFromRecord(nestedUsage, ['output_tokens', 'outputTokens']) : null);
+  const cachedInputTokens =
+    firstTokenCountFromRecord(metadata, ['cached_input_tokens', 'cachedInputTokens']) ??
+    (nestedUsage ? firstTokenCountFromRecord(nestedUsage, ['cached_input_tokens', 'cachedInputTokens']) : null);
+
+  if (inputTokens === null && outputTokens === null && cachedInputTokens === null) {
+    return null;
+  }
+
+  return {
+    inputTokens,
+    outputTokens,
+    cachedInputTokens,
+  };
+}
+
 type TokenUsageRow = Readonly<{
   key: string;
   runNodeId: number;
   attempt: number;
+  nodeKey: string;
   label: string;
   detail: string | null;
+  breakdown: TokenBreakdown | null;
   tokensUsed: number;
 }>;
 
@@ -75,13 +136,30 @@ function resolveTokenUsageRows(params: Readonly<{
     const attemptLabel = `attempt ${snapshot.attempt}`;
     const sequenceLabel = node?.sequencePath ? ` · ${node.sequencePath}` : '';
     const providerLabel = snapshot.diagnostics.provider ? ` · ${snapshot.diagnostics.provider}` : '';
+    const breakdown = (() => {
+      const events = snapshot.diagnostics.events;
+      for (let index = events.length - 1; index >= 0; index -= 1) {
+        const candidate = events[index];
+        if (!candidate) {
+          continue;
+        }
+
+        const extracted = extractTokenBreakdown(candidate.metadata);
+        if (extracted) {
+          return extracted;
+        }
+      }
+      return null;
+    })();
 
     rows.push({
       key: `${snapshot.runNodeId}:${snapshot.attempt}`,
       runNodeId: snapshot.runNodeId,
       attempt: snapshot.attempt,
+      nodeKey,
       label: `${nodeKey} (${attemptLabel})`,
       detail: `${snapshot.outcome}${sequenceLabel}${providerLabel}`,
+      breakdown,
       tokensUsed: snapshot.diagnostics.summary.tokensUsed,
     });
   }
@@ -109,8 +187,9 @@ function RunTokenUsagePanel(props: Readonly<{
   nodes: DashboardRunDetail['nodes'];
   diagnostics: DashboardRunDetail['diagnostics'];
   selectedStreamNode: DashboardRunDetail['nodes'][number] | null;
+  onSelectStreamTarget: (target: AgentStreamTarget) => void;
 }>) {
-  const { nodes, diagnostics, selectedStreamNode } = props;
+  const { nodes, diagnostics, selectedStreamNode, onSelectStreamTarget } = props;
 
   const rows = useMemo(
     () => resolveTokenUsageRows({ nodes, diagnostics }),
@@ -118,6 +197,30 @@ function RunTokenUsagePanel(props: Readonly<{
   );
 
   const totalTokens = useMemo(() => rows.reduce((sum, row) => sum + row.tokensUsed, 0), [rows]);
+  const totalsBreakdown = useMemo(() => {
+    let inputTokens = 0;
+    let outputTokens = 0;
+    let cachedInputTokens = 0;
+    let any = false;
+
+    for (const row of rows) {
+      if (!row.breakdown) {
+        continue;
+      }
+      any = true;
+      inputTokens += row.breakdown.inputTokens ?? 0;
+      outputTokens += row.breakdown.outputTokens ?? 0;
+      cachedInputTokens += row.breakdown.cachedInputTokens ?? 0;
+    }
+
+    return any
+      ? {
+          inputTokens,
+          outputTokens,
+          cachedInputTokens,
+        }
+      : null;
+  }, [rows]);
   const maxTokens = useMemo(
     () => rows.reduce((max, row) => Math.max(max, row.tokensUsed), 0),
     [rows],
@@ -146,6 +249,15 @@ function RunTokenUsagePanel(props: Readonly<{
           <p className="meta-text">{reportingLabel}</p>
         </div>
         <p className="run-token-usage__total">{`Total ${formatTokenCount(totalTokens)} tokens`}</p>
+        {totalsBreakdown ? (
+          <p className="meta-text">
+            {`Input ${formatTokenCount(totalsBreakdown.inputTokens)} · Output ${formatTokenCount(totalsBreakdown.outputTokens)}${
+              totalsBreakdown.cachedInputTokens > 0
+                ? ` · Cached ${formatTokenCount(totalsBreakdown.cachedInputTokens)}`
+                : ''
+            }`}
+          </p>
+        ) : null}
         <p className="meta-text">{`Across ${rows.length} ${attemptCountLabel}.`}</p>
       </div>
 
@@ -153,17 +265,33 @@ function RunTokenUsagePanel(props: Readonly<{
         {rows.map((row) => {
           const percent = maxTokens > 0 ? Math.max(2, Math.round((row.tokensUsed / maxTokens) * 100)) : 0;
           const selected = selectedStreamNode?.id === row.runNodeId && selectedStreamNode.attempt === row.attempt;
+          const breakdownLabel = row.breakdown
+            ? `Input ${row.breakdown.inputTokens === null ? 'n/a' : formatTokenCount(row.breakdown.inputTokens)} · Output ${row.breakdown.outputTokens === null ? 'n/a' : formatTokenCount(row.breakdown.outputTokens)}${
+                row.breakdown.cachedInputTokens !== null ? ` · Cached ${formatTokenCount(row.breakdown.cachedInputTokens)}` : ''
+              }`
+            : null;
 
           return (
-            <li key={row.key} className={`run-token-usage__row${selected ? ' run-token-usage__row--selected' : ''}`}>
-              <div className="run-token-usage__row-header">
-                <span className="run-token-usage__label">{row.label}</span>
-                <span className="meta-text">{formatTokenCount(row.tokensUsed)}</span>
-              </div>
-              <div className="run-token-usage__bar" aria-hidden="true">
-                <div className="run-token-usage__bar-fill" style={{ width: `${percent}%` }} />
-              </div>
-              {row.detail ? <p className="meta-text">{row.detail}</p> : null}
+            <li key={row.key}>
+              <button
+                type="button"
+                className={`run-token-usage__row${selected ? ' run-token-usage__row--selected' : ''}`}
+                aria-label={`Inspect ${row.label}`}
+                aria-pressed={selected}
+                onClick={() => {
+                  onSelectStreamTarget({ runNodeId: row.runNodeId, nodeKey: row.nodeKey, attempt: row.attempt });
+                }}
+              >
+                <div className="run-token-usage__row-header">
+                  <span className="run-token-usage__label">{row.label}</span>
+                  <span className="meta-text">{formatTokenCount(row.tokensUsed)}</span>
+                </div>
+                <div className="run-token-usage__bar" aria-hidden="true">
+                  <div className="run-token-usage__bar-fill" style={{ width: `${percent}%` }} />
+                </div>
+                {breakdownLabel ? <p className="meta-text">{breakdownLabel}</p> : null}
+                {row.detail ? <p className="meta-text">{row.detail}</p> : null}
+              </button>
             </li>
           );
         })}
@@ -1197,6 +1325,7 @@ export function RunAgentStreamCard({
   streamEventListRef,
   selectedEventSequence,
   onSelectedEventSequenceChange,
+  onSelectStreamTarget,
   setStreamAutoScroll,
   setStreamBufferedEvents,
   setStreamEvents,
@@ -1206,6 +1335,7 @@ export function RunAgentStreamCard({
       nodes={nodes}
       diagnostics={diagnostics}
       selectedStreamNode={selectedStreamNode}
+      onSelectStreamTarget={onSelectStreamTarget}
     />
   );
 

@@ -509,6 +509,12 @@ export function RunDetailContent({
         streamEventListRef={streamEventListRef}
         selectedEventSequence={streamSelectedEventSequence}
         onSelectedEventSequenceChange={setStreamSelectedEventSequence}
+        onSelectStreamTarget={(target) => {
+          setStreamAutoScroll(true);
+          setStreamBufferedEvents([]);
+          setStreamSelectedEventSequence(null);
+          setStreamTarget(target);
+        }}
         setStreamAutoScroll={setStreamAutoScroll}
         setStreamBufferedEvents={setStreamBufferedEvents}
         setStreamEvents={setStreamEvents}

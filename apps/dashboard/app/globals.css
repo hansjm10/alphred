@@ -950,9 +950,23 @@ output {
   background: var(--bg-surface);
   border: 1px solid color-mix(in srgb, var(--border-default) 75%, transparent);
   border-radius: 10px;
+  cursor: pointer;
   display: grid;
   gap: 6px;
   padding: 10px;
+  text-align: left;
+  transition: background-color var(--motion-fast), border-color var(--motion-fast);
+  width: 100%;
+}
+
+.run-token-usage__row:hover {
+  background: color-mix(in srgb, var(--accent-active) 4%, var(--bg-surface));
+  border-color: color-mix(in srgb, var(--accent-active) 30%, var(--border-default));
+}
+
+.run-token-usage__row:focus-visible {
+  outline: 2px solid var(--accent-active);
+  outline-offset: 2px;
 }
 
 .run-token-usage__row--selected {

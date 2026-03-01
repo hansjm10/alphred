@@ -3492,6 +3492,46 @@ describe('RunDetailContent realtime updates', () => {
     expect(within(tokenUsage).getByText(/design \(attempt 1\)/i)).toBeInTheDocument();
   });
 
+  it('selects agent stream target when clicking a token usage row', async () => {
+    vi.stubGlobal('EventSource', MockEventSource as unknown as typeof EventSource);
+    let designStreamRequestCount = 0;
+
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/nodes/1/stream')) {
+        designStreamRequestCount += 1;
+        return createJsonResponse({
+          workflowRunId: 412,
+          runNodeId: 1,
+          attempt: 1,
+          nodeStatus: 'completed',
+          ended: true,
+          latestSequence: 0,
+          events: [],
+        });
+      }
+
+      return createJsonResponse(createRunDetail());
+    });
+
+    const user = userEvent.setup();
+
+    render(
+      <RunDetailContent
+        initialDetail={createRunDetail()}
+        repositories={[createRepository()]}
+        enableRealtime={false}
+      />,
+    );
+
+    const tokenUsage = screen.getByRole('region', { name: 'Token usage' });
+    await user.click(within(tokenUsage).getByRole('button', { name: 'Inspect design (attempt 1)' }));
+
+    await waitFor(() => {
+      expect(designStreamRequestCount).toBeGreaterThan(0);
+    });
+  });
+
   it('selects agent stream target when clicking a node in the status panel', async () => {
     vi.stubGlobal('EventSource', MockEventSource as unknown as typeof EventSource);
     fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
