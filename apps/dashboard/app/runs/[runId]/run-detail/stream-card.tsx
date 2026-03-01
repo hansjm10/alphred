@@ -161,32 +161,14 @@ function parseJsonPayload(payload: string): ParsedJsonPayload {
   }
 }
 
-function sanitizeCodeText(value: string): string {
-  return value
-    .replaceAll('&', '&amp;')
-    .replaceAll('<', '&lt;')
-    .replaceAll('>', '&gt;');
-}
+function createRepeatedContentKeyFactory(prefix: string): (value: string) => string {
+  const occurrences = new Map<string, number>();
 
-function highlightJsonCode(jsonText: string): string {
-  const sanitized = sanitizeCodeText(jsonText);
-
-  return sanitized.replace(
-    /("(?:\\u[a-fA-F0-9]{4}|\\[^u]|[^\\"])*")(\s*:)?|\b(true|false)\b|\b(null)\b|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?/g,
-    (match, quotedLiteral, isKeySuffix, booleanLiteral, nullLiteral) => {
-      if (quotedLiteral) {
-        const className = isKeySuffix ? 'run-agent-inspector-token--key' : 'run-agent-inspector-token--string';
-        return `<span class="${className}">${match}</span>`;
-      }
-      if (booleanLiteral) {
-        return `<span class="run-agent-inspector-token--boolean">${match}</span>`;
-      }
-      if (nullLiteral) {
-        return `<span class="run-agent-inspector-token--null">${match}</span>`;
-      }
-      return `<span class="run-agent-inspector-token--number">${match}</span>`;
-    },
-  );
+  return (value: string): string => {
+    const seenCount = occurrences.get(value) ?? 0;
+    occurrences.set(value, seenCount + 1);
+    return seenCount === 0 ? `${prefix}-${value}` : `${prefix}-${value}-${seenCount}`;
+  };
 }
 
 function isLikelyMarkdown(value: string): boolean {
@@ -200,36 +182,40 @@ function renderMarkdownPayload(value: string): ReactNode {
   }
 
   const blocks = normalized.split(/\n{2,}/);
+  const nextBlockKey = createRepeatedContentKeyFactory('md-block');
 
-  return blocks.map((block, blockIndex) => {
+  return blocks.map((block) => {
+    const blockKey = nextBlockKey(block);
+
     if (block.startsWith('```') && block.endsWith('```')) {
       const codeContent = block
         .replace(/^```[a-zA-Z0-9_-]*\n?/, '')
         .replace(/\n?```$/, '');
       return (
-        <pre key={`md-code-${blockIndex}`} className="code-preview run-agent-inspector-markdown-code">
+        <pre key={`${blockKey}-code`} className="code-preview run-agent-inspector-markdown-code">
           <code>{codeContent}</code>
         </pre>
       );
     }
 
     const lines = block.split('\n');
+    const nextLineKey = createRepeatedContentKeyFactory(`${blockKey}-line`);
 
-    const headingMatch = lines[0]?.match(/^(#{1,6})\s+(.*)$/);
+    const headingMatch = /^(#{1,6})\s+(.*)$/.exec(lines[0] ?? '');
     if (headingMatch) {
       const text = headingMatch[2].trim();
       const headingDepth = headingMatch[1].length;
       if (headingDepth <= 2) {
-        return <h4 key={`md-heading-${blockIndex}`}>{text}</h4>;
+        return <h4 key={`${blockKey}-heading`}>{text}</h4>;
       }
-      return <h5 key={`md-heading-${blockIndex}`}>{text}</h5>;
+      return <h5 key={`${blockKey}-heading`}>{text}</h5>;
     }
 
     if (lines.every(line => /^[-*]\s+/.test(line.trim()))) {
       return (
-        <ul key={`md-list-${blockIndex}`} className="run-agent-inspector-markdown-list">
-          {lines.map((line, lineIndex) => (
-            <li key={`md-li-${blockIndex}-${lineIndex}`}>{line.replace(/^[-*]\s+/, '')}</li>
+        <ul key={`${blockKey}-ul`} className="run-agent-inspector-markdown-list">
+          {lines.map((line) => (
+            <li key={nextLineKey(line)}>{line.replace(/^[-*]\s+/, '')}</li>
           ))}
         </ul>
       );
@@ -237,18 +223,18 @@ function renderMarkdownPayload(value: string): ReactNode {
 
     if (lines.every(line => /^\d+\.\s+/.test(line.trim()))) {
       return (
-        <ol key={`md-ol-${blockIndex}`} className="run-agent-inspector-markdown-list">
-          {lines.map((line, lineIndex) => (
-            <li key={`md-oli-${blockIndex}-${lineIndex}`}>{line.replace(/^\d+\.\s+/, '')}</li>
+        <ol key={`${blockKey}-ol`} className="run-agent-inspector-markdown-list">
+          {lines.map((line) => (
+            <li key={nextLineKey(line)}>{line.replace(/^\d+\.\s+/, '')}</li>
           ))}
         </ol>
       );
     }
 
     return (
-      <p key={`md-paragraph-${blockIndex}`}>
+      <p key={`${blockKey}-paragraph`}>
         {lines.map((line, lineIndex) => (
-          <span key={`md-span-${blockIndex}-${lineIndex}`}>
+          <span key={nextLineKey(line)}>
             {line}
             {lineIndex < lines.length - 1 ? <br /> : null}
           </span>
@@ -445,38 +431,43 @@ function EventListPane(props: Readonly<{
     onSelectedEventSequenceChange(lastEvent.sequence);
   };
 
-  const handleListKeyDown = (keyboardEvent: KeyboardEvent<HTMLOListElement>): void => {
+  const resolveNextEventForKeyboardInput = (
+    keyboardEvent: KeyboardEvent<HTMLButtonElement>,
+    selectedSequence: number,
+  ): DashboardRunNodeStreamEvent | null => {
     if (visibleEvents.length === 0) {
-      return;
+      return null;
     }
 
-    const selectedIndex =
-      selectedEventSequence === null
-        ? -1
-        : visibleEvents.findIndex(event => event.sequence === selectedEventSequence);
-    const startIndex = selectedIndex === -1 ? visibleEvents.length - 1 : selectedIndex;
+    const selectedIndex = visibleEvents.findIndex(event => event.sequence === selectedSequence);
+    const clampedSelectedIndex = selectedIndex === -1 ? visibleEvents.length - 1 : selectedIndex;
 
-    let nextIndex: number | null = null;
     if (keyboardEvent.key === 'ArrowDown') {
-      nextIndex = Math.min(startIndex + 1, visibleEvents.length - 1);
-    } else if (keyboardEvent.key === 'ArrowUp') {
-      nextIndex = Math.max(startIndex - 1, 0);
-    } else if (keyboardEvent.key === 'Home') {
-      nextIndex = 0;
-    } else if (keyboardEvent.key === 'End') {
-      nextIndex = visibleEvents.length - 1;
+      return visibleEvents[Math.min(clampedSelectedIndex + 1, visibleEvents.length - 1)] ?? null;
+    }
+    if (keyboardEvent.key === 'ArrowUp') {
+      return visibleEvents[Math.max(clampedSelectedIndex - 1, 0)] ?? null;
+    }
+    if (keyboardEvent.key === 'Home') {
+      return visibleEvents[0] ?? null;
+    }
+    if (keyboardEvent.key === 'End') {
+      return visibleEvents.at(-1) ?? null;
     }
 
-    if (nextIndex === null) {
-      return;
-    }
+    return null;
+  };
 
-    keyboardEvent.preventDefault();
-    const nextEvent = visibleEvents[nextIndex];
+  const handleEventButtonKeyDown = (
+    keyboardEvent: KeyboardEvent<HTMLButtonElement>,
+    selectedSequence: number,
+  ): void => {
+    const nextEvent = resolveNextEventForKeyboardInput(keyboardEvent, selectedSequence);
     if (!nextEvent) {
       return;
     }
 
+    keyboardEvent.preventDefault();
     onSelectedEventSequenceChange(nextEvent.sequence);
     eventButtonRefs.current.get(nextEvent.sequence)?.focus();
   };
@@ -531,7 +522,6 @@ function EventListPane(props: Readonly<{
         ref={streamEventListRef}
         className="page-stack run-agent-stream-events"
         aria-label="Agent stream events"
-        onKeyDown={handleListKeyDown}
       >
         {visibleEvents.length === 0 ? (
           <li>
@@ -558,6 +548,9 @@ function EventListPane(props: Readonly<{
                   onClick={() => {
                     onSelectedEventSequenceChange(event.sequence);
                   }}
+                  onKeyDown={(keyboardEvent) => {
+                    handleEventButtonKeyDown(keyboardEvent, event.sequence);
+                  }}
                 >
                   <span className="run-agent-inspector-event__header">
                     <span className={`run-agent-stream-event-type run-agent-stream-event-type--${event.type}`}>{event.type}</span>
@@ -571,6 +564,78 @@ function EventListPane(props: Readonly<{
         )}
       </ol>
     </section>
+  );
+}
+
+function resolveDetailCodeClassName(wrapPayloadLines: boolean): string {
+  return wrapPayloadLines
+    ? 'code-preview run-agent-inspector-payload'
+    : 'code-preview run-agent-inspector-payload run-agent-inspector-payload--nowrap';
+}
+
+function renderPayloadContent({
+  payloadMode,
+  prettyPayloadText,
+  detailCodeClassName,
+  contentPreview,
+  markdownAvailable,
+}: Readonly<{
+  payloadMode: InspectorPayloadMode;
+  prettyPayloadText: string | null;
+  detailCodeClassName: string;
+  contentPreview: string;
+  markdownAvailable: boolean;
+}>): ReactNode {
+  if (payloadMode === 'pretty') {
+    if (prettyPayloadText) {
+      return (
+        <pre className={detailCodeClassName}>
+          <code>{prettyPayloadText}</code>
+        </pre>
+      );
+    }
+
+    return (
+      <>
+        <p className="meta-text">Payload is not valid JSON; displaying raw payload.</p>
+        <pre className={detailCodeClassName}>
+          <code>{contentPreview}</code>
+        </pre>
+      </>
+    );
+  }
+
+  if (payloadMode === 'raw') {
+    return (
+      <pre className={detailCodeClassName}>
+        <code>{contentPreview}</code>
+      </pre>
+    );
+  }
+
+  if (!markdownAvailable) {
+    return <p className="meta-text">Rendered Markdown is available only for markdown-like payloads.</p>;
+  }
+
+  return <div className="run-agent-inspector-markdown">{renderMarkdownPayload(contentPreview)}</div>;
+}
+
+function renderMetadataContent(metadataRows: readonly (readonly [string, string])[]): ReactNode {
+  if (metadataRows.length === 0) {
+    return <p className="meta-text">No metadata captured for this event.</p>;
+  }
+
+  return (
+    <dl className="run-agent-inspector-metadata-list">
+      {metadataRows.map(([key, value]) => (
+        <div key={key} className="run-agent-inspector-metadata-row">
+          <dt>{key}</dt>
+          <dd>
+            <pre className="code-preview run-agent-inspector-metadata-value">{value}</pre>
+          </dd>
+        </div>
+      ))}
+    </dl>
   );
 }
 
@@ -635,6 +700,12 @@ function DetailPane(props: Readonly<{
   }
 
   const payloadIsTruncated = selectedEvent.contentPreview.length < selectedEvent.contentChars;
+  const payloadSummaryLabel = payloadIsTruncated
+    ? `Stored payload preview is truncated (${selectedEvent.contentPreview.length}/${selectedEvent.contentChars} chars).`
+    : `Payload length: ${selectedEvent.contentChars} chars.`;
+  const usageSummaryLabel = selectedEvent.usage
+    ? `Usage Δ ${selectedEvent.usage.deltaTokens ?? 'n/a'} · cumulative ${selectedEvent.usage.cumulativeTokens ?? 'n/a'}`
+    : null;
 
   const handleCopyPayload = async (): Promise<void> => {
     const copied = await copyTextToClipboard(selectedEvent.contentPreview);
@@ -647,25 +718,22 @@ function DetailPane(props: Readonly<{
     setUtilityFeedback(copied ? 'Metadata copied.' : 'Unable to copy metadata in this environment.');
   };
 
-  const detailCodeClassName = wrapPayloadLines
-    ? 'code-preview run-agent-inspector-payload'
-    : 'code-preview run-agent-inspector-payload run-agent-inspector-payload--nowrap';
+  const detailCodeClassName = resolveDetailCodeClassName(wrapPayloadLines);
+  const payloadContent = renderPayloadContent({
+    payloadMode,
+    prettyPayloadText,
+    detailCodeClassName,
+    contentPreview: selectedEvent.contentPreview,
+    markdownAvailable,
+  });
 
   return (
     <section className="run-agent-inspector-pane run-agent-inspector-pane--detail" aria-label="Agent stream inspector detail">
       <p className="meta-text">
         {`Selected event #${selectedEvent.sequence} · ${selectedEvent.type} · ${formatStreamTimestamp(selectedEvent.timestamp)}`}
       </p>
-      <p className="meta-text">
-        {payloadIsTruncated
-          ? `Stored payload preview is truncated (${selectedEvent.contentPreview.length}/${selectedEvent.contentChars} chars).`
-          : `Payload length: ${selectedEvent.contentChars} chars.`}
-      </p>
-      {selectedEvent.usage ? (
-        <p className="meta-text">
-          {`Usage Δ ${selectedEvent.usage.deltaTokens ?? 'n/a'} · cumulative ${selectedEvent.usage.cumulativeTokens ?? 'n/a'}`}
-        </p>
-      ) : null}
+      <p className="meta-text">{payloadSummaryLabel}</p>
+      {usageSummaryLabel ? <p className="meta-text">{usageSummaryLabel}</p> : null}
 
       <div className="action-row run-agent-inspector-mode-row" role="tablist" aria-label="Payload rendering mode">
         <button
@@ -708,52 +776,11 @@ function DetailPane(props: Readonly<{
       </div>
 
       {utilityFeedback ? <p className="meta-text">{utilityFeedback}</p> : null}
-
-      {payloadMode === 'pretty' ? (
-        prettyPayloadText ? (
-          <pre className={detailCodeClassName}>
-            <code dangerouslySetInnerHTML={{ __html: highlightJsonCode(prettyPayloadText) }} />
-          </pre>
-        ) : (
-          <>
-            <p className="meta-text">Payload is not valid JSON; displaying raw payload.</p>
-            <pre className={detailCodeClassName}>
-              <code>{selectedEvent.contentPreview}</code>
-            </pre>
-          </>
-        )
-      ) : null}
-
-      {payloadMode === 'raw' ? (
-        <pre className={detailCodeClassName}>
-          <code>{selectedEvent.contentPreview}</code>
-        </pre>
-      ) : null}
-
-      {payloadMode === 'markdown' ? (
-        markdownAvailable ? (
-          <div className="run-agent-inspector-markdown">{renderMarkdownPayload(selectedEvent.contentPreview)}</div>
-        ) : (
-          <p className="meta-text">Rendered Markdown is available only for markdown-like payloads.</p>
-        )
-      ) : null}
+      {payloadContent}
 
       <details>
         <summary>metadata</summary>
-        {metadataRows.length === 0 ? (
-          <p className="meta-text">No metadata captured for this event.</p>
-        ) : (
-          <dl className="run-agent-inspector-metadata-list">
-            {metadataRows.map(([key, value]) => (
-              <div key={key} className="run-agent-inspector-metadata-row">
-                <dt>{key}</dt>
-                <dd>
-                  <pre className="code-preview run-agent-inspector-metadata-value">{value}</pre>
-                </dd>
-              </div>
-            ))}
-          </dl>
-        )}
+        {renderMetadataContent(metadataRows)}
       </details>
     </section>
   );
@@ -856,7 +883,7 @@ function SelectedStreamContent(props: Readonly<{
         </output>
       ) : null}
 
-      <div className="run-agent-inspector" role="region" aria-label="Agent output inspector">
+      <section className="run-agent-inspector" aria-label="Agent output inspector">
         <EventListPane
           key={`${selectedStreamNode.id}:${selectedStreamNode.attempt}`}
           streamEvents={streamEvents}
@@ -884,7 +911,7 @@ function SelectedStreamContent(props: Readonly<{
           utilityFeedback={utilityFeedback}
           setUtilityFeedback={setUtilityFeedback}
         />
-      </div>
+      </section>
     </>
   );
 }

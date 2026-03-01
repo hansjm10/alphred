@@ -888,7 +888,7 @@ output {
 .run-agent-stream-events {
   border: 1px solid var(--border-default);
   border-radius: var(--radius-sm);
-  margin-top: var(--space-2);
+  margin-top: 0;
   max-height: clamp(220px, 42vh, 360px);
   overflow-y: auto;
   padding: var(--space-2);
@@ -954,10 +954,6 @@ output {
 
 .run-agent-inspector-windowing {
   align-items: center;
-}
-
-.run-agent-stream-events {
-  margin-top: 0;
 }
 
 .run-agent-inspector-event {

@@ -48,6 +48,45 @@ import {
   type RunDetailContentProps,
 } from './types';
 
+function parseNumericSearchParam(value: string | null): number {
+  if (value === null) {
+    return Number.NaN;
+  }
+
+  return Number(value);
+}
+
+function resolveStreamTargetFromUrlSearch(
+  nodes: DashboardRunDetail['nodes'],
+  streamInspectorUrlSearch: string,
+): Readonly<{ streamTarget: AgentStreamTarget | null; eventSequence: number | null }> {
+  const searchParams = new URLSearchParams(streamInspectorUrlSearch);
+  const runNodeId = parseNumericSearchParam(searchParams.get('streamRunNodeId'));
+
+  if (!Number.isInteger(runNodeId) || runNodeId < 1) {
+    return { streamTarget: null, eventSequence: null };
+  }
+
+  const targetNode = nodes.find((node) => node.id === runNodeId);
+  if (!targetNode || !isStreamSupportedNodeStatus(targetNode.status)) {
+    return { streamTarget: null, eventSequence: null };
+  }
+
+  const attempt = parseNumericSearchParam(searchParams.get('streamAttempt'));
+  const attemptMatchesNode = !Number.isInteger(attempt) || attempt < 1 || targetNode.attempt === attempt;
+  if (!attemptMatchesNode) {
+    return { streamTarget: null, eventSequence: null };
+  }
+
+  const eventSequence = parseNumericSearchParam(searchParams.get('streamEventSequence'));
+  const nextEventSequence = Number.isInteger(eventSequence) && eventSequence > 0 ? eventSequence : null;
+
+  return {
+    streamTarget: toAgentStreamTarget(targetNode),
+    eventSequence: nextEventSequence,
+  };
+}
+
 export function RunDetailContent({
   initialDetail,
   repositories,
@@ -93,7 +132,7 @@ export function RunDetailContent({
     runId: null,
     search: null,
   });
-  const streamInspectorUrlSearch = typeof window === 'undefined' ? '' : window.location.search;
+  const streamInspectorUrlSearch = globalThis.window?.location.search ?? '';
 
   useEffect(() => {
     setHasHydrated(true);
@@ -226,7 +265,7 @@ export function RunDetailContent({
   }, [detail.run.status]);
 
   useEffect(() => {
-    if (typeof window === 'undefined') {
+    if (!globalThis.window) {
       return;
     }
 
@@ -242,39 +281,14 @@ export function RunDetailContent({
       search: streamInspectorUrlSearch,
     };
 
-    const searchParams = new URLSearchParams(streamInspectorUrlSearch);
-    const rawRunNodeId = searchParams.get('streamRunNodeId');
-    const rawAttempt = searchParams.get('streamAttempt');
-    const rawEventSequence = searchParams.get('streamEventSequence');
+    const urlSelection = resolveStreamTargetFromUrlSearch(detail.nodes, streamInspectorUrlSearch);
 
-    const runNodeId = rawRunNodeId === null ? Number.NaN : Number(rawRunNodeId);
-    const attempt = rawAttempt === null ? Number.NaN : Number(rawAttempt);
-    const eventSequence = rawEventSequence === null ? Number.NaN : Number(rawEventSequence);
-
-    const targetNode = Number.isInteger(runNodeId) && runNodeId > 0
-      ? detail.nodes.find((node) => node.id === runNodeId)
-      : null;
-
-    const acceptedUrlStreamTarget =
-      targetNode &&
-      isStreamSupportedNodeStatus(targetNode.status) &&
-      (!Number.isInteger(attempt) || attempt < 1 || targetNode.attempt === attempt)
-        ? targetNode
-        : null;
-
-    if (acceptedUrlStreamTarget) {
-      const nextStreamTarget = toAgentStreamTarget(acceptedUrlStreamTarget);
-      if (!isSameStreamTarget(streamTarget, nextStreamTarget)) {
-        setStreamTarget(nextStreamTarget);
-      }
+    if (urlSelection.streamTarget && !isSameStreamTarget(streamTarget, urlSelection.streamTarget)) {
+      setStreamTarget(urlSelection.streamTarget);
     }
 
-    const nextEventSequence =
-      acceptedUrlStreamTarget && Number.isInteger(eventSequence) && eventSequence > 0
-        ? eventSequence
-        : null;
-    if (streamSelectedEventSequence !== nextEventSequence) {
-      setStreamSelectedEventSequence(nextEventSequence);
+    if (streamSelectedEventSequence !== urlSelection.eventSequence) {
+      setStreamSelectedEventSequence(urlSelection.eventSequence);
     }
 
     if (streamInspectorUrlStateReadyRunId !== detail.run.id) {
@@ -290,38 +304,39 @@ export function RunDetailContent({
   ]);
 
   useEffect(() => {
-    if (typeof window === 'undefined' || streamInspectorUrlStateReadyRunId !== detail.run.id) {
+    const browserWindow = globalThis.window;
+    if (!browserWindow || streamInspectorUrlStateReadyRunId !== detail.run.id) {
       return;
     }
 
-    const url = new URL(window.location.href);
+    const url = new URL(browserWindow.location.href);
     const searchParams = url.searchParams;
 
     if (streamTarget) {
       searchParams.set('streamRunNodeId', String(streamTarget.runNodeId));
       searchParams.set('streamAttempt', String(streamTarget.attempt));
-
-      if (streamSelectedEventSequence !== null) {
-        searchParams.set('streamEventSequence', String(streamSelectedEventSequence));
-      } else {
-        searchParams.delete('streamEventSequence');
-      }
     } else {
-      if (streamSelectedEventSequence !== null) {
-        setStreamSelectedEventSequence(null);
-      }
       searchParams.delete('streamRunNodeId');
       searchParams.delete('streamAttempt');
+    }
+
+    if (streamTarget && streamSelectedEventSequence !== null) {
+      searchParams.set('streamEventSequence', String(streamSelectedEventSequence));
+    } else {
       searchParams.delete('streamEventSequence');
+    }
+
+    if (!streamTarget && streamSelectedEventSequence !== null) {
+      setStreamSelectedEventSequence(null);
     }
 
     const nextSearch = searchParams.toString();
     const nextSearchValue = nextSearch ? `?${nextSearch}` : '';
     const nextUrl = `${url.pathname}${nextSearchValue}${url.hash}`;
-    const currentUrl = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+    const currentUrl = `${browserWindow.location.pathname}${browserWindow.location.search}${browserWindow.location.hash}`;
 
     if (nextUrl !== currentUrl) {
-      window.history.replaceState(window.history.state, '', nextUrl);
+      browserWindow.history.replaceState(browserWindow.history.state, '', nextUrl);
       streamInspectorUrlStateRef.current = {
         runId: detail.run.id,
         search: nextSearchValue,
