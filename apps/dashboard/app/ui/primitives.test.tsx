@@ -2,7 +2,7 @@
 
 import { render, screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
-import { StatusBadge, Tabs, type TabItem } from './primitives';
+import { Card, Panel, StatusBadge, Tabs, type TabItem } from './primitives';
 
 const ITEMS: readonly TabItem[] = [
   { href: '/runs', label: 'All Runs' },
@@ -34,5 +34,35 @@ describe('primitives', () => {
 
     expect(screen.getByRole('link', { name: 'All Runs' })).toHaveAttribute('aria-current', 'page');
     expect(screen.getByRole('link', { name: 'Running' })).not.toHaveAttribute('aria-current');
+  });
+
+  it('renders optional heading ids for Card and Panel headings', () => {
+    render(
+      <>
+        <Card title="Operator focus" headingId="run-detail-focus-heading" />
+        <Panel title="Timeline" headingId="run-detail-timeline-heading" />
+      </>,
+    );
+
+    expect(screen.getByRole('heading', { level: 3, name: 'Operator focus' })).toHaveAttribute(
+      'id',
+      'run-detail-focus-heading',
+    );
+    expect(screen.getByRole('heading', { level: 3, name: 'Timeline' })).toHaveAttribute(
+      'id',
+      'run-detail-timeline-heading',
+    );
+  });
+
+  it('omits heading id when not provided', () => {
+    render(
+      <>
+        <Card title="Operator focus" />
+        <Panel title="Timeline" />
+      </>,
+    );
+
+    expect(screen.getByRole('heading', { level: 3, name: 'Operator focus' })).not.toHaveAttribute('id');
+    expect(screen.getByRole('heading', { level: 3, name: 'Timeline' })).not.toHaveAttribute('id');
   });
 });

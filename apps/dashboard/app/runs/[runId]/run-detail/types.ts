@@ -10,6 +10,45 @@ import type {
 
 export type TimelineCategory = 'lifecycle' | 'node' | 'artifact' | 'diagnostics' | 'routing';
 
+export const RUN_DETAIL_SECTION_KEYS = ['focus', 'timeline', 'stream', 'observability'] as const;
+export type RunDetailSectionKey = (typeof RUN_DETAIL_SECTION_KEYS)[number];
+
+export type RunDetailSectionMetadata = Readonly<{
+  key: RunDetailSectionKey;
+  label: string;
+  headingId: string;
+}>;
+
+export const RUN_DETAIL_SECTION_METADATA = {
+  focus: {
+    key: 'focus',
+    label: 'Focus',
+    headingId: 'run-detail-focus-heading',
+  },
+  timeline: {
+    key: 'timeline',
+    label: 'Timeline',
+    headingId: 'run-detail-timeline-heading',
+  },
+  stream: {
+    key: 'stream',
+    label: 'Stream',
+    headingId: 'run-detail-stream-heading',
+  },
+  observability: {
+    key: 'observability',
+    label: 'Observability',
+    headingId: 'run-detail-observability-heading',
+  },
+} as const satisfies Record<RunDetailSectionKey, RunDetailSectionMetadata>;
+
+export const RUN_DETAIL_SECTIONS = [
+  RUN_DETAIL_SECTION_METADATA.focus,
+  RUN_DETAIL_SECTION_METADATA.timeline,
+  RUN_DETAIL_SECTION_METADATA.stream,
+  RUN_DETAIL_SECTION_METADATA.observability,
+] as const satisfies readonly RunDetailSectionMetadata[];
+
 export type TimelineItem = Readonly<{
   key: string;
   timestamp: Date;
