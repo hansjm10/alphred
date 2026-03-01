@@ -314,11 +314,16 @@ export function RunDetailContent({
     }
 
     const nextSearch = searchParams.toString();
-    const nextUrl = `${url.pathname}${nextSearch ? `?${nextSearch}` : ''}${url.hash}`;
+    const nextSearchValue = nextSearch ? `?${nextSearch}` : '';
+    const nextUrl = `${url.pathname}${nextSearchValue}${url.hash}`;
     const currentUrl = `${window.location.pathname}${window.location.search}${window.location.hash}`;
 
     if (nextUrl !== currentUrl) {
       window.history.replaceState(window.history.state, '', nextUrl);
+      streamInspectorUrlStateRef.current = {
+        runId: detail.run.id,
+        search: nextSearchValue,
+      };
     }
   }, [detail.run.id, streamInspectorUrlStateReadyRunId, streamSelectedEventSequence, streamTarget]);
 

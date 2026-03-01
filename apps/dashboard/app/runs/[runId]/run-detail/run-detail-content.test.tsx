@@ -2541,6 +2541,87 @@ describe('RunDetailContent realtime updates', () => {
     });
   });
 
+  it('keeps inspector URL state aligned after query writes and target changes', async () => {
+    vi.stubGlobal('EventSource', MockEventSource as unknown as typeof EventSource);
+    const user = userEvent.setup();
+    window.history.replaceState(null, '', '/runs/412?streamRunNodeId=1&streamAttempt=1&streamEventSequence=4');
+
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/nodes/1/stream')) {
+        return createJsonResponse({
+          workflowRunId: 412,
+          runNodeId: 1,
+          attempt: 1,
+          nodeStatus: 'completed',
+          ended: true,
+          latestSequence: 5,
+          events: [
+            createStreamEvent({ runNodeId: 1, sequence: 4, contentPreview: 'node one event four' }),
+            createStreamEvent({ runNodeId: 1, sequence: 5, contentPreview: 'node one event five' }),
+          ],
+        });
+      }
+      if (url.includes('/nodes/2/stream')) {
+        return createJsonResponse({
+          workflowRunId: 412,
+          runNodeId: 2,
+          attempt: 1,
+          nodeStatus: 'running',
+          ended: false,
+          latestSequence: 0,
+          events: [],
+        });
+      }
+
+      return createJsonResponse(createRunDetail());
+    });
+
+    render(
+      <RunDetailContent
+        initialDetail={createRunDetail()}
+        repositories={[createRepository()]}
+        enableRealtime={false}
+      />,
+    );
+
+    const streamEventList = screen.getByRole('list', { name: 'Agent stream events' });
+    await waitFor(() => {
+      expect(within(streamEventList).getByText('node one event four')).toBeInTheDocument();
+    });
+
+    await user.click(within(streamEventList).getByText('node one event five'));
+    await waitFor(() => {
+      expect(window.location.search).toContain('streamRunNodeId=1');
+      expect(window.location.search).toContain('streamEventSequence=5');
+    });
+
+    const nodeStatusPanel = screen.getByRole('heading', { level: 3, name: 'Node status' }).closest('aside');
+    expect(nodeStatusPanel).not.toBeNull();
+    await user.click(within(nodeStatusPanel!).getByRole('button', { name: 'implement (attempt 1)' }));
+
+    await waitFor(() => {
+      expect(window.location.search).toContain('streamRunNodeId=2');
+      expect(window.location.search).toContain('streamAttempt=1');
+      expect(window.location.search).not.toContain('streamEventSequence');
+    });
+
+    await act(async () => {
+      await new Promise((resolve) => {
+        setTimeout(resolve, 50);
+      });
+    });
+
+    const nodeOneStreamCalls = fetchMock.mock.calls.filter(([input]) =>
+      String(input).includes('/api/dashboard/runs/412/nodes/1/stream?attempt=1&lastEventSequence=0'),
+    );
+    const nodeTwoStreamCalls = fetchMock.mock.calls.filter(([input]) =>
+      String(input).includes('/api/dashboard/runs/412/nodes/2/stream?attempt=1&lastEventSequence=0'),
+    );
+    expect(nodeOneStreamCalls).toHaveLength(1);
+    expect(nodeTwoStreamCalls).toHaveLength(1);
+  });
+
   it('rehydrates stream inspector query state when same-run URL params change', async () => {
     vi.stubGlobal('EventSource', MockEventSource as unknown as typeof EventSource);
     const initialDetail = createRunDetail();
