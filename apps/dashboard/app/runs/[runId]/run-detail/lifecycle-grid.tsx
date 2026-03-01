@@ -2,7 +2,11 @@ import { ActionButton, Card, Panel, StatusBadge } from '../../../ui/primitives';
 import { formatTimelineTime } from './formatting';
 import { TIMELINE_CATEGORY_LABELS } from './timeline';
 import { TimelineCategoryIcon } from './timeline-icon';
-import type { RunDetailLifecycleGridProps, TimelineItem } from './types';
+import {
+  RUN_DETAIL_SECTION_METADATA,
+  type RunDetailLifecycleGridProps,
+  type TimelineItem,
+} from './types';
 
 export function resolveEmptyTimelineLabel(filteredNodeId: number | null): string {
   return filteredNodeId === null ? 'No lifecycle events captured yet.' : 'No events match the selected node.';
@@ -48,7 +52,11 @@ export function RunDetailLifecycleGrid({
 
   return (
     <div className="page-grid run-detail-lifecycle-grid">
-      <Card title="Timeline" description="Latest run events">
+      <Card
+        title="Timeline"
+        description="Latest run events"
+        headingId={RUN_DETAIL_SECTION_METADATA.timeline.headingId}
+      >
         {selectedNode ? (
           <div className="run-timeline-filter">
             <p className="meta-text">{`Filtered to ${selectedNode.nodeKey} (attempt ${selectedNode.attempt}).`}</p>

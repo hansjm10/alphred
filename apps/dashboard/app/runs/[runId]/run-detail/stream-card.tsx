@@ -7,6 +7,7 @@ import { mergeAgentStreamEvents } from './realtime';
 import { partitionByRecency } from './timeline';
 import {
   RUN_AGENT_STREAM_RECENT_EVENT_COUNT,
+  RUN_DETAIL_SECTION_METADATA,
   type AgentStreamConnectionState,
   type RecentPartition,
   type StateSetter,
@@ -253,7 +254,11 @@ export function RunAgentStreamCard({
 
   if (!isTerminalRun) {
     return (
-      <Card title="Agent stream" description="Live provider events for a selected node attempt.">
+      <Card
+        title="Agent stream"
+        description="Live provider events for a selected node attempt."
+        headingId={RUN_DETAIL_SECTION_METADATA.stream.headingId}
+      >
         {streamContent}
       </Card>
     );
@@ -266,7 +271,11 @@ export function RunAgentStreamCard({
   });
 
   return (
-    <Card title="Agent stream" description="Provider events for a selected node attempt.">
+    <Card
+      title="Agent stream"
+      description="Provider events for a selected node attempt."
+      headingId={RUN_DETAIL_SECTION_METADATA.stream.headingId}
+    >
       <details className="run-agent-stream-collapsed">
         <summary className="run-agent-stream-collapsed__summary">{terminalStreamSummary}</summary>
         {streamContent}

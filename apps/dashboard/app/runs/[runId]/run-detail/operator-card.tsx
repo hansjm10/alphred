@@ -2,7 +2,12 @@ import { ActionButton, ButtonLink, Card, StatusBadge } from '../../../ui/primiti
 import type { DashboardRunControlAction, DashboardRunDetail } from '../../../../src/server/dashboard-contracts';
 import { resolveActionButtonLabel, triggerRunControlAction } from './actions';
 import { formatLastUpdated, formatTimelineTime } from './formatting';
-import type { OperatorActionState, RealtimeChannelState, TimelineItem } from './types';
+import {
+  RUN_DETAIL_SECTION_METADATA,
+  type OperatorActionState,
+  type RealtimeChannelState,
+  type TimelineItem,
+} from './types';
 
 type RunOperatorFocusCardProps = Readonly<{
   detail: DashboardRunDetail;
@@ -44,6 +49,7 @@ export function RunOperatorFocusCard({
     <Card
       title="Operator focus"
       description="Current run status, latest event, and next likely operator action."
+      headingId={RUN_DETAIL_SECTION_METADATA.focus.headingId}
       className="run-operator-focus"
     >
       <ul className="entity-list run-operator-focus-list">

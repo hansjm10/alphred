@@ -2,7 +2,7 @@ import { Card } from '../../../ui/primitives';
 import type { DashboardRunDetail } from '../../../../src/server/dashboard-contracts';
 import { ExpandablePreview } from './expandable-preview';
 import { partitionByRecency } from './timeline';
-import { RUN_OBSERVABILITY_RECENT_ENTRY_COUNT } from './types';
+import { RUN_DETAIL_SECTION_METADATA, RUN_OBSERVABILITY_RECENT_ENTRY_COUNT } from './types';
 
 export function resolvePayloadStorageSummary(diagnostics: DashboardRunDetail['diagnostics'][number]): string {
   if (!diagnostics.truncated && !diagnostics.redacted) {
@@ -64,7 +64,7 @@ export function RunObservabilityCard({ detail }: RunObservabilityCardProps) {
   };
 
   return (
-    <Card title="Observability">
+    <Card title="Observability" headingId={RUN_DETAIL_SECTION_METADATA.observability.headingId}>
       <section className="run-observability-section">
         <p className="meta-text">Artifacts</p>
         {detail.artifacts.length === 0 ? <p>No artifacts captured yet.</p> : null}
@@ -138,4 +138,3 @@ export function RunObservabilityCard({ detail }: RunObservabilityCardProps) {
     </Card>
   );
 }
-
