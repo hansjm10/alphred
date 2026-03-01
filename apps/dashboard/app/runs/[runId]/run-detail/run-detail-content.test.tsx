@@ -2403,7 +2403,15 @@ describe('RunDetailContent realtime updates', () => {
               sequence: 1,
               type: 'assistant',
               contentPreview: '{"foo":"bar","count":2}',
-              metadata: { source: 'dashboard' },
+              metadata: {
+                source: 'dashboard',
+                retries: 2,
+                approved: true,
+                note: null,
+                extra: {
+                  branch: 'main',
+                },
+              },
             }),
           ],
         });
@@ -2440,9 +2448,76 @@ describe('RunDetailContent realtime updates', () => {
 
     await user.click(within(detailPane).getByRole('button', { name: 'Copy metadata' }));
     await waitFor(() => {
-      expect(writeTextMock).toHaveBeenCalledWith(JSON.stringify({ source: 'dashboard' }, null, 2));
+      expect(writeTextMock).toHaveBeenCalledWith(JSON.stringify({
+        source: 'dashboard',
+        retries: 2,
+        approved: true,
+        note: null,
+        extra: {
+          branch: 'main',
+        },
+      }, null, 2));
     });
     expect(within(detailPane).getByText('Metadata copied.')).toBeInTheDocument();
+  });
+
+  it('falls back from markdown mode when selecting a non-markdown JSON string payload', async () => {
+    vi.stubGlobal('EventSource', MockEventSource as unknown as typeof EventSource);
+    const user = userEvent.setup();
+
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/nodes/2/stream')) {
+        return createJsonResponse({
+          workflowRunId: 412,
+          runNodeId: 2,
+          attempt: 1,
+          nodeStatus: 'running',
+          ended: false,
+          latestSequence: 2,
+          events: [
+            createStreamEvent({
+              sequence: 1,
+              type: 'assistant',
+              contentPreview: '# Heading\nMarkdown body',
+            }),
+            createStreamEvent({
+              sequence: 2,
+              type: 'assistant',
+              contentPreview: '"plain string"',
+            }),
+          ],
+        });
+      }
+
+      return createJsonResponse(createRunDetail());
+    });
+
+    render(
+      <RunDetailContent
+        initialDetail={createRunDetail()}
+        repositories={[createRepository()]}
+        enableRealtime={false}
+      />,
+    );
+
+    const streamEventList = screen.getByRole('list', { name: 'Agent stream events' });
+    await waitFor(() => {
+      expect(within(streamEventList).getByText((content) => content.includes('# Heading'))).toBeInTheDocument();
+      expect(within(streamEventList).getByText('"plain string"')).toBeInTheDocument();
+    });
+
+    await user.click(within(streamEventList).getByText((content) => content.includes('# Heading')));
+    const detailPane = screen.getByRole('region', { name: 'Agent stream inspector detail' });
+    await user.click(within(detailPane).getByRole('tab', { name: 'Rendered Markdown' }));
+
+    await user.click(within(streamEventList).getByText('"plain string"'));
+
+    await waitFor(() => {
+      expect(within(detailPane).getByRole('tab', { name: 'Pretty JSON' })).toHaveAttribute('aria-selected', 'true');
+    });
+    expect(detailPane.querySelector('.run-agent-inspector-token--string')).toHaveTextContent('"plain string"');
+    expect(within(detailPane).getByRole('tab', { name: 'Rendered Markdown' })).toBeDisabled();
   });
 
   it('treats JSON null payloads as valid pretty JSON and preserves null in downloads', async () => {
@@ -2563,6 +2638,68 @@ describe('RunDetailContent realtime updates', () => {
     expect(firstEventButton).toHaveAttribute('aria-pressed', 'true');
   });
 
+  it('supports loading older events plus jump and keyboard down/end shortcuts', async () => {
+    vi.stubGlobal('EventSource', MockEventSource as unknown as typeof EventSource);
+    const user = userEvent.setup();
+    const initialEvents = Array.from({ length: 121 }, (_, index) =>
+      createStreamEvent({
+        sequence: index + 1,
+        contentPreview: `event ${index + 1}`,
+      }),
+    );
+
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/nodes/2/stream')) {
+        return createJsonResponse({
+          workflowRunId: 412,
+          runNodeId: 2,
+          attempt: 1,
+          nodeStatus: 'running',
+          ended: false,
+          latestSequence: 121,
+          events: initialEvents,
+        });
+      }
+
+      return createJsonResponse(createRunDetail());
+    });
+
+    render(
+      <RunDetailContent
+        initialDetail={createRunDetail()}
+        repositories={[createRepository()]}
+        enableRealtime={false}
+      />,
+    );
+
+    const streamEventList = screen.getByRole('list', { name: 'Agent stream events' });
+    await waitFor(() => {
+      expect(screen.getByText('Showing 120 of 121 matching events.')).toBeInTheDocument();
+    });
+
+    await user.click(screen.getByRole('button', { name: 'Load 1 older events' }));
+    expect(within(streamEventList).getByText('event 1')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Jump to last' }));
+    const latestEventButton = within(streamEventList).getByText('event 121').closest('button');
+    expect(latestEventButton).toHaveAttribute('aria-pressed', 'true');
+
+    await user.click(screen.getByRole('button', { name: 'Jump to first' }));
+    const firstEventButton = within(streamEventList).getByText('event 1').closest('button');
+    expect(firstEventButton).toHaveAttribute('aria-pressed', 'true');
+
+    fireEvent.keyDown(firstEventButton!, { key: 'ArrowDown' });
+    const secondEventButton = within(streamEventList).getByText('event 2').closest('button');
+    expect(secondEventButton).toHaveAttribute('aria-pressed', 'true');
+
+    fireEvent.keyDown(secondEventButton!, { key: 'End' });
+    expect(latestEventButton).toHaveAttribute('aria-pressed', 'true');
+
+    fireEvent.keyDown(latestEventButton!, { key: 'Enter' });
+    expect(latestEventButton).toHaveAttribute('aria-pressed', 'true');
+  });
+
   it('syncs selected stream node and event sequence to URL query state', async () => {
     vi.stubGlobal('EventSource', MockEventSource as unknown as typeof EventSource);
     const user = userEvent.setup();
@@ -2626,8 +2763,10 @@ describe('RunDetailContent realtime updates', () => {
     });
 
     await user.click(within(streamEventList).getByText('node one event five'));
-    expect(window.location.search).toContain('streamRunNodeId=1');
-    expect(window.location.search).toContain('streamEventSequence=5');
+    await waitFor(() => {
+      expect(window.location.search).toContain('streamRunNodeId=1');
+      expect(window.location.search).toContain('streamEventSequence=5');
+    });
 
     const nodeStatusPanel = screen.getByRole('heading', { level: 3, name: 'Node status' }).closest('aside');
     expect(nodeStatusPanel).not.toBeNull();
@@ -3674,6 +3813,50 @@ describe('RunDetailContent realtime updates', () => {
     expect(within(tokenUsage).getByText(/Total 42 tokens/i)).toBeInTheDocument();
     expect(within(tokenUsage).getByRole('list', { name: 'Token usage by node' })).toBeInTheDocument();
     expect(within(tokenUsage).getByText(/design \(attempt 1\)/i)).toBeInTheDocument();
+  });
+
+  it('derives token usage breakdown from diagnostics metadata and ignores invalid numeric values', () => {
+    const baseDetail = createRunDetail();
+    const baseDiagnostics = baseDetail.diagnostics[0]!;
+    const diagnosticWithBreakdown: DashboardRunDetail['diagnostics'][number] = {
+      ...baseDiagnostics,
+      id: 33,
+      diagnostics: {
+        ...baseDiagnostics.diagnostics,
+        summary: {
+          ...baseDiagnostics.diagnostics.summary,
+          tokensUsed: 77,
+        },
+        events: [
+          {
+            ...baseDiagnostics.diagnostics.events[0]!,
+            metadata: {
+              input_tokens: -1,
+              inputTokens: 7,
+              output_tokens: 3.14,
+              usage: {
+                output_tokens: 5,
+                cached_input_tokens: 2,
+              },
+            },
+          },
+        ],
+      },
+    };
+
+    render(
+      <RunDetailContent
+        initialDetail={createRunDetail({
+          diagnostics: [diagnosticWithBreakdown],
+        })}
+        repositories={[createRepository()]}
+        enableRealtime={false}
+      />,
+    );
+
+    const tokenUsage = screen.getByRole('region', { name: 'Token usage' });
+    expect(within(tokenUsage).getAllByText('Input 7 · Output 5 · Cached 2').length).toBeGreaterThan(0);
+    expect(within(tokenUsage).getByText(/Total 77 tokens/i)).toBeInTheDocument();
   });
 
   it('reports nodes with diagnostics by unique node id when retries emit multiple attempts', () => {
