@@ -2662,6 +2662,7 @@ describe('RunDetailContent realtime updates', () => {
           ended: false,
           latestSequence: 6,
           events: [
+            createStreamEvent({ runNodeId: 2, sequence: 5, contentPreview: 'node two event five' }),
             createStreamEvent({ runNodeId: 2, sequence: 6, contentPreview: 'node two event six' }),
           ],
         });
@@ -2690,7 +2691,7 @@ describe('RunDetailContent realtime updates', () => {
       ),
     ).toHaveLength(0);
 
-    window.history.replaceState(null, '', '/runs/412?streamRunNodeId=2&streamAttempt=1&streamEventSequence=6');
+    window.history.replaceState(null, '', '/runs/412?streamRunNodeId=2&streamAttempt=1&streamEventSequence=5');
     rerender(
       <RunDetailContent
         initialDetail={initialDetail}
@@ -2706,13 +2707,19 @@ describe('RunDetailContent realtime updates', () => {
       );
       expect(window.location.search).toContain('streamRunNodeId=2');
       expect(window.location.search).toContain('streamAttempt=1');
-      expect(window.location.search).toContain('streamEventSequence=6');
+      expect(window.location.search).toContain('streamEventSequence=5');
     });
 
     const streamEventList = screen.getByRole('list', { name: 'Agent stream events' });
     await waitFor(() => {
+      expect(within(streamEventList).getByText('node two event five')).toBeInTheDocument();
       expect(within(streamEventList).getByText('node two event six')).toBeInTheDocument();
     });
+
+    const selectedEventButton = within(streamEventList).getByText('node two event five').closest('button');
+    const latestEventButton = within(streamEventList).getByText('node two event six').closest('button');
+    expect(selectedEventButton).toHaveAttribute('aria-pressed', 'true');
+    expect(latestEventButton).toHaveAttribute('aria-pressed', 'false');
   });
 
   it('rehydrates stream inspector query state after same-run detail refresh resets stream state', async () => {

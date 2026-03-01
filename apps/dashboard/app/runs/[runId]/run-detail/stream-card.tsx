@@ -375,6 +375,8 @@ function downloadEventPayload(event: DashboardRunNodeStreamEvent): void {
 
 function EventListPane(props: Readonly<{
   streamEvents: readonly DashboardRunNodeStreamEvent[];
+  selectedStreamRunNodeId: number;
+  selectedStreamAttempt: number;
   streamEventListRef: { current: HTMLOListElement | null };
   selectedEventSequence: number | null;
   onSelectedEventSequenceChange: (sequence: number | null) => void;
@@ -391,6 +393,8 @@ function EventListPane(props: Readonly<{
 }>) {
   const {
     streamEvents,
+    selectedStreamRunNodeId,
+    selectedStreamAttempt,
     streamEventListRef,
     selectedEventSequence,
     onSelectedEventSequenceChange,
@@ -407,13 +411,21 @@ function EventListPane(props: Readonly<{
   } = props;
 
   const eventButtonRefs = useRef(new Map<number, HTMLButtonElement>());
-  const hasLoadedStreamEventsRef = useRef<boolean>(streamEvents.length > 0);
-  const hasStartedStreamInitializationRef = useRef<boolean>(streamEvents.length > 0);
+  const hasLoadedStreamEventsRef = useRef<boolean>(false);
+  const hasStartedStreamInitializationRef = useRef<boolean>(false);
   const previousLatestFilteredEventSequenceRef = useRef<number | null>(null);
 
+  const targetStreamEvents = useMemo(
+    () =>
+      streamEvents.filter(
+        event => event.runNodeId === selectedStreamRunNodeId && event.attempt === selectedStreamAttempt,
+      ),
+    [selectedStreamAttempt, selectedStreamRunNodeId, streamEvents],
+  );
+
   const filteredEvents = useMemo(
-    () => streamEvents.filter(event => eventMatchesInspectorFilter(event, eventTypeFilter, eventSearchQuery)),
-    [eventSearchQuery, eventTypeFilter, streamEvents],
+    () => targetStreamEvents.filter(event => eventMatchesInspectorFilter(event, eventTypeFilter, eventSearchQuery)),
+    [eventSearchQuery, eventTypeFilter, targetStreamEvents],
   );
 
   const visibleEvents = useMemo(() => {
@@ -427,11 +439,11 @@ function EventListPane(props: Readonly<{
   const hiddenEventCount = Math.max(filteredEvents.length - visibleEvents.length, 0);
 
   useEffect(() => {
-    if (streamEvents.length > 0) {
+    if (targetStreamEvents.length > 0) {
       hasLoadedStreamEventsRef.current = true;
       hasStartedStreamInitializationRef.current = true;
     }
-  }, [streamEvents.length]);
+  }, [targetStreamEvents.length]);
 
   useEffect(() => {
     if (streamConnectionState !== 'ended') {
@@ -939,7 +951,10 @@ function SelectedStreamContent(props: Readonly<{
     const nextInspectorNodeKey = `${selectedStreamNode.id}:${selectedStreamNode.attempt}`;
     const previousInspectorNodeKey = previousInspectorNodeKeyRef.current;
     const inspectorNodeChanged = previousInspectorNodeKey !== null && previousInspectorNodeKey !== nextInspectorNodeKey;
-    if (inspectorNodeChanged && previousSelectedEventSequenceRef.current !== null) {
+    const hasCarriedSelectionAcrossTargets =
+      previousSelectedEventSequenceRef.current !== null &&
+      selectedEventSequence === previousSelectedEventSequenceRef.current;
+    if (inspectorNodeChanged && hasCarriedSelectionAcrossTargets) {
       onSelectedEventSequenceChange(null);
     }
     previousInspectorNodeKeyRef.current = nextInspectorNodeKey;
@@ -993,6 +1008,8 @@ function SelectedStreamContent(props: Readonly<{
         <EventListPane
           key={`${selectedStreamNode.id}:${selectedStreamNode.attempt}`}
           streamEvents={streamEvents}
+          selectedStreamRunNodeId={selectedStreamNode.id}
+          selectedStreamAttempt={selectedStreamNode.attempt}
           streamEventListRef={streamEventListRef}
           selectedEventSequence={selectedEventSequence}
           onSelectedEventSequenceChange={onSelectedEventSequenceChange}
