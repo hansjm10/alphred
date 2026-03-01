@@ -41,6 +41,22 @@ function formatTokenCount(value: number): string {
   return new Intl.NumberFormat(undefined, { maximumFractionDigits: 0 }).format(value);
 }
 
+function formatTokenBreakdownLabel(breakdown: TokenBreakdown | null): string | null {
+  if (!breakdown) {
+    return null;
+  }
+
+  const inputLabel = breakdown.inputTokens === null ? 'n/a' : formatTokenCount(breakdown.inputTokens);
+  const outputLabel = breakdown.outputTokens === null ? 'n/a' : formatTokenCount(breakdown.outputTokens);
+  const breakdownParts = [`Input ${inputLabel}`, `Output ${outputLabel}`];
+  if (breakdown.cachedInputTokens === null) {
+    return breakdownParts.join(' · ');
+  }
+
+  breakdownParts.push(`Cached ${formatTokenCount(breakdown.cachedInputTokens)}`);
+  return breakdownParts.join(' · ');
+}
+
 type TokenBreakdown = Readonly<{
   inputTokens: number | null;
   outputTokens: number | null;
@@ -274,20 +290,7 @@ function RunTokenUsagePanel(props: Readonly<{
             row.isInspectable &&
             selectedStreamNode?.id === row.runNodeId &&
             selectedStreamNode.attempt === row.attempt;
-          let breakdownLabel: string | null = null;
-          if (row.breakdown) {
-            const inputLabel =
-              row.breakdown.inputTokens === null ? 'n/a' : formatTokenCount(row.breakdown.inputTokens);
-            const outputLabel =
-              row.breakdown.outputTokens === null ? 'n/a' : formatTokenCount(row.breakdown.outputTokens);
-            const breakdownParts = [`Input ${inputLabel}`, `Output ${outputLabel}`];
-            if (row.breakdown.cachedInputTokens === null) {
-              breakdownLabel = breakdownParts.join(' · ');
-            } else {
-              breakdownParts.push(`Cached ${formatTokenCount(row.breakdown.cachedInputTokens)}`);
-              breakdownLabel = breakdownParts.join(' · ');
-            }
-          }
+          const breakdownLabel = formatTokenBreakdownLabel(row.breakdown);
 
           return (
             <li key={row.key}>
