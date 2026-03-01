@@ -568,6 +568,21 @@ Type: `{ worktrees: DashboardRunWorktreeMetadata[] }`.
 
 ## UI Route Notes
 
+### `/runs/[runId]`
+
+- Run detail includes an **Agent stream inspector** for the selected node attempt.
+- Inspector workflow:
+  - Event list supports event-type filter (`system`, `assistant`, `tool_use`, `tool_result`, `usage`, `result`) and free-text search.
+  - Keyboard navigation is supported in the event list (`ArrowUp`, `ArrowDown`, `Home`, `End`).
+  - Detail pane supports `Pretty JSON`, `Raw`, and `Rendered Markdown` (when payload appears markdown-like).
+  - Utility actions: copy payload, copy metadata, download payload as `.json`, and line-wrap toggle.
+- URL query state is synchronized for shareable review links:
+  - `streamRunNodeId`
+  - `streamAttempt`
+  - `streamEventSequence`
+- Large event histories use incremental rendering controls (`Load older events`) to keep the inspector responsive.
+- Persisted stream payloads are inspection-safe previews (`contentPreview` + metadata); when preview text is shorter than `contentChars`, the UI marks the payload as truncated.
+
 ### `/runs/[runId]/worktree`
 
 - The page loads persisted run detail first via dashboard service APIs.

@@ -23,11 +23,14 @@ import {
   resolveInitialAgentStreamTarget,
   resolveInitialLastUpdatedAtMs,
   resolveInitialStreamLastUpdatedAtMs,
+  toAgentStreamTarget,
 } from './realtime';
 import {
   clearActionFeedbackOnStatusChange,
   createRetryCountdownEffect,
   flushBufferedAgentStreamEvents,
+  isSameStreamTarget,
+  isStreamSupportedNodeStatus,
   resetRunDetailStateFromInitialDetail,
   syncSelectionStateWithNodes,
   syncStreamEventListScroll,
@@ -44,6 +47,45 @@ import {
   type RealtimeChannelState,
   type RunDetailContentProps,
 } from './types';
+
+function parseNumericSearchParam(value: string | null): number {
+  if (value === null) {
+    return Number.NaN;
+  }
+
+  return Number(value);
+}
+
+function resolveStreamTargetFromUrlSearch(
+  nodes: DashboardRunDetail['nodes'],
+  streamInspectorUrlSearch: string,
+): Readonly<{ streamTarget: AgentStreamTarget | null; eventSequence: number | null }> {
+  const searchParams = new URLSearchParams(streamInspectorUrlSearch);
+  const runNodeId = parseNumericSearchParam(searchParams.get('streamRunNodeId'));
+
+  if (!Number.isInteger(runNodeId) || runNodeId < 1) {
+    return { streamTarget: null, eventSequence: null };
+  }
+
+  const targetNode = nodes.find((node) => node.id === runNodeId);
+  if (!targetNode || !isStreamSupportedNodeStatus(targetNode.status)) {
+    return { streamTarget: null, eventSequence: null };
+  }
+
+  const attempt = parseNumericSearchParam(searchParams.get('streamAttempt'));
+  const attemptMatchesNode = !Number.isInteger(attempt) || attempt < 1 || targetNode.attempt === attempt;
+  if (!attemptMatchesNode) {
+    return { streamTarget: null, eventSequence: null };
+  }
+
+  const eventSequence = parseNumericSearchParam(searchParams.get('streamEventSequence'));
+  const nextEventSequence = Number.isInteger(eventSequence) && eventSequence > 0 ? eventSequence : null;
+
+  return {
+    streamTarget: toAgentStreamTarget(targetNode),
+    eventSequence: nextEventSequence,
+  };
+}
 
 export function RunDetailContent({
   initialDetail,
@@ -76,6 +118,8 @@ export function RunDetailContent({
   const [streamLastUpdatedAtMs, setStreamLastUpdatedAtMs] = useState<number>(() =>
     resolveInitialStreamLastUpdatedAtMs(initialDetail),
   );
+  const [streamSelectedEventSequence, setStreamSelectedEventSequence] = useState<number | null>(null);
+  const [streamInspectorUrlStateReadyRunId, setStreamInspectorUrlStateReadyRunId] = useState<number | null>(null);
   const [pendingControlAction, setPendingControlAction] = useState<DashboardRunControlAction | null>(null);
   const [actionFeedback, setActionFeedback] = useState<ActionFeedbackState>(null);
 
@@ -84,12 +128,18 @@ export function RunDetailContent({
   const streamLastSequenceRef = useRef<number>(0);
   const streamEventListRef = useRef<HTMLOListElement | null>(null);
   const streamAutoScrollRef = useRef<boolean>(streamAutoScroll);
+  const streamInspectorUrlStateRef = useRef<Readonly<{ runId: number | null; search: string | null }>>({
+    runId: null,
+    search: null,
+  });
+  const streamInspectorUrlSearch = globalThis.window?.location.search ?? '';
 
   useEffect(() => {
     setHasHydrated(true);
   }, []);
 
   useEffect(() => {
+    setStreamInspectorUrlStateReadyRunId(null);
     resetRunDetailStateFromInitialDetail({
       initialDetail,
       enableRealtime,
@@ -110,6 +160,7 @@ export function RunDetailContent({
       setStreamRetryCountdownSeconds,
       setStreamAutoScroll,
       setStreamLastUpdatedAtMs,
+      setStreamSelectedEventSequence,
       setPendingControlAction,
       setActionFeedback,
     });
@@ -156,6 +207,10 @@ export function RunDetailContent({
   }, [detail.run.id, detail.run.status, enableRealtime, pollIntervalMs]);
 
   useEffect(() => {
+    if (streamInspectorUrlStateReadyRunId !== detail.run.id) {
+      return () => undefined;
+    }
+
     return createAgentStreamLifecycleEffect({
       runId: detail.run.id,
       streamTarget,
@@ -170,7 +225,7 @@ export function RunDetailContent({
       setStreamRetryCountdownSeconds,
       setStreamLastUpdatedAtMs,
     });
-  }, [detail.run.id, streamTarget]);
+  }, [detail.run.id, streamInspectorUrlStateReadyRunId, streamTarget]);
 
   useEffect(() => {
     flushBufferedAgentStreamEvents({
@@ -208,6 +263,86 @@ export function RunDetailContent({
       setActionFeedback,
     });
   }, [detail.run.status]);
+
+  useEffect(() => {
+    if (!globalThis.window) {
+      return;
+    }
+
+    if (
+      streamInspectorUrlStateReadyRunId === detail.run.id &&
+      streamInspectorUrlStateRef.current.runId === detail.run.id &&
+      streamInspectorUrlStateRef.current.search === streamInspectorUrlSearch
+    ) {
+      return;
+    }
+    streamInspectorUrlStateRef.current = {
+      runId: detail.run.id,
+      search: streamInspectorUrlSearch,
+    };
+
+    const urlSelection = resolveStreamTargetFromUrlSearch(detail.nodes, streamInspectorUrlSearch);
+
+    if (urlSelection.streamTarget && !isSameStreamTarget(streamTarget, urlSelection.streamTarget)) {
+      setStreamTarget(urlSelection.streamTarget);
+    }
+
+    if (streamSelectedEventSequence !== urlSelection.eventSequence) {
+      setStreamSelectedEventSequence(urlSelection.eventSequence);
+    }
+
+    if (streamInspectorUrlStateReadyRunId !== detail.run.id) {
+      setStreamInspectorUrlStateReadyRunId(detail.run.id);
+    }
+  }, [
+    detail.nodes,
+    detail.run.id,
+    streamInspectorUrlSearch,
+    streamInspectorUrlStateReadyRunId,
+    streamSelectedEventSequence,
+    streamTarget,
+  ]);
+
+  useEffect(() => {
+    const browserWindow = globalThis.window;
+    if (!browserWindow || streamInspectorUrlStateReadyRunId !== detail.run.id) {
+      return;
+    }
+
+    const url = new URL(browserWindow.location.href);
+    const searchParams = url.searchParams;
+
+    if (streamTarget) {
+      searchParams.set('streamRunNodeId', String(streamTarget.runNodeId));
+      searchParams.set('streamAttempt', String(streamTarget.attempt));
+    } else {
+      searchParams.delete('streamRunNodeId');
+      searchParams.delete('streamAttempt');
+    }
+
+    if (streamTarget && streamSelectedEventSequence !== null) {
+      searchParams.set('streamEventSequence', String(streamSelectedEventSequence));
+    } else {
+      searchParams.delete('streamEventSequence');
+    }
+
+    if (!streamTarget && streamSelectedEventSequence !== null) {
+      setStreamSelectedEventSequence(null);
+    }
+
+    const nextSearch = searchParams.toString();
+    const nextSearchValue = nextSearch ? `?${nextSearch}` : '';
+    const nextUrl = `${url.pathname}${nextSearchValue}${url.hash}`;
+    const currentUrl = `${browserWindow.location.pathname}${browserWindow.location.search}${browserWindow.location.hash}`;
+
+    if (nextUrl !== currentUrl) {
+      browserWindow.history.replaceState(browserWindow.history.state, '', nextUrl);
+      streamInspectorUrlStateRef.current = {
+        runId: detail.run.id,
+        search: nextSearchValue,
+      };
+    }
+  }, [detail.run.id, streamInspectorUrlStateReadyRunId, streamSelectedEventSequence, streamTarget]);
 
   const timeline = useMemo(() => buildTimeline(detail), [detail]);
   const repositoryContext = useMemo(
@@ -360,6 +495,8 @@ export function RunDetailContent({
 
       <RunAgentStreamCard
         isTerminalRun={!isActiveRunStatus(detail.run.status)}
+        nodes={detail.nodes}
+        diagnostics={detail.diagnostics}
         selectedStreamNode={selectedStreamNode}
         agentStreamLabel={agentStreamLabel}
         streamConnectionState={streamConnectionState}
@@ -370,6 +507,14 @@ export function RunDetailContent({
         streamError={streamError}
         streamEvents={streamEvents}
         streamEventListRef={streamEventListRef}
+        selectedEventSequence={streamSelectedEventSequence}
+        onSelectedEventSequenceChange={setStreamSelectedEventSequence}
+        onSelectStreamTarget={(target) => {
+          setStreamAutoScroll(true);
+          setStreamBufferedEvents([]);
+          setStreamSelectedEventSequence(null);
+          setStreamTarget(target);
+        }}
         setStreamAutoScroll={setStreamAutoScroll}
         setStreamBufferedEvents={setStreamBufferedEvents}
         setStreamEvents={setStreamEvents}
