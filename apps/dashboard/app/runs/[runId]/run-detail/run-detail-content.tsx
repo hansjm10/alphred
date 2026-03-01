@@ -100,6 +100,7 @@ export function RunDetailContent({
   }, []);
 
   useEffect(() => {
+    setStreamInspectorUrlStateReadyRunId(null);
     resetRunDetailStateFromInitialDetail({
       initialDetail,
       enableRealtime,
@@ -230,6 +231,7 @@ export function RunDetailContent({
     }
 
     if (
+      streamInspectorUrlStateReadyRunId === detail.run.id &&
       streamInspectorUrlStateRef.current.runId === detail.run.id &&
       streamInspectorUrlStateRef.current.search === streamInspectorUrlSearch
     ) {

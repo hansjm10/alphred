@@ -2706,6 +2706,101 @@ describe('RunDetailContent realtime updates', () => {
     });
   });
 
+  it('rehydrates stream inspector query state after same-run detail refresh resets stream state', async () => {
+    vi.stubGlobal('EventSource', MockEventSource as unknown as typeof EventSource);
+    const initialDetail = createRunDetail();
+    const refreshedDetail = createRunDetail({
+      artifacts: [
+        {
+          id: 99,
+          runNodeId: 2,
+          artifactType: 'log',
+          contentType: 'text',
+          contentPreview: 'refreshed detail payload',
+          createdAt: '2026-02-18T00:00:50.000Z',
+        },
+      ],
+    });
+    const repository = createRepository();
+    window.history.replaceState(null, '', '/runs/412?streamRunNodeId=1&streamAttempt=1&streamEventSequence=4');
+
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/nodes/1/stream')) {
+        return createJsonResponse({
+          workflowRunId: 412,
+          runNodeId: 1,
+          attempt: 1,
+          nodeStatus: 'completed',
+          ended: true,
+          latestSequence: 5,
+          events: [
+            createStreamEvent({ runNodeId: 1, sequence: 4, contentPreview: 'node one event four' }),
+            createStreamEvent({ runNodeId: 1, sequence: 5, contentPreview: 'node one event five' }),
+          ],
+        });
+      }
+      if (url.includes('/nodes/2/stream')) {
+        return createJsonResponse({
+          workflowRunId: 412,
+          runNodeId: 2,
+          attempt: 1,
+          nodeStatus: 'running',
+          ended: false,
+          latestSequence: 0,
+          events: [],
+        });
+      }
+
+      return createJsonResponse(initialDetail);
+    });
+
+    const { rerender } = render(
+      <RunDetailContent
+        initialDetail={initialDetail}
+        repositories={[repository]}
+        enableRealtime={false}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        expect.stringContaining('/api/dashboard/runs/412/nodes/1/stream?attempt=1&lastEventSequence=0'),
+        expect.objectContaining({ method: 'GET' }),
+      );
+      expect(window.location.search).toContain('streamRunNodeId=1');
+      expect(window.location.search).toContain('streamEventSequence=4');
+    });
+    expect(
+      fetchMock.mock.calls.filter(([input]) =>
+        String(input).includes('/api/dashboard/runs/412/nodes/2/stream?attempt=1&lastEventSequence=0'),
+      ),
+    ).toHaveLength(0);
+
+    fetchMock.mockClear();
+    rerender(
+      <RunDetailContent
+        initialDetail={refreshedDetail}
+        repositories={[repository]}
+        enableRealtime={false}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        expect.stringContaining('/api/dashboard/runs/412/nodes/1/stream?attempt=1&lastEventSequence=0'),
+        expect.objectContaining({ method: 'GET' }),
+      );
+      expect(window.location.search).toContain('streamRunNodeId=1');
+      expect(window.location.search).toContain('streamEventSequence=4');
+    });
+    expect(
+      fetchMock.mock.calls.filter(([input]) =>
+        String(input).includes('/api/dashboard/runs/412/nodes/2/stream?attempt=1&lastEventSequence=0'),
+      ),
+    ).toHaveLength(0);
+  });
+
   it('ignores non-streamable URL stream targets during hydration', async () => {
     vi.stubGlobal('EventSource', MockEventSource as unknown as typeof EventSource);
     window.history.replaceState(null, '', '/runs/412?streamRunNodeId=3&streamAttempt=1&streamEventSequence=4');
