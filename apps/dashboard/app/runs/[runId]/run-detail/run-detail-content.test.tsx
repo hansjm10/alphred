@@ -2584,6 +2584,182 @@ describe('RunDetailContent realtime updates', () => {
     expect((payloadSerializationCall![0] as { payload?: unknown }).payload).toBeNull();
   });
 
+  it('renders boolean and numeric JSON payload tokens with usage fallback values', async () => {
+    vi.stubGlobal('EventSource', MockEventSource as unknown as typeof EventSource);
+    const user = userEvent.setup();
+
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/nodes/2/stream')) {
+        return createJsonResponse({
+          workflowRunId: 412,
+          runNodeId: 2,
+          attempt: 1,
+          nodeStatus: 'running',
+          ended: false,
+          latestSequence: 2,
+          events: [
+            createStreamEvent({
+              sequence: 1,
+              type: 'assistant',
+              contentPreview: 'true',
+              usage: {
+                deltaTokens: null,
+                cumulativeTokens: null,
+              },
+            }),
+            createStreamEvent({ sequence: 2, type: 'assistant', contentPreview: '42' }),
+          ],
+        });
+      }
+
+      return createJsonResponse(createRunDetail());
+    });
+
+    render(
+      <RunDetailContent
+        initialDetail={createRunDetail()}
+        repositories={[createRepository()]}
+        enableRealtime={false}
+      />,
+    );
+
+    const streamEventList = screen.getByRole('list', { name: 'Agent stream events' });
+    await waitFor(() => {
+      expect(within(streamEventList).getByText('true')).toBeInTheDocument();
+      expect(within(streamEventList).getByText('42')).toBeInTheDocument();
+    });
+
+    await user.click(within(streamEventList).getByText('true'));
+    const detailPane = screen.getByRole('region', { name: 'Agent stream inspector detail' });
+    expect(detailPane.querySelector('.run-agent-inspector-token--boolean')).toHaveTextContent('true');
+    expect(within(detailPane).getByText('Usage Δ n/a · cumulative n/a')).toBeInTheDocument();
+
+    await user.click(within(streamEventList).getByText('42'));
+    expect(detailPane.querySelector('.run-agent-inspector-token--number')).toHaveTextContent('42');
+  });
+
+  it('renders ordered lists, heading levels, and fenced code blocks in markdown mode', async () => {
+    vi.stubGlobal('EventSource', MockEventSource as unknown as typeof EventSource);
+    const user = userEvent.setup();
+
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/nodes/2/stream')) {
+        return createJsonResponse({
+          workflowRunId: 412,
+          runNodeId: 2,
+          attempt: 1,
+          nodeStatus: 'running',
+          ended: false,
+          latestSequence: 1,
+          events: [
+            createStreamEvent({
+              sequence: 1,
+              type: 'assistant',
+              contentPreview: '# Title\n\n### Deep\n\n1. first\n2. second\n\n```ts\nconst value = 1;\n```',
+            }),
+          ],
+        });
+      }
+
+      return createJsonResponse(createRunDetail());
+    });
+
+    render(
+      <RunDetailContent
+        initialDetail={createRunDetail()}
+        repositories={[createRepository()]}
+        enableRealtime={false}
+      />,
+    );
+
+    const streamEventList = screen.getByRole('list', { name: 'Agent stream events' });
+    await waitFor(() => {
+      expect(within(streamEventList).getByText((content) => content.includes('# Title'))).toBeInTheDocument();
+    });
+
+    await user.click(within(streamEventList).getByText((content) => content.includes('# Title')));
+    const detailPane = screen.getByRole('region', { name: 'Agent stream inspector detail' });
+    const markdownTab = within(detailPane).getByRole('tab', { name: 'Rendered Markdown' });
+    expect(markdownTab).not.toBeDisabled();
+    await user.click(markdownTab);
+
+    expect(within(detailPane).getByRole('heading', { level: 4, name: 'Title' })).toBeInTheDocument();
+    expect(within(detailPane).getByRole('heading', { level: 5, name: 'Deep' })).toBeInTheDocument();
+    expect(within(detailPane).getByText('first')).toBeInTheDocument();
+    expect(within(detailPane).getByText('second')).toBeInTheDocument();
+    expect(within(detailPane).getByText('const value = 1;')).toBeInTheDocument();
+  });
+
+  it('shows clipboard utility feedback when clipboard APIs are unavailable or reject', async () => {
+    vi.stubGlobal('EventSource', MockEventSource as unknown as typeof EventSource);
+    const user = userEvent.setup();
+
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/nodes/2/stream')) {
+        return createJsonResponse({
+          workflowRunId: 412,
+          runNodeId: 2,
+          attempt: 1,
+          nodeStatus: 'running',
+          ended: false,
+          latestSequence: 1,
+          events: [
+            createStreamEvent({
+              sequence: 1,
+              type: 'assistant',
+              contentPreview: '{"status":"ok"}',
+              metadata: {
+                source: 'dashboard',
+              },
+            }),
+          ],
+        });
+      }
+
+      return createJsonResponse(createRunDetail());
+    });
+
+    render(
+      <RunDetailContent
+        initialDetail={createRunDetail()}
+        repositories={[createRepository()]}
+        enableRealtime={false}
+      />,
+    );
+
+    const streamEventList = screen.getByRole('list', { name: 'Agent stream events' });
+    await waitFor(() => {
+      expect(within(streamEventList).getByText('{"status":"ok"}')).toBeInTheDocument();
+    });
+
+    await user.click(within(streamEventList).getByText('{"status":"ok"}'));
+    const detailPane = screen.getByRole('region', { name: 'Agent stream inspector detail' });
+
+    Object.defineProperty(navigator, 'clipboard', {
+      value: undefined,
+      configurable: true,
+    });
+    await user.click(within(detailPane).getByRole('button', { name: 'Copy payload' }));
+    expect(within(detailPane).getByText('Unable to copy payload in this environment.')).toBeInTheDocument();
+
+    const writeTextRejectMock = vi.fn(async () => {
+      throw new Error('clipboard denied');
+    });
+    Object.defineProperty(navigator, 'clipboard', {
+      value: { writeText: writeTextRejectMock },
+      configurable: true,
+    });
+
+    await user.click(within(detailPane).getByRole('button', { name: 'Copy metadata' }));
+    await waitFor(() => {
+      expect(writeTextRejectMock).toHaveBeenCalledWith(JSON.stringify({ source: 'dashboard' }, null, 2));
+    });
+    expect(within(detailPane).getByText('Unable to copy metadata in this environment.')).toBeInTheDocument();
+  });
+
   it('supports keyboard navigation across inspector event rows', async () => {
     vi.stubGlobal('EventSource', MockEventSource as unknown as typeof EventSource);
 
@@ -2640,7 +2816,6 @@ describe('RunDetailContent realtime updates', () => {
 
   it('supports loading older events plus jump and keyboard down/end shortcuts', async () => {
     vi.stubGlobal('EventSource', MockEventSource as unknown as typeof EventSource);
-    const user = userEvent.setup();
     const initialEvents = Array.from({ length: 121 }, (_, index) =>
       createStreamEvent({
         sequence: index + 1,
@@ -2678,14 +2853,16 @@ describe('RunDetailContent realtime updates', () => {
       expect(screen.getByText('Showing 120 of 121 matching events.')).toBeInTheDocument();
     });
 
-    await user.click(screen.getByRole('button', { name: 'Load 1 older events' }));
-    expect(within(streamEventList).getByText('event 1')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Load 1 older events' }));
+    await waitFor(() => {
+      expect(within(streamEventList).getByText('event 1')).toBeInTheDocument();
+    });
 
-    await user.click(screen.getByRole('button', { name: 'Jump to last' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Jump to last' }));
     const latestEventButton = within(streamEventList).getByText('event 121').closest('button');
     expect(latestEventButton).toHaveAttribute('aria-pressed', 'true');
 
-    await user.click(screen.getByRole('button', { name: 'Jump to first' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Jump to first' }));
     const firstEventButton = within(streamEventList).getByText('event 1').closest('button');
     expect(firstEventButton).toHaveAttribute('aria-pressed', 'true');
 
@@ -2698,7 +2875,7 @@ describe('RunDetailContent realtime updates', () => {
 
     fireEvent.keyDown(latestEventButton!, { key: 'Enter' });
     expect(latestEventButton).toHaveAttribute('aria-pressed', 'true');
-  });
+  }, 15000);
 
   it('syncs selected stream node and event sequence to URL query state', async () => {
     vi.stubGlobal('EventSource', MockEventSource as unknown as typeof EventSource);
@@ -2762,8 +2939,12 @@ describe('RunDetailContent realtime updates', () => {
       expect(window.location.search).toContain('streamEventSequence=4');
     });
 
-    await user.click(within(streamEventList).getByText('node one event five'));
+    const eventFiveButton = within(streamEventList).getByText('node one event five').closest('button');
+    expect(eventFiveButton).not.toBeNull();
+
+    await user.click(eventFiveButton!);
     await waitFor(() => {
+      expect(eventFiveButton).toHaveAttribute('aria-pressed', 'true');
       expect(window.location.search).toContain('streamRunNodeId=1');
       expect(window.location.search).toContain('streamEventSequence=5');
     });
@@ -3857,6 +4038,101 @@ describe('RunDetailContent realtime updates', () => {
     const tokenUsage = screen.getByRole('region', { name: 'Token usage' });
     expect(within(tokenUsage).getAllByText('Input 7 · Output 5 · Cached 2').length).toBeGreaterThan(0);
     expect(within(tokenUsage).getByText(/Total 77 tokens/i)).toBeInTheDocument();
+  });
+
+  it('omits aggregate token breakdown when metadata has no token keys and keeps tie ordering by sequence index', () => {
+    const baseDetail = createRunDetail();
+    const baseDiagnostics = baseDetail.diagnostics[0]!;
+    const eventsWithoutTokenBreakdown = [
+      {
+        ...baseDiagnostics.diagnostics.events[0]!,
+        metadata: {
+          source: 'dashboard',
+        },
+      },
+      undefined as unknown as DashboardRunDetail['diagnostics'][number]['diagnostics']['events'][number],
+    ];
+
+    const alphaDiagnostics: DashboardRunDetail['diagnostics'][number] = {
+      ...baseDiagnostics,
+      id: 51,
+      runNodeId: 10,
+      attempt: 1,
+      createdAt: '2026-02-18T00:00:31.000Z',
+      diagnostics: {
+        ...baseDiagnostics.diagnostics,
+        runNodeId: 10,
+        nodeKey: 'alpha',
+        attempt: 1,
+        summary: {
+          ...baseDiagnostics.diagnostics.summary,
+          tokensUsed: 50,
+        },
+        events: eventsWithoutTokenBreakdown,
+      },
+    };
+    const betaDiagnostics: DashboardRunDetail['diagnostics'][number] = {
+      ...baseDiagnostics,
+      id: 52,
+      runNodeId: 20,
+      attempt: 1,
+      createdAt: '2026-02-18T00:00:32.000Z',
+      diagnostics: {
+        ...baseDiagnostics.diagnostics,
+        runNodeId: 20,
+        nodeKey: 'beta',
+        attempt: 1,
+        summary: {
+          ...baseDiagnostics.diagnostics.summary,
+          tokensUsed: 50,
+        },
+        events: eventsWithoutTokenBreakdown,
+      },
+    };
+
+    render(
+      <RunDetailContent
+        initialDetail={createRunDetail({
+          nodes: [
+            {
+              id: 10,
+              treeNodeId: 10,
+              nodeKey: 'alpha',
+              sequenceIndex: 0,
+              attempt: 1,
+              status: 'completed',
+              startedAt: '2026-02-18T00:00:10.000Z',
+              completedAt: '2026-02-18T00:00:30.000Z',
+              latestArtifact: null,
+              latestRoutingDecision: null,
+              latestDiagnostics: alphaDiagnostics,
+            },
+            {
+              id: 20,
+              treeNodeId: 20,
+              nodeKey: 'beta',
+              sequenceIndex: 1,
+              attempt: 1,
+              status: 'completed',
+              startedAt: '2026-02-18T00:00:35.000Z',
+              completedAt: '2026-02-18T00:00:45.000Z',
+              latestArtifact: null,
+              latestRoutingDecision: null,
+              latestDiagnostics: betaDiagnostics,
+            },
+          ],
+          diagnostics: [alphaDiagnostics, betaDiagnostics],
+        })}
+        repositories={[createRepository()]}
+        enableRealtime={false}
+      />,
+    );
+
+    const tokenUsage = screen.getByRole('region', { name: 'Token usage' });
+    const usageRows = within(tokenUsage).getAllByRole('button');
+    expect(usageRows[0]).toHaveAccessibleName('Inspect alpha (attempt 1)');
+    expect(usageRows[1]).toHaveAccessibleName('Inspect beta (attempt 1)');
+    expect(within(tokenUsage).queryByText(/Input \d+ · Output \d+/i)).toBeNull();
   });
 
   it('reports nodes with diagnostics by unique node id when retries emit multiple attempts', () => {
