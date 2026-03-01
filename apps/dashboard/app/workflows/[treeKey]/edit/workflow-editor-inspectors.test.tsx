@@ -18,6 +18,8 @@ function createDraftNode(overrides: Partial<DashboardWorkflowDraftNode> = {}): D
     nodeKey: 'design',
     displayName: 'Design',
     nodeType: 'agent',
+    nodeRole: 'standard',
+    maxChildren: 12,
     provider: 'codex',
     model: 'gpt-5.3-codex',
     maxRetries: 1,

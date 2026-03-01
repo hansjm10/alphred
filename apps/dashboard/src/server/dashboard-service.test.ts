@@ -2339,6 +2339,264 @@ describe('createDashboardService', () => {
     });
   });
 
+  it('persists node role and maxChildren across save, publish, and draft bootstrap', async () => {
+    const { db, dependencies } = createHarness();
+    migrateDatabase(db);
+
+    const service = createDashboardService({ dependencies });
+
+    await service.createWorkflowDraft({
+      template: 'blank',
+      name: 'Fanout Persist Tree',
+      treeKey: 'fanout-persist-tree',
+    });
+
+    const savedDraft = await service.saveWorkflowDraft('fanout-persist-tree', 1, {
+      draftRevision: 1,
+      name: 'Fanout Persist Tree',
+      nodes: [
+        {
+          nodeKey: 'decompose',
+          displayName: 'Decompose',
+          nodeType: 'agent',
+          nodeRole: 'spawner',
+          maxChildren: 8,
+          provider: 'codex',
+          model: 'gpt-5.3-codex',
+          maxRetries: 0,
+          sequenceIndex: 10,
+          position: null,
+          promptTemplate: { content: 'Break down subtasks.', contentType: 'markdown' },
+        },
+        {
+          nodeKey: 'review',
+          displayName: 'Review',
+          nodeType: 'agent',
+          nodeRole: 'join',
+          maxChildren: 12,
+          provider: 'codex',
+          model: 'gpt-5.3-codex',
+          maxRetries: 0,
+          sequenceIndex: 20,
+          position: null,
+          promptTemplate: { content: 'Review merged outputs.', contentType: 'markdown' },
+        },
+      ],
+      edges: [
+        {
+          sourceNodeKey: 'decompose',
+          targetNodeKey: 'review',
+          routeOn: 'success',
+          priority: 100,
+          auto: true,
+          guardExpression: null,
+        },
+      ],
+    });
+
+    expect(savedDraft.nodes).toEqual(expect.arrayContaining([
+      expect.objectContaining({ nodeKey: 'decompose', nodeRole: 'spawner', maxChildren: 8 }),
+      expect.objectContaining({ nodeKey: 'review', nodeRole: 'join', maxChildren: 12 }),
+    ]));
+
+    await service.publishWorkflowDraft('fanout-persist-tree', 1, {});
+    const bootstrappedDraft = await service.getOrCreateWorkflowDraft('fanout-persist-tree');
+    expect(bootstrappedDraft.nodes).toEqual(expect.arrayContaining([
+      expect.objectContaining({ nodeKey: 'decompose', nodeRole: 'spawner', maxChildren: 8 }),
+      expect.objectContaining({ nodeKey: 'review', nodeRole: 'join', maxChildren: 12 }),
+    ]));
+  });
+
+  it('rejects unsupported node role values on save', async () => {
+    const { db, dependencies } = createHarness();
+    migrateDatabase(db);
+
+    const service = createDashboardService({ dependencies });
+
+    await service.createWorkflowDraft({
+      template: 'blank',
+      name: 'Node Role Invalid Tree',
+      treeKey: 'node-role-invalid-tree',
+    });
+
+    await expect(
+      service.saveWorkflowDraft('node-role-invalid-tree', 1, {
+        draftRevision: 1,
+        name: 'Node Role Invalid Tree',
+        nodes: [
+          {
+            nodeKey: 'agent-node',
+            displayName: 'Agent Node',
+            nodeType: 'agent',
+            nodeRole: 'invalid-role' as unknown as 'standard',
+            maxChildren: 12,
+            provider: 'codex',
+            model: 'gpt-5.3-codex',
+            maxRetries: 0,
+            sequenceIndex: 10,
+            position: null,
+            promptTemplate: { content: 'Agent prompt', contentType: 'markdown' },
+          },
+        ],
+        edges: [],
+      }),
+    ).rejects.toMatchObject({
+      code: 'invalid_request',
+      status: 400,
+      details: expect.objectContaining({
+        errors: expect.arrayContaining([expect.objectContaining({ code: 'node_role_invalid' })]),
+      }),
+    });
+  });
+
+  it('rejects invalid maxChildren values on save', async () => {
+    const { db, dependencies } = createHarness();
+    migrateDatabase(db);
+
+    const service = createDashboardService({ dependencies });
+
+    await service.createWorkflowDraft({
+      template: 'blank',
+      name: 'Max Children Invalid Tree',
+      treeKey: 'max-children-invalid-tree',
+    });
+
+    await expect(
+      service.saveWorkflowDraft('max-children-invalid-tree', 1, {
+        draftRevision: 1,
+        name: 'Max Children Invalid Tree',
+        nodes: [
+          {
+            nodeKey: 'agent-node',
+            displayName: 'Agent Node',
+            nodeType: 'agent',
+            nodeRole: 'standard',
+            maxChildren: -1,
+            provider: 'codex',
+            model: 'gpt-5.3-codex',
+            maxRetries: 0,
+            sequenceIndex: 10,
+            position: null,
+            promptTemplate: { content: 'Agent prompt', contentType: 'markdown' },
+          },
+        ],
+        edges: [],
+      }),
+    ).rejects.toMatchObject({
+      code: 'invalid_request',
+      status: 400,
+      details: expect.objectContaining({
+        errors: expect.arrayContaining([expect.objectContaining({ code: 'max_children_invalid' })]),
+      }),
+    });
+  });
+
+  it('rejects non-agent spawner/join role configurations on save', async () => {
+    const { db, dependencies } = createHarness();
+    migrateDatabase(db);
+
+    const service = createDashboardService({ dependencies });
+
+    await service.createWorkflowDraft({
+      template: 'blank',
+      name: 'Role Type Validation Tree',
+      treeKey: 'role-type-validation-tree',
+    });
+
+    await expect(
+      service.saveWorkflowDraft('role-type-validation-tree', 1, {
+        draftRevision: 1,
+        name: 'Role Type Validation Tree',
+        nodes: [
+          {
+            nodeKey: 'manual-review',
+            displayName: 'Manual Review',
+            nodeType: 'human',
+            nodeRole: 'join',
+            maxChildren: 12,
+            provider: null,
+            model: null,
+            maxRetries: 0,
+            sequenceIndex: 10,
+            position: null,
+            promptTemplate: null,
+          },
+        ],
+        edges: [],
+      }),
+    ).rejects.toMatchObject({
+      code: 'invalid_request',
+      status: 400,
+      details: expect.objectContaining({
+        errors: expect.arrayContaining([expect.objectContaining({ code: 'node_role_requires_agent' })]),
+      }),
+    });
+  });
+
+  it('rejects spawner nodes that do not have exactly one success edge to a join node', async () => {
+    const { db, dependencies } = createHarness();
+    migrateDatabase(db);
+
+    const service = createDashboardService({ dependencies });
+
+    await service.createWorkflowDraft({
+      template: 'blank',
+      name: 'Spawner Edge Validation Tree',
+      treeKey: 'spawner-edge-validation-tree',
+    });
+
+    await expect(
+      service.saveWorkflowDraft('spawner-edge-validation-tree', 1, {
+        draftRevision: 1,
+        name: 'Spawner Edge Validation Tree',
+        nodes: [
+          {
+            nodeKey: 'decompose',
+            displayName: 'Decompose',
+            nodeType: 'agent',
+            nodeRole: 'spawner',
+            maxChildren: 4,
+            provider: 'codex',
+            model: 'gpt-5.3-codex',
+            maxRetries: 0,
+            sequenceIndex: 10,
+            position: null,
+            promptTemplate: { content: 'Break down subtasks.', contentType: 'markdown' },
+          },
+          {
+            nodeKey: 'implement',
+            displayName: 'Implement',
+            nodeType: 'agent',
+            nodeRole: 'standard',
+            maxChildren: 12,
+            provider: 'codex',
+            model: 'gpt-5.3-codex',
+            maxRetries: 0,
+            sequenceIndex: 20,
+            position: null,
+            promptTemplate: { content: 'Implement tasks.', contentType: 'markdown' },
+          },
+        ],
+        edges: [
+          {
+            sourceNodeKey: 'decompose',
+            targetNodeKey: 'implement',
+            routeOn: 'success',
+            priority: 100,
+            auto: true,
+            guardExpression: null,
+          },
+        ],
+      }),
+    ).rejects.toMatchObject({
+      code: 'invalid_request',
+      status: 400,
+      details: expect.objectContaining({
+        errors: expect.arrayContaining([expect.objectContaining({ code: 'spawner_success_target_not_join' })]),
+      }),
+    });
+  });
+
   it('rejects saving drafts with negative transition priorities', async () => {
     const { db, dependencies } = createHarness();
     migrateDatabase(db);

@@ -349,6 +349,8 @@ export function createDraftNode(args: Readonly<{
     nodeKey,
     displayName: baseName,
     nodeType: args.nodeType,
+    nodeRole: 'standard',
+    maxChildren: 12,
     provider: defaultProvider(args.nodeType),
     model: defaultModel(args.nodeType),
     executionPermissions: null,

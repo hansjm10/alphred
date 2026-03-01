@@ -35,6 +35,8 @@ import {
 const MAX_DRAFT_BOOTSTRAP_ATTEMPTS = 4;
 const ROUTING_DECISION_CONTRACT_SENTINEL = 'ALPHRED_ROUTING_CONTRACT_V1';
 const ROUTING_DECISION_CONTRACT_LINE_PREFIX = 'result.metadata.routingDecision:';
+const DEFAULT_NODE_ROLE = 'standard';
+const DEFAULT_MAX_CHILDREN = 12;
 
 const utcNow = sql`(strftime('%Y-%m-%dT%H:%M:%fZ','now'))`;
 
@@ -84,6 +86,22 @@ function templatePrompt(template: DashboardCreateWorkflowRequest['template'], no
   }
 }
 
+function normalizeDraftNodeRole(value: unknown): 'standard' | 'spawner' | 'join' {
+  if (value === 'spawner' || value === 'join') {
+    return value;
+  }
+
+  return DEFAULT_NODE_ROLE;
+}
+
+function normalizeDraftNodeMaxChildren(value: unknown): number {
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 0) {
+    return DEFAULT_MAX_CHILDREN;
+  }
+
+  return value;
+}
+
 export function loadDraftTopologyByTreeId(
   db: Pick<AlphredDatabase, 'select'>,
   treeId: number,
@@ -94,9 +112,11 @@ export function loadDraftTopologyByTreeId(
       nodeKey: treeNodes.nodeKey,
       displayName: treeNodes.displayName,
       nodeType: treeNodes.nodeType,
+      nodeRole: treeNodes.nodeRole,
       provider: treeNodes.provider,
       model: treeNodes.model,
       executionPermissions: treeNodes.executionPermissions,
+      maxChildren: treeNodes.maxChildren,
       maxRetries: treeNodes.maxRetries,
       sequenceIndex: treeNodes.sequenceIndex,
       positionX: treeNodes.positionX,
@@ -124,6 +144,8 @@ export function loadDraftTopologyByTreeId(
         nodeKey: row.nodeKey,
         displayName: row.displayName ?? row.nodeKey,
         nodeType: row.nodeType as 'agent' | 'human' | 'tool',
+        nodeRole: normalizeDraftNodeRole(row.nodeRole),
+        maxChildren: normalizeDraftNodeMaxChildren(row.maxChildren),
         provider: row.provider,
         model:
           row.nodeType === 'agent'
@@ -271,10 +293,12 @@ export function createWorkflowDraftOperations(params: {
                   nodeKey: spec.nodeKey,
                   displayName: spec.displayName,
                   nodeType: 'agent',
+                  nodeRole: DEFAULT_NODE_ROLE,
                   provider: 'codex',
                   model: defaultCodexModel,
                   executionPermissions: null,
                   promptTemplateId: promptTemplateIdByNodeKey.get(spec.nodeKey) ?? null,
+                  maxChildren: DEFAULT_MAX_CHILDREN,
                   maxRetries: 0,
                   sequenceIndex: spec.sequenceIndex,
                   positionX: spec.position.x,
@@ -428,9 +452,11 @@ export function createWorkflowDraftOperations(params: {
                 nodeKey: treeNodes.nodeKey,
                 displayName: treeNodes.displayName,
                 nodeType: treeNodes.nodeType,
+                nodeRole: treeNodes.nodeRole,
                 provider: treeNodes.provider,
                 model: treeNodes.model,
                 executionPermissions: treeNodes.executionPermissions,
+                maxChildren: treeNodes.maxChildren,
                 maxRetries: treeNodes.maxRetries,
                 sequenceIndex: treeNodes.sequenceIndex,
                 positionX: treeNodes.positionX,
@@ -490,6 +516,7 @@ export function createWorkflowDraftOperations(params: {
                   nodeKey: node.nodeKey,
                   displayName: node.displayName,
                   nodeType: node.nodeType,
+                  nodeRole: normalizeDraftNodeRole(node.nodeRole),
                   provider: node.provider,
                   model:
                     node.nodeType === 'agent'
@@ -503,6 +530,7 @@ export function createWorkflowDraftOperations(params: {
                   ),
                   promptTemplateId:
                     node.promptTemplateId === null ? null : (promptTemplateCloneById.get(node.promptTemplateId) ?? null),
+                  maxChildren: normalizeDraftNodeMaxChildren(node.maxChildren),
                   maxRetries: node.maxRetries,
                   sequenceIndex: node.sequenceIndex,
                   positionX: node.positionX,
@@ -794,10 +822,12 @@ export function createWorkflowDraftOperations(params: {
                 nodeKey: node.nodeKey,
                 displayName: node.displayName,
                 nodeType: node.nodeType,
+                nodeRole: normalizeDraftNodeRole(node.nodeRole),
                 provider: node.provider,
                 model: nodeModel,
                 executionPermissions: normalizeExecutionPermissions(node.executionPermissions),
                 promptTemplateId: promptTemplateIdByNodeKey.get(node.nodeKey) ?? null,
+                maxChildren: normalizeDraftNodeMaxChildren(node.maxChildren),
                 maxRetries: node.maxRetries,
                 sequenceIndex: node.sequenceIndex,
                 positionX: node.position?.x ?? null,
