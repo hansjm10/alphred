@@ -7,6 +7,7 @@ export default defineConfig({
   testDir: './apps/dashboard/e2e',
   testMatch: [
     '**/fallbacks.spec.ts',
+    '**/run-detail-section-nav.spec.ts',
     '**/run-lifecycle-controls.spec.ts',
     '**/worktree-explorer.spec.ts',
     '**/workflow-builder.spec.ts',
