@@ -1423,9 +1423,75 @@ describe('RunDetailContent realtime updates', () => {
 
     await user.click(screen.getByRole('button', { name: 'Resume auto-scroll' }));
 
+    const streamEventList = screen.getByRole('list', { name: 'Agent stream events' });
     await waitFor(() => {
-      expect(screen.getByText('buffered update')).toBeInTheDocument();
+      expect(within(streamEventList).getByText('buffered update')).toBeInTheDocument();
     });
+  });
+
+  it('keeps stream event windowing while auto-scroll follows latest live events', async () => {
+    vi.stubGlobal('EventSource', MockEventSource as unknown as typeof EventSource);
+    const initialEvents = Array.from({ length: 120 }, (_, index) =>
+      createStreamEvent({
+        sequence: index + 1,
+        contentPreview: `event ${index + 1}`,
+      }),
+    );
+
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/nodes/2/stream')) {
+        return createJsonResponse({
+          workflowRunId: 412,
+          runNodeId: 2,
+          attempt: 1,
+          nodeStatus: 'running',
+          ended: false,
+          latestSequence: 120,
+          events: initialEvents,
+        });
+      }
+
+      return createJsonResponse(createRunDetail());
+    });
+
+    const user = userEvent.setup();
+
+    render(
+      <RunDetailContent
+        initialDetail={createRunDetail()}
+        repositories={[createRepository()]}
+        enableRealtime={false}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(MockEventSource.instances).toHaveLength(1);
+    });
+
+    const source = MockEventSource.instances[0]!;
+    source.emitOpen();
+
+    const streamEventList = screen.getByRole('list', { name: 'Agent stream events' });
+    await waitFor(() => {
+      expect(within(streamEventList).getByText('event 120')).toBeInTheDocument();
+    });
+
+    await user.click(within(streamEventList).getByText('event 1'));
+    expect(window.location.search).toContain('streamEventSequence=1');
+
+    for (let sequence = 121; sequence <= 130; sequence += 1) {
+      source.emit('stream_event', createStreamEvent({ sequence, contentPreview: `event ${sequence}` }));
+    }
+
+    await waitFor(() => {
+      expect(screen.getByText('Showing 120 of 130 matching events.')).toBeInTheDocument();
+      expect(window.location.search).toContain('streamEventSequence=130');
+    });
+
+    expect(within(streamEventList).queryByText('event 1')).toBeNull();
+    const latestEventButton = within(streamEventList).getByText('event 130').closest('button');
+    expect(latestEventButton).toHaveAttribute('aria-pressed', 'true');
   });
 
   it('deduplicates persisted stream snapshot events by sequence and keeps the latest entry', async () => {
@@ -2265,6 +2331,79 @@ describe('RunDetailContent realtime updates', () => {
       expect(window.location.search).toContain('streamAttempt=1');
       expect(window.location.search).not.toContain('streamEventSequence');
     });
+  });
+
+  it('resets stale event selection when switching stream targets with overlapping sequence ids', async () => {
+    vi.stubGlobal('EventSource', MockEventSource as unknown as typeof EventSource);
+    const user = userEvent.setup();
+    window.history.replaceState(null, '', '/runs/412?streamRunNodeId=1&streamAttempt=1&streamEventSequence=4');
+
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/nodes/1/stream')) {
+        return createJsonResponse({
+          workflowRunId: 412,
+          runNodeId: 1,
+          attempt: 1,
+          nodeStatus: 'completed',
+          ended: true,
+          latestSequence: 5,
+          events: [
+            createStreamEvent({ runNodeId: 1, sequence: 4, contentPreview: 'node one event four' }),
+            createStreamEvent({ runNodeId: 1, sequence: 5, contentPreview: 'node one event five' }),
+          ],
+        });
+      }
+      if (url.includes('/nodes/2/stream')) {
+        return createJsonResponse({
+          workflowRunId: 412,
+          runNodeId: 2,
+          attempt: 1,
+          nodeStatus: 'running',
+          ended: false,
+          latestSequence: 6,
+          events: [
+            createStreamEvent({ runNodeId: 2, sequence: 4, contentPreview: 'node two event four' }),
+            createStreamEvent({ runNodeId: 2, sequence: 6, contentPreview: 'node two event six' }),
+          ],
+        });
+      }
+
+      return createJsonResponse(createRunDetail());
+    });
+
+    render(
+      <RunDetailContent
+        initialDetail={createRunDetail()}
+        repositories={[createRepository()]}
+        enableRealtime={false}
+      />,
+    );
+
+    const streamEventList = screen.getByRole('list', { name: 'Agent stream events' });
+    await waitFor(() => {
+      expect(within(streamEventList).getByText('node one event four')).toBeInTheDocument();
+      expect(window.location.search).toContain('streamRunNodeId=1');
+      expect(window.location.search).toContain('streamEventSequence=4');
+    });
+
+    const nodeStatusPanel = screen.getByRole('heading', { level: 3, name: 'Node status' }).closest('aside');
+    expect(nodeStatusPanel).not.toBeNull();
+    await user.click(within(nodeStatusPanel!).getByRole('button', { name: 'implement (attempt 1)' }));
+
+    const nextStreamEventList = screen.getByRole('list', { name: 'Agent stream events' });
+    await waitFor(() => {
+      expect(within(nextStreamEventList).getByText('node two event four')).toBeInTheDocument();
+      expect(within(nextStreamEventList).getByText('node two event six')).toBeInTheDocument();
+      expect(window.location.search).toContain('streamRunNodeId=2');
+      expect(window.location.search).toContain('streamAttempt=1');
+      expect(window.location.search).toContain('streamEventSequence=6');
+    });
+
+    const reusedSequenceButton = within(nextStreamEventList).getByText('node two event four').closest('button');
+    const latestEventButton = within(nextStreamEventList).getByText('node two event six').closest('button');
+    expect(reusedSequenceButton).toHaveAttribute('aria-pressed', 'false');
+    expect(latestEventButton).toHaveAttribute('aria-pressed', 'true');
   });
 
   it('keeps inspector controls accessible on narrow mobile viewports', async () => {

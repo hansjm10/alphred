@@ -370,6 +370,15 @@ function EventListPane(props: Readonly<{
       return;
     }
 
+    const latestEventSequence = filteredEvents.at(-1)?.sequence ?? null;
+    const shouldFollowLatestEvent = streamAutoScroll && streamConnectionState === 'live';
+    if (shouldFollowLatestEvent) {
+      if (selectedEventSequence !== latestEventSequence) {
+        onSelectedEventSequenceChange(latestEventSequence);
+      }
+      return;
+    }
+
     const hasSelectedEvent =
       selectedEventSequence !== null && filteredEvents.some(event => event.sequence === selectedEventSequence);
 
@@ -377,11 +386,15 @@ function EventListPane(props: Readonly<{
       return;
     }
 
-    onSelectedEventSequenceChange(filteredEvents.at(-1)?.sequence ?? null);
-  }, [filteredEvents, onSelectedEventSequenceChange, selectedEventSequence, streamConnectionState]);
+    onSelectedEventSequenceChange(latestEventSequence);
+  }, [filteredEvents, onSelectedEventSequenceChange, selectedEventSequence, streamAutoScroll, streamConnectionState]);
 
   useEffect(() => {
     if (selectedEventSequence === null) {
+      return;
+    }
+
+    if (streamAutoScroll && streamConnectionState === 'live') {
       return;
     }
 
@@ -393,7 +406,14 @@ function EventListPane(props: Readonly<{
     if (filteredEvents.some(event => event.sequence === selectedEventSequence)) {
       setVisibleEventCount(filteredEvents.length);
     }
-  }, [filteredEvents, selectedEventSequence, setVisibleEventCount, visibleEvents]);
+  }, [
+    filteredEvents,
+    selectedEventSequence,
+    setVisibleEventCount,
+    streamAutoScroll,
+    streamConnectionState,
+    visibleEvents,
+  ]);
 
   const jumpToFirst = (): void => {
     const firstEvent = filteredEvents[0];
@@ -768,15 +788,29 @@ function SelectedStreamContent(props: Readonly<{
   const [payloadMode, setPayloadMode] = useState<InspectorPayloadMode>('pretty');
   const [wrapPayloadLines, setWrapPayloadLines] = useState<boolean>(true);
   const [utilityFeedback, setUtilityFeedback] = useState<string | null>(null);
+  const previousInspectorNodeKeyRef = useRef<string | null>(null);
+  const previousSelectedEventSequenceRef = useRef<number | null>(selectedEventSequence);
 
   useEffect(() => {
+    const nextInspectorNodeKey = `${selectedStreamNode.id}:${selectedStreamNode.attempt}`;
+    const previousInspectorNodeKey = previousInspectorNodeKeyRef.current;
+    const inspectorNodeChanged = previousInspectorNodeKey !== null && previousInspectorNodeKey !== nextInspectorNodeKey;
+    if (inspectorNodeChanged && previousSelectedEventSequenceRef.current !== null) {
+      onSelectedEventSequenceChange(null);
+    }
+    previousInspectorNodeKeyRef.current = nextInspectorNodeKey;
+
     setEventTypeFilter('all');
     setEventSearchQuery('');
     setVisibleEventCount(STREAM_EVENT_WINDOW_SIZE);
     setPayloadMode('pretty');
     setWrapPayloadLines(true);
     setUtilityFeedback(null);
-  }, [selectedStreamNode.id, selectedStreamNode.attempt]);
+  }, [onSelectedEventSequenceChange, selectedStreamNode.id, selectedStreamNode.attempt]);
+
+  useEffect(() => {
+    previousSelectedEventSequenceRef.current = selectedEventSequence;
+  }, [selectedEventSequence]);
 
   useEffect(() => {
     setVisibleEventCount(STREAM_EVENT_WINDOW_SIZE);
