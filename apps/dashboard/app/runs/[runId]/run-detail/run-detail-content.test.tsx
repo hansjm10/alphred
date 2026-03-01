@@ -1553,6 +1553,7 @@ describe('RunDetailContent realtime updates', () => {
 
   it('clears agent stream target when selecting a non-streamable node in the status panel', async () => {
     vi.stubGlobal('EventSource', MockEventSource as unknown as typeof EventSource);
+    window.history.replaceState(null, '', '/runs/412?streamRunNodeId=1&streamAttempt=1&streamEventSequence=4');
     fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
       const url = String(input);
       if (url.includes('/nodes/1/stream')) {
@@ -1646,16 +1647,22 @@ describe('RunDetailContent realtime updates', () => {
     const nodeStatusPanel = screen.getByRole('heading', { level: 3, name: 'Node status' }).closest('aside');
     expect(nodeStatusPanel).not.toBeNull();
 
-    await user.click(within(nodeStatusPanel!).getByRole('button', { name: 'design (attempt 1)' }));
-
     await waitFor(() => {
-      expect(screen.getByText(/Node design \(attempt 1\)/i)).toBeInTheDocument();
+      expect(fetchMock).toHaveBeenCalledWith(
+        expect.stringContaining('/api/dashboard/runs/412/nodes/1/stream?attempt=1&lastEventSequence=0'),
+        expect.objectContaining({ method: 'GET' }),
+      );
+      expect(window.location.search).toContain('streamRunNodeId=1');
+      expect(window.location.search).toContain('streamEventSequence=4');
     });
 
     await user.click(within(nodeStatusPanel!).getByRole('button', { name: 'review (attempt 1)' }));
 
     await waitFor(() => {
       expect(screen.getByText('Select a node from Node Status to open its agent stream.')).toBeInTheDocument();
+      expect(window.location.search).not.toContain('streamRunNodeId');
+      expect(window.location.search).not.toContain('streamAttempt');
+      expect(window.location.search).not.toContain('streamEventSequence');
     });
     expect(screen.queryByText(/Node design \(attempt 1\)/i)).toBeNull();
 
@@ -2232,6 +2239,10 @@ describe('RunDetailContent realtime updates', () => {
         expect.objectContaining({ method: 'GET' }),
       );
     });
+    const defaultTargetStreamCalls = fetchMock.mock.calls.filter(([input]) =>
+      String(input).includes('/api/dashboard/runs/412/nodes/2/stream?attempt=1&lastEventSequence=0'),
+    );
+    expect(defaultTargetStreamCalls).toHaveLength(0);
 
     const streamEventList = screen.getByRole('list', { name: 'Agent stream events' });
     await waitFor(() => {

@@ -78,6 +78,7 @@ export function RunDetailContent({
     resolveInitialStreamLastUpdatedAtMs(initialDetail),
   );
   const [streamSelectedEventSequence, setStreamSelectedEventSequence] = useState<number | null>(null);
+  const [streamInspectorUrlStateReadyRunId, setStreamInspectorUrlStateReadyRunId] = useState<number | null>(null);
   const [pendingControlAction, setPendingControlAction] = useState<DashboardRunControlAction | null>(null);
   const [actionFeedback, setActionFeedback] = useState<ActionFeedbackState>(null);
 
@@ -86,7 +87,6 @@ export function RunDetailContent({
   const streamLastSequenceRef = useRef<number>(0);
   const streamEventListRef = useRef<HTMLOListElement | null>(null);
   const streamAutoScrollRef = useRef<boolean>(streamAutoScroll);
-  const streamInspectorUrlStateInitializedRef = useRef<boolean>(false);
   const streamInspectorUrlStateRunIdRef = useRef<number | null>(null);
 
   useEffect(() => {
@@ -161,6 +161,10 @@ export function RunDetailContent({
   }, [detail.run.id, detail.run.status, enableRealtime, pollIntervalMs]);
 
   useEffect(() => {
+    if (streamInspectorUrlStateReadyRunId !== detail.run.id) {
+      return () => undefined;
+    }
+
     return createAgentStreamLifecycleEffect({
       runId: detail.run.id,
       streamTarget,
@@ -175,7 +179,7 @@ export function RunDetailContent({
       setStreamRetryCountdownSeconds,
       setStreamLastUpdatedAtMs,
     });
-  }, [detail.run.id, streamTarget]);
+  }, [detail.run.id, streamInspectorUrlStateReadyRunId, streamTarget]);
 
   useEffect(() => {
     flushBufferedAgentStreamEvents({
@@ -247,11 +251,11 @@ export function RunDetailContent({
       setStreamSelectedEventSequence(null);
     }
 
-    streamInspectorUrlStateInitializedRef.current = true;
+    setStreamInspectorUrlStateReadyRunId(detail.run.id);
   }, [detail.nodes, detail.run.id]);
 
   useEffect(() => {
-    if (typeof window === 'undefined' || !streamInspectorUrlStateInitializedRef.current) {
+    if (typeof window === 'undefined' || streamInspectorUrlStateReadyRunId !== detail.run.id) {
       return;
     }
 
@@ -261,14 +265,15 @@ export function RunDetailContent({
     if (streamTarget) {
       searchParams.set('streamRunNodeId', String(streamTarget.runNodeId));
       searchParams.set('streamAttempt', String(streamTarget.attempt));
+
+      if (streamSelectedEventSequence !== null) {
+        searchParams.set('streamEventSequence', String(streamSelectedEventSequence));
+      } else {
+        searchParams.delete('streamEventSequence');
+      }
     } else {
       searchParams.delete('streamRunNodeId');
       searchParams.delete('streamAttempt');
-    }
-
-    if (streamSelectedEventSequence !== null) {
-      searchParams.set('streamEventSequence', String(streamSelectedEventSequence));
-    } else {
       searchParams.delete('streamEventSequence');
     }
 
@@ -279,7 +284,7 @@ export function RunDetailContent({
     if (nextUrl !== currentUrl) {
       window.history.replaceState(window.history.state, '', nextUrl);
     }
-  }, [streamSelectedEventSequence, streamTarget]);
+  }, [detail.run.id, streamInspectorUrlStateReadyRunId, streamSelectedEventSequence, streamTarget]);
 
   const timeline = useMemo(() => buildTimeline(detail), [detail]);
   const repositoryContext = useMemo(
