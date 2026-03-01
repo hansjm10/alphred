@@ -1023,6 +1023,115 @@ describe('createDashboardService', () => {
     expect(runDetail.worktrees).toHaveLength(1);
   });
 
+  it('retrieves full failed command output by run-node attempt and event index', async () => {
+    const { db, dependencies } = createHarness();
+    seedRunData(db);
+    const runNode = db
+      .select({
+        id: runNodes.id,
+      })
+      .from(runNodes)
+      .where(eq(runNodes.workflowRunId, 1))
+      .get();
+    if (!runNode) {
+      throw new Error('Expected seeded run node.');
+    }
+
+    const fullOutput = `config.webServer failed:\n${'stderr\n'.repeat(800)}`;
+    db.insert(phaseArtifacts)
+      .values({
+        workflowRunId: 1,
+        runNodeId: runNode.id,
+        artifactType: 'log',
+        contentType: 'json',
+        content: JSON.stringify({
+          schemaVersion: 1,
+          workflowRunId: 1,
+          runNodeId: runNode.id,
+          attempt: 1,
+          eventIndex: 2,
+          sequence: 3,
+          command: 'pnpm test:e2e',
+          exitCode: 1,
+          output: fullOutput,
+          outputChars: fullOutput.length,
+          stdout: null,
+          stderr: fullOutput,
+        }),
+        metadata: {
+          kind: 'failed_command_output_v1',
+          attempt: 1,
+          eventIndex: 2,
+          sequence: 3,
+          command: 'pnpm test:e2e',
+          exitCode: 1,
+          outputChars: fullOutput.length,
+        },
+        createdAt: '2026-02-17T20:03:00.000Z',
+      })
+      .run();
+
+    const service = createDashboardService({
+      dependencies,
+      cwd: '/work/alphred',
+    });
+
+    const output = await service.getRunNodeDiagnosticCommandOutput({
+      runId: 1,
+      runNodeId: runNode.id,
+      attempt: 1,
+      eventIndex: 2,
+    });
+
+    expect(output).toEqual({
+      workflowRunId: 1,
+      runNodeId: runNode.id,
+      attempt: 1,
+      eventIndex: 2,
+      sequence: 3,
+      artifactId: expect.any(Number),
+      command: 'pnpm test:e2e',
+      exitCode: 1,
+      outputChars: fullOutput.length,
+      output: fullOutput,
+      stdout: null,
+      stderr: fullOutput,
+      createdAt: '2026-02-17T20:03:00.000Z',
+    });
+  });
+
+  it('returns not_found when failed command output is unavailable for an event index', async () => {
+    const { db, dependencies } = createHarness();
+    seedRunData(db);
+    const runNode = db
+      .select({
+        id: runNodes.id,
+      })
+      .from(runNodes)
+      .where(eq(runNodes.workflowRunId, 1))
+      .get();
+    if (!runNode) {
+      throw new Error('Expected seeded run node.');
+    }
+
+    const service = createDashboardService({
+      dependencies,
+      cwd: '/work/alphred',
+    });
+
+    await expect(
+      service.getRunNodeDiagnosticCommandOutput({
+        runId: 1,
+        runNodeId: runNode.id,
+        attempt: 1,
+        eventIndex: 9,
+      }),
+    ).rejects.toMatchObject({
+      code: 'not_found',
+      status: 404,
+    });
+  });
+
   it('scopes fan-out child membership to each barrier batch for the same spawner and join pair', async () => {
     const { db, dependencies } = createHarness();
     migrateDatabase(db);

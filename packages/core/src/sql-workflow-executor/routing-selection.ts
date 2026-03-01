@@ -1,6 +1,6 @@
 import { and, asc, eq, inArray } from 'drizzle-orm';
 import { phaseArtifacts, routingDecisions, type AlphredDatabase } from '@alphred/db';
-import { ERROR_HANDLER_SUMMARY_METADATA_KIND } from './constants.js';
+import { ERROR_HANDLER_SUMMARY_METADATA_KIND, FAILED_COMMAND_OUTPUT_ARTIFACT_KIND } from './constants.js';
 import { readRoutingDecisionAttempt, selectFirstMatchingOutgoingEdge } from './routing-decisions.js';
 import { isRecord, normalizeArtifactContentType, toRoutingDecisionType } from './type-conversions.js';
 import type {
@@ -86,12 +86,17 @@ export function loadLatestFailureArtifact(
 
   let latest: FailureLogArtifact | null = null;
   for (const row of rows) {
+    const metadata = isRecord(row.metadata) ? row.metadata : null;
+    if (metadata?.kind === FAILED_COMMAND_OUTPUT_ARTIFACT_KIND) {
+      continue;
+    }
+
     latest = {
       id: row.id,
       runNodeId: row.runNodeId,
       content: row.content,
       createdAt: row.createdAt,
-      metadata: isRecord(row.metadata) ? row.metadata : null,
+      metadata,
     };
   }
 
@@ -227,6 +232,7 @@ export function loadLatestArtifactsByRunNodeId(
       id: phaseArtifacts.id,
       runNodeId: phaseArtifacts.runNodeId,
       createdAt: phaseArtifacts.createdAt,
+      metadata: phaseArtifacts.metadata,
     })
     .from(phaseArtifacts)
     .where(eq(phaseArtifacts.workflowRunId, workflowRunId))
@@ -235,6 +241,11 @@ export function loadLatestArtifactsByRunNodeId(
 
   const latestByRunNodeId = new Map<number, LatestArtifact>();
   for (const row of rows) {
+    const metadata = isRecord(row.metadata) ? row.metadata : null;
+    if (metadata?.kind === FAILED_COMMAND_OUTPUT_ARTIFACT_KIND) {
+      continue;
+    }
+
     latestByRunNodeId.set(row.runNodeId, {
       id: row.id,
       createdAt: row.createdAt,

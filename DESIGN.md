@@ -274,6 +274,8 @@ SQL-first workflow topology and execution state are modeled with normalized tabl
     - `(workflow_run_id, created_at)`, `(run_node_id, created_at)`, and `created_at` indexes support run timeline and node drill-down queries.
   - Runtime boundary:
     - Diagnostics are inspection-only by default and are not re-injected into downstream execution context.
+    - Failed command-execution `tool_result` events (`exit_code != 0`) persist non-truncated command output in dedicated `phase_artifacts` log rows tagged with metadata kind `failed_command_output_v1`.
+    - Diagnostics payloads may include `failedCommandOutputs[]` references with deterministic API paths (`/api/dashboard/runs/{runId}/nodes/{runNodeId}/diagnostics/{attempt}/commands/{eventIndex}`) so operators can retrieve full output without changing bounded timeline previews.
 - `run_node_stream_events`
   - Append-only per-node/per-attempt provider stream events for live operator monitoring.
   - Constraint/index rationale:
