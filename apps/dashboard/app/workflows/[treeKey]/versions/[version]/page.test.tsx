@@ -45,6 +45,21 @@ describe('WorkflowVersionPage', () => {
       name: 'Demo Tree',
       status: 'published',
       version: 2,
+      nodes: [
+        {
+          nodeKey: 'decompose',
+          nodeRole: 'spawner',
+          maxChildren: 8,
+        },
+      ],
+      edges: [
+        {
+          sourceNodeKey: 'decompose',
+          targetNodeKey: 'review',
+          routeOn: 'failure',
+          priority: 20,
+        },
+      ],
       initialRunnableNodeKeys: [],
     });
 
@@ -56,6 +71,8 @@ describe('WorkflowVersionPage', () => {
 
     expect(getWorkflowTreeVersionSnapshotMock).toHaveBeenCalledTimes(1);
     expect(screen.getByRole('heading', { name: 'Demo Tree v2' })).toBeInTheDocument();
+    expect(screen.getByText('role spawner · maxChildren 8')).toBeInTheDocument();
+    expect(screen.getByText('failure route · priority 20')).toBeInTheDocument();
   });
 
   it('delegates invalid version params to next/navigation notFound()', async () => {

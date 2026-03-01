@@ -36,6 +36,21 @@ describe('WorkflowDetailPage', () => {
       name: 'Demo Tree',
       status: 'published',
       version: 2,
+      nodes: [
+        {
+          nodeKey: 'decompose',
+          nodeRole: 'spawner',
+          maxChildren: 8,
+        },
+      ],
+      edges: [
+        {
+          sourceNodeKey: 'decompose',
+          targetNodeKey: 'review',
+          routeOn: 'failure',
+          priority: 20,
+        },
+      ],
       initialRunnableNodeKeys: [],
     });
     createDashboardServiceMock.mockReturnValue({
@@ -50,6 +65,8 @@ describe('WorkflowDetailPage', () => {
 
     expect(screen.getByRole('heading', { name: 'Demo Tree' })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Edit' })).toHaveAttribute('href', '/workflows/demo-tree/edit');
+    expect(screen.getByText('role spawner · maxChildren 8')).toBeInTheDocument();
+    expect(screen.getByText('failure route · priority 20')).toBeInTheDocument();
   });
 
   it('delegates not found snapshots to next/navigation notFound()', async () => {

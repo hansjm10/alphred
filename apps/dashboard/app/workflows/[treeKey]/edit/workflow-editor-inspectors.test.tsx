@@ -75,6 +75,18 @@ describe('NodeInspector', () => {
     expect(onChange).toHaveBeenLastCalledWith(expect.objectContaining({ displayName: 'Implementation' }));
   });
 
+  it('updates node role and max children through onChange', () => {
+    const onChange = vi.fn();
+
+    render(<NodeInspector node={createNode(createDraftNode())} onChange={onChange} />);
+
+    fireEvent.change(screen.getByLabelText(/^Role/), { target: { value: 'spawner' } });
+    expect(onChange).toHaveBeenLastCalledWith(expect.objectContaining({ nodeRole: 'spawner' }));
+
+    fireEvent.change(screen.getByLabelText(/^Max children/), { target: { value: '8' } });
+    expect(onChange).toHaveBeenLastCalledWith(expect.objectContaining({ maxChildren: 8 }));
+  });
+
   it('creates a default markdown prompt template when editing an empty prompt', () => {
     const onChange = vi.fn();
 
@@ -107,6 +119,7 @@ describe('NodeInspector', () => {
     expect(onChange).toHaveBeenLastCalledWith(
       expect.objectContaining({
         nodeType: 'human',
+        nodeRole: 'standard',
         provider: null,
         model: null,
         promptTemplate: null,
@@ -382,6 +395,44 @@ describe('EdgeInspector', () => {
         guardExpression: null,
       }),
     );
+  });
+
+  it('switches route to failure and enforces auto-only transition behavior', () => {
+    const onChange = vi.fn();
+
+    render(
+      <EdgeInspector
+        edge={createEdge(createDraftEdge({
+          routeOn: 'success',
+          auto: false,
+          guardExpression: { field: 'decision', operator: '==', value: 'approved' },
+        }))}
+        onChange={onChange}
+      />,
+    );
+
+    fireEvent.change(screen.getByLabelText('Route'), { target: { value: 'failure' } });
+    expect(onChange).toHaveBeenLastCalledWith(expect.objectContaining({
+      routeOn: 'failure',
+      auto: true,
+      guardExpression: null,
+    }));
+  });
+
+  it('shows failure-route messaging and disables auto toggle for failure transitions', () => {
+    render(
+      <EdgeInspector
+        edge={createEdge(createDraftEdge({
+          routeOn: 'failure',
+          auto: true,
+          guardExpression: null,
+        }))}
+        onChange={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText('Failure transitions are always auto and do not evaluate guards.')).toBeInTheDocument();
+    expect(screen.getByLabelText('Auto')).toBeDisabled();
   });
 
   it('builds guided expressions and coerces boolean/number guard values', () => {
