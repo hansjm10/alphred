@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
+import { Fragment, useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
 import { ActionButton, Card } from '../../../ui/primitives';
 import type { DashboardRunDetail, DashboardRunNodeStreamEvent } from '../../../../src/server/dashboard-contracts';
 import { formatLastUpdated, formatStreamTimestamp } from './formatting';
@@ -256,31 +256,12 @@ function renderMarkdownPayload(value: string): ReactNode {
   const blocks = normalized.split(/\n{2,}/);
   const nextBlockKey = createRepeatedContentKeyFactory('md-block');
 
-  return blocks.map((block) => {
-    const blockKey = nextBlockKey(block);
-
-    if (block.startsWith('```') && block.endsWith('```')) {
-      const codeContent = block
-        .replace(/^```[a-zA-Z0-9_-]*\n?/, '')
-        .replace(/\n?```$/, '');
-      return (
-        <pre key={`${blockKey}-code`} className="code-preview run-agent-inspector-markdown-code">
-          <code>{codeContent}</code>
-        </pre>
-      );
+  const renderMarkdownLines = (lines: readonly string[], blockKey: string): ReactNode => {
+    if (lines.length === 0) {
+      return null;
     }
 
-    const lines = block.split('\n');
     const nextLineKey = createRepeatedContentKeyFactory(`${blockKey}-line`);
-
-    const heading = parseMarkdownHeading(lines[0] ?? '');
-    if (heading) {
-      const { depth: headingDepth, text } = heading;
-      if (headingDepth <= 2) {
-        return <h4 key={`${blockKey}-heading`}>{text}</h4>;
-      }
-      return <h5 key={`${blockKey}-heading`}>{text}</h5>;
-    }
 
     if (lines.every(line => /^[-*]\s+/.test(line.trim()))) {
       return (
@@ -312,6 +293,45 @@ function renderMarkdownPayload(value: string): ReactNode {
         ))}
       </p>
     );
+  };
+
+  return blocks.map((block) => {
+    const blockKey = nextBlockKey(block);
+
+    if (block.startsWith('```') && block.endsWith('```')) {
+      const codeContent = block
+        .replace(/^```[a-zA-Z0-9_-]*\n?/, '')
+        .replace(/\n?```$/, '');
+      return (
+        <pre key={`${blockKey}-code`} className="code-preview run-agent-inspector-markdown-code">
+          <code>{codeContent}</code>
+        </pre>
+      );
+    }
+
+    const lines = block.split('\n');
+
+    const heading = parseMarkdownHeading(lines[0] ?? '');
+    if (heading) {
+      const { depth: headingDepth, text } = heading;
+      const headingElement = headingDepth <= 2 ? <h4>{text}</h4> : <h5>{text}</h5>;
+      const trailingLines = lines.slice(1).filter(line => line.trim().length > 0);
+
+      if (trailingLines.length === 0) {
+        return headingDepth <= 2
+          ? <h4 key={`${blockKey}-heading`}>{text}</h4>
+          : <h5 key={`${blockKey}-heading`}>{text}</h5>;
+      }
+
+      return (
+        <Fragment key={`${blockKey}-heading-block`}>
+          {headingElement}
+          {renderMarkdownLines(trailingLines, `${blockKey}-trailing`)}
+        </Fragment>
+      );
+    }
+
+    return renderMarkdownLines(lines, blockKey);
   });
 }
 

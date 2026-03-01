@@ -2312,7 +2312,11 @@ describe('RunDetailContent realtime updates', () => {
             latestSequence: 2,
             events: [
               createStreamEvent({ sequence: 1, type: 'assistant', contentPreview: '{"foo":"bar","count":2}' }),
-              createStreamEvent({ sequence: 2, type: 'assistant', contentPreview: '# Heading\n\n- item one\n- item two' }),
+              createStreamEvent({
+                sequence: 2,
+                type: 'assistant',
+                contentPreview: '# Heading\nDetails line\n\n- item one\n- item two',
+              }),
             ],
           });
         }
@@ -2346,6 +2350,7 @@ describe('RunDetailContent realtime updates', () => {
     expect(markdownTab).not.toBeDisabled();
     await user.click(markdownTab);
     expect(within(detailPane).getByText('Heading')).toBeInTheDocument();
+    expect(within(detailPane).getByText('Details line')).toBeInTheDocument();
     expect(within(detailPane).getByText('item one')).toBeInTheDocument();
   });
 
