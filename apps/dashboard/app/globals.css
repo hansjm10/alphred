@@ -900,9 +900,194 @@ output {
   padding: 8px;
 }
 
-.run-agent-stream-event-content {
+.run-agent-inspector {
+  display: grid;
+  gap: var(--space-2);
+  grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
+  margin-top: var(--space-2);
+}
+
+.run-agent-inspector-pane {
+  border: 1px solid color-mix(in srgb, var(--border-default) 75%, transparent);
+  border-radius: var(--radius-sm);
+  min-width: 0;
+  padding: var(--space-2);
+}
+
+.run-agent-inspector-pane--events {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.run-agent-inspector-pane--detail {
+  display: grid;
+  gap: 8px;
+}
+
+.run-agent-inspector-search-row {
+  display: grid;
+  gap: var(--space-2);
+  grid-template-columns: minmax(140px, 0.45fr) minmax(0, 1fr);
+}
+
+.run-agent-inspector-field {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.run-agent-inspector-field select,
+.run-agent-inspector-field input {
+  background: var(--bg-canvas);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  font: 400 13px/20px var(--font-data);
+  min-width: 0;
+  padding: 6px 8px;
+}
+
+.run-agent-inspector-field input {
+  width: 100%;
+}
+
+.run-agent-inspector-windowing {
+  align-items: center;
+}
+
+.run-agent-stream-events {
+  margin-top: 0;
+}
+
+.run-agent-inspector-event {
+  background: transparent;
+  border: 1px solid color-mix(in srgb, var(--border-default) 75%, transparent);
+  border-radius: var(--radius-sm);
+  color: inherit;
+  cursor: pointer;
+  display: grid;
+  gap: 6px;
+  padding: 8px;
+  text-align: left;
+  width: 100%;
+}
+
+.run-agent-inspector-event:hover {
+  border-color: color-mix(in srgb, var(--accent-active) 40%, var(--border-default));
+}
+
+.run-agent-inspector-event--selected {
+  background: color-mix(in srgb, var(--accent-active) 10%, var(--bg-surface));
+  border-color: color-mix(in srgb, var(--accent-active) 55%, var(--border-default));
+}
+
+.run-agent-inspector-event__header {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+  justify-content: space-between;
+}
+
+.run-agent-inspector-event__summary {
   color: var(--text-secondary);
   overflow-wrap: anywhere;
+}
+
+.run-agent-inspector-mode-row {
+  margin-top: 2px;
+}
+
+.run-agent-inspector-mode-row .button-link {
+  min-height: 30px;
+}
+
+.run-agent-inspector-mode-row .button-link.is-active {
+  border-color: color-mix(in srgb, var(--accent-active) 55%, var(--border-default));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent-active) 35%, transparent);
+}
+
+.run-agent-inspector-actions {
+  margin-top: 2px;
+}
+
+.run-agent-inspector-payload {
+  margin: 0;
+}
+
+.run-agent-inspector-payload--nowrap {
+  white-space: pre;
+}
+
+.run-agent-inspector-markdown {
+  display: grid;
+  gap: 8px;
+}
+
+.run-agent-inspector-markdown > :first-child {
+  margin-top: 0;
+}
+
+.run-agent-inspector-markdown > :last-child {
+  margin-bottom: 0;
+}
+
+.run-agent-inspector-markdown-code {
+  margin: 0;
+}
+
+.run-agent-inspector-markdown-list {
+  margin: 0;
+  padding-left: 20px;
+}
+
+.run-agent-inspector-metadata-list {
+  display: grid;
+  gap: 8px;
+  margin: 8px 0 0;
+}
+
+.run-agent-inspector-metadata-row {
+  border: 1px solid color-mix(in srgb, var(--border-default) 70%, transparent);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+
+.run-agent-inspector-metadata-row dt {
+  background: color-mix(in srgb, var(--bg-canvas) 70%, var(--bg-surface));
+  border-bottom: 1px solid color-mix(in srgb, var(--border-default) 70%, transparent);
+  font: 600 12px/18px var(--font-data);
+  padding: 6px 8px;
+}
+
+.run-agent-inspector-metadata-row dd {
+  margin: 0;
+}
+
+.run-agent-inspector-metadata-value {
+  border: 0;
+  border-radius: 0;
+  margin: 0;
+}
+
+.run-agent-inspector-token--key {
+  color: var(--accent-active);
+}
+
+.run-agent-inspector-token--string {
+  color: var(--accent-success);
+}
+
+.run-agent-inspector-token--number {
+  color: var(--accent-warning);
+}
+
+.run-agent-inspector-token--boolean {
+  color: var(--accent-info);
+}
+
+.run-agent-inspector-token--null {
+  color: var(--text-muted);
 }
 
 .run-agent-stream-event-type {
@@ -2154,6 +2339,14 @@ output {
   .run-agent-stream-controls {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .run-agent-inspector {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .run-agent-inspector-search-row {
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .run-agent-stream-events {

@@ -164,6 +164,7 @@ export function resetRunDetailStateFromInitialDetail(params: {
   setStreamRetryCountdownSeconds: StateSetter<number | null>;
   setStreamAutoScroll: StateSetter<boolean>;
   setStreamLastUpdatedAtMs: StateSetter<number>;
+  setStreamSelectedEventSequence: StateSetter<number | null>;
   setPendingControlAction: StateSetter<DashboardRunControlAction | null>;
   setActionFeedback: StateSetter<ActionFeedbackState>;
 }): void {
@@ -187,6 +188,7 @@ export function resetRunDetailStateFromInitialDetail(params: {
     setStreamRetryCountdownSeconds,
     setStreamAutoScroll,
     setStreamLastUpdatedAtMs,
+    setStreamSelectedEventSequence,
     setPendingControlAction,
     setActionFeedback,
   } = params;
@@ -207,6 +209,7 @@ export function resetRunDetailStateFromInitialDetail(params: {
   setStreamRetryCountdownSeconds(null);
   setStreamAutoScroll(true);
   setStreamLastUpdatedAtMs(Date.now());
+  setStreamSelectedEventSequence(null);
   setPendingControlAction(null);
   setActionFeedback(null);
   streamLastSequenceRef.current = 0;
@@ -274,4 +277,3 @@ export function clearActionFeedbackOnStatusChange(params: {
     return null;
   });
 }
-

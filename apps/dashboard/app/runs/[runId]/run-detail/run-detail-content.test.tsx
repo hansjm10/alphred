@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { act, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { hydrateRoot } from 'react-dom/client';
 import { renderToString } from 'react-dom/server';
@@ -369,6 +369,7 @@ describe('RunDetailContent realtime updates', () => {
     fetchMock.mockReset();
     MockEventSource.instances = [];
     vi.stubGlobal('fetch', fetchMock);
+    window.history.replaceState(null, '', '/runs/412');
   });
 
   afterEach(() => {
@@ -1392,8 +1393,11 @@ describe('RunDetailContent realtime updates', () => {
     await waitFor(() => {
       expect(screen.getByText('phase two')).toBeInTheDocument();
     });
-    await user.click(screen.getByText('metadata'));
-    expect(screen.getByText(/workspace-write/)).toBeInTheDocument();
+    await user.click(screen.getByText('phase two'));
+    const detailPane = screen.getByRole('region', { name: 'Agent stream inspector detail' });
+    await user.click(within(detailPane).getByText('metadata'));
+    expect(within(detailPane).getByText('sandboxMode')).toBeInTheDocument();
+    expect(within(detailPane).getByText('workspace-write')).toBeInTheDocument();
 
     await user.click(screen.getByRole('button', { name: 'Pause auto-scroll' }));
 
@@ -1471,9 +1475,10 @@ describe('RunDetailContent realtime updates', () => {
       expect(screen.getByText('duplicate replacement')).toBeInTheDocument();
     });
 
-    expect(screen.queryByText('duplicate original')).toBeNull();
-    expect(screen.getAllByText('duplicate replacement')).toHaveLength(1);
-    expect(screen.getAllByText('unique second event')).toHaveLength(1);
+    const streamEventList = screen.getByRole('list', { name: 'Agent stream events' });
+    expect(within(streamEventList).queryByText('duplicate original')).toBeNull();
+    expect(within(streamEventList).getAllByText('duplicate replacement')).toHaveLength(1);
+    expect(within(streamEventList).getAllByText('unique second event')).toHaveLength(1);
   });
 
   it('does not restart stream when selecting the active node in the status panel', async () => {
@@ -1740,10 +1745,11 @@ describe('RunDetailContent realtime updates', () => {
       );
     });
 
+    const streamEventList = screen.getByRole('list', { name: 'Agent stream events' });
     await waitFor(() => {
-      expect(screen.getByText('seeded event')).toBeInTheDocument();
-      expect(screen.getByText('second page one')).toBeInTheDocument();
-      expect(screen.getByText('second page two')).toBeInTheDocument();
+      expect(within(streamEventList).getByText('seeded event')).toBeInTheDocument();
+      expect(within(streamEventList).getByText('second page one')).toBeInTheDocument();
+      expect(within(streamEventList).getByText('second page two')).toBeInTheDocument();
     });
 
     expect(MockEventSource.instances).toHaveLength(0);
@@ -1980,7 +1986,7 @@ describe('RunDetailContent realtime updates', () => {
     expect(details).toHaveTextContent(longArtifact);
   });
 
-  it('adds an expand affordance for long stream event payloads', async () => {
+  it('renders long stream event payloads in inspector detail view', async () => {
     vi.stubGlobal('EventSource', MockEventSource as unknown as typeof EventSource);
     const user = userEvent.setup();
     const longStreamPayload = `stream payload ${'payload '.repeat(60)}`;
@@ -2016,16 +2022,267 @@ describe('RunDetailContent realtime updates', () => {
     );
 
     await waitFor(() => {
-      expect(screen.getByText('Show full event payload')).toBeInTheDocument();
+      expect(
+        screen.getByText((content) => content.includes('stream payload payload payload payload payload')),
+      ).toBeInTheDocument();
     });
 
-    const toggle = screen.getByText('Show full event payload');
-    const details = toggle.closest('details');
-    expect(details).not.toHaveAttribute('open');
+    const detailPane = screen.getByLabelText('Agent stream inspector detail');
+    expect(detailPane).toHaveTextContent(longStreamPayload.trim());
+    await user.click(within(detailPane).getByRole('button', { name: 'Disable line wrap' }));
+    expect(within(detailPane).getByRole('button', { name: 'Enable line wrap' })).toBeInTheDocument();
+  });
 
-    await user.click(toggle);
-    expect(details).toHaveAttribute('open');
-    expect(details).toHaveTextContent(longStreamPayload.trim());
+  it('filters and searches stream events in the inspector list', async () => {
+    vi.stubGlobal('EventSource', MockEventSource as unknown as typeof EventSource);
+    const user = userEvent.setup();
+
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/nodes/2/stream')) {
+        return createJsonResponse({
+          workflowRunId: 412,
+          runNodeId: 2,
+          attempt: 1,
+          nodeStatus: 'running',
+          ended: false,
+          latestSequence: 2,
+          events: [
+            createStreamEvent({ sequence: 1, type: 'assistant', contentPreview: 'assistant response' }),
+            createStreamEvent({ sequence: 2, type: 'tool_result', contentPreview: 'tool output summary' }),
+          ],
+        });
+      }
+
+      return createJsonResponse(createRunDetail());
+    });
+
+    render(
+      <RunDetailContent
+        initialDetail={createRunDetail()}
+        repositories={[createRepository()]}
+        enableRealtime={false}
+      />,
+    );
+
+    const streamEventList = screen.getByRole('list', { name: 'Agent stream events' });
+    await waitFor(() => {
+      expect(within(streamEventList).getByText('assistant response')).toBeInTheDocument();
+      expect(within(streamEventList).getByText('tool output summary')).toBeInTheDocument();
+    });
+
+    await user.selectOptions(screen.getByLabelText('Agent stream event type filter'), 'tool_result');
+    expect(within(streamEventList).queryByText('assistant response')).toBeNull();
+    expect(within(streamEventList).getByText('tool output summary')).toBeInTheDocument();
+
+    await user.type(screen.getByLabelText('Search agent stream events'), 'no-match');
+    expect(within(streamEventList).getByText('No events match current filters.')).toBeInTheDocument();
+  });
+
+  it('supports pretty/raw/markdown payload rendering modes in inspector detail', async () => {
+    vi.stubGlobal('EventSource', MockEventSource as unknown as typeof EventSource);
+    const user = userEvent.setup();
+
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/nodes/2/stream')) {
+        return createJsonResponse({
+            workflowRunId: 412,
+            runNodeId: 2,
+            attempt: 1,
+            nodeStatus: 'running',
+            ended: false,
+            latestSequence: 2,
+            events: [
+              createStreamEvent({ sequence: 1, type: 'assistant', contentPreview: '{"foo":"bar","count":2}' }),
+              createStreamEvent({ sequence: 2, type: 'assistant', contentPreview: '# Heading\n\n- item one\n- item two' }),
+            ],
+          });
+        }
+
+      return createJsonResponse(createRunDetail());
+    });
+
+    render(
+      <RunDetailContent
+        initialDetail={createRunDetail()}
+        repositories={[createRepository()]}
+        enableRealtime={false}
+      />,
+    );
+
+    const streamEventList = screen.getByRole('list', { name: 'Agent stream events' });
+    await waitFor(() => {
+      expect(within(streamEventList).getByText('{"foo":"bar","count":2}')).toBeInTheDocument();
+      expect(within(streamEventList).getByText((content) => content.includes('# Heading'))).toBeInTheDocument();
+    });
+
+    await user.click(within(streamEventList).getByText('{"foo":"bar","count":2}'));
+    const detailPane = screen.getByRole('region', { name: 'Agent stream inspector detail' });
+    expect(within(detailPane).getByText(/"foo"/)).toBeInTheDocument();
+
+    await user.click(within(detailPane).getByRole('tab', { name: 'Raw' }));
+    expect(within(detailPane).getByText('{"foo":"bar","count":2}')).toBeInTheDocument();
+
+    await user.click(within(streamEventList).getByText((content) => content.includes('# Heading')));
+    const markdownTab = within(detailPane).getByRole('tab', { name: 'Rendered Markdown' });
+    expect(markdownTab).not.toBeDisabled();
+    await user.click(markdownTab);
+    expect(within(detailPane).getByText('Heading')).toBeInTheDocument();
+    expect(within(detailPane).getByText('item one')).toBeInTheDocument();
+  });
+
+  it('supports keyboard navigation across inspector event rows', async () => {
+    vi.stubGlobal('EventSource', MockEventSource as unknown as typeof EventSource);
+
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/nodes/2/stream')) {
+        return createJsonResponse({
+          workflowRunId: 412,
+          runNodeId: 2,
+          attempt: 1,
+          nodeStatus: 'running',
+          ended: false,
+          latestSequence: 3,
+          events: [
+            createStreamEvent({ sequence: 1, contentPreview: 'first event' }),
+            createStreamEvent({ sequence: 2, contentPreview: 'second event' }),
+            createStreamEvent({ sequence: 3, contentPreview: 'third event' }),
+          ],
+        });
+      }
+
+      return createJsonResponse(createRunDetail());
+    });
+
+    render(
+      <RunDetailContent
+        initialDetail={createRunDetail()}
+        repositories={[createRepository()]}
+        enableRealtime={false}
+      />,
+    );
+
+    const streamEventList = screen.getByRole('list', { name: 'Agent stream events' });
+    await waitFor(() => {
+      expect(within(streamEventList).getByText('third event')).toBeInTheDocument();
+    });
+
+    const secondEventButton = within(streamEventList).getByText('second event').closest('button');
+    expect(secondEventButton).not.toBeNull();
+    expect(secondEventButton).toHaveAttribute('aria-pressed', 'false');
+
+    streamEventList.focus();
+    fireEvent.keyDown(streamEventList, { key: 'ArrowUp' });
+    expect(secondEventButton).toHaveAttribute('aria-pressed', 'true');
+
+    fireEvent.keyDown(streamEventList, { key: 'Home' });
+    const firstEventButton = within(streamEventList).getByText('first event').closest('button');
+    expect(firstEventButton).toHaveAttribute('aria-pressed', 'true');
+  });
+
+  it('syncs selected stream node and event sequence to URL query state', async () => {
+    vi.stubGlobal('EventSource', MockEventSource as unknown as typeof EventSource);
+    const user = userEvent.setup();
+    window.history.replaceState(null, '', '/runs/412?streamRunNodeId=1&streamAttempt=1&streamEventSequence=4');
+
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/nodes/1/stream')) {
+        return createJsonResponse({
+          workflowRunId: 412,
+          runNodeId: 1,
+          attempt: 1,
+          nodeStatus: 'completed',
+          ended: true,
+          latestSequence: 5,
+          events: [
+            createStreamEvent({ runNodeId: 1, sequence: 4, contentPreview: 'node one event four' }),
+            createStreamEvent({ runNodeId: 1, sequence: 5, contentPreview: 'node one event five' }),
+          ],
+        });
+      }
+      if (url.includes('/nodes/2/stream')) {
+        return createJsonResponse({
+          workflowRunId: 412,
+          runNodeId: 2,
+          attempt: 1,
+          nodeStatus: 'running',
+          ended: false,
+          latestSequence: 0,
+          events: [],
+        });
+      }
+
+      return createJsonResponse(createRunDetail());
+    });
+
+    render(
+      <RunDetailContent
+        initialDetail={createRunDetail()}
+        repositories={[createRepository()]}
+        enableRealtime={false}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        expect.stringContaining('/api/dashboard/runs/412/nodes/1/stream?attempt=1&lastEventSequence=0'),
+        expect.objectContaining({ method: 'GET' }),
+      );
+    });
+
+    const streamEventList = screen.getByRole('list', { name: 'Agent stream events' });
+    await waitFor(() => {
+      expect(within(streamEventList).getByText('node one event four')).toBeInTheDocument();
+      expect(window.location.search).toContain('streamRunNodeId=1');
+      expect(window.location.search).toContain('streamEventSequence=4');
+    });
+
+    await user.click(within(streamEventList).getByText('node one event five'));
+    expect(window.location.search).toContain('streamRunNodeId=1');
+    expect(window.location.search).toContain('streamEventSequence=5');
+  });
+
+  it('keeps inspector controls accessible on narrow mobile viewports', async () => {
+    vi.stubGlobal('EventSource', MockEventSource as unknown as typeof EventSource);
+    Object.defineProperty(window, 'innerWidth', { value: 375, configurable: true });
+    window.dispatchEvent(new Event('resize'));
+
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/nodes/2/stream')) {
+        return createJsonResponse({
+          workflowRunId: 412,
+          runNodeId: 2,
+          attempt: 1,
+          nodeStatus: 'running',
+          ended: false,
+          latestSequence: 1,
+          events: [
+            createStreamEvent({ sequence: 1, contentPreview: 'mobile event payload' }),
+          ],
+        });
+      }
+
+      return createJsonResponse(createRunDetail());
+    });
+
+    render(
+      <RunDetailContent
+        initialDetail={createRunDetail()}
+        repositories={[createRepository()]}
+        enableRealtime={false}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByRole('region', { name: 'Agent output inspector' })).toBeInTheDocument();
+      expect(screen.getByRole('region', { name: 'Agent stream inspector events' })).toBeInTheDocument();
+      expect(screen.getByRole('region', { name: 'Agent stream inspector detail' })).toBeInTheDocument();
+      expect(screen.getByLabelText('Search agent stream events')).toBeInTheDocument();
+    });
   });
 
   it('surfaces operator focus with current status, latest event, and next action', () => {
@@ -2417,7 +2674,8 @@ describe('RunDetailContent realtime updates', () => {
     source.emitOpen();
 
     await waitFor(() => {
-      expect(screen.getByText('seeded event')).toBeInTheDocument();
+      const streamEventList = screen.getByRole('list', { name: 'Agent stream events' });
+      expect(within(streamEventList).getByText('seeded event')).toBeInTheDocument();
     });
 
     await user.click(screen.getByRole('button', { name: 'Pause auto-scroll' }));

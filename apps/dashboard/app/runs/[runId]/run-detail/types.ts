@@ -196,7 +196,10 @@ export type AgentStreamLifecycleEffectParams = {
 export type RunAgentStreamCardProps = Readonly<{
   isTerminalRun: boolean;
   selectedStreamNode: DashboardRunDetail['nodes'][number] | null;
-  agentStreamLabel: string;
+  agentStreamLabel: {
+    badgeLabel: string;
+    detail: string;
+  };
   streamConnectionState: AgentStreamConnectionState;
   streamLastUpdatedAtMs: number;
   hasHydrated: boolean;
@@ -205,6 +208,8 @@ export type RunAgentStreamCardProps = Readonly<{
   streamError: string | null;
   streamEvents: readonly DashboardRunNodeStreamEvent[];
   streamEventListRef: { current: HTMLOListElement | null };
+  selectedEventSequence: number | null;
+  onSelectedEventSequenceChange: (sequence: number | null) => void;
   setStreamAutoScroll: StateSetter<boolean>;
   setStreamBufferedEvents: StateSetter<DashboardRunNodeStreamEvent[]>;
   setStreamEvents: StateSetter<DashboardRunNodeStreamEvent[]>;
