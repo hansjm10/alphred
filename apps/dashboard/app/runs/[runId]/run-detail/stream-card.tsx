@@ -279,6 +279,9 @@ function RunTokenUsagePanel(props: Readonly<{
                 aria-label={`Inspect ${row.label}`}
                 aria-pressed={selected}
                 onClick={() => {
+                  if (selected) {
+                    return;
+                  }
                   onSelectStreamTarget({ runNodeId: row.runNodeId, nodeKey: row.nodeKey, attempt: row.attempt });
                 }}
               >
@@ -724,7 +727,9 @@ function EventListPane(props: Readonly<{
       const waitingForInitialStreamLoad =
         selectedEventSequence !== null &&
         !hasLoadedStreamEventsRef.current &&
-        (!hasStartedStreamInitializationRef.current || streamConnectionState === 'reconnecting');
+        (!hasStartedStreamInitializationRef.current ||
+          streamConnectionState === 'reconnecting' ||
+          streamConnectionState === 'live');
       if (waitingForInitialStreamLoad) {
         return;
       }

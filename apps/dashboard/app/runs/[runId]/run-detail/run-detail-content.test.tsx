@@ -2722,6 +2722,99 @@ describe('RunDetailContent realtime updates', () => {
     expect(latestEventButton).toHaveAttribute('aria-pressed', 'false');
   });
 
+  it('preserves URL-selected stream event while switching away from a live target', async () => {
+    vi.stubGlobal('EventSource', MockEventSource as unknown as typeof EventSource);
+    const initialDetail = createRunDetail();
+    const repository = createRepository();
+    let resolveNodeOneSnapshot!: (response: Response) => void;
+    const nodeOneSnapshot = new Promise<Response>((resolve) => {
+      resolveNodeOneSnapshot = resolve;
+    });
+
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/nodes/1/stream')) {
+        return nodeOneSnapshot;
+      }
+      if (url.includes('/nodes/2/stream')) {
+        return createJsonResponse({
+          workflowRunId: 412,
+          runNodeId: 2,
+          attempt: 1,
+          nodeStatus: 'running',
+          ended: false,
+          latestSequence: 0,
+          events: [],
+        });
+      }
+
+      return createJsonResponse(initialDetail);
+    });
+
+    const { rerender } = render(
+      <RunDetailContent
+        initialDetail={initialDetail}
+        repositories={[repository]}
+        enableRealtime={false}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(MockEventSource.instances).toHaveLength(1);
+    });
+    MockEventSource.instances[0]?.emitOpen();
+
+    window.history.replaceState(null, '', '/runs/412?streamRunNodeId=1&streamAttempt=1&streamEventSequence=4');
+    rerender(
+      <RunDetailContent
+        initialDetail={initialDetail}
+        repositories={[repository]}
+        enableRealtime={false}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        expect.stringContaining('/api/dashboard/runs/412/nodes/1/stream?attempt=1&lastEventSequence=0'),
+        expect.objectContaining({ method: 'GET' }),
+      );
+    });
+
+    await act(async () => {
+      await new Promise((resolve) => {
+        setTimeout(resolve, 50);
+      });
+    });
+    expect(window.location.search).toContain('streamEventSequence=4');
+
+    resolveNodeOneSnapshot(
+      createJsonResponse({
+        workflowRunId: 412,
+        runNodeId: 1,
+        attempt: 1,
+        nodeStatus: 'completed',
+        ended: true,
+        latestSequence: 5,
+        events: [
+          createStreamEvent({ runNodeId: 1, sequence: 4, contentPreview: 'node one event four' }),
+          createStreamEvent({ runNodeId: 1, sequence: 5, contentPreview: 'node one event five' }),
+        ],
+      }),
+    );
+
+    const streamEventList = screen.getByRole('list', { name: 'Agent stream events' });
+    await waitFor(() => {
+      expect(within(streamEventList).getByText('node one event four')).toBeInTheDocument();
+      expect(within(streamEventList).getByText('node one event five')).toBeInTheDocument();
+    });
+
+    const selectedEventButton = within(streamEventList).getByText('node one event four').closest('button');
+    const latestEventButton = within(streamEventList).getByText('node one event five').closest('button');
+    expect(selectedEventButton).toHaveAttribute('aria-pressed', 'true');
+    expect(latestEventButton).toHaveAttribute('aria-pressed', 'false');
+    expect(window.location.search).toContain('streamEventSequence=4');
+  });
+
   it('rehydrates stream inspector query state after same-run detail refresh resets stream state', async () => {
     vi.stubGlobal('EventSource', MockEventSource as unknown as typeof EventSource);
     const initialDetail = createRunDetail();
@@ -3492,7 +3585,7 @@ describe('RunDetailContent realtime updates', () => {
     expect(within(tokenUsage).getByText(/design \(attempt 1\)/i)).toBeInTheDocument();
   });
 
-  it('selects agent stream target when clicking a token usage row', async () => {
+  it('selects agent stream target when clicking a token usage row without restarting the active target', async () => {
     vi.stubGlobal('EventSource', MockEventSource as unknown as typeof EventSource);
     let designStreamRequestCount = 0;
 
@@ -3525,11 +3618,27 @@ describe('RunDetailContent realtime updates', () => {
     );
 
     const tokenUsage = screen.getByRole('region', { name: 'Token usage' });
-    await user.click(within(tokenUsage).getByRole('button', { name: 'Inspect design (attempt 1)' }));
+    const designRow = within(tokenUsage).getByRole('button', { name: 'Inspect design (attempt 1)' });
+    await user.click(designRow);
 
     await waitFor(() => {
       expect(designStreamRequestCount).toBeGreaterThan(0);
     });
+
+    await waitFor(() => {
+      expect(designRow).toHaveAttribute('aria-pressed', 'true');
+    });
+
+    const requestCountAfterSelection = designStreamRequestCount;
+    await user.click(designRow);
+
+    await act(async () => {
+      await new Promise((resolve) => {
+        setTimeout(resolve, 50);
+      });
+    });
+
+    expect(designStreamRequestCount).toBe(requestCountAfterSelection);
   });
 
   it('selects agent stream target when clicking a node in the status panel', async () => {
