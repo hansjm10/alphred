@@ -5,12 +5,10 @@ const DASHBOARD_PORT = 18080;
 
 export default defineConfig({
   testDir: './apps/dashboard/e2e',
-  testMatch: [
-    '**/fallbacks.spec.ts',
-    '**/run-lifecycle-controls.spec.ts',
-    '**/worktree-explorer.spec.ts',
-    '**/workflow-builder.spec.ts',
-  ],
+  // Discover dashboard e2e specs by convention so new suites do not require
+  // manual config updates. Keep gated route suites isolated to dedicated configs.
+  testMatch: ['**/*.spec.ts'],
+  testIgnore: ['**/test-routes-gated.spec.ts', '**/test-routes-build-gate.spec.ts'],
   fullyParallel: false,
   // Keep local runs fast, but enable retries in CI so `trace: on-first-retry` can actually capture traces.
   retries: process.env.CI ? 1 : 0,
