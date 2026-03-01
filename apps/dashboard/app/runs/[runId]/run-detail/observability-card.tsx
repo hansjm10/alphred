@@ -64,7 +64,7 @@ export function RunObservabilityCard({ detail }: RunObservabilityCardProps) {
   };
 
   return (
-    <Card title="Observability">
+    <Card title="Observability" headingId="run-detail-observability-heading">
       <section className="run-observability-section">
         <p className="meta-text">Artifacts</p>
         {detail.artifacts.length === 0 ? <p>No artifacts captured yet.</p> : null}
@@ -138,4 +138,3 @@ export function RunObservabilityCard({ detail }: RunObservabilityCardProps) {
     </Card>
   );
 }
-

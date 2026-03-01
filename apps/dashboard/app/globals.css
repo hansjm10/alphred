@@ -349,7 +349,8 @@ output {
 .button-link:focus-visible,
 .shell-nav-link:focus-visible,
 .tabs__link:focus-visible,
-.run-timeline-event:focus-visible {
+.run-timeline-event:focus-visible,
+.run-section-jump-nav__link:focus-visible {
   outline: 2px solid var(--accent-active);
   outline-offset: 2px;
 }
@@ -698,6 +699,58 @@ output {
 
 .run-detail-priority-grid {
   align-items: start;
+}
+
+.run-section-jump-nav {
+  background: color-mix(in srgb, var(--bg-canvas) 92%, transparent);
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  padding-bottom: 2px;
+  position: sticky;
+  scrollbar-width: thin;
+  top: calc(var(--space-6) + var(--space-2));
+  z-index: 4;
+}
+
+.run-section-jump-nav__list {
+  display: flex;
+  gap: var(--space-1);
+  list-style: none;
+  min-width: max-content;
+}
+
+.run-section-jump-nav__link {
+  align-items: center;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-pill);
+  color: var(--text-secondary);
+  display: inline-flex;
+  font: 600 13px/20px var(--font-display);
+  min-height: 34px;
+  padding: 6px 12px;
+  text-decoration: none;
+  transition: border-color var(--motion-fast), background-color var(--motion-fast), color var(--motion-fast);
+  white-space: nowrap;
+}
+
+.run-section-jump-nav__link:hover {
+  border-color: color-mix(in srgb, var(--accent-active) 40%, var(--border-default));
+  color: var(--text-primary);
+}
+
+.run-section-jump-nav__link[aria-current='location'] {
+  background: color-mix(in srgb, var(--accent-active) 10%, var(--bg-surface));
+  border-color: color-mix(in srgb, var(--accent-active) 42%, var(--border-default));
+  color: var(--accent-active);
+}
+
+.run-detail-section-anchor {
+  scroll-margin-top: calc(var(--space-7) + var(--space-2));
+}
+
+.run-detail-section-anchor--compact {
+  scroll-margin-top: calc(var(--space-6) + var(--space-2));
 }
 
 .run-operator-focus-list {
@@ -2123,6 +2176,13 @@ output {
 
   .run-detail-priority-grid {
     gap: var(--space-2);
+  }
+
+  .run-section-jump-nav {
+    margin-left: calc(var(--space-2) * -1);
+    margin-right: calc(var(--space-2) * -1);
+    padding: 0 var(--space-2) 2px;
+    top: calc(var(--space-5) + var(--space-2));
   }
 
   .run-detail-primary-actions {
