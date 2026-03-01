@@ -881,48 +881,91 @@ output {
   border-color: color-mix(in srgb, var(--accent-active) 55%, var(--border-default));
 }
 
+.run-agent-stream-status {
+  align-items: center;
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--bg-subtle) 55%, var(--bg-surface)) 0%,
+    var(--bg-surface) 100%
+  );
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  padding: 10px 12px;
+}
+
+.run-agent-stream-status .run-realtime-status__badge {
+  background: color-mix(in srgb, var(--bg-canvas) 70%, var(--bg-surface));
+  border: 1px solid color-mix(in srgb, var(--border-default) 70%, transparent);
+  border-radius: var(--radius-pill);
+  color: var(--text-secondary);
+  padding: 2px 10px;
+}
+
+.run-agent-stream-warning {
+  background: color-mix(in srgb, var(--accent-danger) 8%, var(--bg-surface));
+}
+
 .run-agent-stream-controls {
+  align-items: center;
+  justify-content: space-between;
   margin-top: var(--space-2);
 }
 
 .run-agent-stream-events {
-  border: 1px solid var(--border-default);
-  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--bg-canvas) 72%, var(--bg-surface));
+  border: 1px solid color-mix(in srgb, var(--border-default) 75%, transparent);
+  border-radius: var(--radius-md);
+  flex: 1;
+  list-style: none;
   margin-top: 0;
-  max-height: clamp(220px, 42vh, 360px);
+  min-height: 0;
   overflow-y: auto;
-  padding: var(--space-2);
+  padding: var(--space-1);
+  scrollbar-gutter: stable both-edges;
 }
 
 .run-agent-stream-event {
-  border: 1px solid color-mix(in srgb, var(--border-default) 75%, transparent);
-  border-radius: var(--radius-sm);
-  padding: 8px;
+  border: 0;
+  padding: 0;
 }
 
 .run-agent-inspector {
   display: grid;
-  gap: var(--space-2);
-  grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
+  gap: var(--space-3);
+  grid-template-columns: minmax(0, 440px) minmax(0, 1fr);
+  height: clamp(520px, 74vh, 760px);
+  align-items: stretch;
   margin-top: var(--space-2);
 }
 
 .run-agent-inspector-pane {
-  border: 1px solid color-mix(in srgb, var(--border-default) 75%, transparent);
-  border-radius: var(--radius-sm);
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--bg-subtle) 55%, var(--bg-surface)) 0%,
+    var(--bg-surface) 55%,
+    var(--bg-surface) 100%
+  );
+  border: 1px solid color-mix(in srgb, var(--border-default) 70%, transparent);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-sm);
   min-width: 0;
-  padding: var(--space-2);
+  min-height: 0;
+  padding: var(--space-2) var(--space-2);
 }
 
 .run-agent-inspector-pane--events {
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
+  overflow: hidden;
 }
 
 .run-agent-inspector-pane--detail {
   display: grid;
-  gap: 8px;
+  gap: 10px;
+  overflow: auto;
+  padding-bottom: var(--space-3);
 }
 
 .run-agent-inspector-search-row {
@@ -939,43 +982,83 @@ output {
 
 .run-agent-inspector-field select,
 .run-agent-inspector-field input {
-  background: var(--bg-canvas);
-  border: 1px solid var(--border-default);
-  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--bg-canvas) 78%, var(--bg-surface));
+  border: 1px solid color-mix(in srgb, var(--border-default) 78%, transparent);
+  border-radius: var(--radius-md);
   color: var(--text-primary);
   font: 400 13px/20px var(--font-data);
   min-width: 0;
-  padding: 6px 8px;
+  padding: 7px 10px;
+  transition: border-color var(--motion-fast), box-shadow var(--motion-fast);
 }
 
 .run-agent-inspector-field input {
   width: 100%;
 }
 
+.run-agent-inspector-field select:focus-visible,
+.run-agent-inspector-field input:focus-visible {
+  outline: none;
+  border-color: color-mix(in srgb, var(--accent-active) 55%, var(--border-default));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-active) 18%, transparent);
+}
+
 .run-agent-inspector-windowing {
   align-items: center;
 }
 
+.run-agent-inspector .button-link {
+  font: 600 13px/18px var(--font-display);
+  min-height: 32px;
+  padding: 6px 10px;
+}
+
+.run-agent-inspector .button-link:hover {
+  transform: none;
+}
+
 .run-agent-inspector-event {
-  background: transparent;
+  background: color-mix(in srgb, var(--bg-surface) 82%, var(--bg-canvas));
   border: 1px solid color-mix(in srgb, var(--border-default) 75%, transparent);
-  border-radius: var(--radius-sm);
+  border-left: 4px solid transparent;
+  border-radius: 10px;
+  box-shadow: 0 1px 0 rgba(15, 23, 42, 0.04);
   color: inherit;
   cursor: pointer;
   display: grid;
   gap: 6px;
-  padding: 8px;
+  padding: 10px 10px;
   text-align: left;
   width: 100%;
 }
 
+.run-agent-inspector-event--system {
+  border-left-color: color-mix(in srgb, var(--accent-active) 75%, transparent);
+}
+
+.run-agent-inspector-event--assistant {
+  border-left-color: color-mix(in srgb, var(--accent-success) 70%, transparent);
+}
+
+.run-agent-inspector-event--tool_use,
+.run-agent-inspector-event--tool_result {
+  border-left-color: color-mix(in srgb, var(--accent-warning) 78%, transparent);
+}
+
+.run-agent-inspector-event--usage,
+.run-agent-inspector-event--result {
+  border-left-color: color-mix(in srgb, var(--text-muted) 78%, transparent);
+}
+
 .run-agent-inspector-event:hover {
-  border-color: color-mix(in srgb, var(--accent-active) 40%, var(--border-default));
+  background: var(--bg-surface);
+  border-color: color-mix(in srgb, var(--accent-active) 38%, var(--border-default));
 }
 
 .run-agent-inspector-event--selected {
   background: color-mix(in srgb, var(--accent-active) 10%, var(--bg-surface));
   border-color: color-mix(in srgb, var(--accent-active) 55%, var(--border-default));
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-active) 14%, transparent);
 }
 
 .run-agent-inspector-event__header {
@@ -988,19 +1071,33 @@ output {
 .run-agent-inspector-event__summary {
   color: var(--text-secondary);
   overflow-wrap: anywhere;
+  font: 400 13px/20px var(--font-body);
 }
 
 .run-agent-inspector-mode-row {
+  background: color-mix(in srgb, var(--bg-canvas) 75%, var(--bg-surface));
+  border: 1px solid color-mix(in srgb, var(--border-default) 75%, transparent);
+  border-radius: var(--radius-pill);
+  gap: 6px;
   margin-top: 2px;
+  padding: 4px;
+  width: fit-content;
 }
 
 .run-agent-inspector-mode-row .button-link {
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-pill);
+  color: var(--text-secondary);
   min-height: 30px;
+  padding: 6px 12px;
+  transition: background-color var(--motion-fast), color var(--motion-fast);
 }
 
 .run-agent-inspector-mode-row .button-link.is-active {
-  border-color: color-mix(in srgb, var(--accent-active) 55%, var(--border-default));
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent-active) 35%, transparent);
+  background: var(--bg-surface);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent-active) 38%, transparent), var(--shadow-sm);
+  color: var(--text-primary);
 }
 
 .run-agent-inspector-actions {
@@ -1097,41 +1194,94 @@ output {
 
 .run-agent-stream-event-type--system {
   background: color-mix(in srgb, var(--accent-active) 18%, var(--bg-surface));
+  border: 1px solid color-mix(in srgb, var(--accent-active) 30%, transparent);
+  color: color-mix(in srgb, var(--accent-active) 78%, var(--text-primary));
 }
 
 .run-agent-stream-event-type--assistant {
   background: color-mix(in srgb, var(--accent-success) 20%, var(--bg-surface));
+  border: 1px solid color-mix(in srgb, var(--accent-success) 30%, transparent);
+  color: color-mix(in srgb, var(--accent-success) 78%, var(--text-primary));
 }
 
 .run-agent-stream-event-type--tool_use,
 .run-agent-stream-event-type--tool_result {
   background: color-mix(in srgb, var(--accent-warning) 24%, var(--bg-surface));
+  border: 1px solid color-mix(in srgb, var(--accent-warning) 30%, transparent);
+  color: color-mix(in srgb, var(--accent-warning) 78%, var(--text-primary));
 }
 
 .run-agent-stream-event-type--usage {
   background: color-mix(in srgb, var(--text-muted) 22%, var(--bg-surface));
+  border: 1px solid color-mix(in srgb, var(--text-muted) 30%, transparent);
+  color: var(--text-secondary);
 }
 
 .run-agent-stream-event-type--result {
   background: color-mix(in srgb, var(--accent-active) 24%, var(--bg-surface));
+  border: 1px solid color-mix(in srgb, var(--accent-active) 30%, transparent);
+  color: color-mix(in srgb, var(--accent-active) 78%, var(--text-primary));
 }
 
 .run-agent-stream-collapsed {
+  background: color-mix(in srgb, var(--bg-canvas) 78%, var(--bg-surface));
   border: 1px dashed color-mix(in srgb, var(--border-default) 75%, transparent);
-  border-radius: var(--radius-sm);
-  padding: 8px;
+  border-radius: var(--radius-md);
+  padding: 10px;
 }
 
 .run-agent-stream-collapsed__summary {
   color: var(--text-secondary);
   cursor: pointer;
   font: 600 12px/18px var(--font-display);
-  width: fit-content;
+  list-style: none;
+  width: 100%;
+}
+
+.run-agent-stream-collapsed__summary::-webkit-details-marker {
+  display: none;
+}
+
+.run-agent-stream-collapsed__summary::after {
+  content: "▾";
+  float: right;
+  transition: transform var(--motion-fast);
+}
+
+.run-agent-stream-collapsed[open] .run-agent-stream-collapsed__summary::after {
+  transform: rotate(180deg);
 }
 
 .run-agent-stream-collapsed__summary:hover {
   color: var(--accent-active);
-  text-decoration: underline;
+  text-decoration: none;
+}
+
+.run-agent-inspector-metadata {
+  border: 1px solid color-mix(in srgb, var(--border-default) 70%, transparent);
+  border-radius: var(--radius-md);
+  padding: var(--space-2);
+}
+
+.run-agent-inspector-metadata__summary {
+  color: var(--accent-active);
+  cursor: pointer;
+  font: 600 12px/18px var(--font-display);
+  list-style: none;
+}
+
+.run-agent-inspector-metadata__summary::-webkit-details-marker {
+  display: none;
+}
+
+.run-agent-inspector-metadata__summary::after {
+  content: "▾";
+  float: right;
+  transition: transform var(--motion-fast);
+}
+
+.run-agent-inspector-metadata[open] .run-agent-inspector-metadata__summary::after {
+  transform: rotate(180deg);
 }
 
 .run-expandable-preview {
@@ -2339,6 +2489,7 @@ output {
 
   .run-agent-inspector {
     grid-template-columns: minmax(0, 1fr);
+    height: auto;
   }
 
   .run-agent-inspector-search-row {
@@ -2346,6 +2497,7 @@ output {
   }
 
   .run-agent-stream-events {
+    flex: none;
     max-height: clamp(220px, 38vh, 320px);
   }
 

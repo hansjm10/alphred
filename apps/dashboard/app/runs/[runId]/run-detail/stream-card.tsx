@@ -646,7 +646,7 @@ function EventListPane(props: Readonly<{
                     }
                   }}
                   type="button"
-                  className={`run-agent-inspector-event${selected ? ' run-agent-inspector-event--selected' : ''}`}
+                  className={`run-agent-inspector-event run-agent-inspector-event--${event.type}${selected ? ' run-agent-inspector-event--selected' : ''}`}
                   aria-pressed={selected}
                   onClick={() => {
                     onSelectedEventSequenceChange(event.sequence);
@@ -896,8 +896,8 @@ function DetailPane(props: Readonly<{
       {utilityFeedback ? <p className="meta-text">{utilityFeedback}</p> : null}
       {payloadContent}
 
-      <details>
-        <summary>metadata</summary>
+      <details className="run-agent-inspector-metadata">
+        <summary className="run-agent-inspector-metadata__summary">metadata</summary>
         {renderMetadataContent(metadataRows)}
       </details>
     </section>
@@ -990,7 +990,10 @@ function SelectedStreamContent(props: Readonly<{
 
   return (
     <>
-      <output className={`run-realtime-status run-realtime-status--${streamConnectionState}`} aria-live="polite">
+      <output
+        className={`run-realtime-status run-realtime-status--${streamConnectionState} run-agent-stream-status`}
+        aria-live="polite"
+      >
         <span className="run-realtime-status__badge">{agentStreamLabel.badgeLabel}</span>
         <span className="meta-text">{agentStreamLabel.detail}</span>
         <span className="meta-text">
@@ -999,7 +1002,7 @@ function SelectedStreamContent(props: Readonly<{
       </output>
 
       {streamError && (streamConnectionState === 'reconnecting' || streamConnectionState === 'stale') ? (
-        <output className="run-realtime-warning" aria-live="polite">
+        <output className="run-realtime-warning run-agent-stream-warning" aria-live="polite">
           {`Agent stream degraded: ${streamError}`}
         </output>
       ) : null}
