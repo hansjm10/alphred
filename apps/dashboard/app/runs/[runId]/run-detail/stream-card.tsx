@@ -107,6 +107,7 @@ type TokenUsageRow = Readonly<{
   detail: string | null;
   breakdown: TokenBreakdown | null;
   tokensUsed: number;
+  isInspectable: boolean;
 }>;
 
 function resolveTokenUsageRows(params: Readonly<{
@@ -161,6 +162,7 @@ function resolveTokenUsageRows(params: Readonly<{
       detail: `${snapshot.outcome}${sequenceLabel}${providerLabel}`,
       breakdown,
       tokensUsed: snapshot.diagnostics.summary.tokensUsed,
+      isInspectable: node !== null && node.attempt === snapshot.attempt,
     });
   }
 
@@ -225,9 +227,13 @@ function RunTokenUsagePanel(props: Readonly<{
     () => rows.reduce((max, row) => Math.max(max, row.tokensUsed), 0),
     [rows],
   );
+  const reportingNodeCount = useMemo(
+    () => new Set(rows.map((row) => row.runNodeId)).size,
+    [rows],
+  );
 
   const attemptCountLabel = rows.length === 1 ? 'node attempt' : 'node attempts';
-  const reportingLabel = `${rows.length}/${nodes.length} nodes reporting`;
+  const reportingLabel = `${reportingNodeCount}/${nodes.length} nodes reporting`;
 
   if (rows.length === 0) {
     return (
@@ -264,7 +270,10 @@ function RunTokenUsagePanel(props: Readonly<{
       <ul className="run-token-usage__list" aria-label="Token usage by node">
         {rows.map((row) => {
           const percent = maxTokens > 0 ? Math.max(2, Math.round((row.tokensUsed / maxTokens) * 100)) : 0;
-          const selected = selectedStreamNode?.id === row.runNodeId && selectedStreamNode.attempt === row.attempt;
+          const selected =
+            row.isInspectable &&
+            selectedStreamNode?.id === row.runNodeId &&
+            selectedStreamNode.attempt === row.attempt;
           const breakdownLabel = row.breakdown
             ? `Input ${row.breakdown.inputTokens === null ? 'n/a' : formatTokenCount(row.breakdown.inputTokens)} · Output ${row.breakdown.outputTokens === null ? 'n/a' : formatTokenCount(row.breakdown.outputTokens)}${
                 row.breakdown.cachedInputTokens !== null ? ` · Cached ${formatTokenCount(row.breakdown.cachedInputTokens)}` : ''
@@ -275,11 +284,12 @@ function RunTokenUsagePanel(props: Readonly<{
             <li key={row.key}>
               <button
                 type="button"
-                className={`run-token-usage__row${selected ? ' run-token-usage__row--selected' : ''}`}
-                aria-label={`Inspect ${row.label}`}
+                className={`run-token-usage__row${selected ? ' run-token-usage__row--selected' : ''}${row.isInspectable ? '' : ' run-token-usage__row--disabled'}`}
+                aria-label={row.isInspectable ? `Inspect ${row.label}` : `${row.label} stream unavailable`}
                 aria-pressed={selected}
+                disabled={!row.isInspectable}
                 onClick={() => {
-                  if (selected) {
+                  if (selected || !row.isInspectable) {
                     return;
                   }
                   onSelectStreamTarget({ runNodeId: row.runNodeId, nodeKey: row.nodeKey, attempt: row.attempt });
@@ -294,6 +304,9 @@ function RunTokenUsagePanel(props: Readonly<{
                 </div>
                 {breakdownLabel ? <p className="meta-text">{breakdownLabel}</p> : null}
                 {row.detail ? <p className="meta-text">{row.detail}</p> : null}
+                {!row.isInspectable ? (
+                  <p className="meta-text">Stream history unavailable for historical attempts.</p>
+                ) : null}
               </button>
             </li>
           );

@@ -974,6 +974,16 @@ output {
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-active) 12%, transparent);
 }
 
+.run-token-usage__row--disabled {
+  cursor: not-allowed;
+  opacity: 0.72;
+}
+
+.run-token-usage__row--disabled:hover {
+  background: var(--bg-surface);
+  border-color: color-mix(in srgb, var(--border-default) 75%, transparent);
+}
+
 .run-token-usage__row-header {
   align-items: baseline;
   display: flex;

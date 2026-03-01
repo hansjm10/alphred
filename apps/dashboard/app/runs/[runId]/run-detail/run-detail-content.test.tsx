@@ -3585,6 +3585,197 @@ describe('RunDetailContent realtime updates', () => {
     expect(within(tokenUsage).getByText(/design \(attempt 1\)/i)).toBeInTheDocument();
   });
 
+  it('reports nodes with diagnostics by unique node id when retries emit multiple attempts', () => {
+    const baseDetail = createRunDetail();
+    const baseDiagnostics = baseDetail.diagnostics[0]!;
+    const attemptOneDiagnostics: DashboardRunDetail['diagnostics'][number] = {
+      ...baseDiagnostics,
+      id: 21,
+      attempt: 1,
+      createdAt: '2026-02-18T00:00:32.000Z',
+      diagnostics: {
+        ...baseDiagnostics.diagnostics,
+        attempt: 1,
+        summary: {
+          ...baseDiagnostics.diagnostics.summary,
+          tokensUsed: 21,
+        },
+      },
+    };
+    const attemptTwoDiagnostics: DashboardRunDetail['diagnostics'][number] = {
+      ...baseDiagnostics,
+      id: 22,
+      attempt: 2,
+      createdAt: '2026-02-18T00:01:32.000Z',
+      diagnostics: {
+        ...baseDiagnostics.diagnostics,
+        attempt: 2,
+        summary: {
+          ...baseDiagnostics.diagnostics.summary,
+          tokensUsed: 42,
+        },
+      },
+    };
+
+    render(
+      <RunDetailContent
+        initialDetail={createRunDetail({
+          nodes: [
+            {
+              id: 1,
+              treeNodeId: 1,
+              nodeKey: 'design',
+              sequenceIndex: 0,
+              attempt: 2,
+              status: 'completed',
+              startedAt: '2026-02-18T00:00:10.000Z',
+              completedAt: '2026-02-18T00:00:30.000Z',
+              latestArtifact: null,
+              latestRoutingDecision: null,
+              latestDiagnostics: attemptTwoDiagnostics,
+            },
+            {
+              id: 2,
+              treeNodeId: 2,
+              nodeKey: 'implement',
+              sequenceIndex: 1,
+              attempt: 1,
+              status: 'running',
+              startedAt: '2026-02-18T00:00:35.000Z',
+              completedAt: null,
+              latestArtifact: null,
+              latestRoutingDecision: null,
+              latestDiagnostics: null,
+            },
+          ],
+          diagnostics: [attemptOneDiagnostics, attemptTwoDiagnostics],
+        })}
+        repositories={[createRepository()]}
+        enableRealtime={false}
+      />,
+    );
+
+    const tokenUsage = screen.getByRole('region', { name: 'Token usage' });
+    expect(within(tokenUsage).getByText('1/2 nodes reporting')).toBeInTheDocument();
+    expect(within(tokenUsage).getByText(/Across 2 node attempts\./i)).toBeInTheDocument();
+  });
+
+  it('disables token usage rows for historical attempts that are not inspectable in the stream panel', async () => {
+    vi.stubGlobal('EventSource', MockEventSource as unknown as typeof EventSource);
+    let historicalAttemptRequestCount = 0;
+    const baseDetail = createRunDetail();
+    const baseDiagnostics = baseDetail.diagnostics[0]!;
+    const attemptOneDiagnostics: DashboardRunDetail['diagnostics'][number] = {
+      ...baseDiagnostics,
+      id: 21,
+      attempt: 1,
+      createdAt: '2026-02-18T00:00:32.000Z',
+      diagnostics: {
+        ...baseDiagnostics.diagnostics,
+        attempt: 1,
+      },
+    };
+    const attemptTwoDiagnostics: DashboardRunDetail['diagnostics'][number] = {
+      ...baseDiagnostics,
+      id: 22,
+      attempt: 2,
+      createdAt: '2026-02-18T00:01:32.000Z',
+      diagnostics: {
+        ...baseDiagnostics.diagnostics,
+        attempt: 2,
+      },
+    };
+
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/nodes/1/stream?attempt=1')) {
+        historicalAttemptRequestCount += 1;
+        return createJsonResponse({
+          workflowRunId: 412,
+          runNodeId: 1,
+          attempt: 1,
+          nodeStatus: 'completed',
+          ended: true,
+          latestSequence: 0,
+          events: [],
+        });
+      }
+      if (url.includes('/nodes/1/stream?attempt=2')) {
+        return createJsonResponse({
+          workflowRunId: 412,
+          runNodeId: 1,
+          attempt: 2,
+          nodeStatus: 'completed',
+          ended: true,
+          latestSequence: 0,
+          events: [],
+        });
+      }
+
+      return createJsonResponse(createRunDetail());
+    });
+
+    const user = userEvent.setup();
+
+    render(
+      <RunDetailContent
+        initialDetail={createRunDetail({
+          nodes: [
+            {
+              id: 1,
+              treeNodeId: 1,
+              nodeKey: 'design',
+              sequenceIndex: 0,
+              attempt: 2,
+              status: 'completed',
+              startedAt: '2026-02-18T00:00:10.000Z',
+              completedAt: '2026-02-18T00:00:30.000Z',
+              latestArtifact: null,
+              latestRoutingDecision: null,
+              latestDiagnostics: attemptTwoDiagnostics,
+            },
+            {
+              id: 2,
+              treeNodeId: 2,
+              nodeKey: 'implement',
+              sequenceIndex: 1,
+              attempt: 1,
+              status: 'running',
+              startedAt: '2026-02-18T00:00:35.000Z',
+              completedAt: null,
+              latestArtifact: null,
+              latestRoutingDecision: null,
+              latestDiagnostics: null,
+            },
+          ],
+          diagnostics: [attemptOneDiagnostics, attemptTwoDiagnostics],
+        })}
+        repositories={[createRepository()]}
+        enableRealtime={false}
+      />,
+    );
+
+    const tokenUsage = screen.getByRole('region', { name: 'Token usage' });
+    const historicalAttemptRow = within(tokenUsage).getByRole('button', {
+      name: 'design (attempt 1) stream unavailable',
+    });
+    const latestAttemptRow = within(tokenUsage).getByRole('button', { name: 'Inspect design (attempt 2)' });
+    expect(historicalAttemptRow).toBeDisabled();
+    expect(latestAttemptRow).toBeEnabled();
+    expect(within(tokenUsage).getByText('Stream history unavailable for historical attempts.')).toBeInTheDocument();
+
+    await user.click(historicalAttemptRow);
+
+    await act(async () => {
+      await new Promise((resolve) => {
+        setTimeout(resolve, 50);
+      });
+    });
+
+    expect(historicalAttemptRequestCount).toBe(0);
+    expect(historicalAttemptRow).toHaveAttribute('aria-pressed', 'false');
+  });
+
   it('selects agent stream target when clicking a token usage row without restarting the active target', async () => {
     vi.stubGlobal('EventSource', MockEventSource as unknown as typeof EventSource);
     let designStreamRequestCount = 0;
