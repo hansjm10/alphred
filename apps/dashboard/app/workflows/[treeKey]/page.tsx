@@ -17,6 +17,15 @@ export default async function WorkflowDetailPage({ params }: WorkflowDetailPageP
   try {
     const snapshot = await service.getWorkflowTreeSnapshot(treeKey);
     const json = JSON.stringify(snapshot, null, 2);
+    const nodes = snapshot.nodes ?? [];
+    const edges = snapshot.edges ?? [];
+    const nonDefaultRoleNodes = nodes.filter((node) => {
+      const nodeRole = node.nodeRole ?? 'standard';
+      const maxChildren = node.maxChildren ?? 12;
+      return nodeRole !== 'standard' || maxChildren !== 12;
+    });
+    const failureRouteEdges = edges.filter((edge) => (edge.routeOn ?? 'success') === 'failure');
+    const hasFanoutConfiguration = nonDefaultRoleNodes.length > 0 || failureRouteEdges.length > 0;
 
     return (
       <div className="page-stack">
@@ -42,6 +51,29 @@ export default async function WorkflowDetailPage({ params }: WorkflowDetailPageP
                 <span>{snapshot.initialRunnableNodeKeys.length > 0 ? snapshot.initialRunnableNodeKeys.join(', ') : '—'}</span>
               </li>
             </ul>
+          </Panel>
+
+          <Panel title="Fan-out settings">
+            {hasFanoutConfiguration ? (
+              <ul className="entity-list">
+                {nonDefaultRoleNodes.map((node) => (
+                  <li key={`node-${node.nodeKey}`}>
+                    <span>{node.nodeKey}</span>
+                    <span>
+                      role {(node.nodeRole ?? 'standard')} · maxChildren {node.maxChildren ?? 12}
+                    </span>
+                  </li>
+                ))}
+                {failureRouteEdges.map((edge) => (
+                  <li key={`edge-${edge.sourceNodeKey}-${edge.targetNodeKey}-${edge.priority}`}>
+                    <span>{edge.sourceNodeKey} → {edge.targetNodeKey}</span>
+                    <span>failure route · priority {edge.priority}</span>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="meta-text">No fan-out specific settings configured.</p>
+            )}
           </Panel>
 
           <Panel title="View JSON">

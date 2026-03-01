@@ -25,6 +25,11 @@ const guardOperators: readonly GuardOperator[] = ['==', '!=', '>', '<', '>=', '<
 const approvalPolicyOptions = providerApprovalPolicies;
 const sandboxModeOptions = providerSandboxModes;
 const webSearchModeOptions = providerWebSearchModes;
+const workflowNodeRoleOptions: readonly NonNullable<DashboardWorkflowDraftNode['nodeRole']>[] = [
+  'standard',
+  'spawner',
+  'join',
+];
 
 type GuardEditorMode = 'guided' | 'advanced';
 
@@ -298,6 +303,22 @@ function networkAccessSelectValue(executionPermissions: ProviderExecutionPermiss
   return executionPermissions.networkAccessEnabled ? 'enabled' : 'disabled';
 }
 
+function normalizeNodeRole(nodeRole: DashboardWorkflowDraftNode['nodeRole']): NonNullable<DashboardWorkflowDraftNode['nodeRole']> {
+  return workflowNodeRoleOptions.includes(nodeRole ?? 'standard') ? (nodeRole ?? 'standard') : 'standard';
+}
+
+function normalizeMaxChildren(maxChildren: DashboardWorkflowDraftNode['maxChildren']): number {
+  if (typeof maxChildren !== 'number' || !Number.isFinite(maxChildren) || !Number.isInteger(maxChildren) || maxChildren < 0) {
+    return 12;
+  }
+
+  return maxChildren;
+}
+
+function normalizeEdgeRouteOn(routeOn: DashboardWorkflowDraftEdge['routeOn']): 'success' | 'failure' {
+  return routeOn === 'failure' ? 'failure' : 'success';
+}
+
 function CodexExecutionPermissionFields({
   executionPermissions,
   onExecutionPermissionsChange,
@@ -503,6 +524,8 @@ export function NodeInspector({
 
   const nodeType = data.nodeType;
   const isAgent = nodeType === 'agent';
+  const normalizedNodeRole = normalizeNodeRole(data.nodeRole);
+  const normalizedMaxChildren = normalizeMaxChildren(data.maxChildren);
   const providerOptionsWithCurrent = resolveProviderOptionsWithCurrent(providerOptions, data.provider);
   const selectedProvider = data.provider ?? providerOptionsWithCurrent[0]?.provider ?? null;
   const isCodexProvider = selectedProvider === 'codex';
@@ -527,14 +550,15 @@ export function NodeInspector({
       return;
     }
 
-    onChange({
-      ...data,
-      nodeType: nextNodeType,
-      provider: null,
-      model: null,
-      executionPermissions: null,
-      promptTemplate: null,
-    });
+      onChange({
+        ...data,
+        nodeType: nextNodeType,
+        provider: null,
+        model: null,
+        nodeRole: 'standard',
+        executionPermissions: null,
+        promptTemplate: null,
+      });
   }
 
   function handleProviderChange(nextProvider: string) {
@@ -571,6 +595,33 @@ export function NodeInspector({
           <option value="tool">tool</option>
         </select>
       </label>
+
+      {isAgent ? (
+        <>
+          <label className="workflow-inspector-field">
+            <span>Role</span>
+            <select
+              value={normalizedNodeRole}
+              onChange={(event) => handleFieldChange('nodeRole', event.target.value as NonNullable<DashboardWorkflowDraftNode['nodeRole']>)}
+            >
+              {workflowNodeRoleOptions.map((role) => (
+                <option key={role} value={role}>{role}</option>
+              ))}
+            </select>
+            <span className="meta-text">Spawner nodes fan out into dynamic children; join nodes aggregate those children.</span>
+          </label>
+
+          <label className="workflow-inspector-field">
+            <span>Max children</span>
+            <input
+              type="number"
+              min={0}
+              value={normalizedMaxChildren}
+              onChange={(event) => handleFieldChange('maxChildren', Number(event.target.value))}
+            />
+          </label>
+        </>
+      ) : null}
 
       {isAgent ? (
         <AgentNodeFields
@@ -630,18 +681,41 @@ function EdgeInspectorContent({
   ]);
   const [advancedExpression, setAdvancedExpression] = useState('');
   const [advancedError, setAdvancedError] = useState<string | null>(null);
+  const routeOn = normalizeEdgeRouteOn(data.routeOn);
+  const isFailureRoute = routeOn === 'failure';
+  const isAuto = isFailureRoute ? true : data.auto;
+  const guardExpression = isAuto ? null : data.guardExpression;
 
   useEffect(() => {
-    const guided = toGuidedState(data.auto ? null : data.guardExpression);
+    const guided = toGuidedState(guardExpression);
     setGuidedLogic(guided.logic);
     setGuidedConditions(guided.conditions);
-    setAdvancedExpression(JSON.stringify(data.auto ? { field: 'decision', operator: '==', value: 'approved' } : data.guardExpression, null, 2));
+    setAdvancedExpression(JSON.stringify(guardExpression ?? { field: 'decision', operator: '==', value: 'approved' }, null, 2));
     setAdvancedError(null);
-  }, [data.auto, data.guardExpression]);
+  }, [guardExpression]);
 
   const guardSummary = useMemo(() => {
-    return summarizeGuardExpression(data.auto ? null : data.guardExpression);
-  }, [data.auto, data.guardExpression]);
+    return summarizeGuardExpression(guardExpression);
+  }, [guardExpression]);
+
+  function handleRouteOnChange(nextRouteOn: 'success' | 'failure') {
+    if (nextRouteOn === 'failure') {
+      onChange({
+        ...data,
+        routeOn: 'failure',
+        auto: true,
+        guardExpression: null,
+      });
+      return;
+    }
+
+    onChange({
+      ...data,
+      routeOn: 'success',
+      auto: data.auto,
+      guardExpression: data.auto ? null : data.guardExpression,
+    });
+  }
 
   function handleAutoChange(nextAuto: boolean) {
     if (nextAuto) {
@@ -660,11 +734,11 @@ function EdgeInspectorContent({
   function applyGuidedState(nextLogic: 'and' | 'or', nextConditions: GuidedConditionDraft[]) {
     setGuidedLogic(nextLogic);
     setGuidedConditions(nextConditions);
-    onChange({
-      ...data,
-      auto: false,
-      guardExpression: toGuardExpression(nextLogic, nextConditions),
-    });
+      onChange({
+        ...data,
+        auto: false,
+        guardExpression: toGuardExpression(nextLogic, nextConditions),
+      });
   }
 
   function handleGuidedConditionChange(index: number, patch: Partial<GuidedConditionDraft>) {
@@ -729,12 +803,27 @@ function EdgeInspectorContent({
         />
       </label>
 
-      <label className="workflow-inspector-field workflow-inspector-field--inline">
-        <span>Auto</span>
-        <input type="checkbox" checked={data.auto} onChange={(event) => handleAutoChange(event.target.checked)} />
+      <label className="workflow-inspector-field">
+        <span>Route</span>
+        <select value={routeOn} onChange={(event) => handleRouteOnChange(event.target.value as 'success' | 'failure')}>
+          <option value="success">success</option>
+          <option value="failure">failure</option>
+        </select>
       </label>
 
-      {data.auto ? (
+      <label className="workflow-inspector-field workflow-inspector-field--inline">
+        <span>Auto</span>
+        <input
+          type="checkbox"
+          checked={isAuto}
+          disabled={isFailureRoute}
+          onChange={(event) => handleAutoChange(event.target.checked)}
+        />
+      </label>
+
+      {isFailureRoute ? (
+        <p className="meta-text">Failure transitions are always auto and do not evaluate guards.</p>
+      ) : isAuto ? (
         <p className="meta-text">Auto transitions are unconditional.</p>
       ) : (
         <>
