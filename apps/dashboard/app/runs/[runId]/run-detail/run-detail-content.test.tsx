@@ -2454,11 +2454,15 @@ describe('RunDetailContent realtime updates', () => {
     expect(secondEventButton).not.toBeNull();
     expect(secondEventButton).toHaveAttribute('aria-pressed', 'false');
 
-    streamEventList.focus();
-    fireEvent.keyDown(streamEventList, { key: 'ArrowUp' });
+    const thirdEventButton = within(streamEventList).getByText('third event').closest('button');
+    expect(thirdEventButton).not.toBeNull();
+    expect(thirdEventButton).toHaveAttribute('aria-pressed', 'true');
+
+    thirdEventButton?.focus();
+    fireEvent.keyDown(thirdEventButton!, { key: 'ArrowUp' });
     expect(secondEventButton).toHaveAttribute('aria-pressed', 'true');
 
-    fireEvent.keyDown(streamEventList, { key: 'Home' });
+    fireEvent.keyDown(secondEventButton!, { key: 'Home' });
     const firstEventButton = within(streamEventList).getByText('first event').closest('button');
     expect(firstEventButton).toHaveAttribute('aria-pressed', 'true');
   });

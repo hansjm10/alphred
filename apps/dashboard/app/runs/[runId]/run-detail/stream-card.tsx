@@ -576,21 +576,34 @@ function resolveDetailCodeClassName(wrapPayloadLines: boolean): string {
 function renderPayloadContent({
   payloadMode,
   prettyPayloadText,
+  prettyPayloadValue,
   detailCodeClassName,
   contentPreview,
   markdownAvailable,
 }: Readonly<{
   payloadMode: InspectorPayloadMode;
   prettyPayloadText: string | null;
+  prettyPayloadValue: unknown;
   detailCodeClassName: string;
   contentPreview: string;
   markdownAvailable: boolean;
 }>): ReactNode {
   if (payloadMode === 'pretty') {
     if (prettyPayloadText) {
+      let prettyCodeContent: ReactNode = prettyPayloadText;
+      if (prettyPayloadValue === null) {
+        prettyCodeContent = <span className="run-agent-inspector-token--null">null</span>;
+      } else if (typeof prettyPayloadValue === 'boolean') {
+        prettyCodeContent = <span className="run-agent-inspector-token--boolean">{prettyPayloadText}</span>;
+      } else if (typeof prettyPayloadValue === 'number') {
+        prettyCodeContent = <span className="run-agent-inspector-token--number">{prettyPayloadText}</span>;
+      } else if (typeof prettyPayloadValue === 'string') {
+        prettyCodeContent = <span className="run-agent-inspector-token--string">{prettyPayloadText}</span>;
+      }
+
       return (
         <pre className={detailCodeClassName}>
-          <code>{prettyPayloadText}</code>
+          <code>{prettyCodeContent}</code>
         </pre>
       );
     }
@@ -680,6 +693,10 @@ function DetailPane(props: Readonly<{
   }, [parsedPrettyPayload, selectedEvent]);
 
   const markdownAvailable = selectedEvent ? isLikelyMarkdown(selectedEvent.contentPreview) : false;
+  const prettyPayloadValue =
+    selectedEvent && parsedPrettyPayload && parsedPrettyPayload.ok
+      ? parsedPrettyPayload.value
+      : null;
 
   useEffect(() => {
     if (!selectedEvent) {
@@ -722,6 +739,7 @@ function DetailPane(props: Readonly<{
   const payloadContent = renderPayloadContent({
     payloadMode,
     prettyPayloadText,
+    prettyPayloadValue,
     detailCodeClassName,
     contentPreview: selectedEvent.contentPreview,
     markdownAvailable,
