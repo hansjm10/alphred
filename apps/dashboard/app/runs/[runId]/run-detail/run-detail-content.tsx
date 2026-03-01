@@ -272,6 +272,9 @@ export function RunDetailContent({
         searchParams.delete('streamEventSequence');
       }
     } else {
+      if (streamSelectedEventSequence !== null) {
+        setStreamSelectedEventSequence(null);
+      }
       searchParams.delete('streamRunNodeId');
       searchParams.delete('streamAttempt');
       searchParams.delete('streamEventSequence');

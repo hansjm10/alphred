@@ -149,11 +149,15 @@ function flattenMetadata(metadata: Record<string, unknown> | null): readonly (re
     .map(([key, value]) => [key, stringifyMetadataValue(value)] as const);
 }
 
-function parseJsonPayload(payload: string): unknown | null {
+type ParsedJsonPayload =
+  | Readonly<{ ok: true; value: unknown }>
+  | Readonly<{ ok: false }>;
+
+function parseJsonPayload(payload: string): ParsedJsonPayload {
   try {
-    return JSON.parse(payload);
+    return { ok: true, value: JSON.parse(payload) };
   } catch {
-    return null;
+    return { ok: false };
   }
 }
 
@@ -275,7 +279,7 @@ function downloadEventPayload(event: DashboardRunNodeStreamEvent): void {
   const parsedPayload = parseJsonPayload(event.contentPreview);
   const payload = {
     ...event,
-    payload: parsedPayload ?? event.contentPreview,
+    payload: parsedPayload.ok ? parsedPayload.value : event.contentPreview,
     truncated: event.contentPreview.length < event.contentChars,
   };
 
@@ -596,11 +600,11 @@ function DetailPane(props: Readonly<{
   }, [selectedEvent]);
 
   const prettyPayloadText = useMemo(() => {
-    if (!selectedEvent || parsedPrettyPayload === null) {
+    if (!selectedEvent || parsedPrettyPayload === null || !parsedPrettyPayload.ok) {
       return null;
     }
 
-    return JSON.stringify(parsedPrettyPayload, null, 2);
+    return JSON.stringify(parsedPrettyPayload.value, null, 2);
   }, [parsedPrettyPayload, selectedEvent]);
 
   const markdownAvailable = selectedEvent ? isLikelyMarkdown(selectedEvent.contentPreview) : false;

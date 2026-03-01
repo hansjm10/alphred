@@ -1390,10 +1390,11 @@ describe('RunDetailContent realtime updates', () => {
       createdAt: '2026-02-18T00:00:41.000Z',
     });
 
+    const initialStreamEventList = screen.getByRole('list', { name: 'Agent stream events' });
     await waitFor(() => {
-      expect(screen.getByText('phase two')).toBeInTheDocument();
+      expect(within(initialStreamEventList).getByText('phase two')).toBeInTheDocument();
     });
-    await user.click(screen.getByText('phase two'));
+    await user.click(within(initialStreamEventList).getByText('phase two'));
     const detailPane = screen.getByRole('region', { name: 'Agent stream inspector detail' });
     await user.click(within(detailPane).getByText('metadata'));
     expect(within(detailPane).getByText('sandboxMode')).toBeInTheDocument();
@@ -1734,6 +1735,141 @@ describe('RunDetailContent realtime updates', () => {
 
     const pendingNodeStreamCalls = fetchMock.mock.calls.filter(([input]) => String(input).includes('/nodes/3/stream'));
     expect(pendingNodeStreamCalls).toHaveLength(0);
+  });
+
+  it('clears stale selected stream events after selecting a non-streamable node', async () => {
+    vi.stubGlobal('EventSource', MockEventSource as unknown as typeof EventSource);
+    const user = userEvent.setup();
+    window.history.replaceState(null, '', '/runs/412?streamRunNodeId=1&streamAttempt=1&streamEventSequence=4');
+    const initialDetail = createRunDetail({
+      run: {
+        nodeSummary: {
+          pending: 1,
+          running: 0,
+          completed: 2,
+          failed: 0,
+          skipped: 0,
+          cancelled: 0,
+        },
+      },
+      nodes: [
+        {
+          id: 1,
+          treeNodeId: 1,
+          nodeKey: 'design',
+          sequenceIndex: 0,
+          attempt: 1,
+          status: 'completed',
+          startedAt: '2026-02-18T00:00:10.000Z',
+          completedAt: '2026-02-18T00:00:30.000Z',
+          latestArtifact: null,
+          latestRoutingDecision: null,
+          latestDiagnostics: null,
+        },
+        {
+          id: 2,
+          treeNodeId: 2,
+          nodeKey: 'implement',
+          sequenceIndex: 1,
+          attempt: 1,
+          status: 'completed',
+          startedAt: '2026-02-18T00:00:35.000Z',
+          completedAt: '2026-02-18T00:00:45.000Z',
+          latestArtifact: null,
+          latestRoutingDecision: null,
+          latestDiagnostics: null,
+        },
+        {
+          id: 3,
+          treeNodeId: 3,
+          nodeKey: 'review',
+          sequenceIndex: 2,
+          attempt: 1,
+          status: 'pending',
+          startedAt: null,
+          completedAt: null,
+          latestArtifact: null,
+          latestRoutingDecision: null,
+          latestDiagnostics: null,
+        },
+      ],
+    });
+
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/nodes/1/stream')) {
+        return createJsonResponse({
+          workflowRunId: 412,
+          runNodeId: 1,
+          attempt: 1,
+          nodeStatus: 'completed',
+          ended: true,
+          latestSequence: 5,
+          events: [
+            createStreamEvent({ runNodeId: 1, sequence: 4, contentPreview: 'node one event four' }),
+            createStreamEvent({ runNodeId: 1, sequence: 5, contentPreview: 'node one event five' }),
+          ],
+        });
+      }
+      if (url.includes('/nodes/2/stream')) {
+        return createJsonResponse({
+          workflowRunId: 412,
+          runNodeId: 2,
+          attempt: 1,
+          nodeStatus: 'completed',
+          ended: true,
+          latestSequence: 6,
+          events: [
+            createStreamEvent({ runNodeId: 2, sequence: 4, contentPreview: 'node two event four' }),
+            createStreamEvent({ runNodeId: 2, sequence: 6, contentPreview: 'node two event six' }),
+          ],
+        });
+      }
+
+      return createJsonResponse(initialDetail);
+    });
+
+    render(
+      <RunDetailContent
+        initialDetail={initialDetail}
+        repositories={[createRepository()]}
+        enableRealtime={false}
+      />,
+    );
+
+    const streamEventList = screen.getByRole('list', { name: 'Agent stream events' });
+    await waitFor(() => {
+      expect(within(streamEventList).getByText('node one event four')).toBeInTheDocument();
+      expect(window.location.search).toContain('streamRunNodeId=1');
+      expect(window.location.search).toContain('streamEventSequence=4');
+    });
+
+    const nodeStatusPanel = screen.getByRole('heading', { level: 3, name: 'Node status' }).closest('aside');
+    expect(nodeStatusPanel).not.toBeNull();
+
+    await user.click(within(nodeStatusPanel!).getByRole('button', { name: 'review (attempt 1)' }));
+
+    await waitFor(() => {
+      expect(window.location.search).not.toContain('streamRunNodeId');
+      expect(window.location.search).not.toContain('streamAttempt');
+      expect(window.location.search).not.toContain('streamEventSequence');
+    });
+
+    await user.click(within(nodeStatusPanel!).getByRole('button', { name: 'implement (attempt 1)' }));
+
+    const nextStreamEventList = screen.getByRole('list', { name: 'Agent stream events' });
+    await waitFor(() => {
+      expect(within(nextStreamEventList).getByText('node two event four')).toBeInTheDocument();
+      expect(within(nextStreamEventList).getByText('node two event six')).toBeInTheDocument();
+      expect(window.location.search).toContain('streamRunNodeId=2');
+      expect(window.location.search).toContain('streamAttempt=1');
+      expect(window.location.search).toContain('streamEventSequence=6');
+    });
+
+    const reusedSequenceButton = within(nextStreamEventList).getByText('node two event four').closest('button');
+    const latestEventButton = within(nextStreamEventList).getByText('node two event six').closest('button');
+    expect(reusedSequenceButton).toHaveAttribute('aria-pressed', 'false');
+    expect(latestEventButton).toHaveAttribute('aria-pressed', 'true');
   });
 
   it('paginates ended stream snapshots until persisted history is fully loaded', async () => {
@@ -2203,6 +2339,68 @@ describe('RunDetailContent realtime updates', () => {
     await user.click(markdownTab);
     expect(within(detailPane).getByText('Heading')).toBeInTheDocument();
     expect(within(detailPane).getByText('item one')).toBeInTheDocument();
+  });
+
+  it('treats JSON null payloads as valid pretty JSON and preserves null in downloads', async () => {
+    vi.stubGlobal('EventSource', MockEventSource as unknown as typeof EventSource);
+    const user = userEvent.setup();
+    const createObjectUrlSpy = vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:stream-event');
+    const revokeObjectUrlSpy = vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => undefined);
+    const jsonStringifySpy = vi.spyOn(JSON, 'stringify');
+
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/nodes/2/stream')) {
+        return createJsonResponse({
+          workflowRunId: 412,
+          runNodeId: 2,
+          attempt: 1,
+          nodeStatus: 'running',
+          ended: false,
+          latestSequence: 1,
+          events: [
+            createStreamEvent({ sequence: 1, type: 'assistant', contentChars: 4, contentPreview: 'null' }),
+          ],
+        });
+      }
+
+      return createJsonResponse(createRunDetail());
+    });
+
+    render(
+      <RunDetailContent
+        initialDetail={createRunDetail()}
+        repositories={[createRepository()]}
+        enableRealtime={false}
+      />,
+    );
+
+    const streamEventList = screen.getByRole('list', { name: 'Agent stream events' });
+    await waitFor(() => {
+      expect(within(streamEventList).getByText('null')).toBeInTheDocument();
+    });
+
+    await user.click(within(streamEventList).getByText('null'));
+    const detailPane = screen.getByRole('region', { name: 'Agent stream inspector detail' });
+
+    expect(within(detailPane).queryByText('Payload is not valid JSON; displaying raw payload.')).toBeNull();
+    expect(within(detailPane).getByText('null')).toBeInTheDocument();
+
+    jsonStringifySpy.mockClear();
+    await user.click(within(detailPane).getByRole('button', { name: 'Download payload (.json)' }));
+    expect(createObjectUrlSpy).toHaveBeenCalledTimes(1);
+    expect(revokeObjectUrlSpy).toHaveBeenCalledTimes(1);
+
+    const payloadSerializationCall = jsonStringifySpy.mock.calls.find(([value]) => (
+      typeof value === 'object' &&
+      value !== null &&
+      'workflowRunId' in value &&
+      'runNodeId' in value &&
+      'sequence' in value &&
+      'payload' in value
+    ));
+    expect(payloadSerializationCall).toBeDefined();
+    expect((payloadSerializationCall![0] as { payload?: unknown }).payload).toBeNull();
   });
 
   it('supports keyboard navigation across inspector event rows', async () => {
