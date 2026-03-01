@@ -2254,6 +2254,17 @@ describe('RunDetailContent realtime updates', () => {
     await user.click(within(streamEventList).getByText('node one event five'));
     expect(window.location.search).toContain('streamRunNodeId=1');
     expect(window.location.search).toContain('streamEventSequence=5');
+
+    const nodeStatusPanel = screen.getByRole('heading', { level: 3, name: 'Node status' }).closest('aside');
+    expect(nodeStatusPanel).not.toBeNull();
+
+    await user.click(within(nodeStatusPanel!).getByRole('button', { name: 'implement (attempt 1)' }));
+
+    await waitFor(() => {
+      expect(window.location.search).toContain('streamRunNodeId=2');
+      expect(window.location.search).toContain('streamAttempt=1');
+      expect(window.location.search).not.toContain('streamEventSequence');
+    });
   });
 
   it('keeps inspector controls accessible on narrow mobile viewports', async () => {

@@ -297,6 +297,7 @@ function EventListPane(props: Readonly<{
   streamEventListRef: { current: HTMLOListElement | null };
   selectedEventSequence: number | null;
   onSelectedEventSequenceChange: (sequence: number | null) => void;
+  streamConnectionState: AgentStreamConnectionState;
   eventTypeFilter: StreamEventFilter;
   setEventTypeFilter: StateSetter<StreamEventFilter>;
   eventSearchQuery: string;
@@ -312,6 +313,7 @@ function EventListPane(props: Readonly<{
     streamEventListRef,
     selectedEventSequence,
     onSelectedEventSequenceChange,
+    streamConnectionState,
     eventTypeFilter,
     setEventTypeFilter,
     eventSearchQuery,
@@ -325,6 +327,7 @@ function EventListPane(props: Readonly<{
 
   const eventButtonRefs = useRef(new Map<number, HTMLButtonElement>());
   const hasLoadedStreamEventsRef = useRef<boolean>(streamEvents.length > 0);
+  const hasStartedStreamInitializationRef = useRef<boolean>(streamEvents.length > 0);
 
   const filteredEvents = useMemo(
     () => streamEvents.filter(event => eventMatchesInspectorFilter(event, eventTypeFilter, eventSearchQuery)),
@@ -344,12 +347,23 @@ function EventListPane(props: Readonly<{
   useEffect(() => {
     if (streamEvents.length > 0) {
       hasLoadedStreamEventsRef.current = true;
+      hasStartedStreamInitializationRef.current = true;
     }
   }, [streamEvents.length]);
 
   useEffect(() => {
+    if (streamConnectionState !== 'ended') {
+      hasStartedStreamInitializationRef.current = true;
+    }
+  }, [streamConnectionState]);
+
+  useEffect(() => {
     if (filteredEvents.length === 0) {
-      if (!hasLoadedStreamEventsRef.current && selectedEventSequence !== null) {
+      const waitingForInitialStreamLoad =
+        selectedEventSequence !== null &&
+        !hasLoadedStreamEventsRef.current &&
+        (!hasStartedStreamInitializationRef.current || streamConnectionState === 'reconnecting');
+      if (waitingForInitialStreamLoad) {
         return;
       }
       onSelectedEventSequenceChange(null);
@@ -364,7 +378,7 @@ function EventListPane(props: Readonly<{
     }
 
     onSelectedEventSequenceChange(filteredEvents.at(-1)?.sequence ?? null);
-  }, [filteredEvents, onSelectedEventSequenceChange, selectedEventSequence]);
+  }, [filteredEvents, onSelectedEventSequenceChange, selectedEventSequence, streamConnectionState]);
 
   useEffect(() => {
     if (selectedEventSequence === null) {
@@ -799,10 +813,12 @@ function SelectedStreamContent(props: Readonly<{
 
       <div className="run-agent-inspector" role="region" aria-label="Agent output inspector">
         <EventListPane
+          key={`${selectedStreamNode.id}:${selectedStreamNode.attempt}`}
           streamEvents={streamEvents}
           streamEventListRef={streamEventListRef}
           selectedEventSequence={selectedEventSequence}
           onSelectedEventSequenceChange={onSelectedEventSequenceChange}
+          streamConnectionState={streamConnectionState}
           eventTypeFilter={eventTypeFilter}
           setEventTypeFilter={setEventTypeFilter}
           eventSearchQuery={eventSearchQuery}
