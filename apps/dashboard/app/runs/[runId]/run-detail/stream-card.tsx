@@ -274,11 +274,20 @@ function RunTokenUsagePanel(props: Readonly<{
             row.isInspectable &&
             selectedStreamNode?.id === row.runNodeId &&
             selectedStreamNode.attempt === row.attempt;
-          const breakdownLabel = row.breakdown
-            ? `Input ${row.breakdown.inputTokens === null ? 'n/a' : formatTokenCount(row.breakdown.inputTokens)} · Output ${row.breakdown.outputTokens === null ? 'n/a' : formatTokenCount(row.breakdown.outputTokens)}${
-                row.breakdown.cachedInputTokens !== null ? ` · Cached ${formatTokenCount(row.breakdown.cachedInputTokens)}` : ''
-              }`
-            : null;
+          let breakdownLabel: string | null = null;
+          if (row.breakdown) {
+            const inputLabel =
+              row.breakdown.inputTokens === null ? 'n/a' : formatTokenCount(row.breakdown.inputTokens);
+            const outputLabel =
+              row.breakdown.outputTokens === null ? 'n/a' : formatTokenCount(row.breakdown.outputTokens);
+            const breakdownParts = [`Input ${inputLabel}`, `Output ${outputLabel}`];
+            if (row.breakdown.cachedInputTokens === null) {
+              breakdownLabel = breakdownParts.join(' · ');
+            } else {
+              breakdownParts.push(`Cached ${formatTokenCount(row.breakdown.cachedInputTokens)}`);
+              breakdownLabel = breakdownParts.join(' · ');
+            }
+          }
 
           return (
             <li key={row.key}>
@@ -304,9 +313,9 @@ function RunTokenUsagePanel(props: Readonly<{
                 </div>
                 {breakdownLabel ? <p className="meta-text">{breakdownLabel}</p> : null}
                 {row.detail ? <p className="meta-text">{row.detail}</p> : null}
-                {!row.isInspectable ? (
+                {row.isInspectable ? null : (
                   <p className="meta-text">Stream history unavailable for historical attempts.</p>
-                ) : null}
+                )}
               </button>
             </li>
           );
