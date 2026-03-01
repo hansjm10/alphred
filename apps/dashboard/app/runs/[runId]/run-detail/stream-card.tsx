@@ -124,9 +124,7 @@ function RunTokenUsagePanel(props: Readonly<{
   );
 
   const attemptCountLabel = rows.length === 1 ? 'node attempt' : 'node attempts';
-  const reportingLabel = rows.length === nodes.length
-    ? `${rows.length}/${nodes.length} nodes reporting`
-    : `${rows.length}/${nodes.length} nodes reporting`;
+  const reportingLabel = `${rows.length}/${nodes.length} nodes reporting`;
 
   if (rows.length === 0) {
     return (
