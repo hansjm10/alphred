@@ -296,7 +296,7 @@ export function RunDetailContent({
   };
 
   return (
-    <div className="page-stack">
+    <div className="page-stack run-detail-content">
       <section className="page-heading">
         <h2>{`Run #${detail.run.id}`}</h2>
         <p>{pageSubtitle}</p>

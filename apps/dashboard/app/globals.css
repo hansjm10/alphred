@@ -700,10 +700,17 @@ output {
   align-items: start;
 }
 
+.run-detail-content {
+  --run-detail-section-nav-top: clamp(88px, 9vw, 120px);
+  --run-detail-section-anchor-offset: calc(var(--run-detail-section-nav-top) + 52px);
+}
+
 .run-detail-section-jump-nav {
+  margin-top: calc(-1 * var(--space-1));
+  padding-block: var(--space-1);
   position: sticky;
-  top: var(--space-2);
-  z-index: 5;
+  top: var(--run-detail-section-nav-top);
+  z-index: 4;
 }
 
 .run-detail-section-jump-nav__list {
@@ -726,6 +733,7 @@ output {
   padding: 6px 10px;
   text-decoration: none;
   transition: border-color 120ms ease, color 120ms ease, background-color 120ms ease;
+  white-space: nowrap;
 }
 
 .run-detail-section-jump-nav__link:hover {
@@ -742,6 +750,13 @@ output {
   background: color-mix(in srgb, var(--accent-active) 16%, var(--bg-surface));
   border-color: color-mix(in srgb, var(--accent-active) 48%, var(--border-default));
   color: var(--accent-active);
+}
+
+#run-detail-focus-heading,
+#run-detail-timeline-heading,
+#run-detail-stream-heading,
+#run-detail-observability-heading {
+  scroll-margin-top: var(--run-detail-section-anchor-offset);
 }
 
 .run-operator-focus-list {
@@ -2024,14 +2039,23 @@ output {
     gap: var(--space-2);
   }
 
+  .run-detail-content {
+    --run-detail-section-nav-top: clamp(132px, 20vh, 188px);
+    --run-detail-section-anchor-offset: calc(var(--run-detail-section-nav-top) + 52px);
+  }
+
   .run-detail-section-jump-nav {
-    top: var(--space-1);
+    margin-inline: calc(-1 * var(--space-1));
+    padding-inline: var(--space-1);
   }
 
   .run-detail-section-jump-nav__list {
     flex-wrap: nowrap;
     overflow-x: auto;
+    overscroll-behavior-x: contain;
     padding-bottom: 2px;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: thin;
   }
 
   .run-detail-section-jump-nav__list li {

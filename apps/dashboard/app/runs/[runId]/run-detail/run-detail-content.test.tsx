@@ -11,6 +11,7 @@ import type {
   DashboardRunNodeStreamEvent,
 } from '../../../../src/server/dashboard-contracts';
 import { RunDetailContent } from './run-detail-content';
+import { RUN_DETAIL_SECTIONS } from './types';
 
 function createRepository(overrides: Partial<DashboardRepositoryState> = {}): DashboardRepositoryState {
   const name = overrides.name ?? 'demo-repo';
@@ -1952,6 +1953,34 @@ describe('RunDetailContent realtime updates', () => {
     expect(within(focusCard!).getByRole('button', { name: 'Pause' })).toBeEnabled();
     expect(within(focusCard!).getByRole('button', { name: 'Cancel Run' })).toBeEnabled();
     expect(within(focusCard!).getByText(/implement started \(attempt 1\)\./i)).toBeInTheDocument();
+  });
+
+  it('renders a run detail section nav below the page heading with link targets for each major section', () => {
+    render(
+      <RunDetailContent
+        initialDetail={createRunDetail()}
+        repositories={[createRepository()]}
+        enableRealtime={false}
+      />,
+    );
+
+    const pageHeading = screen.getByRole('heading', { level: 2, name: 'Run #412' }).closest('.page-heading');
+    const sectionNav = screen.getByRole('navigation', {
+      name: 'Run detail sections',
+    });
+    expect(pageHeading).not.toBeNull();
+    expect(pageHeading?.nextElementSibling).toBe(sectionNav);
+
+    for (const section of RUN_DETAIL_SECTIONS) {
+      const link = within(sectionNav).getByRole('link', {
+        name: section.label,
+      });
+      expect(link).toHaveAttribute('href', `#${section.headingId}`);
+
+      const targetHeading = document.getElementById(section.headingId);
+      expect(targetHeading).not.toBeNull();
+      expect(targetHeading?.tagName).toBe('H3');
+    }
   });
 
   it('collapses earlier timeline entries behind disclosure when the timeline is long', () => {
