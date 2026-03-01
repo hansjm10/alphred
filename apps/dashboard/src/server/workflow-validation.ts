@@ -22,7 +22,6 @@ const executionApprovalPolicies = new Set(providerApprovalPolicies);
 const executionSandboxModes = new Set(providerSandboxModes);
 const executionWebSearchModes = new Set(providerWebSearchModes);
 const defaultWorkflowNodeRole = 'standard';
-const defaultWorkflowNodeMaxChildren = 12;
 
 export function isGuardExpression(value: unknown): value is GuardExpression {
   if (!isRecord(value)) {
@@ -100,14 +99,6 @@ function normalizeDraftNodeRole(value: unknown): 'standard' | 'spawner' | 'join'
   }
 
   return defaultWorkflowNodeRole;
-}
-
-function normalizeDraftNodeMaxChildren(value: unknown): number {
-  if (typeof value !== 'number' || !Number.isInteger(value) || value < 0) {
-    return defaultWorkflowNodeMaxChildren;
-  }
-
-  return value;
 }
 
 export function normalizeWorkflowTreeKey(rawValue: unknown): string {
@@ -220,8 +211,6 @@ export function normalizeDraftTopologyKeys(
     nodes: topology.nodes.map(node => ({
       ...node,
       nodeKey: node.nodeKey.trim(),
-      nodeRole: normalizeDraftNodeRole(node.nodeRole),
-      maxChildren: normalizeDraftNodeMaxChildren(node.maxChildren),
       provider: node.provider?.trim() ? node.provider.trim() : null,
       model: node.model?.trim() ? node.model.trim() : null,
       executionPermissions: node.executionPermissions ?? null,

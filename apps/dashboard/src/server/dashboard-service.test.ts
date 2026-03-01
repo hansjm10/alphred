@@ -2407,6 +2407,90 @@ describe('createDashboardService', () => {
     ]));
   });
 
+  it('rejects unsupported node role values on save', async () => {
+    const { db, dependencies } = createHarness();
+    migrateDatabase(db);
+
+    const service = createDashboardService({ dependencies });
+
+    await service.createWorkflowDraft({
+      template: 'blank',
+      name: 'Node Role Invalid Tree',
+      treeKey: 'node-role-invalid-tree',
+    });
+
+    await expect(
+      service.saveWorkflowDraft('node-role-invalid-tree', 1, {
+        draftRevision: 1,
+        name: 'Node Role Invalid Tree',
+        nodes: [
+          {
+            nodeKey: 'agent-node',
+            displayName: 'Agent Node',
+            nodeType: 'agent',
+            nodeRole: 'invalid-role' as unknown as 'standard',
+            maxChildren: 12,
+            provider: 'codex',
+            model: 'gpt-5.3-codex',
+            maxRetries: 0,
+            sequenceIndex: 10,
+            position: null,
+            promptTemplate: { content: 'Agent prompt', contentType: 'markdown' },
+          },
+        ],
+        edges: [],
+      }),
+    ).rejects.toMatchObject({
+      code: 'invalid_request',
+      status: 400,
+      details: expect.objectContaining({
+        errors: expect.arrayContaining([expect.objectContaining({ code: 'node_role_invalid' })]),
+      }),
+    });
+  });
+
+  it('rejects invalid maxChildren values on save', async () => {
+    const { db, dependencies } = createHarness();
+    migrateDatabase(db);
+
+    const service = createDashboardService({ dependencies });
+
+    await service.createWorkflowDraft({
+      template: 'blank',
+      name: 'Max Children Invalid Tree',
+      treeKey: 'max-children-invalid-tree',
+    });
+
+    await expect(
+      service.saveWorkflowDraft('max-children-invalid-tree', 1, {
+        draftRevision: 1,
+        name: 'Max Children Invalid Tree',
+        nodes: [
+          {
+            nodeKey: 'agent-node',
+            displayName: 'Agent Node',
+            nodeType: 'agent',
+            nodeRole: 'standard',
+            maxChildren: -1,
+            provider: 'codex',
+            model: 'gpt-5.3-codex',
+            maxRetries: 0,
+            sequenceIndex: 10,
+            position: null,
+            promptTemplate: { content: 'Agent prompt', contentType: 'markdown' },
+          },
+        ],
+        edges: [],
+      }),
+    ).rejects.toMatchObject({
+      code: 'invalid_request',
+      status: 400,
+      details: expect.objectContaining({
+        errors: expect.arrayContaining([expect.objectContaining({ code: 'max_children_invalid' })]),
+      }),
+    });
+  });
+
   it('rejects non-agent spawner/join role configurations on save', async () => {
     const { db, dependencies } = createHarness();
     migrateDatabase(db);
