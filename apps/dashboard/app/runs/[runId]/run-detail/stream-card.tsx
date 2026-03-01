@@ -171,8 +171,80 @@ function createRepeatedContentKeyFactory(prefix: string): (value: string) => str
   };
 }
 
+function startsWithMarkdownHeading(line: string): boolean {
+  const trimmedLine = line.trimStart();
+  let headingDepth = 0;
+  while (headingDepth < trimmedLine.length && headingDepth < 6 && trimmedLine[headingDepth] === '#') {
+    headingDepth += 1;
+  }
+
+  if (headingDepth === 0 || headingDepth >= trimmedLine.length) {
+    return false;
+  }
+
+  return trimmedLine[headingDepth] === ' ';
+}
+
+function startsWithOrderedListPrefix(line: string): boolean {
+  const trimmedLine = line.trimStart();
+  let index = 0;
+
+  while (index < trimmedLine.length && trimmedLine[index] >= '0' && trimmedLine[index] <= '9') {
+    index += 1;
+  }
+
+  if (index === 0 || index + 1 >= trimmedLine.length) {
+    return false;
+  }
+
+  return trimmedLine[index] === '.' && trimmedLine[index + 1] === ' ';
+}
+
+function hasMarkdownLink(line: string): boolean {
+  const openBracketIndex = line.indexOf('[');
+  const closeBracketIndex = line.indexOf(']', openBracketIndex + 1);
+  const openParenIndex = line.indexOf('(', closeBracketIndex + 1);
+  const closeParenIndex = line.indexOf(')', openParenIndex + 1);
+
+  return openBracketIndex !== -1 && closeBracketIndex !== -1 && openParenIndex !== -1 && closeParenIndex !== -1;
+}
+
+function parseMarkdownHeading(line: string): Readonly<{ depth: number; text: string }> | null {
+  const trimmedLine = line.trimStart();
+  let depth = 0;
+
+  while (depth < trimmedLine.length && depth < 6 && trimmedLine[depth] === '#') {
+    depth += 1;
+  }
+
+  if (depth === 0 || depth >= trimmedLine.length || trimmedLine[depth] !== ' ') {
+    return null;
+  }
+
+  const text = trimmedLine.slice(depth + 1).trim();
+  if (text.length === 0) {
+    return null;
+  }
+
+  return { depth, text };
+}
+
 function isLikelyMarkdown(value: string): boolean {
-  return /(^#{1,6}\s)|(^[-*]\s)|(^\d+\.\s)|(```)|\[[^\]]+\]\([^)]+\)/m.test(value);
+  if (value.includes('```')) {
+    return true;
+  }
+
+  const lines = value.split('\n');
+  return lines.some((line) => {
+    const trimmedLine = line.trimStart();
+    return (
+      startsWithMarkdownHeading(trimmedLine) ||
+      trimmedLine.startsWith('- ') ||
+      trimmedLine.startsWith('* ') ||
+      startsWithOrderedListPrefix(trimmedLine) ||
+      hasMarkdownLink(trimmedLine)
+    );
+  });
 }
 
 function renderMarkdownPayload(value: string): ReactNode {
@@ -201,10 +273,9 @@ function renderMarkdownPayload(value: string): ReactNode {
     const lines = block.split('\n');
     const nextLineKey = createRepeatedContentKeyFactory(`${blockKey}-line`);
 
-    const headingMatch = /^(#{1,6})\s+(.*)$/.exec(lines[0] ?? '');
-    if (headingMatch) {
-      const text = headingMatch[2].trim();
-      const headingDepth = headingMatch[1].length;
+    const heading = parseMarkdownHeading(lines[0] ?? '');
+    if (heading) {
+      const { depth: headingDepth, text } = heading;
       if (headingDepth <= 2) {
         return <h4 key={`${blockKey}-heading`}>{text}</h4>;
       }
