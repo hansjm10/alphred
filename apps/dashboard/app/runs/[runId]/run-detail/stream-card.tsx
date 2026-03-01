@@ -172,8 +172,8 @@ function highlightJsonCode(jsonText: string): string {
   const sanitized = sanitizeCodeText(jsonText);
 
   return sanitized.replace(
-    /("(?:\\u[a-fA-F0-9]{4}|\\[^u]|[^\\"])*")(\s*:)?|\b(true|false|null)\b|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?/g,
-    (match, quotedLiteral, isKeySuffix, booleanLiteral) => {
+    /("(?:\\u[a-fA-F0-9]{4}|\\[^u]|[^\\"])*")(\s*:)?|\b(true|false)\b|\b(null)\b|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?/g,
+    (match, quotedLiteral, isKeySuffix, booleanLiteral, nullLiteral) => {
       if (quotedLiteral) {
         const className = isKeySuffix ? 'run-agent-inspector-token--key' : 'run-agent-inspector-token--string';
         return `<span class="${className}">${match}</span>`;
@@ -181,7 +181,7 @@ function highlightJsonCode(jsonText: string): string {
       if (booleanLiteral) {
         return `<span class="run-agent-inspector-token--boolean">${match}</span>`;
       }
-      if (match === 'null') {
+      if (nullLiteral) {
         return `<span class="run-agent-inspector-token--null">${match}</span>`;
       }
       return `<span class="run-agent-inspector-token--number">${match}</span>`;

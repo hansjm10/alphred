@@ -29,6 +29,7 @@ import {
   clearActionFeedbackOnStatusChange,
   createRetryCountdownEffect,
   flushBufferedAgentStreamEvents,
+  isSameStreamTarget,
   isStreamSupportedNodeStatus,
   resetRunDetailStateFromInitialDetail,
   syncSelectionStateWithNodes,
@@ -88,7 +89,11 @@ export function RunDetailContent({
   const streamLastSequenceRef = useRef<number>(0);
   const streamEventListRef = useRef<HTMLOListElement | null>(null);
   const streamAutoScrollRef = useRef<boolean>(streamAutoScroll);
-  const streamInspectorUrlStateRunIdRef = useRef<number | null>(null);
+  const streamInspectorUrlStateRef = useRef<Readonly<{ runId: number | null; search: string | null }>>({
+    runId: null,
+    search: null,
+  });
+  const streamInspectorUrlSearch = typeof window === 'undefined' ? '' : window.location.search;
 
   useEffect(() => {
     setHasHydrated(true);
@@ -224,12 +229,18 @@ export function RunDetailContent({
       return;
     }
 
-    if (streamInspectorUrlStateRunIdRef.current === detail.run.id) {
+    if (
+      streamInspectorUrlStateRef.current.runId === detail.run.id &&
+      streamInspectorUrlStateRef.current.search === streamInspectorUrlSearch
+    ) {
       return;
     }
-    streamInspectorUrlStateRunIdRef.current = detail.run.id;
+    streamInspectorUrlStateRef.current = {
+      runId: detail.run.id,
+      search: streamInspectorUrlSearch,
+    };
 
-    const searchParams = new URLSearchParams(window.location.search);
+    const searchParams = new URLSearchParams(streamInspectorUrlSearch);
     const rawRunNodeId = searchParams.get('streamRunNodeId');
     const rawAttempt = searchParams.get('streamAttempt');
     const rawEventSequence = searchParams.get('streamEventSequence');
@@ -250,17 +261,31 @@ export function RunDetailContent({
         : null;
 
     if (acceptedUrlStreamTarget) {
-      setStreamTarget(toAgentStreamTarget(acceptedUrlStreamTarget));
+      const nextStreamTarget = toAgentStreamTarget(acceptedUrlStreamTarget);
+      if (!isSameStreamTarget(streamTarget, nextStreamTarget)) {
+        setStreamTarget(nextStreamTarget);
+      }
     }
 
-    if (acceptedUrlStreamTarget && Number.isInteger(eventSequence) && eventSequence > 0) {
-      setStreamSelectedEventSequence(eventSequence);
-    } else {
-      setStreamSelectedEventSequence(null);
+    const nextEventSequence =
+      acceptedUrlStreamTarget && Number.isInteger(eventSequence) && eventSequence > 0
+        ? eventSequence
+        : null;
+    if (streamSelectedEventSequence !== nextEventSequence) {
+      setStreamSelectedEventSequence(nextEventSequence);
     }
 
-    setStreamInspectorUrlStateReadyRunId(detail.run.id);
-  }, [detail.nodes, detail.run.id]);
+    if (streamInspectorUrlStateReadyRunId !== detail.run.id) {
+      setStreamInspectorUrlStateReadyRunId(detail.run.id);
+    }
+  }, [
+    detail.nodes,
+    detail.run.id,
+    streamInspectorUrlSearch,
+    streamInspectorUrlStateReadyRunId,
+    streamSelectedEventSequence,
+    streamTarget,
+  ]);
 
   useEffect(() => {
     if (typeof window === 'undefined' || streamInspectorUrlStateReadyRunId !== detail.run.id) {
