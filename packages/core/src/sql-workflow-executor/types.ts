@@ -207,6 +207,12 @@ export type DiagnosticUsageSnapshot = {
   cumulativeTokens: number | null;
 };
 
+export type RunNodeTokenBreakdown = {
+  inputTokens: number | null;
+  outputTokens: number | null;
+  cachedInputTokens: number | null;
+};
+
 export type StreamUsageState = {
   cumulativeTokens: number | null;
 };
@@ -285,6 +291,9 @@ export type RunNodeDiagnosticsPayload = {
   };
   summary: {
     tokensUsed: number;
+    inputTokens: number | null;
+    outputTokens: number | null;
+    cachedInputTokens: number | null;
     eventCount: number;
     retainedEventCount: number;
     droppedEventCount: number;

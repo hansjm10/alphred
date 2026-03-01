@@ -24,6 +24,7 @@ import type {
   RunNodeErrorHandlerDiagnostics,
   RunNodeFailureRouteDiagnostics,
   RunNodeDiagnosticsPayload,
+  RunNodeTokenBreakdown,
   RunNodeExecutionRow,
 } from './types.js';
 
@@ -40,6 +41,11 @@ type TokenUsage =
 type DiagnosticsRedactionState = {
   redacted: boolean;
   truncated: boolean;
+};
+
+type EventTokenBreakdown = {
+  mode: 'incremental' | 'cumulative';
+  breakdown: RunNodeTokenBreakdown;
 };
 
 export function toNonNegativeTokenCount(value: unknown): number | undefined {
@@ -138,6 +144,110 @@ export function extractTokenUsageFromEvent(event: ProviderEvent): TokenUsage | u
   }
 
   return undefined;
+}
+
+function readTokenFieldValue(metadata: Record<string, unknown>, keys: readonly string[]): number | null {
+  const candidates: number[] = [];
+  for (const key of keys) {
+    const candidate = toNonNegativeTokenCount(metadata[key]);
+    if (candidate !== undefined) {
+      candidates.push(candidate);
+    }
+  }
+
+  if (candidates.length === 0) {
+    return null;
+  }
+
+  return Math.max(...candidates);
+}
+
+function readTokenBreakdownFromMetadata(metadata: Record<string, unknown>): RunNodeTokenBreakdown {
+  const nestedUsage = isRecord(metadata.usage) ? metadata.usage : null;
+
+  const resolveField = (keys: readonly string[]): number | null => {
+    const topLevel = readTokenFieldValue(metadata, keys);
+    const nested = nestedUsage ? readTokenFieldValue(nestedUsage, keys) : null;
+
+    if (topLevel === null && nested === null) {
+      return null;
+    }
+
+    return Math.max(topLevel ?? 0, nested ?? 0);
+  };
+
+  return {
+    inputTokens: resolveField(['input_tokens', 'inputTokens']),
+    outputTokens: resolveField(['output_tokens', 'outputTokens']),
+    cachedInputTokens: resolveField(['cached_input_tokens', 'cachedInputTokens']),
+  };
+}
+
+function extractTokenBreakdownFromEvent(event: ProviderEvent): EventTokenBreakdown | null {
+  if (event.type !== 'usage' || !event.metadata) {
+    return null;
+  }
+
+  const breakdown = readTokenBreakdownFromMetadata(event.metadata);
+  if (breakdown.inputTokens === null && breakdown.outputTokens === null && breakdown.cachedInputTokens === null) {
+    return null;
+  }
+
+  const nestedUsage = isRecord(event.metadata.usage) ? event.metadata.usage : null;
+  const hasCumulativeSignal =
+    readCumulativeUsage(event.metadata) !== undefined
+    || (nestedUsage !== null && readCumulativeUsage(nestedUsage) !== undefined);
+  const tokenUsage = extractTokenUsageFromEvent(event);
+  const mode =
+    tokenUsage?.mode === 'incremental' && !hasCumulativeSignal
+      ? 'incremental'
+      : 'cumulative';
+
+  return {
+    mode,
+    breakdown,
+  };
+}
+
+function mergeBreakdownValue(
+  current: number | null,
+  next: number | null,
+  mode: EventTokenBreakdown['mode'],
+): number | null {
+  if (next === null) {
+    return current;
+  }
+
+  if (mode === 'incremental') {
+    return (current ?? 0) + next;
+  }
+
+  return current === null ? next : Math.max(current, next);
+}
+
+export function collectRunNodeTokenBreakdown(events: readonly ProviderEvent[]): RunNodeTokenBreakdown {
+  const totals: RunNodeTokenBreakdown = {
+    inputTokens: null,
+    outputTokens: null,
+    cachedInputTokens: null,
+  };
+
+  for (const event of events) {
+    const extracted = extractTokenBreakdownFromEvent(event);
+    if (!extracted) {
+      continue;
+    }
+
+    totals.inputTokens = mergeBreakdownValue(totals.inputTokens, extracted.breakdown.inputTokens, extracted.mode);
+    totals.outputTokens = mergeBreakdownValue(totals.outputTokens, extracted.breakdown.outputTokens, extracted.mode);
+    totals.cachedInputTokens = mergeBreakdownValue(
+      totals.cachedInputTokens,
+      extracted.breakdown.cachedInputTokens,
+      extracted.mode,
+    );
+  }
+
+  return totals;
 }
 
 export function sanitizeDiagnosticsString(value: string, state: DiagnosticsRedactionState): string {
@@ -432,6 +542,7 @@ export function buildDiagnosticsPayload(params: {
   runNodeSnapshot: RunNodeExecutionRow;
   contextManifest: ContextHandoffManifest;
   tokensUsed: number;
+  tokenBreakdown: RunNodeTokenBreakdown;
   events: ProviderEvent[];
   routingDecision: RouteDecisionSignal | null;
   failedCommandOutputs?: DiagnosticCommandOutputReference[];
@@ -479,6 +590,9 @@ export function buildDiagnosticsPayload(params: {
     },
     summary: {
       tokensUsed: params.tokensUsed,
+      inputTokens: params.tokenBreakdown.inputTokens,
+      outputTokens: params.tokenBreakdown.outputTokens,
+      cachedInputTokens: params.tokenBreakdown.cachedInputTokens,
       eventCount: eventBuild.eventCount,
       retainedEventCount: retainedEvents.length,
       droppedEventCount,

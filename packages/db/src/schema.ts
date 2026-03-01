@@ -556,6 +556,9 @@ export const runNodeDiagnostics = sqliteTable(
     redacted: integer('redacted').notNull().default(0),
     truncated: integer('truncated').notNull().default(0),
     payloadChars: integer('payload_chars').notNull().default(0),
+    inputTokens: integer('input_tokens'),
+    outputTokens: integer('output_tokens'),
+    cachedInputTokens: integer('cached_input_tokens'),
     diagnostics: text('diagnostics', { mode: 'json' }).notNull(),
     createdAt: text('created_at').notNull().default(utcNow),
   },
@@ -582,6 +585,18 @@ export const runNodeDiagnostics = sqliteTable(
       sql`${table.droppedEventCount} >= 0`,
     ),
     payloadCharsCheck: check('run_node_diagnostics_payload_chars_ck', sql`${table.payloadChars} >= 0`),
+    inputTokensCheck: check(
+      'run_node_diagnostics_input_tokens_ck',
+      sql`${table.inputTokens} is null or ${table.inputTokens} >= 0`,
+    ),
+    outputTokensCheck: check(
+      'run_node_diagnostics_output_tokens_ck',
+      sql`${table.outputTokens} is null or ${table.outputTokens} >= 0`,
+    ),
+    cachedInputTokensCheck: check(
+      'run_node_diagnostics_cached_input_tokens_ck',
+      sql`${table.cachedInputTokens} is null or ${table.cachedInputTokens} >= 0`,
+    ),
     redactedBoolCheck: check('run_node_diagnostics_redacted_bool_ck', sql`${table.redacted} in (0, 1)`),
     truncatedBoolCheck: check('run_node_diagnostics_truncated_bool_ck', sql`${table.truncated} in (0, 1)`),
     runCreatedAtIdx: index('run_node_diagnostics_run_id_created_at_idx').on(table.workflowRunId, table.createdAt),

@@ -128,6 +128,9 @@ export function createRunNodeDiagnosticsSnapshot(
     },
     summary: {
       tokensUsed: 0,
+      inputTokens: null,
+      outputTokens: null,
+      cachedInputTokens: null,
       eventCount: diagnosticsRow.eventCount,
       retainedEventCount: diagnosticsRow.retainedEventCount,
       droppedEventCount: diagnosticsRow.droppedEventCount,
@@ -146,6 +149,10 @@ export function createRunNodeDiagnosticsSnapshot(
   const payload = isRecordValue(diagnosticsRow.diagnostics)
     ? (diagnosticsRow.diagnostics as DashboardRunNodeDiagnosticPayload)
     : fallbackPayload;
+
+  payload.summary.inputTokens ??= null;
+  payload.summary.outputTokens ??= null;
+  payload.summary.cachedInputTokens ??= null;
 
   return {
     id: diagnosticsRow.id,

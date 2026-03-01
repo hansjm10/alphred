@@ -91,6 +91,9 @@ function createRunDetail(overrides: RunDetailOverrides = {}): DashboardRunDetail
       },
       summary: {
         tokensUsed: 42,
+        inputTokens: 24,
+        outputTokens: 18,
+        cachedInputTokens: 5,
         eventCount: 3,
         retainedEventCount: 3,
         droppedEventCount: 0,
@@ -4007,6 +4010,9 @@ describe('RunDetailContent realtime updates', () => {
         summary: {
           ...baseDiagnostics.diagnostics.summary,
           tokensUsed: 77,
+          inputTokens: null,
+          outputTokens: null,
+          cachedInputTokens: null,
         },
         events: [
           {
@@ -4067,6 +4073,9 @@ describe('RunDetailContent realtime updates', () => {
         summary: {
           ...baseDiagnostics.diagnostics.summary,
           tokensUsed: 50,
+          inputTokens: null,
+          outputTokens: null,
+          cachedInputTokens: null,
         },
         events: eventsWithoutTokenBreakdown,
       },
@@ -4085,6 +4094,9 @@ describe('RunDetailContent realtime updates', () => {
         summary: {
           ...baseDiagnostics.diagnostics.summary,
           tokensUsed: 50,
+          inputTokens: null,
+          outputTokens: null,
+          cachedInputTokens: null,
         },
         events: eventsWithoutTokenBreakdown,
       },

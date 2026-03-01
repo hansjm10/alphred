@@ -111,6 +111,9 @@ function createRunDetail(overrides: RunDetailOverrides = {}): DashboardRunDetail
       },
       summary: {
         tokensUsed: 42,
+        inputTokens: 24,
+        outputTokens: 18,
+        cachedInputTokens: 5,
         eventCount: 3,
         retainedEventCount: 3,
         droppedEventCount: 0,

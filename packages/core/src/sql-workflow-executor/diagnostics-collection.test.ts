@@ -83,6 +83,11 @@ function createDiagnosticsPayloadParams(
     runNodeSnapshot: node,
     contextManifest: createContextHandoffManifest(),
     tokensUsed: 0,
+    tokenBreakdown: {
+      inputTokens: null,
+      outputTokens: null,
+      cachedInputTokens: null,
+    },
     events: [],
     routingDecision: null,
     error: new Error('execution failed'),

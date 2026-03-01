@@ -146,6 +146,9 @@ export function hasDiagnosticsShape(value: unknown): value is DashboardRunDetail
 
   if (
     !isInteger(payload.summary.tokensUsed) ||
+    !(payload.summary.inputTokens === null || isInteger(payload.summary.inputTokens)) ||
+    !(payload.summary.outputTokens === null || isInteger(payload.summary.outputTokens)) ||
+    !(payload.summary.cachedInputTokens === null || isInteger(payload.summary.cachedInputTokens)) ||
     !isInteger(payload.summary.eventCount) ||
     !isInteger(payload.summary.retainedEventCount) ||
     !isInteger(payload.summary.droppedEventCount) ||

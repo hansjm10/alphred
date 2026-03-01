@@ -3,6 +3,7 @@ import { phaseArtifacts, runNodeDiagnostics, runNodeStreamEvents, type AlphredDa
 import type { ProviderEvent } from '@alphred/shared';
 import {
   buildDiagnosticsPayload,
+  collectRunNodeTokenBreakdown,
   extractTokenUsageFromEvent,
   sanitizeDiagnosticMetadata,
   sanitizeDiagnosticsString,
@@ -335,8 +336,10 @@ export function persistRunNodeAttemptDiagnostics(
     attempt: params.attempt,
     events: params.events,
   });
+  const tokenBreakdown = collectRunNodeTokenBreakdown(params.events);
   const diagnostics = buildDiagnosticsPayload({
     ...params,
+    tokenBreakdown,
     failedCommandOutputs,
   });
 
@@ -352,6 +355,9 @@ export function persistRunNodeAttemptDiagnostics(
       redacted: diagnostics.redacted ? 1 : 0,
       truncated: diagnostics.truncated ? 1 : 0,
       payloadChars: diagnostics.payloadChars,
+      inputTokens: tokenBreakdown.inputTokens,
+      outputTokens: tokenBreakdown.outputTokens,
+      cachedInputTokens: tokenBreakdown.cachedInputTokens,
       diagnostics: diagnostics.payload,
     })
     .onConflictDoNothing({
