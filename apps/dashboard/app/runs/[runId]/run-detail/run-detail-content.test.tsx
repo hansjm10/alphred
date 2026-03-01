@@ -2640,6 +2640,7 @@ describe('RunDetailContent realtime updates', () => {
       );
       expect(window.location.search).toContain('streamRunNodeId=2');
       expect(window.location.search).not.toContain('streamRunNodeId=3');
+      expect(window.location.search).not.toContain('streamEventSequence');
     });
 
     const pendingNodeStreamCalls = fetchMock.mock.calls.filter(([input]) => String(input).includes('/nodes/3/stream'));

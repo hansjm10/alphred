@@ -242,15 +242,18 @@ export function RunDetailContent({
       ? detail.nodes.find((node) => node.id === runNodeId)
       : null;
 
-    if (
+    const acceptedUrlStreamTarget =
       targetNode &&
       isStreamSupportedNodeStatus(targetNode.status) &&
       (!Number.isInteger(attempt) || attempt < 1 || targetNode.attempt === attempt)
-    ) {
-      setStreamTarget(toAgentStreamTarget(targetNode));
+        ? targetNode
+        : null;
+
+    if (acceptedUrlStreamTarget) {
+      setStreamTarget(toAgentStreamTarget(acceptedUrlStreamTarget));
     }
 
-    if (Number.isInteger(eventSequence) && eventSequence > 0) {
+    if (acceptedUrlStreamTarget && Number.isInteger(eventSequence) && eventSequence > 0) {
       setStreamSelectedEventSequence(eventSequence);
     } else {
       setStreamSelectedEventSequence(null);
