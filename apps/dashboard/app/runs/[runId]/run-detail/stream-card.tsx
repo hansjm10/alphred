@@ -693,10 +693,7 @@ function DetailPane(props: Readonly<{
   }, [parsedPrettyPayload, selectedEvent]);
 
   const markdownAvailable = selectedEvent ? isLikelyMarkdown(selectedEvent.contentPreview) : false;
-  const prettyPayloadValue =
-    selectedEvent && parsedPrettyPayload && parsedPrettyPayload.ok
-      ? parsedPrettyPayload.value
-      : null;
+  const prettyPayloadValue = parsedPrettyPayload?.ok ? parsedPrettyPayload.value : null;
 
   useEffect(() => {
     if (!selectedEvent) {
