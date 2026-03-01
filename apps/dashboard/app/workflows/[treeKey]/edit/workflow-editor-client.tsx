@@ -1050,6 +1050,14 @@ function isDraftNodeType(value: unknown): value is DashboardWorkflowDraftNode['n
   return value === 'agent' || value === 'human' || value === 'tool';
 }
 
+function isDraftNodeRole(value: unknown): value is DashboardWorkflowDraftNode['nodeRole'] {
+  return value === undefined || value === 'standard' || value === 'spawner' || value === 'join';
+}
+
+function isDraftNodeMaxChildren(value: unknown): value is DashboardWorkflowDraftNode['maxChildren'] {
+  return value === undefined || (isFiniteNumber(value) && Number.isInteger(value) && value >= 0);
+}
+
 function isDraftNodePosition(value: unknown): value is DashboardWorkflowDraftNode['position'] {
   if (value === null) {
     return true;
@@ -1130,6 +1138,8 @@ function isDraftNode(value: unknown): value is DashboardWorkflowDraftNode {
     isDraftNodeType(value.nodeType) &&
     (typeof value.provider === 'string' || value.provider === null) &&
     (model === undefined || typeof model === 'string' || model === null) &&
+    isDraftNodeRole((value as { nodeRole?: unknown }).nodeRole) &&
+    isDraftNodeMaxChildren((value as { maxChildren?: unknown }).maxChildren) &&
     isFiniteNumber(value.maxRetries) &&
     Number.isInteger(value.maxRetries) &&
     isFiniteNumber(value.sequenceIndex) &&

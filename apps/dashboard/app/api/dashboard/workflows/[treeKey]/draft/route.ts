@@ -24,6 +24,7 @@ type RouteContext = {
 
 const guardOperators = new Set(['==', '!=', '>', '<', '>=', '<=']);
 const edgeRouteOnValues = new Set(['success', 'failure']);
+const nodeRoleValues = new Set(['standard', 'spawner', 'join']);
 const executionPermissionKeys = new Set([
   'approvalPolicy',
   'sandboxMode',
@@ -245,6 +246,40 @@ function parseDraftNodePosition(value: unknown, index: number): { x: number; y: 
   });
 }
 
+function parseDraftNodeRole(value: unknown, index: number): DashboardWorkflowDraftNode['nodeRole'] {
+  if (value === undefined || value === null) {
+    return 'standard';
+  }
+
+  if (typeof value !== 'string' || !nodeRoleValues.has(value)) {
+    throw new DashboardIntegrationError('invalid_request', `Draft node at index ${index} has an invalid nodeRole.`, {
+      status: 400,
+      details: { field: `nodes[${index}].nodeRole` },
+    });
+  }
+
+  return value as DashboardWorkflowDraftNode['nodeRole'];
+}
+
+function parseDraftNodeMaxChildren(value: unknown, index: number): number {
+  if (value === undefined || value === null) {
+    return 12;
+  }
+
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 0) {
+    throw new DashboardIntegrationError(
+      'invalid_request',
+      `Draft node at index ${index} has an invalid maxChildren.`,
+      {
+        status: 400,
+        details: { field: `nodes[${index}].maxChildren` },
+      },
+    );
+  }
+
+  return value;
+}
+
 function parseDraftNodePromptTemplate(
   value: unknown,
   index: number,
@@ -340,6 +375,8 @@ function parseDraftNode(raw: unknown, index: number): DashboardWorkflowDraftNode
   }
 
   const position = parseDraftNodePosition(raw.position, index);
+  const nodeRole = parseDraftNodeRole(raw.nodeRole, index);
+  const maxChildren = parseDraftNodeMaxChildren(raw.maxChildren, index);
   const promptTemplate = parseDraftNodePromptTemplate(raw.promptTemplate, index);
   const executionPermissions = parseDraftNodeExecutionPermissions(raw.executionPermissions, index);
 
@@ -368,6 +405,8 @@ function parseDraftNode(raw: unknown, index: number): DashboardWorkflowDraftNode
     nodeKey: raw.nodeKey,
     displayName: raw.displayName,
     nodeType,
+    nodeRole,
+    maxChildren,
     provider,
     model,
     ...(executionPermissions === null ? {} : { executionPermissions }),

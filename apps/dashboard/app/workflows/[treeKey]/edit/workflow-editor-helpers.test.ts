@@ -8,6 +8,8 @@ function createDraftNodeData(overrides: Partial<DashboardWorkflowDraftNode> = {}
     nodeKey: 'design',
     displayName: 'Design',
     nodeType: 'agent',
+    nodeRole: 'standard',
+    maxChildren: 12,
     provider: 'codex',
     model: 'gpt-5.3-codex',
     executionPermissions: null,
@@ -64,6 +66,8 @@ describe('workflow-editor-helpers', () => {
     });
 
     expect(created.nodeKey).toBe('agent-3');
+    expect(created.nodeRole).toBe('standard');
+    expect(created.maxChildren).toBe(12);
     expect(created.executionPermissions).toBeNull();
     expect(created.sequenceIndex).toBe(40);
     expect(created.position).toEqual({ x: 100, y: 50 });

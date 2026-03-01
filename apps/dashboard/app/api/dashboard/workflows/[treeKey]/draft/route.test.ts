@@ -377,6 +377,84 @@ describe('PUT /api/dashboard/workflows/[treeKey]/draft', () => {
     expect(saveWorkflowDraftMock).not.toHaveBeenCalled();
   });
 
+  it('returns 400 when a node role payload is invalid', async () => {
+    const request = new Request('http://localhost/api/dashboard/workflows/demo-tree/draft?version=1', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        draftRevision: 1,
+        name: 'Demo Tree',
+        nodes: [
+          {
+            nodeKey: 'design',
+            displayName: 'Design',
+            nodeType: 'agent',
+            nodeRole: 'planner',
+            provider: null,
+            maxRetries: 0,
+            sequenceIndex: 10,
+            position: null,
+            promptTemplate: null,
+          },
+        ],
+        edges: [],
+      }),
+    });
+
+    const response = await PUT(request, { params: Promise.resolve({ treeKey: 'demo-tree' }) });
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      error: {
+        code: 'invalid_request',
+        message: 'Draft node at index 0 has an invalid nodeRole.',
+        details: {
+          field: 'nodes[0].nodeRole',
+        },
+      },
+    });
+    expect(saveWorkflowDraftMock).not.toHaveBeenCalled();
+  });
+
+  it('returns 400 when a node maxChildren payload is invalid', async () => {
+    const request = new Request('http://localhost/api/dashboard/workflows/demo-tree/draft?version=1', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        draftRevision: 1,
+        name: 'Demo Tree',
+        nodes: [
+          {
+            nodeKey: 'design',
+            displayName: 'Design',
+            nodeType: 'agent',
+            provider: null,
+            maxChildren: -1,
+            maxRetries: 0,
+            sequenceIndex: 10,
+            position: null,
+            promptTemplate: null,
+          },
+        ],
+        edges: [],
+      }),
+    });
+
+    const response = await PUT(request, { params: Promise.resolve({ treeKey: 'demo-tree' }) });
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      error: {
+        code: 'invalid_request',
+        message: 'Draft node at index 0 has an invalid maxChildren.',
+        details: {
+          field: 'nodes[0].maxChildren',
+        },
+      },
+    });
+    expect(saveWorkflowDraftMock).not.toHaveBeenCalled();
+  });
+
   it('returns 400 when a node promptTemplate payload is invalid', async () => {
     const request = new Request('http://localhost/api/dashboard/workflows/demo-tree/draft?version=1', {
       method: 'PUT',
@@ -985,7 +1063,9 @@ describe('PUT /api/dashboard/workflows/[treeKey]/draft', () => {
             nodeKey: 'design',
             displayName: 'Design',
             nodeType: 'agent',
+            nodeRole: 'spawner',
             provider: 'codex',
+            maxChildren: 7,
             maxRetries: 0,
             sequenceIndex: 10,
             position: { x: 10, y: 20 },
@@ -1031,6 +1111,8 @@ describe('PUT /api/dashboard/workflows/[treeKey]/draft', () => {
     expect(saveWorkflowDraftMock).toHaveBeenCalledWith('demo-tree', 1, expect.objectContaining({
       nodes: [
         expect.objectContaining({
+          nodeRole: 'spawner',
+          maxChildren: 7,
           executionPermissions: {
             approvalPolicy: 'on-request',
             sandboxMode: 'workspace-write',
@@ -1038,6 +1120,54 @@ describe('PUT /api/dashboard/workflows/[treeKey]/draft', () => {
             additionalDirectories: ['/tmp/scratch'],
             webSearchMode: 'cached',
           },
+        }),
+      ],
+    }));
+  });
+
+  it('defaults missing nodeRole and maxChildren fields when saving drafts', async () => {
+    saveWorkflowDraftMock.mockResolvedValue({
+      treeKey: 'demo-tree',
+      version: 1,
+      draftRevision: 2,
+      name: 'Demo Tree',
+      description: null,
+      versionNotes: null,
+      nodes: [],
+      edges: [],
+      initialRunnableNodeKeys: [],
+    });
+
+    const request = new Request('http://localhost/api/dashboard/workflows/demo-tree/draft?version=1', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        draftRevision: 2,
+        name: 'Demo Tree',
+        nodes: [
+          {
+            nodeKey: 'design',
+            displayName: 'Design',
+            nodeType: 'agent',
+            provider: 'codex',
+            maxRetries: 0,
+            sequenceIndex: 10,
+            position: { x: 10, y: 20 },
+            promptTemplate: { content: 'Draft prompt', contentType: 'markdown' },
+          },
+        ],
+        edges: [],
+      }),
+    });
+
+    const response = await PUT(request, { params: Promise.resolve({ treeKey: 'demo-tree' }) });
+
+    expect(response.status).toBe(200);
+    expect(saveWorkflowDraftMock).toHaveBeenCalledWith('demo-tree', 1, expect.objectContaining({
+      nodes: [
+        expect.objectContaining({
+          nodeRole: 'standard',
+          maxChildren: 12,
         }),
       ],
     }));
@@ -1144,6 +1274,8 @@ describe('PUT /api/dashboard/workflows/[treeKey]/draft', () => {
           nodeKey: 'design',
           displayName: 'Design',
           nodeType: 'agent',
+          nodeRole: 'standard',
+          maxChildren: 12,
           provider: 'codex',
           model: null,
           maxRetries: 0,

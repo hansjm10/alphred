@@ -16,10 +16,13 @@ import { DashboardIntegrationError } from './dashboard-errors';
 import { isRecord } from './dashboard-utils';
 
 const workflowNodeTypes = new Set(['agent', 'human', 'tool']);
+const workflowNodeRoles = new Set(['standard', 'spawner', 'join']);
 const guardOperators = new Set(['==', '!=', '>', '<', '>=', '<=']);
 const executionApprovalPolicies = new Set(providerApprovalPolicies);
 const executionSandboxModes = new Set(providerSandboxModes);
 const executionWebSearchModes = new Set(providerWebSearchModes);
+const defaultWorkflowNodeRole = 'standard';
+const defaultWorkflowNodeMaxChildren = 12;
 
 export function isGuardExpression(value: unknown): value is GuardExpression {
   if (!isRecord(value)) {
@@ -85,6 +88,26 @@ export function normalizeExecutionPermissions(
   }
 
   return Object.keys(normalized).length > 0 ? normalized : null;
+}
+
+function isDraftNodeRole(value: unknown): value is 'standard' | 'spawner' | 'join' {
+  return typeof value === 'string' && workflowNodeRoles.has(value);
+}
+
+function normalizeDraftNodeRole(value: unknown): 'standard' | 'spawner' | 'join' {
+  if (isDraftNodeRole(value)) {
+    return value;
+  }
+
+  return defaultWorkflowNodeRole;
+}
+
+function normalizeDraftNodeMaxChildren(value: unknown): number {
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 0) {
+    return defaultWorkflowNodeMaxChildren;
+  }
+
+  return value;
 }
 
 export function normalizeWorkflowTreeKey(rawValue: unknown): string {
@@ -197,6 +220,8 @@ export function normalizeDraftTopologyKeys(
     nodes: topology.nodes.map(node => ({
       ...node,
       nodeKey: node.nodeKey.trim(),
+      nodeRole: normalizeDraftNodeRole(node.nodeRole),
+      maxChildren: normalizeDraftNodeMaxChildren(node.maxChildren),
       provider: node.provider?.trim() ? node.provider.trim() : null,
       model: node.model?.trim() ? node.model.trim() : null,
       executionPermissions: node.executionPermissions ?? null,
@@ -224,6 +249,7 @@ export function validateDraftTopology(
   }
 
   const nodeKeys = new Set<string>();
+  const nodeRoleByKey = new Map<string, 'standard' | 'spawner' | 'join'>();
   const sequenceIndexes = new Set<number>();
   for (const node of normalizedTopology.nodes) {
     if (!workflowNodeTypes.has(node.nodeType)) {
@@ -252,6 +278,36 @@ export function validateDraftTopology(
     const trimmedName = node.displayName.trim();
     if (trimmedName.length === 0) {
       errors.push({ code: 'node_name_missing', message: `Node "${trimmedKey}" must have a display name.` });
+    }
+
+    if (
+      node.nodeRole !== undefined
+      && node.nodeRole !== null
+      && !isDraftNodeRole(node.nodeRole)
+    ) {
+      errors.push({
+        code: 'node_role_invalid',
+        message: `Node "${trimmedKey}" has unsupported node role "${String(node.nodeRole)}".`,
+      });
+    }
+    const nodeRole = normalizeDraftNodeRole(node.nodeRole);
+    nodeRoleByKey.set(trimmedKey, nodeRole);
+
+    if (
+      node.maxChildren !== undefined
+      && (!Number.isFinite(node.maxChildren) || !Number.isInteger(node.maxChildren) || node.maxChildren < 0)
+    ) {
+      errors.push({
+        code: 'max_children_invalid',
+        message: `Node "${trimmedKey}" must set maxChildren as a non-negative integer.`,
+      });
+    }
+
+    if ((nodeRole === 'spawner' || nodeRole === 'join') && node.nodeType !== 'agent') {
+      errors.push({
+        code: 'node_role_requires_agent',
+        message: `Node "${trimmedKey}" uses role "${nodeRole}" but only agent nodes may use spawner/join roles.`,
+      });
     }
 
     const executionPermissions = node.executionPermissions ?? null;
@@ -436,6 +492,32 @@ export function validateDraftTopology(
       errors.push({
         code: 'guard_invalid',
         message: `Guard expression for ${edge.sourceNodeKey} → ${edge.targetNodeKey} must be parseable.`,
+      });
+    }
+  }
+
+  for (const node of normalizedTopology.nodes) {
+    const nodeRole = nodeRoleByKey.get(node.nodeKey) ?? normalizeDraftNodeRole(node.nodeRole);
+    if (nodeRole !== 'spawner') {
+      continue;
+    }
+
+    const successEdges = normalizedTopology.edges.filter(
+      edge => edge.sourceNodeKey === node.nodeKey && edge.routeOn !== 'failure',
+    );
+    if (successEdges.length !== 1) {
+      errors.push({
+        code: 'spawner_success_edge_count_invalid',
+        message: `Spawner node "${node.nodeKey}" must have exactly one success transition to a join node.`,
+      });
+      continue;
+    }
+
+    const targetNodeRole = nodeRoleByKey.get(successEdges[0].targetNodeKey);
+    if (targetNodeRole !== 'join') {
+      errors.push({
+        code: 'spawner_success_target_not_join',
+        message: `Spawner node "${node.nodeKey}" must route its success transition to a join node.`,
       });
     }
   }

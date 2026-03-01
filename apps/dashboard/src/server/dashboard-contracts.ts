@@ -80,6 +80,8 @@ export type DashboardWorkflowDraftNode = {
   nodeKey: string;
   displayName: string;
   nodeType: 'agent' | 'human' | 'tool';
+  nodeRole?: 'standard' | 'spawner' | 'join';
+  maxChildren?: number;
   provider: string | null;
   model?: string | null;
   executionPermissions?: ProviderExecutionPermissions | null;
