@@ -456,6 +456,7 @@ export function buildDiagnosticsPayload(params: {
   let retainedEvents = eventBuild.retainedEvents;
   let droppedEventCount = eventBuild.droppedEventCount;
   let toolEvents = buildToolEventSummaries(retainedEvents);
+  let retainedFailedCommandOutputs = params.failedCommandOutputs;
   let errorDetails = params.error === null ? null : toDiagnosticErrorDetails(params.error, redactionState);
   const sanitizedErrorHandler =
     params.errorHandler === undefined ? undefined : sanitizeErrorHandlerDiagnostics(params.errorHandler, redactionState);
@@ -489,9 +490,9 @@ export function buildDiagnosticsPayload(params: {
     eventTypeCounts: eventBuild.eventTypeCounts,
     events: retainedEvents,
     toolEvents,
-    ...(params.failedCommandOutputs === undefined || params.failedCommandOutputs.length === 0
+    ...(retainedFailedCommandOutputs === undefined || retainedFailedCommandOutputs.length === 0
       ? {}
-      : { failedCommandOutputs: params.failedCommandOutputs }),
+      : { failedCommandOutputs: retainedFailedCommandOutputs }),
     routingDecision: params.routingDecision,
     ...(params.failureRoute === undefined ? {} : { failureRoute: params.failureRoute }),
     error: errorDetails,
@@ -514,6 +515,17 @@ export function buildDiagnosticsPayload(params: {
       ...errorDetails,
       stackPreview: null,
     };
+    redactionState.truncated = true;
+    payload = buildPayload();
+    payloadChars = JSON.stringify(payload).length;
+  }
+
+  while (
+    payloadChars > MAX_DIAGNOSTIC_PAYLOAD_CHARS
+    && retainedFailedCommandOutputs !== undefined
+    && retainedFailedCommandOutputs.length > 0
+  ) {
+    retainedFailedCommandOutputs = retainedFailedCommandOutputs.slice(0, -1);
     redactionState.truncated = true;
     payload = buildPayload();
     payloadChars = JSON.stringify(payload).length;
