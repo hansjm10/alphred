@@ -8,6 +8,7 @@ import { integer, sqliteTable, text } from 'drizzle-orm/sqlite-core';
 import {
   routingDecisionContractLinePrefix,
   routingDecisionContractSentinel,
+  spawnerOutputContractSentinel,
   type ProviderEvent,
   type ProviderRunOptions,
 } from '@alphred/shared';
@@ -1634,7 +1635,11 @@ function seedDesignTreeIntegrationRun() {
   };
 }
 
-function seedDynamicFanOutIssue163Run() {
+function seedDynamicFanOutIssue163Run(
+  options: {
+    breakdownPromptContent?: string;
+  } = {},
+) {
   const db = createDatabase(':memory:');
   migrateDatabase(db);
 
@@ -1664,7 +1669,7 @@ function seedDynamicFanOutIssue163Run() {
     .values({
       templateKey: 'issue_163_breakdown_prompt',
       version: 1,
-      content: 'Break issue 163 into independent subtasks.',
+      content: options.breakdownPromptContent ?? 'Break issue 163 into independent subtasks.',
       contentType: 'markdown',
     })
     .returning({ id: promptTemplates.id })
@@ -1896,6 +1901,141 @@ function seedGuardedDynamicFanOutNoRouteRun() {
 
   const materialized = materializeWorkflowRunFromTree(db, {
     treeKey: 'guarded-dynamic-fanout-no-route',
+  });
+
+  const runNodeRows = db
+    .select({
+      id: runNodes.id,
+      nodeKey: runNodes.nodeKey,
+    })
+    .from(runNodes)
+    .where(eq(runNodes.workflowRunId, materialized.run.id))
+    .all();
+
+  const runNodeIdByKey = new Map(runNodeRows.map(node => [node.nodeKey, node.id]));
+  return {
+    db,
+    runId: materialized.run.id,
+    runNodeIdByKey,
+  };
+}
+
+function seedSpawnerFailureRouteRun(params: { maxRetries?: number } = {}) {
+  const db = createDatabase(':memory:');
+  migrateDatabase(db);
+
+  const tree = db
+    .insert(workflowTrees)
+    .values({
+      treeKey: 'spawner-failure-route',
+      version: 1,
+      name: 'Spawner Failure Route',
+    })
+    .returning({ id: workflowTrees.id })
+    .get();
+
+  const spawnerPrompt = db
+    .insert(promptTemplates)
+    .values({
+      templateKey: 'spawner_failure_route_spawner_prompt',
+      version: 1,
+      content: 'Break work into subtasks.',
+      contentType: 'markdown',
+    })
+    .returning({ id: promptTemplates.id })
+    .get();
+
+  const joinPrompt = db
+    .insert(promptTemplates)
+    .values({
+      templateKey: 'spawner_failure_route_join_prompt',
+      version: 1,
+      content: 'Join fan-out results.',
+      contentType: 'markdown',
+    })
+    .returning({ id: promptTemplates.id })
+    .get();
+
+  const fallbackPrompt = db
+    .insert(promptTemplates)
+    .values({
+      templateKey: 'spawner_failure_route_fallback_prompt',
+      version: 1,
+      content: 'Recover from spawner failure.',
+      contentType: 'markdown',
+    })
+    .returning({ id: promptTemplates.id })
+    .get();
+
+  const insertedNodes = db
+    .insert(treeNodes)
+    .values([
+      {
+        workflowTreeId: tree.id,
+        nodeKey: 'breakdown',
+        nodeType: 'agent',
+        nodeRole: 'spawner',
+        provider: 'codex',
+        promptTemplateId: spawnerPrompt.id,
+        sequenceIndex: 10,
+        maxChildren: 8,
+        maxRetries: params.maxRetries ?? 1,
+      },
+      {
+        workflowTreeId: tree.id,
+        nodeKey: 'final-review',
+        nodeType: 'agent',
+        nodeRole: 'join',
+        provider: 'codex',
+        promptTemplateId: joinPrompt.id,
+        sequenceIndex: 20,
+      },
+      {
+        workflowTreeId: tree.id,
+        nodeKey: 'fallback',
+        nodeType: 'agent',
+        provider: 'codex',
+        promptTemplateId: fallbackPrompt.id,
+        sequenceIndex: 30,
+      },
+    ])
+    .returning({
+      id: treeNodes.id,
+      nodeKey: treeNodes.nodeKey,
+    })
+    .all();
+
+  const nodeIdByKey = new Map(insertedNodes.map(node => [node.nodeKey, node.id]));
+  const breakdownNodeId = nodeIdByKey.get('breakdown');
+  const finalReviewNodeId = nodeIdByKey.get('final-review');
+  const fallbackNodeId = nodeIdByKey.get('fallback');
+  if (!breakdownNodeId || !finalReviewNodeId || !fallbackNodeId) {
+    throw new Error('Expected spawner failure-route tree nodes to be seeded.');
+  }
+
+  db.insert(treeEdges)
+    .values([
+      {
+        workflowTreeId: tree.id,
+        sourceNodeId: breakdownNodeId,
+        targetNodeId: finalReviewNodeId,
+        routeOn: 'success',
+        priority: 0,
+        auto: 1,
+      },
+      {
+        workflowTreeId: tree.id,
+        sourceNodeId: breakdownNodeId,
+        targetNodeId: fallbackNodeId,
+        routeOn: 'failure',
+        priority: 0,
+        auto: 1,
+      },
+    ])
+    .run();
+
+  const materialized = materializeWorkflowRunFromTree(db, {
+    treeKey: 'spawner-failure-route',
   });
 
   const runNodeRows = db
@@ -4559,6 +4699,219 @@ describe('createSqlWorkflowExecutor', () => {
     });
     expect(observedPrompt).toContain(routingDecisionContractSentinel);
     expect(observedPrompt.split(routingDecisionContractSentinel).length - 1).toBe(1);
+  });
+
+  it('injects spawner output contract into prompts for spawner nodes', async () => {
+    const { db, runId, runNodeIdByKey } = seedDynamicFanOutIssue163Run();
+    const breakdownRunNodeId = runNodeIdByKey.get('breakdown');
+    if (!breakdownRunNodeId) {
+      throw new Error('Expected breakdown run node to exist.');
+    }
+
+    let observedSpawnerPrompt = '';
+    let invocation = 0;
+    const executor = createSqlWorkflowExecutor(db, {
+      resolveProvider: () => ({
+        async *run(prompt: string): AsyncIterable<ProviderEvent> {
+          invocation += 1;
+          if (invocation === 1) {
+            yield { type: 'result', content: 'Design complete.', timestamp: 10 };
+            return;
+          }
+
+          observedSpawnerPrompt = prompt;
+          yield {
+            type: 'result',
+            content: JSON.stringify({ schemaVersion: 1, subtasks: [] }),
+            timestamp: 20,
+          };
+        },
+      }),
+    });
+
+    await executor.executeNextRunnableNode({
+      workflowRunId: runId,
+      options: {
+        workingDirectory: '/tmp/alphred-worktree',
+      },
+    });
+    const breakdownStep = await executor.executeNextRunnableNode({
+      workflowRunId: runId,
+      options: {
+        workingDirectory: '/tmp/alphred-worktree',
+      },
+    });
+
+    expect(breakdownStep).toEqual({
+      outcome: 'executed',
+      workflowRunId: runId,
+      runNodeId: breakdownRunNodeId,
+      nodeKey: 'breakdown',
+      runNodeStatus: 'completed',
+      runStatus: 'running',
+      artifactId: expect.any(Number),
+    });
+    expect(observedSpawnerPrompt).toContain('Break issue 163 into independent subtasks.');
+    expect(observedSpawnerPrompt).toContain(spawnerOutputContractSentinel);
+    expect(observedSpawnerPrompt).toContain('schemaVersion');
+    expect(observedSpawnerPrompt).toContain('subtasks');
+    expect(observedSpawnerPrompt).toContain('0..8');
+  });
+
+  it('does not duplicate spawner output contract when prompt already includes the spawner sentinel', async () => {
+    const { db, runId, runNodeIdByKey } = seedDynamicFanOutIssue163Run({
+      breakdownPromptContent: [
+        'Break issue 163 into independent subtasks.',
+        spawnerOutputContractSentinel,
+        'Spawner output contract already provided in prompt.',
+      ].join('\n'),
+    });
+    const breakdownRunNodeId = runNodeIdByKey.get('breakdown');
+    if (!breakdownRunNodeId) {
+      throw new Error('Expected breakdown run node to exist.');
+    }
+
+    let observedSpawnerPrompt = '';
+    let invocation = 0;
+    const executor = createSqlWorkflowExecutor(db, {
+      resolveProvider: () => ({
+        async *run(prompt: string): AsyncIterable<ProviderEvent> {
+          invocation += 1;
+          if (invocation === 1) {
+            yield { type: 'result', content: 'Design complete.', timestamp: 10 };
+            return;
+          }
+
+          observedSpawnerPrompt = prompt;
+          yield {
+            type: 'result',
+            content: JSON.stringify({ schemaVersion: 1, subtasks: [] }),
+            timestamp: 20,
+          };
+        },
+      }),
+    });
+
+    await executor.executeNextRunnableNode({
+      workflowRunId: runId,
+      options: {
+        workingDirectory: '/tmp/alphred-worktree',
+      },
+    });
+    const breakdownStep = await executor.executeNextRunnableNode({
+      workflowRunId: runId,
+      options: {
+        workingDirectory: '/tmp/alphred-worktree',
+      },
+    });
+
+    expect(breakdownStep).toEqual({
+      outcome: 'executed',
+      workflowRunId: runId,
+      runNodeId: breakdownRunNodeId,
+      nodeKey: 'breakdown',
+      runNodeStatus: 'completed',
+      runStatus: 'running',
+      artifactId: expect.any(Number),
+    });
+    expect(observedSpawnerPrompt).toContain(spawnerOutputContractSentinel);
+    expect(observedSpawnerPrompt.split(spawnerOutputContractSentinel).length - 1).toBe(1);
+  });
+
+  it('leaves non-spawner prompts unchanged by spawner contract injection', async () => {
+    const { db, runId, runNodeId } = seedSingleAgentRun();
+    let observedPrompt = '';
+    const executor = createSqlWorkflowExecutor(db, {
+      resolveProvider: () => ({
+        async *run(prompt: string): AsyncIterable<ProviderEvent> {
+          observedPrompt = prompt;
+          yield { type: 'result', content: 'done', timestamp: 10 };
+        },
+      }),
+    });
+
+    const firstStep = await executor.executeNextRunnableNode({
+      workflowRunId: runId,
+      options: {
+        workingDirectory: '/tmp/alphred-worktree',
+      },
+    });
+
+    expect(firstStep).toEqual({
+      outcome: 'executed',
+      workflowRunId: runId,
+      runNodeId,
+      nodeKey: 'design',
+      runNodeStatus: 'completed',
+      runStatus: 'completed',
+      artifactId: expect.any(Number),
+    });
+    expect(observedPrompt).toBe('Create a design report');
+    expect(observedPrompt).not.toContain(spawnerOutputContractSentinel);
+  });
+
+  it('injects both spawner and routing contracts for guarded spawner nodes and supports successful guarded routing', async () => {
+    const { db, runId, runNodeIdByKey } = seedGuardedDynamicFanOutNoRouteRun();
+    const breakdownRunNodeId = runNodeIdByKey.get('breakdown');
+    if (!breakdownRunNodeId) {
+      throw new Error('Expected breakdown run node to exist.');
+    }
+
+    let observedSpawnerPrompt = '';
+    const executor = createSqlWorkflowExecutor(db, {
+      resolveProvider: () => ({
+        async *run(prompt: string): AsyncIterable<ProviderEvent> {
+          observedSpawnerPrompt = prompt;
+          yield {
+            type: 'result',
+            content: JSON.stringify({
+              schemaVersion: 1,
+              subtasks: [
+                {
+                  nodeKey: 'guarded-spawner-child',
+                  title: 'Guarded spawner child',
+                  prompt: 'Do guarded fan-out work.',
+                },
+              ],
+            }),
+            timestamp: 10,
+            metadata: {
+              routingDecision: 'approved',
+            },
+          };
+        },
+      }),
+    });
+
+    const firstStep = await executor.executeNextRunnableNode({
+      workflowRunId: runId,
+      options: {
+        workingDirectory: '/tmp/alphred-worktree',
+      },
+    });
+
+    expect(firstStep).toEqual({
+      outcome: 'executed',
+      workflowRunId: runId,
+      runNodeId: breakdownRunNodeId,
+      nodeKey: 'breakdown',
+      runNodeStatus: 'completed',
+      runStatus: 'running',
+      artifactId: expect.any(Number),
+    });
+    expect(observedSpawnerPrompt).toContain(spawnerOutputContractSentinel);
+    expect(observedSpawnerPrompt).toContain(routingDecisionContractSentinel);
+    expect(observedSpawnerPrompt.split(spawnerOutputContractSentinel).length - 1).toBe(1);
+    expect(observedSpawnerPrompt.split(routingDecisionContractSentinel).length - 1).toBe(1);
+
+    const dynamicChildCountRow = db
+      .select({
+        count: sql<number>`count(*)`,
+      })
+      .from(runNodes)
+      .where(and(eq(runNodes.workflowRunId, runId), eq(runNodes.spawnerNodeId, breakdownRunNodeId)))
+      .get();
+    expect(dynamicChildCountRow?.count ?? 0).toBe(1);
   });
 
   it('routes using structured metadata even when report text resembles a decision directive', async () => {
@@ -10280,6 +10633,219 @@ describe('createSqlWorkflowExecutor', () => {
       },
     });
     expect(resolveProvider).not.toHaveBeenCalled();
+  });
+
+  it('retries schema-invalid spawner output while retries remain', async () => {
+    const { db, runId, runNodeIdByKey } = seedDynamicFanOutIssue163Run();
+    const breakdownRunNodeId = runNodeIdByKey.get('breakdown');
+    if (!breakdownRunNodeId) {
+      throw new Error('Expected breakdown run node to exist.');
+    }
+
+    db.update(runNodes)
+      .set({
+        maxRetries: 1,
+      })
+      .where(eq(runNodes.id, breakdownRunNodeId))
+      .run();
+
+    let invocation = 0;
+    const executor = createSqlWorkflowExecutor(db, {
+      resolveProvider: () => ({
+        async *run(): AsyncIterable<ProviderEvent> {
+          invocation += 1;
+          if (invocation === 1) {
+            yield {
+              type: 'result',
+              content: 'Issue 163 design completed.',
+              timestamp: 10,
+            };
+            return;
+          }
+
+          if (invocation === 2) {
+            yield {
+              type: 'result',
+              content: JSON.stringify({ schemaVersion: 2, subtasks: [] }),
+              timestamp: 20,
+            };
+            return;
+          }
+
+          yield {
+            type: 'result',
+            content: JSON.stringify({ schemaVersion: 1, subtasks: [] }),
+            timestamp: 30,
+          };
+        },
+      }),
+    });
+
+    await executor.executeNextRunnableNode({
+      workflowRunId: runId,
+      options: {
+        workingDirectory: '/tmp/alphred-worktree',
+      },
+    });
+    const breakdownStep = await executor.executeNextRunnableNode({
+      workflowRunId: runId,
+      options: {
+        workingDirectory: '/tmp/alphred-worktree',
+      },
+    });
+
+    expect(breakdownStep).toEqual({
+      outcome: 'executed',
+      workflowRunId: runId,
+      runNodeId: breakdownRunNodeId,
+      nodeKey: 'breakdown',
+      runNodeStatus: 'completed',
+      runStatus: 'running',
+      artifactId: expect.any(Number),
+    });
+    const persistedBreakdownNode = db
+      .select({
+        status: runNodes.status,
+        attempt: runNodes.attempt,
+      })
+      .from(runNodes)
+      .where(eq(runNodes.id, breakdownRunNodeId))
+      .get();
+    expect(persistedBreakdownNode).toEqual({
+      status: 'completed',
+      attempt: 2,
+    });
+
+    const breakdownLogArtifacts = db
+      .select({
+        artifactType: phaseArtifacts.artifactType,
+        content: phaseArtifacts.content,
+        metadata: phaseArtifacts.metadata,
+      })
+      .from(phaseArtifacts)
+      .where(
+        and(
+          eq(phaseArtifacts.workflowRunId, runId),
+          eq(phaseArtifacts.runNodeId, breakdownRunNodeId),
+          eq(phaseArtifacts.artifactType, 'log'),
+        ),
+      )
+      .orderBy(asc(phaseArtifacts.id))
+      .all();
+    expect(breakdownLogArtifacts).toHaveLength(1);
+    expect(breakdownLogArtifacts[0]?.content).toContain('SPAWNER_OUTPUT_INVALID');
+    expect(breakdownLogArtifacts[0]?.content).toContain('schemaVersion must equal 1');
+    expect(breakdownLogArtifacts[0]?.metadata).toEqual(
+      expect.objectContaining({
+        failureReason: 'retry_scheduled',
+      }),
+    );
+  });
+
+  it('routes spawner failures through failure edges when invalid output exhausts retries', async () => {
+    const { db, runId, runNodeIdByKey } = seedSpawnerFailureRouteRun({ maxRetries: 1 });
+    const breakdownRunNodeId = runNodeIdByKey.get('breakdown');
+    const fallbackRunNodeId = runNodeIdByKey.get('fallback');
+    if (!breakdownRunNodeId || !fallbackRunNodeId) {
+      throw new Error('Expected breakdown and fallback run nodes to exist.');
+    }
+
+    let invocation = 0;
+    const executor = createSqlWorkflowExecutor(db, {
+      resolveProvider: () => ({
+        async *run(): AsyncIterable<ProviderEvent> {
+          invocation += 1;
+          if (invocation <= 2) {
+            yield {
+              type: 'result',
+              content: 'not-json',
+              timestamp: 10 * invocation,
+            };
+            return;
+          }
+
+          yield {
+            type: 'result',
+            content: 'Fallback recovered.',
+            timestamp: 30,
+          };
+        },
+      }),
+    });
+
+    const breakdownStep = await executor.executeNextRunnableNode({
+      workflowRunId: runId,
+      options: {
+        workingDirectory: '/tmp/alphred-worktree',
+      },
+    });
+
+    expect(breakdownStep).toEqual({
+      outcome: 'executed',
+      workflowRunId: runId,
+      runNodeId: breakdownRunNodeId,
+      nodeKey: 'breakdown',
+      runNodeStatus: 'failed',
+      runStatus: 'running',
+      artifactId: expect.any(Number),
+    });
+    const fallbackStatus = db
+      .select({
+        status: runNodes.status,
+      })
+      .from(runNodes)
+      .where(eq(runNodes.id, fallbackRunNodeId))
+      .get();
+    expect(fallbackStatus).toEqual({
+      status: 'pending',
+    });
+
+    const breakdownLogArtifacts = db
+      .select({
+        metadata: phaseArtifacts.metadata,
+      })
+      .from(phaseArtifacts)
+      .where(
+        and(
+          eq(phaseArtifacts.workflowRunId, runId),
+          eq(phaseArtifacts.runNodeId, breakdownRunNodeId),
+          eq(phaseArtifacts.artifactType, 'log'),
+        ),
+      )
+      .orderBy(asc(phaseArtifacts.id))
+      .all();
+    expect(breakdownLogArtifacts).toHaveLength(2);
+    expect(
+      (
+        breakdownLogArtifacts[1]?.metadata as
+          | {
+              failureRoute?: {
+                status?: string;
+                targetNodeKey?: string | null;
+              };
+            }
+          | null
+      )?.failureRoute,
+    ).toMatchObject({
+      status: 'selected',
+      targetNodeKey: 'fallback',
+    });
+
+    const fallbackStep = await executor.executeNextRunnableNode({
+      workflowRunId: runId,
+      options: {
+        workingDirectory: '/tmp/alphred-worktree',
+      },
+    });
+    expect(fallbackStep).toEqual({
+      outcome: 'executed',
+      workflowRunId: runId,
+      runNodeId: fallbackRunNodeId,
+      nodeKey: 'fallback',
+      runNodeStatus: 'completed',
+      runStatus: 'completed',
+      artifactId: expect.any(Number),
+    });
   });
 
   it('executes all dynamic fan-out children before join and create-pr', async () => {
