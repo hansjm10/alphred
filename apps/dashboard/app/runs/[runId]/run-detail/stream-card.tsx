@@ -13,6 +13,8 @@ type InspectorPayloadMode = 'pretty' | 'raw' | 'markdown';
 
 type RunAgentStreamCardProps = Readonly<{
   isTerminalRun: boolean;
+  nodes: DashboardRunDetail['nodes'];
+  diagnostics: DashboardRunDetail['diagnostics'];
   selectedStreamNode: DashboardRunDetail['nodes'][number] | null;
   agentStreamLabel: {
     badgeLabel: string;
@@ -32,6 +34,145 @@ type RunAgentStreamCardProps = Readonly<{
   setStreamBufferedEvents: StateSetter<DashboardRunNodeStreamEvent[]>;
   setStreamEvents: StateSetter<DashboardRunNodeStreamEvent[]>;
 }>;
+
+function formatTokenCount(value: number): string {
+  return new Intl.NumberFormat(undefined, { maximumFractionDigits: 0 }).format(value);
+}
+
+type TokenUsageRow = Readonly<{
+  key: string;
+  runNodeId: number;
+  attempt: number;
+  label: string;
+  detail: string | null;
+  tokensUsed: number;
+}>;
+
+function resolveTokenUsageRows(params: Readonly<{
+  nodes: DashboardRunDetail['nodes'];
+  diagnostics: DashboardRunDetail['diagnostics'];
+}>): readonly TokenUsageRow[] {
+  const { nodes, diagnostics } = params;
+
+  const nodeById = new Map<number, DashboardRunDetail['nodes'][number]>();
+  for (const node of nodes) {
+    nodeById.set(node.id, node);
+  }
+
+  const uniqueDiagnostics = new Map<string, DashboardRunDetail['diagnostics'][number]>();
+  for (const snapshot of diagnostics) {
+    const key = `${snapshot.runNodeId}:${snapshot.attempt}`;
+    const existing = uniqueDiagnostics.get(key);
+    if (!existing || snapshot.createdAt > existing.createdAt) {
+      uniqueDiagnostics.set(key, snapshot);
+    }
+  }
+
+  const rows: TokenUsageRow[] = [];
+  for (const snapshot of uniqueDiagnostics.values()) {
+    const node = nodeById.get(snapshot.runNodeId) ?? null;
+    const nodeKey = node?.nodeKey ?? snapshot.diagnostics.nodeKey ?? `node-${snapshot.runNodeId}`;
+    const attemptLabel = `attempt ${snapshot.attempt}`;
+    const sequenceLabel = node?.sequencePath ? ` · ${node.sequencePath}` : '';
+    const providerLabel = snapshot.diagnostics.provider ? ` · ${snapshot.diagnostics.provider}` : '';
+
+    rows.push({
+      key: `${snapshot.runNodeId}:${snapshot.attempt}`,
+      runNodeId: snapshot.runNodeId,
+      attempt: snapshot.attempt,
+      label: `${nodeKey} (${attemptLabel})`,
+      detail: `${snapshot.outcome}${sequenceLabel}${providerLabel}`,
+      tokensUsed: snapshot.diagnostics.summary.tokensUsed,
+    });
+  }
+
+  rows.sort((left, right) => {
+    if (right.tokensUsed !== left.tokensUsed) {
+      return right.tokensUsed - left.tokensUsed;
+    }
+
+    const leftNode = nodeById.get(left.runNodeId);
+    const rightNode = nodeById.get(right.runNodeId);
+    const leftIndex = leftNode?.sequenceIndex ?? Number.POSITIVE_INFINITY;
+    const rightIndex = rightNode?.sequenceIndex ?? Number.POSITIVE_INFINITY;
+    if (leftIndex !== rightIndex) {
+      return leftIndex - rightIndex;
+    }
+
+    return left.label.localeCompare(right.label);
+  });
+
+  return rows;
+}
+
+function RunTokenUsagePanel(props: Readonly<{
+  nodes: DashboardRunDetail['nodes'];
+  diagnostics: DashboardRunDetail['diagnostics'];
+  selectedStreamNode: DashboardRunDetail['nodes'][number] | null;
+}>) {
+  const { nodes, diagnostics, selectedStreamNode } = props;
+
+  const rows = useMemo(
+    () => resolveTokenUsageRows({ nodes, diagnostics }),
+    [diagnostics, nodes],
+  );
+
+  const totalTokens = useMemo(() => rows.reduce((sum, row) => sum + row.tokensUsed, 0), [rows]);
+  const maxTokens = useMemo(
+    () => rows.reduce((max, row) => Math.max(max, row.tokensUsed), 0),
+    [rows],
+  );
+
+  const attemptCountLabel = rows.length === 1 ? 'node attempt' : 'node attempts';
+  const reportingLabel = rows.length === nodes.length
+    ? `${rows.length}/${nodes.length} nodes reporting`
+    : `${rows.length}/${nodes.length} nodes reporting`;
+
+  if (rows.length === 0) {
+    return (
+      <section className="run-token-usage" aria-label="Token usage">
+        <div className="run-token-usage__header">
+          <p className="run-token-usage__title">Token usage</p>
+          <p className="meta-text">{`0/${nodes.length} nodes reporting`}</p>
+        </div>
+        <p className="meta-text">No token diagnostics captured yet.</p>
+      </section>
+    );
+  }
+
+  return (
+    <section className="run-token-usage" aria-label="Token usage">
+      <div className="run-token-usage__header">
+        <div className="run-token-usage__headline">
+          <p className="run-token-usage__title">Token usage</p>
+          <p className="meta-text">{reportingLabel}</p>
+        </div>
+        <p className="run-token-usage__total">{`Total ${formatTokenCount(totalTokens)} tokens`}</p>
+        <p className="meta-text">{`Across ${rows.length} ${attemptCountLabel}.`}</p>
+      </div>
+
+      <ul className="run-token-usage__list" aria-label="Token usage by node">
+        {rows.map((row) => {
+          const percent = maxTokens > 0 ? Math.max(2, Math.round((row.tokensUsed / maxTokens) * 100)) : 0;
+          const selected = selectedStreamNode?.id === row.runNodeId && selectedStreamNode.attempt === row.attempt;
+
+          return (
+            <li key={row.key} className={`run-token-usage__row${selected ? ' run-token-usage__row--selected' : ''}`}>
+              <div className="run-token-usage__row-header">
+                <span className="run-token-usage__label">{row.label}</span>
+                <span className="meta-text">{formatTokenCount(row.tokensUsed)}</span>
+              </div>
+              <div className="run-token-usage__bar" aria-hidden="true">
+                <div className="run-token-usage__bar-fill" style={{ width: `${percent}%` }} />
+              </div>
+              {row.detail ? <p className="meta-text">{row.detail}</p> : null}
+            </li>
+          );
+        })}
+      </ul>
+    </section>
+  );
+}
 
 type ToggleStreamAutoScrollInput = Readonly<{
   streamAutoScroll: boolean;
@@ -1044,6 +1185,8 @@ function SelectedStreamContent(props: Readonly<{
 
 export function RunAgentStreamCard({
   isTerminalRun,
+  nodes,
+  diagnostics,
   selectedStreamNode,
   agentStreamLabel,
   streamConnectionState,
@@ -1060,6 +1203,14 @@ export function RunAgentStreamCard({
   setStreamBufferedEvents,
   setStreamEvents,
 }: RunAgentStreamCardProps) {
+  const tokenUsagePanel = (
+    <RunTokenUsagePanel
+      nodes={nodes}
+      diagnostics={diagnostics}
+      selectedStreamNode={selectedStreamNode}
+    />
+  );
+
   const streamContent = selectedStreamNode ? (
     <SelectedStreamContent
       selectedStreamNode={selectedStreamNode}
@@ -1091,6 +1242,7 @@ export function RunAgentStreamCard({
   if (!isTerminalRun) {
     return (
       <Card title="Agent stream" description="Agent output inspector for a selected node attempt.">
+        {tokenUsagePanel}
         {streamContent}
       </Card>
     );
@@ -1104,6 +1256,7 @@ export function RunAgentStreamCard({
 
   return (
     <Card title="Agent stream" description="Agent output inspector for a selected node attempt.">
+      {tokenUsagePanel}
       <details className="run-agent-stream-collapsed">
         <summary className="run-agent-stream-collapsed__summary">{terminalStreamSummary}</summary>
         {streamContent}

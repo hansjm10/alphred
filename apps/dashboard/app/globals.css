@@ -906,6 +906,93 @@ output {
   background: color-mix(in srgb, var(--accent-danger) 8%, var(--bg-surface));
 }
 
+.run-token-usage {
+  background: color-mix(in srgb, var(--bg-canvas) 78%, var(--bg-surface));
+  border: 1px solid color-mix(in srgb, var(--border-default) 70%, transparent);
+  border-radius: var(--radius-md);
+  display: grid;
+  gap: var(--space-2);
+  padding: var(--space-2);
+}
+
+.run-token-usage__header {
+  display: grid;
+  gap: 2px;
+}
+
+.run-token-usage__headline {
+  align-items: baseline;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: space-between;
+}
+
+.run-token-usage__title {
+  font: 700 12px/18px var(--font-display);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.run-token-usage__total {
+  font: 700 16px/22px var(--font-display);
+}
+
+.run-token-usage__list {
+  display: grid;
+  gap: var(--space-1);
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.run-token-usage__row {
+  background: var(--bg-surface);
+  border: 1px solid color-mix(in srgb, var(--border-default) 75%, transparent);
+  border-radius: 10px;
+  display: grid;
+  gap: 6px;
+  padding: 10px;
+}
+
+.run-token-usage__row--selected {
+  border-color: color-mix(in srgb, var(--accent-active) 55%, var(--border-default));
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-active) 12%, transparent);
+}
+
+.run-token-usage__row-header {
+  align-items: baseline;
+  display: flex;
+  gap: 10px;
+  justify-content: space-between;
+  min-width: 0;
+}
+
+.run-token-usage__label {
+  font: 600 14px/20px var(--font-display);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.run-token-usage__bar {
+  background: color-mix(in srgb, var(--bg-canvas) 78%, var(--bg-surface));
+  border: 1px solid color-mix(in srgb, var(--border-default) 70%, transparent);
+  border-radius: var(--radius-pill);
+  height: 10px;
+  overflow: hidden;
+}
+
+.run-token-usage__bar-fill {
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--accent-active) 85%, #000000),
+    color-mix(in srgb, var(--accent-success) 72%, #000000)
+  );
+  height: 100%;
+}
+
 .run-agent-stream-controls {
   align-items: center;
   justify-content: space-between;

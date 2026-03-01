@@ -3476,6 +3476,22 @@ describe('RunDetailContent realtime updates', () => {
     expect(screen.queryByRole('list', { name: 'Agent stream targets' })).toBeNull();
   });
 
+  it('surfaces token usage summary for node diagnostics inside the agent stream card', () => {
+    render(
+      <RunDetailContent
+        initialDetail={createRunDetail()}
+        repositories={[createRepository()]}
+        enableRealtime={false}
+      />,
+    );
+
+    const tokenUsage = screen.getByRole('region', { name: 'Token usage' });
+    expect(tokenUsage).toBeInTheDocument();
+    expect(within(tokenUsage).getByText(/Total 42 tokens/i)).toBeInTheDocument();
+    expect(within(tokenUsage).getByRole('list', { name: 'Token usage by node' })).toBeInTheDocument();
+    expect(within(tokenUsage).getByText(/design \(attempt 1\)/i)).toBeInTheDocument();
+  });
+
   it('selects agent stream target when clicking a node in the status panel', async () => {
     vi.stubGlobal('EventSource', MockEventSource as unknown as typeof EventSource);
     fetchMock.mockImplementation(async (input: RequestInfo | URL) => {

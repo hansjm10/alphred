@@ -495,6 +495,8 @@ export function RunDetailContent({
 
       <RunAgentStreamCard
         isTerminalRun={!isActiveRunStatus(detail.run.status)}
+        nodes={detail.nodes}
+        diagnostics={detail.diagnostics}
         selectedStreamNode={selectedStreamNode}
         agentStreamLabel={agentStreamLabel}
         streamConnectionState={streamConnectionState}
