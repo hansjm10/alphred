@@ -53,3 +53,6 @@ postedit-*
 
 # Local UI captures
 runs-desktop-1920x1080.png
+
+# Local Playwright CLI config
+.playwright/
