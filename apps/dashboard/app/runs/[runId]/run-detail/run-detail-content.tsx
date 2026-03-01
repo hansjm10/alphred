@@ -33,6 +33,7 @@ import {
   syncStreamEventListScroll,
   toggleNodeFilterState,
 } from './state';
+import { RunDetailSectionJumpNav } from './section-jump-nav';
 import { RunAgentStreamCard } from './stream-card';
 import { buildTimeline, partitionByRecency, resolveRepositoryContext } from './timeline';
 import {
@@ -300,6 +301,8 @@ export function RunDetailContent({
         <h2>{`Run #${detail.run.id}`}</h2>
         <p>{pageSubtitle}</p>
       </section>
+
+      <RunDetailSectionJumpNav />
 
       <div className="page-grid run-detail-priority-grid">
         <RunOperatorFocusCard
