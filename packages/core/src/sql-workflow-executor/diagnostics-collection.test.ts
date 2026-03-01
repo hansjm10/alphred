@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import type { ProviderEvent } from '@alphred/shared';
 import { MAX_DIAGNOSTIC_PAYLOAD_CHARS } from './constants.js';
 import { buildDiagnosticsPayload } from './diagnostics-collection.js';
 import type {
@@ -104,6 +105,14 @@ function createFailedCommandOutputReference(
   };
 }
 
+function createProviderEvent(eventIndex: number, contentLength: number): ProviderEvent {
+  return {
+    type: 'assistant',
+    content: `event-${eventIndex.toString().padStart(3, '0')}-${'z'.repeat(contentLength)}`,
+    timestamp: eventIndex,
+  };
+}
+
 describe('buildDiagnosticsPayload', () => {
   it('trims failed command output references to enforce payload size bounds', () => {
     const failedCommandOutputs = Array.from({ length: 220 }, (_unused, eventIndex) =>
@@ -139,5 +148,34 @@ describe('buildDiagnosticsPayload', () => {
 
     expect(diagnostics.payloadChars).toBeLessThanOrEqual(MAX_DIAGNOSTIC_PAYLOAD_CHARS);
     expect(diagnostics.payload.failedCommandOutputs).toEqual(failedCommandOutputs);
+  });
+
+  it('trims failed command output references before dropping events', () => {
+    const events = Array.from({ length: 40 }, (_unused, eventIndex) => createProviderEvent(eventIndex, 520));
+    const failedCommandOutputs = Array.from({ length: 320 }, (_unused, eventIndex) =>
+      createFailedCommandOutputReference(eventIndex, 180),
+    );
+
+    const diagnosticsWithoutFailedCommandOutputs = buildDiagnosticsPayload(
+      createDiagnosticsPayloadParams({
+        events,
+      }),
+    );
+    expect(diagnosticsWithoutFailedCommandOutputs.payloadChars).toBeLessThanOrEqual(MAX_DIAGNOSTIC_PAYLOAD_CHARS);
+    expect(diagnosticsWithoutFailedCommandOutputs.droppedEventCount).toBe(0);
+
+    const diagnostics = buildDiagnosticsPayload(
+      createDiagnosticsPayloadParams({
+        events,
+        failedCommandOutputs,
+      }),
+    );
+
+    const retainedFailedCommandOutputs = diagnostics.payload.failedCommandOutputs ?? [];
+    expect(diagnostics.payloadChars).toBeLessThanOrEqual(MAX_DIAGNOSTIC_PAYLOAD_CHARS);
+    expect(diagnostics.payload.events).toHaveLength(events.length);
+    expect(diagnostics.droppedEventCount).toBe(0);
+    expect(diagnostics.payload.summary.droppedEventCount).toBe(0);
+    expect(retainedFailedCommandOutputs.length).toBeLessThan(failedCommandOutputs.length);
   });
 });

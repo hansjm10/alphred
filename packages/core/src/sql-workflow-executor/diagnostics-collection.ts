@@ -501,6 +501,17 @@ export function buildDiagnosticsPayload(params: {
 
   let payload = buildPayload();
   let payloadChars = JSON.stringify(payload).length;
+  while (
+    payloadChars > MAX_DIAGNOSTIC_PAYLOAD_CHARS
+    && retainedFailedCommandOutputs !== undefined
+    && retainedFailedCommandOutputs.length > 0
+  ) {
+    retainedFailedCommandOutputs = retainedFailedCommandOutputs.slice(0, -1);
+    redactionState.truncated = true;
+    payload = buildPayload();
+    payloadChars = JSON.stringify(payload).length;
+  }
+
   while (payloadChars > MAX_DIAGNOSTIC_PAYLOAD_CHARS && retainedEvents.length > 0) {
     retainedEvents = retainedEvents.slice(0, -1);
     droppedEventCount += 1;
@@ -515,17 +526,6 @@ export function buildDiagnosticsPayload(params: {
       ...errorDetails,
       stackPreview: null,
     };
-    redactionState.truncated = true;
-    payload = buildPayload();
-    payloadChars = JSON.stringify(payload).length;
-  }
-
-  while (
-    payloadChars > MAX_DIAGNOSTIC_PAYLOAD_CHARS
-    && retainedFailedCommandOutputs !== undefined
-    && retainedFailedCommandOutputs.length > 0
-  ) {
-    retainedFailedCommandOutputs = retainedFailedCommandOutputs.slice(0, -1);
     redactionState.truncated = true;
     payload = buildPayload();
     payloadChars = JSON.stringify(payload).length;
