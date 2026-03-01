@@ -3,6 +3,7 @@ import {
   routingDecisionContractLinePrefix,
   routingDecisionContractSentinel,
   routingDecisionSignals,
+  spawnerOutputContractSentinel,
   type AgentProviderName,
   type PhaseDefinition,
   type ProviderEvent,
@@ -149,21 +150,40 @@ function buildRoutingDecisionPromptContract(guardedSuccessEdges: EdgeRow[]): str
   ].join('\n');
 }
 
+function buildSpawnerOutputPromptContract(maxChildren: number): string {
+  return [
+    spawnerOutputContractSentinel,
+    'Spawner output contract (required for nodeRole=spawner):',
+    '- Output must be a JSON object only (no markdown fences or prose).',
+    '- Required top-level fields: `schemaVersion`, `subtasks`.',
+    '- `schemaVersion` must equal `1`.',
+    `- \`subtasks\` must be an array with length \`0..${maxChildren}\` (respect maxChildren).`,
+    '- Each subtask entry must be an object with required non-empty `title` and `prompt`.',
+    '- Optional subtask fields: `nodeKey`, `provider`, `model`, `metadata`.',
+    '- If provided, `metadata` must be a JSON object.',
+  ].join('\n');
+}
+
 function resolveExecutionPrompt(node: RunNodeExecutionRow, edgeRows: EdgeRow[]): string {
   const basePrompt = node.prompt ?? '';
   const guardedSuccessEdges = loadGuardedSuccessOutgoingEdges(node, edgeRows);
-  if (guardedSuccessEdges.length === 0) {
+  const shouldInjectRoutingContract =
+    guardedSuccessEdges.length > 0 && !basePrompt.includes(routingDecisionContractSentinel);
+  const shouldInjectSpawnerContract =
+    node.nodeRole === 'spawner' && !basePrompt.includes(spawnerOutputContractSentinel);
+
+  if (!shouldInjectRoutingContract && !shouldInjectSpawnerContract) {
     return basePrompt;
   }
 
-  if (basePrompt.includes(routingDecisionContractSentinel)) {
-    return basePrompt;
+  const sections = [basePrompt.trim()];
+  if (shouldInjectSpawnerContract) {
+    sections.push(buildSpawnerOutputPromptContract(node.maxChildren));
   }
-
-  const sections = [basePrompt.trim(), buildRoutingDecisionPromptContract(guardedSuccessEdges)].filter(
-    section => section.length > 0,
-  );
-  return sections.join('\n\n');
+  if (shouldInjectRoutingContract) {
+    sections.push(buildRoutingDecisionPromptContract(guardedSuccessEdges));
+  }
+  return sections.filter(section => section.length > 0).join('\n\n');
 }
 
 export function createExecutionPhase(node: RunNodeExecutionRow, promptOverride?: string): PhaseDefinition {

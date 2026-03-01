@@ -120,6 +120,7 @@ export const routingDecisionSources = ['provider_result_metadata', 'result_conte
 export type RoutingDecisionSource = (typeof routingDecisionSources)[number];
 export const routingDecisionContractSentinel = 'ALPHRED_ROUTING_CONTRACT_V1';
 export const routingDecisionContractLinePrefix = 'result.metadata.routingDecision:';
+export const spawnerOutputContractSentinel = 'ALPHRED_SPAWNER_CONTRACT_V1';
 
 export const providerApprovalPolicies = ['never', 'on-request', 'on-failure', 'untrusted'] as const;
 export type ProviderApprovalPolicy = (typeof providerApprovalPolicies)[number];
