@@ -29,6 +29,7 @@ import {
   clearActionFeedbackOnStatusChange,
   createRetryCountdownEffect,
   flushBufferedAgentStreamEvents,
+  isStreamSupportedNodeStatus,
   resetRunDetailStateFromInitialDetail,
   syncSelectionStateWithNodes,
   syncStreamEventListScroll,
@@ -241,7 +242,11 @@ export function RunDetailContent({
       ? detail.nodes.find((node) => node.id === runNodeId)
       : null;
 
-    if (targetNode && (!Number.isInteger(attempt) || attempt < 1 || targetNode.attempt === attempt)) {
+    if (
+      targetNode &&
+      isStreamSupportedNodeStatus(targetNode.status) &&
+      (!Number.isInteger(attempt) || attempt < 1 || targetNode.attempt === attempt)
+    ) {
       setStreamTarget(toAgentStreamTarget(targetNode));
     }
 

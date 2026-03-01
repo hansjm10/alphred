@@ -2539,6 +2539,113 @@ describe('RunDetailContent realtime updates', () => {
     });
   });
 
+  it('ignores non-streamable URL stream targets during hydration', async () => {
+    vi.stubGlobal('EventSource', MockEventSource as unknown as typeof EventSource);
+    window.history.replaceState(null, '', '/runs/412?streamRunNodeId=3&streamAttempt=1&streamEventSequence=4');
+
+    const initialDetail = createRunDetail({
+      run: {
+        nodeSummary: {
+          pending: 1,
+          running: 1,
+          completed: 1,
+          failed: 0,
+          skipped: 0,
+          cancelled: 0,
+        },
+      },
+      nodes: [
+        {
+          id: 1,
+          treeNodeId: 1,
+          nodeKey: 'design',
+          sequenceIndex: 0,
+          attempt: 1,
+          status: 'completed',
+          startedAt: '2026-02-18T00:00:10.000Z',
+          completedAt: '2026-02-18T00:00:30.000Z',
+          latestArtifact: null,
+          latestRoutingDecision: null,
+          latestDiagnostics: null,
+        },
+        {
+          id: 2,
+          treeNodeId: 2,
+          nodeKey: 'implement',
+          sequenceIndex: 1,
+          attempt: 1,
+          status: 'running',
+          startedAt: '2026-02-18T00:00:35.000Z',
+          completedAt: null,
+          latestArtifact: null,
+          latestRoutingDecision: null,
+          latestDiagnostics: null,
+        },
+        {
+          id: 3,
+          treeNodeId: 3,
+          nodeKey: 'review',
+          sequenceIndex: 2,
+          attempt: 1,
+          status: 'pending',
+          startedAt: null,
+          completedAt: null,
+          latestArtifact: null,
+          latestRoutingDecision: null,
+          latestDiagnostics: null,
+        },
+      ],
+    });
+
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/nodes/2/stream')) {
+        return createJsonResponse({
+          workflowRunId: 412,
+          runNodeId: 2,
+          attempt: 1,
+          nodeStatus: 'running',
+          ended: false,
+          latestSequence: 0,
+          events: [],
+        });
+      }
+      if (url.includes('/nodes/3/stream')) {
+        return createJsonResponse({
+          workflowRunId: 412,
+          runNodeId: 3,
+          attempt: 1,
+          nodeStatus: 'pending',
+          ended: false,
+          latestSequence: 0,
+          events: [],
+        });
+      }
+
+      return createJsonResponse(initialDetail);
+    });
+
+    render(
+      <RunDetailContent
+        initialDetail={initialDetail}
+        repositories={[createRepository()]}
+        enableRealtime={false}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        expect.stringContaining('/api/dashboard/runs/412/nodes/2/stream?attempt=1&lastEventSequence=0'),
+        expect.objectContaining({ method: 'GET' }),
+      );
+      expect(window.location.search).toContain('streamRunNodeId=2');
+      expect(window.location.search).not.toContain('streamRunNodeId=3');
+    });
+
+    const pendingNodeStreamCalls = fetchMock.mock.calls.filter(([input]) => String(input).includes('/nodes/3/stream'));
+    expect(pendingNodeStreamCalls).toHaveLength(0);
+  });
+
   it('resets stale event selection when switching stream targets with overlapping sequence ids', async () => {
     vi.stubGlobal('EventSource', MockEventSource as unknown as typeof EventSource);
     const user = userEvent.setup();
