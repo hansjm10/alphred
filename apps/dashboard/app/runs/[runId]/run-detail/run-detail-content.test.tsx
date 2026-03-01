@@ -2130,6 +2130,31 @@ describe('RunDetailContent realtime updates', () => {
     expect(screen.queryByText(/Filtered to design \(attempt 1\)\./i)).toBeNull();
   });
 
+  it('clears node timeline filter when requesting all events', async () => {
+    const user = userEvent.setup();
+
+    render(
+      <RunDetailContent
+        initialDetail={createRunDetail()}
+        repositories={[createRepository()]}
+        enableRealtime={false}
+      />,
+    );
+
+    const timeline = screen.getByRole('list', { name: 'Run timeline' });
+    const designFilterButton = screen.getAllByRole('button', { name: 'design (attempt 1)' })[0]!;
+    await user.click(designFilterButton);
+
+    expect(within(timeline).queryByText('implement started (attempt 1).')).toBeNull();
+    expect(screen.getByText(/Filtered to design \(attempt 1\)\./i)).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Show all events' }));
+
+    expect(screen.queryByText(/Filtered to design \(attempt 1\)\./i)).toBeNull();
+    expect(within(timeline).getByText('implement started (attempt 1).')).toBeInTheDocument();
+    expect(designFilterButton).toHaveAttribute('aria-pressed', 'false');
+  });
+
   it('keeps node filter button selected after clicking a run-level timeline event', async () => {
     const user = userEvent.setup();
 
@@ -2352,6 +2377,72 @@ describe('RunDetailContent realtime updates', () => {
     expect(within(detailPane).getByText('Heading')).toBeInTheDocument();
     expect(within(detailPane).getByText('Details line')).toBeInTheDocument();
     expect(within(detailPane).getByText('item one')).toBeInTheDocument();
+  });
+
+  it('returns to pretty mode and copies payload and metadata from inspector detail', async () => {
+    vi.stubGlobal('EventSource', MockEventSource as unknown as typeof EventSource);
+    const user = userEvent.setup();
+    const writeTextMock = vi.fn(async () => undefined);
+    Object.defineProperty(navigator, 'clipboard', {
+      value: { writeText: writeTextMock },
+      configurable: true,
+    });
+
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/nodes/2/stream')) {
+        return createJsonResponse({
+          workflowRunId: 412,
+          runNodeId: 2,
+          attempt: 1,
+          nodeStatus: 'running',
+          ended: false,
+          latestSequence: 1,
+          events: [
+            createStreamEvent({
+              sequence: 1,
+              type: 'assistant',
+              contentPreview: '{"foo":"bar","count":2}',
+              metadata: { source: 'dashboard' },
+            }),
+          ],
+        });
+      }
+
+      return createJsonResponse(createRunDetail());
+    });
+
+    render(
+      <RunDetailContent
+        initialDetail={createRunDetail()}
+        repositories={[createRepository()]}
+        enableRealtime={false}
+      />,
+    );
+
+    const streamEventList = screen.getByRole('list', { name: 'Agent stream events' });
+    await waitFor(() => {
+      expect(within(streamEventList).getByText('{"foo":"bar","count":2}')).toBeInTheDocument();
+    });
+
+    await user.click(within(streamEventList).getByText('{"foo":"bar","count":2}'));
+    const detailPane = screen.getByRole('region', { name: 'Agent stream inspector detail' });
+
+    await user.click(within(detailPane).getByRole('tab', { name: 'Raw' }));
+    await user.click(within(detailPane).getByRole('tab', { name: 'Pretty JSON' }));
+    expect(within(detailPane).getByText(/"foo"/)).toBeInTheDocument();
+
+    await user.click(within(detailPane).getByRole('button', { name: 'Copy payload' }));
+    await waitFor(() => {
+      expect(writeTextMock).toHaveBeenCalledWith('{"foo":"bar","count":2}');
+    });
+    expect(within(detailPane).getByText('Payload copied.')).toBeInTheDocument();
+
+    await user.click(within(detailPane).getByRole('button', { name: 'Copy metadata' }));
+    await waitFor(() => {
+      expect(writeTextMock).toHaveBeenCalledWith(JSON.stringify({ source: 'dashboard' }, null, 2));
+    });
+    expect(within(detailPane).getByText('Metadata copied.')).toBeInTheDocument();
   });
 
   it('treats JSON null payloads as valid pretty JSON and preserves null in downloads', async () => {
