@@ -1953,6 +1953,7 @@ describe('database schema hardening', () => {
     expect(names.has('run_node_stream_events_run_id_created_at_idx')).toBe(true);
     expect(names.has('run_node_stream_events_run_node_id_created_at_idx')).toBe(true);
     expect(names.has('run_node_stream_events_created_at_idx')).toBe(true);
+    expect(names.has('work_item_events_repository_id_id_idx')).toBe(true);
   });
 });
 

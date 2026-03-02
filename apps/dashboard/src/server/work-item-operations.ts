@@ -297,14 +297,6 @@ export function createWorkItemOperations(params: { withDatabase: WithDatabase })
           });
         }
 
-        const latestEvent = db
-          .select({ id: workItemEvents.id })
-          .from(workItemEvents)
-          .where(eq(workItemEvents.repositoryId, repositoryId))
-          .orderBy(desc(workItemEvents.id))
-          .limit(1)
-          .get();
-
         const events = db
           .select()
           .from(workItemEvents)
@@ -317,6 +309,14 @@ export function createWorkItemOperations(params: { withDatabase: WithDatabase })
           .orderBy(asc(workItemEvents.id))
           .limit(limit)
           .all();
+
+        const latestEvent = db
+          .select({ id: workItemEvents.id })
+          .from(workItemEvents)
+          .where(eq(workItemEvents.repositoryId, repositoryId))
+          .orderBy(desc(workItemEvents.id))
+          .limit(1)
+          .get();
 
         return {
           repositoryId,

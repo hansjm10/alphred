@@ -175,6 +175,7 @@ export const workItemEvents = sqliteTable(
     actorLabelNotEmptyCheck: check('work_item_events_actor_label_not_empty_ck', sql`${table.actorLabel} <> ''`),
     workItemCreatedAtIdx: index('work_item_events_work_item_id_created_at_idx').on(table.workItemId, table.createdAt),
     repoCreatedAtIdx: index('work_item_events_repository_id_created_at_idx').on(table.repositoryId, table.createdAt),
+    repoIdIdx: index('work_item_events_repository_id_id_idx').on(table.repositoryId, table.id),
     createdAtIdx: index('work_item_events_created_at_idx').on(table.createdAt),
   }),
 );
