@@ -1,11 +1,21 @@
 import { NextResponse } from 'next/server';
 import {
-  DashboardIntegrationError,
   toDashboardIntegrationError,
 } from '../../../../../../../src/server/dashboard-errors';
 import { toErrorResponse } from '../../../../../../../src/server/dashboard-http';
 import { createDashboardService, type DashboardService } from '../../../../../../../src/server/dashboard-service';
 import { parseRepositoryIdFromPathSegment } from '../../../../work-items/_shared/work-item-route-validation';
+import {
+  createSseResponse,
+  encodeSseChunk,
+  parseOptionalNonNegativeInteger,
+  resolveOptionalLimit,
+  resolveResumePointerFromQueryAndHeader,
+  SSE_CONNECTED_COMMENT,
+  shouldUseSseTransport,
+  type StreamWriter,
+  waitForNextPoll,
+} from '../../../../_shared/sse';
 
 const STREAM_POLL_INTERVAL_MS = 350;
 const STREAM_HEARTBEAT_INTERVAL_MS = 10_000;
@@ -18,41 +28,10 @@ type RouteContext = {
 };
 
 type BoardEventsSnapshot = Awaited<ReturnType<DashboardService['getRepositoryBoardEventsSnapshot']>>;
-type StreamWriter = (chunk: string) => void;
-
-function parseOptionalNonNegativeInteger(name: string, value: string | null): number | undefined {
-  if (value === null) {
-    return undefined;
-  }
-
-  const parsed = Number(value);
-  if (!Number.isInteger(parsed) || parsed < 0) {
-    throw new DashboardIntegrationError('invalid_request', `${name} must be a non-negative integer.`, {
-      status: 400,
-    });
-  }
-
-  return parsed;
-}
 
 async function resolveRepositoryId(context: RouteContext): Promise<number> {
   const params = await context.params;
   return parseRepositoryIdFromPathSegment(params.name);
-}
-
-function resolveResumeEventId(searchParams: URLSearchParams, request: Request): number {
-  const queryEventId = parseOptionalNonNegativeInteger('lastEventId', searchParams.get('lastEventId'));
-  const headerEventId = parseOptionalNonNegativeInteger('Last-Event-ID', request.headers.get('last-event-id'));
-  return Math.max(queryEventId ?? 0, headerEventId ?? 0);
-}
-
-function encodeSseChunk(event: string, data: unknown, id?: number): string {
-  const lines = [
-    ...(id === undefined ? [] : [`id: ${id}`]),
-    `event: ${event}`,
-    `data: ${JSON.stringify(data)}`,
-  ];
-  return `${lines.join('\n')}\n\n`;
 }
 
 function emitBoardState(
@@ -89,27 +68,6 @@ function emitBoardEvents(
   };
 }
 
-async function waitForNextPoll(delayMs: number, signal: AbortSignal): Promise<void> {
-  if (signal.aborted) {
-    return;
-  }
-
-  await new Promise<void>((resolve) => {
-    const timeoutId = setTimeout(() => {
-      signal.removeEventListener('abort', onAbort);
-      resolve();
-    }, delayMs);
-
-    const onAbort = () => {
-      clearTimeout(timeoutId);
-      signal.removeEventListener('abort', onAbort);
-      resolve();
-    };
-
-    signal.addEventListener('abort', onAbort, { once: true });
-  });
-}
-
 async function streamBoardEvents(params: {
   request: Request;
   service: DashboardService;
@@ -122,7 +80,7 @@ async function streamBoardEvents(params: {
   let lastHeartbeatMs = Date.now();
   let lastKnownLatestEventId: number | null = null;
 
-  write(': stream_connected\n\n');
+  write(SSE_CONNECTED_COMMENT);
 
   while (!request.signal.aborted) {
     const snapshot = await service.getRepositoryBoardEventsSnapshot({
@@ -153,79 +111,43 @@ async function streamBoardEvents(params: {
   }
 }
 
-function createSseResponse(params: {
-  request: Request;
-  service: DashboardService;
-  repositoryId: number;
-  resumeEventId: number;
-}): Response {
-  const { request, service, repositoryId, resumeEventId } = params;
-
-  const stream = new ReadableStream<Uint8Array>({
-    async start(controller) {
-      const encoder = new TextEncoder();
-      const write = (chunk: string): void => {
-        if (!request.signal.aborted) {
-          controller.enqueue(encoder.encode(chunk));
-        }
-      };
-
-      try {
-        await streamBoardEvents({
-          request,
-          service,
-          repositoryId,
-          resumeEventId,
-          write,
-        });
-      } catch (error) {
-        const integrationError = toDashboardIntegrationError(error);
-        write(
-          encodeSseChunk('board_error', {
-            code: integrationError.code,
-            message: integrationError.message,
-          }),
-        );
-      } finally {
-        controller.close();
-      }
-    },
-  });
-
-  return new Response(stream, {
-    status: 200,
-    headers: {
-      'content-type': 'text/event-stream; charset=utf-8',
-      'cache-control': 'no-cache, no-transform',
-      connection: 'keep-alive',
-      'x-accel-buffering': 'no',
-    },
-  });
-}
-
 export async function GET(request: Request, context: RouteContext): Promise<Response> {
   const service = createDashboardService();
 
   try {
     const repositoryId = await resolveRepositoryId(context);
     const searchParams = new URL(request.url).searchParams;
-    const lastEventId = resolveResumeEventId(searchParams, request);
+    const lastEventId = resolveResumePointerFromQueryAndHeader(searchParams, request, 'lastEventId');
     const limit = parseOptionalNonNegativeInteger('limit', searchParams.get('limit'));
-    const transport = searchParams.get('transport');
 
-    if (transport === 'sse' || request.headers.get('accept')?.includes('text/event-stream')) {
+    if (shouldUseSseTransport(searchParams, request)) {
       return createSseResponse({
         request,
-        service,
-        repositoryId,
-        resumeEventId: lastEventId,
+        stream: async (write) => {
+          await streamBoardEvents({
+            request,
+            service,
+            repositoryId,
+            resumeEventId: lastEventId,
+            write,
+          });
+        },
+        onError: (error, write) => {
+          const integrationError = toDashboardIntegrationError(error);
+          write(
+            encodeSseChunk('board_error', {
+              code: integrationError.code,
+              message: integrationError.message,
+            }),
+          );
+        },
       });
     }
 
     const snapshot = await service.getRepositoryBoardEventsSnapshot({
       repositoryId,
       lastEventId,
-      limit: limit === undefined ? undefined : Math.max(1, limit),
+      limit: resolveOptionalLimit(limit),
     });
     return NextResponse.json(snapshot);
   } catch (error) {
