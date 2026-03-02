@@ -1,8 +1,11 @@
 import { validateParentChildWorkItemTypes, validateTransition } from '@alphred/core';
 import {
   and,
+  asc,
+  desc,
   eq,
   repositories,
+  sql,
   workItemEvents,
   workItems,
   type AlphredDatabase,
@@ -14,6 +17,8 @@ import { DashboardIntegrationError } from './dashboard-errors';
 import type {
   DashboardApproveStoryBreakdownRequest,
   DashboardApproveStoryBreakdownResult,
+  DashboardBoardEventSnapshot,
+  DashboardBoardEventsSnapshot,
   DashboardCreateWorkItemRequest,
   DashboardCreateWorkItemResult,
   DashboardGetWorkItemResult,
@@ -32,8 +37,11 @@ import type {
 type WithDatabase = <T>(operation: (db: AlphredDatabase) => Promise<T> | T) => Promise<T>;
 
 type WorkItemRow = typeof workItems.$inferSelect;
+type WorkItemEventRow = typeof workItemEvents.$inferSelect;
 type AlphredTransaction = Parameters<Parameters<AlphredDatabase['transaction']>[0]>[0];
 type DbOrTx = AlphredDatabase | AlphredTransaction;
+
+const MAX_BOARD_EVENT_SNAPSHOT_EVENTS = 200;
 
 function toOptionalNonEmptyTrimmedString(value: string | null): string | null {
   if (value === null) return null;
@@ -69,6 +77,19 @@ function toWorkItemSnapshot(row: WorkItemRow): DashboardWorkItemSnapshot {
     revision: row.revision,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
+  };
+}
+
+function toBoardEventSnapshot(row: WorkItemEventRow): DashboardBoardEventSnapshot {
+  return {
+    id: row.id,
+    repositoryId: row.repositoryId,
+    workItemId: row.workItemId,
+    eventType: row.eventType as WorkItemEventType,
+    actorType: row.actorType as WorkItemActorType,
+    actorLabel: row.actorLabel,
+    payload: row.payload,
+    createdAt: row.createdAt,
   };
 }
 
@@ -113,6 +134,25 @@ function requireExpectedRevision(expectedRevision: number): number {
     });
   }
   return expectedRevision;
+}
+
+function requireLastEventId(lastEventId: number): number {
+  if (!Number.isInteger(lastEventId) || lastEventId < 0) {
+    throw new DashboardIntegrationError('invalid_request', 'lastEventId must be a non-negative integer.', {
+      status: 400,
+    });
+  }
+  return lastEventId;
+}
+
+function requireSnapshotLimit(limit: number): number {
+  if (!Number.isInteger(limit) || limit < 1) {
+    throw new DashboardIntegrationError('invalid_request', 'limit must be a positive integer.', {
+      status: 400,
+    });
+  }
+
+  return Math.min(limit, MAX_BOARD_EVENT_SNAPSHOT_EVENTS);
 }
 
 function isValidStatusForType(type: WorkItemType, status: string): status is WorkItemStatus {
@@ -203,6 +243,11 @@ function toHierarchyConflictError(error: unknown): DashboardIntegrationError {
 
 export type WorkItemOperations = {
   listWorkItems: (repositoryId: number) => Promise<DashboardListWorkItemsResult>;
+  getRepositoryBoardEventsSnapshot: (params: {
+    repositoryId: number;
+    lastEventId?: number;
+    limit?: number;
+  }) => Promise<DashboardBoardEventsSnapshot>;
   getWorkItem: (params: { repositoryId: number; workItemId: number }) => Promise<DashboardGetWorkItemResult>;
   createWorkItem: (request: DashboardCreateWorkItemRequest) => Promise<DashboardCreateWorkItemResult>;
   updateWorkItemFields: (request: DashboardUpdateWorkItemFieldsRequest) => Promise<DashboardUpdateWorkItemFieldsResult>;
@@ -232,6 +277,52 @@ export function createWorkItemOperations(params: { withDatabase: WithDatabase })
 
         const rows = db.select().from(workItems).where(eq(workItems.repositoryId, repositoryId)).all();
         return { workItems: rows.map(toWorkItemSnapshot) };
+      });
+    },
+
+    getRepositoryBoardEventsSnapshot(paramsRaw): Promise<DashboardBoardEventsSnapshot> {
+      const repositoryId = requireRepositoryId(paramsRaw.repositoryId);
+      const lastEventId = requireLastEventId(paramsRaw.lastEventId ?? 0);
+      const limit = requireSnapshotLimit(paramsRaw.limit ?? MAX_BOARD_EVENT_SNAPSHOT_EVENTS);
+
+      return withDatabase(db => {
+        const repository = db
+          .select({ id: repositories.id })
+          .from(repositories)
+          .where(eq(repositories.id, repositoryId))
+          .get();
+        if (!repository) {
+          throw new DashboardIntegrationError('not_found', `Repository id=${repositoryId} was not found.`, {
+            status: 404,
+          });
+        }
+
+        const events = db
+          .select()
+          .from(workItemEvents)
+          .where(
+            and(
+              eq(workItemEvents.repositoryId, repositoryId),
+              sql`${workItemEvents.id} > ${lastEventId}`,
+            ),
+          )
+          .orderBy(asc(workItemEvents.id))
+          .limit(limit)
+          .all();
+
+        const latestEvent = db
+          .select({ id: workItemEvents.id })
+          .from(workItemEvents)
+          .where(eq(workItemEvents.repositoryId, repositoryId))
+          .orderBy(desc(workItemEvents.id))
+          .limit(1)
+          .get();
+
+        return {
+          repositoryId,
+          latestEventId: latestEvent?.id ?? 0,
+          events: events.map(toBoardEventSnapshot),
+        };
       });
     },
 

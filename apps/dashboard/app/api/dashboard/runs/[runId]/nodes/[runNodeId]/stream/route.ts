@@ -5,6 +5,17 @@ import {
 } from '../../../../../../../../src/server/dashboard-errors';
 import { toErrorResponse } from '../../../../../../../../src/server/dashboard-http';
 import { createDashboardService, type DashboardService } from '../../../../../../../../src/server/dashboard-service';
+import {
+  createSseResponse,
+  encodeSseChunk,
+  parseOptionalNonNegativeInteger,
+  resolveOptionalLimit,
+  resolveResumePointerFromQueryAndHeader,
+  SSE_CONNECTED_COMMENT,
+  shouldUseSseTransport,
+  type StreamWriter,
+  waitForNextPoll,
+} from '../../../../../_shared/sse';
 
 const STREAM_POLL_INTERVAL_MS = 350;
 const STREAM_HEARTBEAT_INTERVAL_MS = 10_000;
@@ -18,7 +29,6 @@ type RunNodeStreamRouteContext = {
 };
 
 type RunNodeStreamSnapshot = Awaited<ReturnType<DashboardService['getRunNodeStreamSnapshot']>>;
-type StreamWriter = (chunk: string) => void;
 
 function parsePositiveInteger(name: string, value: string | null): number {
   const parsed = Number(value);
@@ -31,34 +41,8 @@ function parsePositiveInteger(name: string, value: string | null): number {
   return parsed;
 }
 
-function parseOptionalNonNegativeInteger(name: string, value: string | null): number | undefined {
-  if (value === null) {
-    return undefined;
-  }
-
-  const parsed = Number(value);
-  if (!Number.isInteger(parsed) || parsed < 0) {
-    throw new DashboardIntegrationError('invalid_request', `${name} must be a non-negative integer.`, {
-      status: 400,
-    });
-  }
-
-  return parsed;
-}
-
 function resolveResumeSequence(searchParams: URLSearchParams, request: Request): number {
-  const querySequence = parseOptionalNonNegativeInteger('lastEventSequence', searchParams.get('lastEventSequence'));
-  const headerSequence = parseOptionalNonNegativeInteger('Last-Event-ID', request.headers.get('last-event-id'));
-  return Math.max(querySequence ?? 0, headerSequence ?? 0);
-}
-
-function encodeSseChunk(event: string, data: unknown, id?: number): string {
-  const lines = [
-    ...(id === undefined ? [] : [`id: ${id}`]),
-    `event: ${event}`,
-    `data: ${JSON.stringify(data)}`,
-  ];
-  return `${lines.join('\n')}\n\n`;
+  return resolveResumePointerFromQueryAndHeader(searchParams, request, 'lastEventSequence');
 }
 
 function emitStreamState(
@@ -127,27 +111,6 @@ function emitStreamEnd(write: StreamWriter, snapshot: RunNodeStreamSnapshot): vo
   );
 }
 
-async function waitForNextPoll(delayMs: number, signal: AbortSignal): Promise<void> {
-  if (signal.aborted) {
-    return;
-  }
-
-  await new Promise<void>((resolve) => {
-    const timeoutId = setTimeout(() => {
-      signal.removeEventListener('abort', onAbort);
-      resolve();
-    }, delayMs);
-
-    const onAbort = () => {
-      clearTimeout(timeoutId);
-      signal.removeEventListener('abort', onAbort);
-      resolve();
-    };
-
-    signal.addEventListener('abort', onAbort, { once: true });
-  });
-}
-
 async function streamRunNodeEvents(params: {
   request: Request;
   service: DashboardService;
@@ -162,7 +125,7 @@ async function streamRunNodeEvents(params: {
   let lastHeartbeatMs = Date.now();
   let lastConnectionState: string | null = null;
 
-  write(': stream_connected\n\n');
+  write(SSE_CONNECTED_COMMENT);
 
   while (!request.signal.aborted) {
     const snapshot = await service.getRunNodeStreamSnapshot({
@@ -206,60 +169,6 @@ async function streamRunNodeEvents(params: {
   }
 }
 
-function createSseResponse(params: {
-  request: Request;
-  service: DashboardService;
-  runId: number;
-  runNodeId: number;
-  attempt: number;
-  resumeSequence: number;
-}): Response {
-  const { request, service, runId, runNodeId, attempt, resumeSequence } = params;
-
-  const stream = new ReadableStream<Uint8Array>({
-    async start(controller) {
-      const encoder = new TextEncoder();
-      const write = (chunk: string): void => {
-        if (!request.signal.aborted) {
-          controller.enqueue(encoder.encode(chunk));
-        }
-      };
-
-      try {
-        await streamRunNodeEvents({
-          request,
-          service,
-          runId,
-          runNodeId,
-          attempt,
-          resumeSequence,
-          write,
-        });
-      } catch (error) {
-        const integrationError = toDashboardIntegrationError(error);
-        write(
-          encodeSseChunk('stream_error', {
-            code: integrationError.code,
-            message: integrationError.message,
-          }),
-        );
-      } finally {
-        controller.close();
-      }
-    },
-  });
-
-  return new Response(stream, {
-    status: 200,
-    headers: {
-      'content-type': 'text/event-stream; charset=utf-8',
-      'cache-control': 'no-cache, no-transform',
-      connection: 'keep-alive',
-      'x-accel-buffering': 'no',
-    },
-  });
-}
-
 export async function GET(request: Request, context: RunNodeStreamRouteContext): Promise<Response> {
   const service = createDashboardService();
 
@@ -272,16 +181,30 @@ export async function GET(request: Request, context: RunNodeStreamRouteContext):
     const attempt = parsePositiveInteger('attempt', searchParams.get('attempt'));
     const lastEventSequence = resolveResumeSequence(searchParams, request);
     const limit = parseOptionalNonNegativeInteger('limit', searchParams.get('limit'));
-    const transport = searchParams.get('transport');
 
-    if (transport === 'sse' || request.headers.get('accept')?.includes('text/event-stream')) {
+    if (shouldUseSseTransport(searchParams, request)) {
       return createSseResponse({
         request,
-        service,
-        runId,
-        runNodeId,
-        attempt,
-        resumeSequence: lastEventSequence,
+        stream: async (write) => {
+          await streamRunNodeEvents({
+            request,
+            service,
+            runId,
+            runNodeId,
+            attempt,
+            resumeSequence: lastEventSequence,
+            write,
+          });
+        },
+        onError: (error, write) => {
+          const integrationError = toDashboardIntegrationError(error);
+          write(
+            encodeSseChunk('stream_error', {
+              code: integrationError.code,
+              message: integrationError.message,
+            }),
+          );
+        },
       });
     }
 
@@ -290,7 +213,7 @@ export async function GET(request: Request, context: RunNodeStreamRouteContext):
       runNodeId,
       attempt,
       lastEventSequence,
-      limit: limit === undefined ? undefined : Math.max(1, limit),
+      limit: resolveOptionalLimit(limit),
     });
 
     return NextResponse.json(snapshot);

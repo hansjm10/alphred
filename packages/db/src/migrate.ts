@@ -216,6 +216,8 @@ export function migrateDatabase(db: AlphredDatabase): void {
     ON work_item_events(work_item_id, created_at)`);
   tx.run(sql`CREATE INDEX IF NOT EXISTS work_item_events_repository_id_created_at_idx
     ON work_item_events(repository_id, created_at)`);
+  tx.run(sql`CREATE INDEX IF NOT EXISTS work_item_events_repository_id_id_idx
+    ON work_item_events(repository_id, id)`);
   tx.run(sql`CREATE INDEX IF NOT EXISTS work_item_events_created_at_idx
     ON work_item_events(created_at)`);
 

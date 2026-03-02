@@ -1,5 +1,5 @@
 import type { GuardExpression, ProviderExecutionPermissions, WorkItemStatus, WorkItemType } from '@alphred/shared';
-import type { WorkItemActorType } from '@alphred/db';
+import type { WorkItemActorType, WorkItemEventType } from '@alphred/db';
 
 export type DashboardNodeStatus = 'pending' | 'running' | 'completed' | 'failed' | 'skipped' | 'cancelled';
 
@@ -464,6 +464,23 @@ export type DashboardRunControlResult = {
   previousRunStatus: DashboardRunSummary['status'];
   runStatus: DashboardRunSummary['status'];
   retriedRunNodeIds: number[];
+};
+
+export type DashboardBoardEventSnapshot = {
+  id: number;
+  repositoryId: number;
+  workItemId: number;
+  eventType: WorkItemEventType;
+  actorType: WorkItemActorType;
+  actorLabel: string;
+  payload: unknown;
+  createdAt: string;
+};
+
+export type DashboardBoardEventsSnapshot = {
+  repositoryId: number;
+  latestEventId: number;
+  events: DashboardBoardEventSnapshot[];
 };
 
 export type DashboardWorkItemSnapshot = {
