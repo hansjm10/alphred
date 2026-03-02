@@ -636,7 +636,7 @@ export function RepositoryBoardPageContent({
     return (
       <section key={status} className="board-column" aria-label={`Tasks ${status}`}>
         <header className="board-column__header">
-          <h4>{status}</h4>
+          <h4>{formatTaskStatusLabel(status)}</h4>
           <span className="meta-text">{tasks.length}</span>
         </header>
         {tasks.length === 0 ? (
@@ -678,30 +678,32 @@ export function RepositoryBoardPageContent({
           aria-labelledby={dialogTitleId}
           onClick={(event) => event.stopPropagation()}
         >
-          <div className="board-detail__header">
-            <h3 className="board-detail__dialog-title" id={dialogTitleId}>
-              Task details
-            </h3>
-            <ActionButton tone="secondary" onClick={clearSelection}>
-              Close
+          <header className="board-drawer__header">
+            <span className="board-drawer__kicker meta-text">Task</span>
+            <ActionButton
+              tone="secondary"
+              className="board-drawer__close"
+              onClick={clearSelection}
+              aria-label="Close task details"
+              title="Close"
+            >
+              ×
             </ActionButton>
-          </div>
+          </header>
 
-          <h4 className="board-detail__title">{selectedWorkItem.title}</h4>
+          <div className="board-drawer__summary">
+            <h3 className="board-drawer__title" id={dialogTitleId}>
+              {selectedWorkItem.title}
+            </h3>
 
-          <div className="board-detail__fields">
-            <div className="board-detail__field">
-              <span className="meta-text">Id</span>
-              <span>#{selectedWorkItem.id}</span>
-            </div>
-            <div className="board-detail__field">
-              <span className="meta-text">Type</span>
-              <span>{selectedWorkItem.type}</span>
+            <div className="board-drawer__meta" aria-label="Task metadata">
+              <span className="board-pill">#{selectedWorkItem.id}</span>
+              <span className="board-pill">{selectedWorkItem.type}</span>
             </div>
           </div>
 
           {status ? (
-            <div className="board-detail__status">
+            <div className="board-drawer__control">
               <label htmlFor={statusSelectId} className="meta-text">
                 Status
               </label>
@@ -713,6 +715,7 @@ export function RepositoryBoardPageContent({
                 }}
                 disabled={moving}
                 aria-disabled={moving}
+                className="board-drawer__select"
               >
                 {taskWorkItemStatuses.map(entry => (
                   <option key={entry} value={entry}>
@@ -723,7 +726,7 @@ export function RepositoryBoardPageContent({
             </div>
           ) : null}
 
-          <div className="board-detail__section">
+          <div className="board-detail__section board-detail__section--divider">
             <h5>Parent chain</h5>
             {selectedParentChain.length === 0 ? (
               <p className="meta-text">None</p>
@@ -741,12 +744,12 @@ export function RepositoryBoardPageContent({
             )}
           </div>
 
-          <div className="board-detail__section">
+          <div className="board-detail__section board-detail__section--divider">
             <h5>Planned files</h5>
             {renderStringList(selectedWorkItem.plannedFiles)}
           </div>
 
-          <div className="board-detail__section">
+          <div className="board-detail__section board-detail__section--divider">
             <h5>Assignees</h5>
             {renderStringList(selectedWorkItem.assignees)}
           </div>

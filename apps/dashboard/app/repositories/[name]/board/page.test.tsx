@@ -154,7 +154,7 @@ describe('RepositoryBoardPageContent', () => {
 
     await user.click(screen.getByRole('button', { name: /Write tests/ }));
 
-    expect(screen.getByRole('dialog', { name: 'Task details' })).toBeInTheDocument();
+    expect(screen.getByRole('dialog', { name: 'Write tests' })).toBeInTheDocument();
     expect(screen.getByText('Parent chain')).toBeInTheDocument();
     expect(screen.getByText('epic')).toBeInTheDocument();
     expect(screen.getByText('feature')).toBeInTheDocument();
