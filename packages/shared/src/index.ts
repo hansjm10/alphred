@@ -118,6 +118,8 @@ export type RoutingDecisionSignal = (typeof routingDecisionSignals)[number];
 export type RoutingDecisionType = RoutingDecisionSignal | 'no_route';
 export const routingDecisionSources = ['provider_result_metadata', 'result_content_contract_fallback'] as const;
 export type RoutingDecisionSource = (typeof routingDecisionSources)[number];
+
+export * from './workItems.js';
 export const routingDecisionContractSentinel = 'ALPHRED_ROUTING_CONTRACT_V1';
 export const routingDecisionContractLinePrefix = 'result.metadata.routingDecision:';
 export const spawnerOutputContractSentinel = 'ALPHRED_SPAWNER_CONTRACT_V1';
