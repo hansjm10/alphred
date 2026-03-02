@@ -38,7 +38,7 @@ export const workItemEventTypes = [
 export type WorkItemEventType = (typeof workItemEventTypes)[number];
 
 function escapeSqlStringLiteral(value: string): string {
-  return value.replace(/'/g, "''");
+  return value.split("'").join("''");
 }
 
 export function sqlEnumValues(values: readonly string[]): SQL<unknown> {
