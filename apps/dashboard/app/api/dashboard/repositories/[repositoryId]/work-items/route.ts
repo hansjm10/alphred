@@ -9,13 +9,13 @@ import {
 
 type RouteContext = {
   params: Promise<{
-    name: string;
+    repositoryId: string;
   }>;
 };
 
 async function resolveRepositoryId(context: RouteContext): Promise<number> {
   const params = await context.params;
-  return parseRepositoryIdFromPathSegment(params.name);
+  return parseRepositoryIdFromPathSegment(params.repositoryId);
 }
 
 export async function GET(_request: Request, context: RouteContext): Promise<Response> {
