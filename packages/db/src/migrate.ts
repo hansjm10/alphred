@@ -172,6 +172,25 @@ export function migrateDatabase(db: AlphredDatabase): void {
     ON work_items(repository_id, status)`);
   tx.run(sql`CREATE INDEX IF NOT EXISTS work_items_repository_id_parent_id_idx
     ON work_items(repository_id, parent_id)`);
+  tx.run(sql`CREATE UNIQUE INDEX IF NOT EXISTS work_items_repository_id_id_uq
+    ON work_items(repository_id, id)`);
+
+  const workItemEventsDefinition = tx.get<{ sql: string | null }>(
+    sql`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'work_item_events'`,
+  )?.sql;
+  if (workItemEventsDefinition && !workItemEventsDefinition.includes('work_item_events_repository_id_work_item_id_fk')) {
+    tx.run(sql`DROP TABLE IF EXISTS work_item_events`);
+  }
+
+  const workItemPoliciesDefinition = tx.get<{ sql: string | null }>(
+    sql`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'work_item_policies'`,
+  )?.sql;
+  if (
+    workItemPoliciesDefinition &&
+    !workItemPoliciesDefinition.includes('work_item_policies_repository_id_epic_work_item_id_fk')
+  ) {
+    tx.run(sql`DROP TABLE IF EXISTS work_item_policies`);
+  }
 
   tx.run(sql`CREATE TABLE IF NOT EXISTS work_item_events (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -182,6 +201,10 @@ export function migrateDatabase(db: AlphredDatabase): void {
     actor_label TEXT NOT NULL,
     payload TEXT NOT NULL,
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    CONSTRAINT work_item_events_repository_id_work_item_id_fk
+      FOREIGN KEY (repository_id, work_item_id)
+      REFERENCES work_items(repository_id, id)
+      ON DELETE CASCADE,
     CONSTRAINT work_item_events_event_type_ck
       CHECK (event_type IN (${sqlEnumValues(workItemEventTypes)})),
     CONSTRAINT work_item_events_actor_type_ck
@@ -202,7 +225,11 @@ export function migrateDatabase(db: AlphredDatabase): void {
     epic_work_item_id INTEGER REFERENCES work_items(id) ON DELETE CASCADE,
     payload TEXT NOT NULL,
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
-    updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+    updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    CONSTRAINT work_item_policies_repository_id_epic_work_item_id_fk
+      FOREIGN KEY (repository_id, epic_work_item_id)
+      REFERENCES work_items(repository_id, id)
+      ON DELETE CASCADE
   )`);
   tx.run(sql`CREATE UNIQUE INDEX IF NOT EXISTS work_item_policies_repo_single_uq
     ON work_item_policies(repository_id)

@@ -121,6 +121,7 @@ export const workItems = sqliteTable(
     updatedAt: text('updated_at').notNull().default(utcNow),
   },
   table => ({
+    repositoryIdIdUnique: uniqueIndex('work_items_repository_id_id_uq').on(table.repositoryId, table.id),
     parentFk: foreignKey({
       columns: [table.parentId],
       foreignColumns: [table.id],
@@ -164,6 +165,11 @@ export const workItemEvents = sqliteTable(
     createdAt: text('created_at').notNull().default(utcNow),
   },
   table => ({
+    workItemRepoFk: foreignKey({
+      columns: [table.repositoryId, table.workItemId],
+      foreignColumns: [workItems.repositoryId, workItems.id],
+      name: 'work_item_events_repository_id_work_item_id_fk',
+    }).onDelete('cascade'),
     eventTypeCheck: check('work_item_events_event_type_ck', sql`${table.eventType} in (${sqlEnumValues(workItemEventTypes)})`),
     actorTypeCheck: check('work_item_events_actor_type_ck', sql`${table.actorType} in (${sqlEnumValues(workItemActorTypes)})`),
     actorLabelNotEmptyCheck: check('work_item_events_actor_label_not_empty_ck', sql`${table.actorLabel} <> ''`),
@@ -186,6 +192,11 @@ export const workItemPolicies = sqliteTable(
     updatedAt: text('updated_at').notNull().default(utcNow),
   },
   table => ({
+    epicWorkItemRepoFk: foreignKey({
+      columns: [table.repositoryId, table.epicWorkItemId],
+      foreignColumns: [workItems.repositoryId, workItems.id],
+      name: 'work_item_policies_repository_id_epic_work_item_id_fk',
+    }).onDelete('cascade'),
     singleRepoPolicyUnique: uniqueIndex('work_item_policies_repo_single_uq')
       .on(table.repositoryId)
       .where(sql`${table.epicWorkItemId} is null`),
