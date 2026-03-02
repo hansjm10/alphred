@@ -915,14 +915,26 @@ output {
   z-index: 60;
 }
 
+.board-drawer-scrim__backdrop {
+  appearance: none;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  flex: 1;
+  margin: 0;
+  padding: 0;
+}
+
 .board-drawer {
   --board-drawer-pad-x: var(--space-3);
   --board-drawer-pad-y: var(--space-2);
   background: var(--bg-surface);
+  border: 0;
   border-left: 0;
   box-shadow: var(--shadow-md);
   display: grid;
   gap: var(--space-2);
+  margin: 0;
   max-width: none;
   overflow: auto;
   padding: var(--board-drawer-pad-y) var(--board-drawer-pad-x);

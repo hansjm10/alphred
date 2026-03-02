@@ -1,4 +1,3 @@
-import type { DashboardRepositoryState, DashboardWorkItemSnapshot } from '../../../../src/server/dashboard-contracts';
 import { createDashboardService } from '../../../../src/server/dashboard-service';
 import { loadGitHubAuthGate } from '../../../ui/load-github-auth-gate';
 import { notFound } from 'next/navigation';
@@ -43,10 +42,10 @@ export default async function RepositoryBoardPage({ params }: RepositoryBoardPag
 
   return (
     <RepositoryBoardPageContent
-      repository={repository as DashboardRepositoryState}
+      repository={repository}
       actor={resolveActor(authGate)}
       initialLatestEventId={boardEventsSnapshot.latestEventId}
-      initialWorkItems={workItemsResult.workItems as DashboardWorkItemSnapshot[]}
+      initialWorkItems={workItemsResult.workItems}
     />
   );
 }

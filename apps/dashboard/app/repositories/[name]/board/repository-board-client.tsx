@@ -125,6 +125,155 @@ function isDragWorkItemData(value: unknown): value is DragWorkItemData {
   );
 }
 
+function coerceNullableString(value: unknown, fallback: string | null): string | null {
+  if (value === null) {
+    return null;
+  }
+  if (typeof value === 'string') {
+    return value;
+  }
+  return fallback;
+}
+
+function coerceNullableStringArray(value: unknown, fallback: string[] | null): string[] | null {
+  if (value === null) {
+    return null;
+  }
+  if (Array.isArray(value)) {
+    return value as string[];
+  }
+  return fallback;
+}
+
+function coerceNullableNumber(value: unknown, fallback: number | null): number | null {
+  if (value === null) {
+    return null;
+  }
+  if (typeof value === 'number') {
+    return value;
+  }
+  return fallback;
+}
+
+function applyCreatedBoardEvent(
+  previous: Readonly<Record<number, DashboardWorkItemSnapshot>>,
+  event: BoardEventSnapshot,
+  existing: DashboardWorkItemSnapshot | undefined,
+): Readonly<Record<number, DashboardWorkItemSnapshot>> {
+  const payload = event.payload;
+  if (!isRecord(payload) || typeof payload.type !== 'string' || typeof payload.status !== 'string' || typeof payload.title !== 'string') {
+    return previous;
+  }
+
+  const next: DashboardWorkItemSnapshot = {
+    id: event.workItemId,
+    repositoryId: event.repositoryId,
+    type: payload.type as WorkItemType,
+    status: payload.status as WorkItemStatus,
+    title: payload.title,
+    description: null,
+    parentId: typeof payload.parentId === 'number' ? payload.parentId : null,
+    tags: Array.isArray(payload.tags) ? (payload.tags as string[]) : null,
+    plannedFiles: Array.isArray(payload.plannedFiles) ? (payload.plannedFiles as string[]) : null,
+    assignees: Array.isArray(payload.assignees) ? (payload.assignees as string[]) : null,
+    priority: typeof payload.priority === 'number' ? payload.priority : null,
+    estimate: typeof payload.estimate === 'number' ? payload.estimate : null,
+    revision: typeof payload.revision === 'number' ? payload.revision : 0,
+    createdAt: event.createdAt,
+    updatedAt: event.createdAt,
+  };
+
+  return {
+    ...previous,
+    [event.workItemId]: existing ? { ...existing, ...next } : next,
+  };
+}
+
+function applyUpdatedBoardEvent(
+  previous: Readonly<Record<number, DashboardWorkItemSnapshot>>,
+  event: BoardEventSnapshot,
+  existing: DashboardWorkItemSnapshot | undefined,
+): Readonly<Record<number, DashboardWorkItemSnapshot>> {
+  if (!existing) {
+    return previous;
+  }
+
+  const payload = event.payload;
+  if (!isRecord(payload) || !isRecord(payload.changes)) {
+    return previous;
+  }
+
+  const changes = payload.changes;
+  const next: DashboardWorkItemSnapshot = {
+    ...existing,
+    title: typeof changes.title === 'string' ? changes.title : existing.title,
+    description: coerceNullableString(changes.description, existing.description),
+    tags: coerceNullableStringArray(changes.tags, existing.tags),
+    plannedFiles: coerceNullableStringArray(changes.plannedFiles, existing.plannedFiles),
+    assignees: coerceNullableStringArray(changes.assignees, existing.assignees),
+    priority: coerceNullableNumber(changes.priority, existing.priority),
+    estimate: coerceNullableNumber(changes.estimate, existing.estimate),
+    revision: typeof payload.revision === 'number' ? payload.revision : existing.revision,
+    updatedAt: event.createdAt,
+  };
+
+  return {
+    ...previous,
+    [existing.id]: next,
+  };
+}
+
+function applyReparentedBoardEvent(
+  previous: Readonly<Record<number, DashboardWorkItemSnapshot>>,
+  event: BoardEventSnapshot,
+  existing: DashboardWorkItemSnapshot | undefined,
+): Readonly<Record<number, DashboardWorkItemSnapshot>> {
+  if (!existing) {
+    return previous;
+  }
+
+  const payload = event.payload;
+  if (!isRecord(payload)) {
+    return previous;
+  }
+
+  const parentIdValue = payload.toParentId;
+  const parentId = typeof parentIdValue === 'number' ? parentIdValue : null;
+  const next: DashboardWorkItemSnapshot = {
+    ...existing,
+    parentId,
+    revision: typeof payload.revision === 'number' ? payload.revision : existing.revision,
+    updatedAt: event.createdAt,
+  };
+
+  return { ...previous, [existing.id]: next };
+}
+
+function applyStatusChangedBoardEvent(
+  previous: Readonly<Record<number, DashboardWorkItemSnapshot>>,
+  event: BoardEventSnapshot,
+  existing: DashboardWorkItemSnapshot | undefined,
+): Readonly<Record<number, DashboardWorkItemSnapshot>> {
+  if (!existing) {
+    return previous;
+  }
+
+  const payload = event.payload;
+  if (!isRecord(payload) || typeof payload.toStatus !== 'string') {
+    return previous;
+  }
+
+  const nextStatus = payload.toStatus;
+  const next: DashboardWorkItemSnapshot = {
+    ...existing,
+    status: nextStatus as WorkItemStatus,
+    revision: typeof payload.revision === 'number' ? payload.revision : existing.revision,
+    updatedAt: event.createdAt,
+  };
+
+  return { ...previous, [existing.id]: next };
+}
+
 function applyBoardEventToWorkItems(
   previous: Readonly<Record<number, DashboardWorkItemSnapshot>>,
   repository: DashboardRepositoryState,
@@ -135,111 +284,23 @@ function applyBoardEventToWorkItems(
   }
 
   const existing = previous[event.workItemId];
-  const payload = event.payload;
-
-  switch (event.eventType) {
-    case 'created': {
-      if (!isRecord(payload) || typeof payload.type !== 'string' || typeof payload.status !== 'string' || typeof payload.title !== 'string') {
-        return previous;
-      }
-
-      const next: DashboardWorkItemSnapshot = {
-        id: event.workItemId,
-        repositoryId: event.repositoryId,
-        type: payload.type as WorkItemType,
-        status: payload.status as WorkItemStatus,
-        title: payload.title,
-        description: null,
-        parentId: typeof payload.parentId === 'number' ? payload.parentId : null,
-        tags: Array.isArray(payload.tags) ? (payload.tags as string[]) : null,
-        plannedFiles: Array.isArray(payload.plannedFiles) ? (payload.plannedFiles as string[]) : null,
-        assignees: Array.isArray(payload.assignees) ? (payload.assignees as string[]) : null,
-        priority: typeof payload.priority === 'number' ? payload.priority : null,
-        estimate: typeof payload.estimate === 'number' ? payload.estimate : null,
-        revision: typeof payload.revision === 'number' ? payload.revision : 0,
-        createdAt: event.createdAt,
-        updatedAt: event.createdAt,
-      };
-
-      return {
-        ...previous,
-        [event.workItemId]: existing ? { ...existing, ...next } : next,
-      };
-    }
-
-    case 'updated': {
-      if (!existing) {
-        return previous;
-      }
-      if (!isRecord(payload) || !isRecord(payload.changes)) {
-        return previous;
-      }
-
-      const changes = payload.changes as Record<string, unknown>;
-      const next: DashboardWorkItemSnapshot = {
-        ...existing,
-        title: typeof changes.title === 'string' ? changes.title : existing.title,
-        description:
-          changes.description === null || typeof changes.description === 'string'
-            ? (changes.description as string | null)
-            : existing.description,
-        tags: Array.isArray(changes.tags) ? (changes.tags as string[]) : changes.tags === null ? null : existing.tags,
-        plannedFiles: Array.isArray(changes.plannedFiles) ? (changes.plannedFiles as string[]) : changes.plannedFiles === null ? null : existing.plannedFiles,
-        assignees: Array.isArray(changes.assignees) ? (changes.assignees as string[]) : changes.assignees === null ? null : existing.assignees,
-        priority: typeof changes.priority === 'number' ? changes.priority : changes.priority === null ? null : existing.priority,
-        estimate: typeof changes.estimate === 'number' ? changes.estimate : changes.estimate === null ? null : existing.estimate,
-        revision: typeof payload.revision === 'number' ? payload.revision : existing.revision,
-        updatedAt: event.createdAt,
-      };
-
-      return {
-        ...previous,
-        [existing.id]: next,
-      };
-    }
-
-    case 'reparented': {
-      if (!existing) {
-        return previous;
-      }
-      if (!isRecord(payload)) {
-        return previous;
-      }
-
-      const parentIdValue = payload.toParentId;
-      const parentId = typeof parentIdValue === 'number' ? parentIdValue : null;
-      const next: DashboardWorkItemSnapshot = {
-        ...existing,
-        parentId,
-        revision: typeof payload.revision === 'number' ? payload.revision : existing.revision,
-        updatedAt: event.createdAt,
-      };
-
-      return { ...previous, [existing.id]: next };
-    }
-
-    case 'status_changed': {
-      if (!existing) {
-        return previous;
-      }
-      if (!isRecord(payload) || typeof payload.toStatus !== 'string') {
-        return previous;
-      }
-
-      const nextStatus = payload.toStatus;
-      const next: DashboardWorkItemSnapshot = {
-        ...existing,
-        status: nextStatus as WorkItemStatus,
-        revision: typeof payload.revision === 'number' ? payload.revision : existing.revision,
-        updatedAt: event.createdAt,
-      };
-
-      return { ...previous, [existing.id]: next };
-    }
-
-    default:
-      return previous;
+  if (event.eventType === 'created') {
+    return applyCreatedBoardEvent(previous, event, existing);
   }
+
+  if (event.eventType === 'updated') {
+    return applyUpdatedBoardEvent(previous, event, existing);
+  }
+
+  if (event.eventType === 'reparented') {
+    return applyReparentedBoardEvent(previous, event, existing);
+  }
+
+  if (event.eventType === 'status_changed') {
+    return applyStatusChangedBoardEvent(previous, event, existing);
+  }
+
+  return previous;
 }
 
 async function fetchWorkItem(params: {
@@ -375,10 +436,6 @@ function BoardTaskCard({ task, selected, moving, onSelect }: BoardTaskCardProps)
     disabled: moving,
   });
 
-  const { ['aria-pressed']: ariaPressedIgnored, ['aria-disabled']: ariaDisabledIgnored, ...draggableAttributes } = attributes;
-  void ariaPressedIgnored;
-  void ariaDisabledIgnored;
-
   const style: CSSProperties = {
     transform: transform ? CSS.Translate.toString(transform) : undefined,
   };
@@ -391,6 +448,8 @@ function BoardTaskCard({ task, selected, moving, onSelect }: BoardTaskCardProps)
       data-dragging={isDragging ? 'true' : 'false'}
     >
       <button
+        {...attributes}
+        {...listeners}
         className={`board-card ${selected ? 'board-card--selected' : ''}`}
         data-selected={selected ? 'true' : 'false'}
         type="button"
@@ -398,8 +457,6 @@ function BoardTaskCard({ task, selected, moving, onSelect }: BoardTaskCardProps)
         aria-pressed={selected}
         aria-disabled={moving || undefined}
         disabled={moving}
-        {...draggableAttributes}
-        {...listeners}
       >
         <span className="board-card__title">{task.title}</span>
         <span className="board-card__id meta-text">#{task.id}</span>
@@ -513,7 +570,7 @@ export function RepositoryBoardPageContent({
     return grouped;
   }, [workItemsById]);
 
-  const selectedWorkItem = selectedWorkItemId !== null ? workItemsById[selectedWorkItemId] ?? null : null;
+  const selectedWorkItem = selectedWorkItemId === null ? null : (workItemsById[selectedWorkItemId] ?? null);
   const selectedParentChain = useMemo(() => {
     if (!selectedWorkItem) {
       return [];
@@ -561,6 +618,37 @@ export function RepositoryBoardPageContent({
       }, retryDelayMs);
     };
 
+    const handleBoardState = (rawEvent: Event): void => {
+      const payload = parseJsonSafely((rawEvent as MessageEvent).data);
+      if (!isRecord(payload) || payload.connectionState !== 'live') {
+        return;
+      }
+      setConnectionState('live');
+      if (typeof payload.latestEventId === 'number') {
+        lastEventIdRef.current = Math.max(lastEventIdRef.current, payload.latestEventId);
+      }
+    };
+
+    const handleBoardEvent = (rawEvent: Event): void => {
+      const parsed = parseBoardEvent(rawEvent);
+      if (!parsed) {
+        setConnectionError('Board event payload was malformed.');
+        return;
+      }
+
+      lastEventIdRef.current = Math.max(lastEventIdRef.current, parsed.id);
+      setWorkItemsById(previous => applyBoardEventToWorkItems(previous, repository, parsed));
+    };
+
+    const handleBoardError = (rawEvent: Event): void => {
+      const payload = parseJsonSafely((rawEvent as MessageEvent).data);
+      if (isRecord(payload) && typeof payload.message === 'string') {
+        setConnectionError(payload.message);
+        return;
+      }
+      setConnectionError('Board stream channel reported an error.');
+    };
+
     const connect = async (): Promise<void> => {
       if (disposed) {
         return;
@@ -579,36 +667,9 @@ export function RepositoryBoardPageContent({
         setConnectionError(null);
       };
 
-      source.addEventListener('board_state', (rawEvent: Event) => {
-        const payload = parseJsonSafely((rawEvent as MessageEvent).data);
-        if (!isRecord(payload) || payload.connectionState !== 'live') {
-          return;
-        }
-        setConnectionState('live');
-        if (typeof payload.latestEventId === 'number') {
-          lastEventIdRef.current = Math.max(lastEventIdRef.current, payload.latestEventId);
-        }
-      });
-
-      source.addEventListener('board_event', (rawEvent: Event) => {
-        const parsed = parseBoardEvent(rawEvent);
-        if (!parsed) {
-          setConnectionError('Board event payload was malformed.');
-          return;
-        }
-
-        lastEventIdRef.current = Math.max(lastEventIdRef.current, parsed.id);
-        setWorkItemsById(previous => applyBoardEventToWorkItems(previous, repository, parsed));
-      });
-
-      source.addEventListener('board_error', (rawEvent: Event) => {
-        const payload = parseJsonSafely((rawEvent as MessageEvent).data);
-        if (isRecord(payload) && typeof payload.message === 'string') {
-          setConnectionError(payload.message);
-          return;
-        }
-        setConnectionError('Board stream channel reported an error.');
-      });
+      source.addEventListener('board_state', handleBoardState);
+      source.addEventListener('board_event', handleBoardEvent);
+      source.addEventListener('board_error', handleBoardError);
 
       source.onerror = () => {
         closeSource();
@@ -638,15 +699,15 @@ export function RepositoryBoardPageContent({
       }
     };
 
-    window.addEventListener('keydown', handleKeyDown);
+    globalThis.addEventListener('keydown', handleKeyDown);
     return () => {
-      window.removeEventListener('keydown', handleKeyDown);
+      globalThis.removeEventListener('keydown', handleKeyDown);
     };
   }, [selectedWorkItemId]);
 
   const handleMove = async (workItemId: number, nextStatusRaw: string) => {
     const current = workItemsById[workItemId];
-    if (!current || current.type !== 'task') {
+    if (current?.type !== 'task') {
       return;
     }
 
@@ -744,14 +805,13 @@ export function RepositoryBoardPageContent({
   };
 
   const renderConnectionLabel = (): ReactNode => {
-    const label =
-      connectionState === 'live'
-        ? 'Live'
-        : connectionState === 'connecting'
-          ? 'Connecting'
-          : connectionState === 'reconnecting'
-            ? 'Reconnecting'
-            : 'Stale';
+    const labelByState: Readonly<Record<BoardConnectionState, string>> = {
+      live: 'Live',
+      connecting: 'Connecting',
+      reconnecting: 'Reconnecting',
+      stale: 'Stale',
+    };
+    const label = labelByState[connectionState];
     return (
       <div className="board-connection" aria-label={`Connection status: ${label}`}>
         <span className={`board-connection__dot board-connection__dot--${connectionState}`} aria-hidden="true" />
@@ -797,19 +857,15 @@ export function RepositoryBoardPageContent({
     const statusSelectId = `board-detail-status-${selectedWorkItem.id}`;
 
     return (
-      <div
-        className="board-drawer-scrim"
-        role="presentation"
-        onClick={clearSelection}
-      >
-        <aside
-          className="board-drawer"
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby={dialogTitleId}
-          aria-busy={moving || undefined}
-          onClick={(event) => event.stopPropagation()}
-        >
+      <div className="board-drawer-scrim">
+        <button
+          type="button"
+          className="board-drawer-scrim__backdrop"
+          onClick={clearSelection}
+          aria-label="Close task details"
+          title="Close"
+        />
+        <dialog className="board-drawer" open aria-modal="true" aria-labelledby={dialogTitleId} aria-busy={moving || undefined}>
           <header className="board-drawer__header">
             <span className="board-drawer__kicker meta-text">Task</span>
             <ActionButton
@@ -890,7 +946,7 @@ export function RepositoryBoardPageContent({
             <h5>Assignees</h5>
             {renderStringList(selectedWorkItem.assignees)}
           </div>
-        </aside>
+        </dialog>
       </div>
     );
   };
@@ -914,7 +970,7 @@ export function RepositoryBoardPageContent({
       ) : null}
       {renderBanner()}
 
-      <div className="board-kanban" role="region" aria-label="Task board">
+      <section className="board-kanban" aria-label="Task board">
         <DndContext
           sensors={sensors}
           collisionDetection={rectIntersection}
@@ -939,7 +995,7 @@ export function RepositoryBoardPageContent({
           </div>
           <DragOverlay>
             {activeDragWorkItemId !== null && workItemsById[activeDragWorkItemId] ? (
-              <div className="board-card board-card--overlay" role="presentation">
+              <div className="board-card board-card--overlay" aria-hidden="true">
                 <span className="board-card__title">{workItemsById[activeDragWorkItemId]!.title}</span>
                 <span className="board-card__id meta-text">#{activeDragWorkItemId}</span>
               </div>
@@ -947,7 +1003,7 @@ export function RepositoryBoardPageContent({
           </DragOverlay>
         </DndContext>
         {renderDetails()}
-      </div>
+      </section>
     </div>
   );
 }
