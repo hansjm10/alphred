@@ -214,6 +214,24 @@ function renderLaunchAction(
   );
 }
 
+function renderBoardAction(selectedRepository: DashboardRepositoryState | null): ReactNode {
+  if (selectedRepository !== null) {
+    const boardHref = `/repositories/${encodeURIComponent(selectedRepository.name)}/board`;
+
+    return (
+      <ButtonLink href={boardHref}>
+        Open Board
+      </ButtonLink>
+    );
+  }
+
+  return (
+    <ActionButton disabled aria-disabled="true">
+      Open Board
+    </ActionButton>
+  );
+}
+
 type RepositoriesListCardProps = Readonly<{
   syncBanner: SyncBanner | null;
   searchQuery: string;
@@ -488,6 +506,7 @@ function RepositoriesActionsPanel({
   const syncSelectedTone = isAddFormOpen ? undefined : 'primary';
   const shouldRenderAddRepositoryButton = hasRepositories && !isAddFormOpen;
   const shouldRenderLaunchAction = hasRepositories && !isAddFormOpen;
+  const shouldRenderBoardAction = hasRepositories && !isAddFormOpen;
 
   return (
     <Panel title="Repository actions" description="Select a row to inspect details and run sync.">
@@ -524,6 +543,8 @@ function RepositoriesActionsPanel({
         ) : null}
 
         {shouldRenderLaunchAction ? renderLaunchAction(canLaunchWithSelectedRepository, selectedRepository) : null}
+
+        {shouldRenderBoardAction ? renderBoardAction(selectedRepository) : null}
       </div>
       <p className="meta-text repo-add-hint">{addFormHint}</p>
 
