@@ -1,5 +1,15 @@
 import type { AlphredDatabase } from './connection.js';
 import { sql, type SQL } from 'drizzle-orm';
+import {
+  epicWorkItemStatuses,
+  featureWorkItemStatuses,
+  sqlEnumValues,
+  storyWorkItemStatuses,
+  taskWorkItemStatuses,
+  workItemActorTypes,
+  workItemEventTypes,
+  workItemTypes,
+} from './workItemEnums.js';
 
 type MigrationExecutor = Pick<AlphredDatabase, 'get' | 'run'>;
 
@@ -116,6 +126,121 @@ export function migrateDatabase(db: AlphredDatabase): void {
   tx.run(sql`DROP INDEX IF EXISTS repositories_name_idx`);
   tx.run(sql`CREATE INDEX IF NOT EXISTS repositories_created_at_idx
     ON repositories(created_at)`);
+
+  const workItemsDefinition = tx.get<{ sql: string | null }>(
+    sql`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'work_items'`,
+  )?.sql;
+  if (workItemsDefinition && !workItemsDefinition.includes('work_items_status_ck')) {
+    tx.run(sql`DROP TABLE IF EXISTS work_item_events`);
+    tx.run(sql`DROP TABLE IF EXISTS work_item_policies`);
+    tx.run(sql`DROP TABLE IF EXISTS work_items`);
+  }
+
+  tx.run(sql`CREATE TABLE IF NOT EXISTS work_items (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    repository_id INTEGER NOT NULL REFERENCES repositories(id) ON DELETE RESTRICT,
+    type TEXT NOT NULL,
+    status TEXT NOT NULL,
+    title TEXT NOT NULL,
+    description TEXT,
+    parent_id INTEGER REFERENCES work_items(id) ON DELETE CASCADE,
+    tags TEXT,
+    planned_files TEXT,
+    assignees TEXT,
+    priority INTEGER,
+    estimate INTEGER,
+    revision INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    CONSTRAINT work_items_type_ck
+      CHECK (type IN (${sqlEnumValues(workItemTypes)})),
+    CONSTRAINT work_items_status_ck
+      CHECK (
+        (type = 'epic' AND status IN (${sqlEnumValues(epicWorkItemStatuses)}))
+        OR (type = 'feature' AND status IN (${sqlEnumValues(featureWorkItemStatuses)}))
+        OR (type = 'story' AND status IN (${sqlEnumValues(storyWorkItemStatuses)}))
+        OR (type = 'task' AND status IN (${sqlEnumValues(taskWorkItemStatuses)}))
+      ),
+    CONSTRAINT work_items_title_not_empty_ck
+      CHECK (title <> ''),
+    CONSTRAINT work_items_revision_non_negative_ck
+      CHECK (revision >= 0),
+    CONSTRAINT work_items_parent_self_ck
+      CHECK (parent_id IS NULL OR parent_id <> id)
+  )`);
+  tx.run(sql`CREATE INDEX IF NOT EXISTS work_items_repository_id_status_idx
+    ON work_items(repository_id, status)`);
+  tx.run(sql`CREATE INDEX IF NOT EXISTS work_items_repository_id_parent_id_idx
+    ON work_items(repository_id, parent_id)`);
+  tx.run(sql`CREATE UNIQUE INDEX IF NOT EXISTS work_items_repository_id_id_uq
+    ON work_items(repository_id, id)`);
+
+  const workItemEventsDefinition = tx.get<{ sql: string | null }>(
+    sql`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'work_item_events'`,
+  )?.sql;
+  if (workItemEventsDefinition && !workItemEventsDefinition.includes('work_item_events_repository_id_work_item_id_fk')) {
+    tx.run(sql`DROP TABLE IF EXISTS work_item_events`);
+  }
+
+  const workItemPoliciesDefinition = tx.get<{ sql: string | null }>(
+    sql`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'work_item_policies'`,
+  )?.sql;
+  if (
+    workItemPoliciesDefinition &&
+    !workItemPoliciesDefinition.includes('work_item_policies_repository_id_epic_work_item_id_fk')
+  ) {
+    tx.run(sql`DROP TABLE IF EXISTS work_item_policies`);
+  }
+
+  tx.run(sql`CREATE TABLE IF NOT EXISTS work_item_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    repository_id INTEGER NOT NULL REFERENCES repositories(id) ON DELETE RESTRICT,
+    work_item_id INTEGER NOT NULL REFERENCES work_items(id) ON DELETE CASCADE,
+    event_type TEXT NOT NULL,
+    actor_type TEXT NOT NULL,
+    actor_label TEXT NOT NULL,
+    payload TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    CONSTRAINT work_item_events_repository_id_work_item_id_fk
+      FOREIGN KEY (repository_id, work_item_id)
+      REFERENCES work_items(repository_id, id)
+      ON DELETE CASCADE,
+    CONSTRAINT work_item_events_event_type_ck
+      CHECK (event_type IN (${sqlEnumValues(workItemEventTypes)})),
+    CONSTRAINT work_item_events_actor_type_ck
+      CHECK (actor_type IN (${sqlEnumValues(workItemActorTypes)})),
+    CONSTRAINT work_item_events_actor_label_not_empty_ck
+      CHECK (actor_label <> '')
+  )`);
+  tx.run(sql`CREATE INDEX IF NOT EXISTS work_item_events_work_item_id_created_at_idx
+    ON work_item_events(work_item_id, created_at)`);
+  tx.run(sql`CREATE INDEX IF NOT EXISTS work_item_events_repository_id_created_at_idx
+    ON work_item_events(repository_id, created_at)`);
+  tx.run(sql`CREATE INDEX IF NOT EXISTS work_item_events_created_at_idx
+    ON work_item_events(created_at)`);
+
+  tx.run(sql`CREATE TABLE IF NOT EXISTS work_item_policies (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    repository_id INTEGER NOT NULL REFERENCES repositories(id) ON DELETE RESTRICT,
+    epic_work_item_id INTEGER REFERENCES work_items(id) ON DELETE CASCADE,
+    payload TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    CONSTRAINT work_item_policies_repository_id_epic_work_item_id_fk
+      FOREIGN KEY (repository_id, epic_work_item_id)
+      REFERENCES work_items(repository_id, id)
+      ON DELETE CASCADE
+  )`);
+  tx.run(sql`CREATE UNIQUE INDEX IF NOT EXISTS work_item_policies_repo_single_uq
+    ON work_item_policies(repository_id)
+    WHERE epic_work_item_id IS NULL`);
+  tx.run(sql`CREATE UNIQUE INDEX IF NOT EXISTS work_item_policies_repo_epic_uq
+    ON work_item_policies(repository_id, epic_work_item_id)
+    WHERE epic_work_item_id IS NOT NULL`);
+  tx.run(sql`CREATE INDEX IF NOT EXISTS work_item_policies_repository_id_epic_work_item_id_idx
+    ON work_item_policies(repository_id, epic_work_item_id)`);
+  tx.run(sql`CREATE INDEX IF NOT EXISTS work_item_policies_repository_id_idx
+    ON work_item_policies(repository_id)`);
 
   tx.run(sql`CREATE TABLE IF NOT EXISTS agent_models (
     id INTEGER PRIMARY KEY AUTOINCREMENT,

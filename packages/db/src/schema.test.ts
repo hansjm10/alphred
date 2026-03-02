@@ -7,6 +7,9 @@ import {
   phaseArtifacts,
   promptTemplates,
   repositories,
+  workItemEvents,
+  workItemPolicies,
+  workItems,
   runNodeDiagnostics,
   runNodeEdges,
   runNodeStreamEvents,
@@ -693,6 +696,99 @@ describe('database schema hardening', () => {
 
     const trees = db.select({ id: workflowTrees.id }).from(workflowTrees).all();
     expect(trees).toHaveLength(1);
+  });
+
+  it('drops legacy work_items tables that are missing the type/status checks', () => {
+    const db = createDatabase(':memory:');
+
+    db.run(sql`CREATE TABLE work_items (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      repository_id INTEGER NOT NULL,
+      type TEXT NOT NULL,
+      status TEXT NOT NULL,
+      title TEXT NOT NULL,
+      parent_id INTEGER
+    )`);
+    db.run(sql`CREATE TABLE work_item_events (id INTEGER PRIMARY KEY AUTOINCREMENT)`);
+    db.run(sql`CREATE TABLE work_item_policies (id INTEGER PRIMARY KEY AUTOINCREMENT)`);
+
+    expect(() => migrateDatabase(db)).not.toThrow();
+
+    const workItemsDefinition = db.get<{ sql: string | null }>(
+      sql`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'work_items'`,
+    )?.sql;
+    const workItemEventsDefinition = db.get<{ sql: string | null }>(
+      sql`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'work_item_events'`,
+    )?.sql;
+    const workItemPoliciesDefinition = db.get<{ sql: string | null }>(
+      sql`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'work_item_policies'`,
+    )?.sql;
+
+    expect(workItemsDefinition).toContain('work_items_status_ck');
+    expect(workItemEventsDefinition).toContain('work_item_events_repository_id_work_item_id_fk');
+    expect(workItemPoliciesDefinition).toContain('work_item_policies_repository_id_epic_work_item_id_fk');
+  });
+
+  it('drops legacy work_item_events tables that are missing the composite repository/work-item foreign key', () => {
+    const db = createDatabase(':memory:');
+
+    db.run(sql`CREATE TABLE work_items (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      repository_id INTEGER NOT NULL,
+      type TEXT NOT NULL,
+      status TEXT NOT NULL,
+      title TEXT NOT NULL,
+      parent_id INTEGER,
+      CONSTRAINT work_items_status_ck CHECK (status <> '')
+    )`);
+    db.run(sql`CREATE TABLE work_item_events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      repository_id INTEGER NOT NULL,
+      work_item_id INTEGER NOT NULL,
+      event_type TEXT NOT NULL,
+      actor_type TEXT NOT NULL,
+      actor_label TEXT NOT NULL,
+      payload TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    )`);
+
+    expect(() => migrateDatabase(db)).not.toThrow();
+
+    const workItemEventsDefinition = db.get<{ sql: string | null }>(
+      sql`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'work_item_events'`,
+    )?.sql;
+
+    expect(workItemEventsDefinition).toContain('work_item_events_repository_id_work_item_id_fk');
+  });
+
+  it('drops legacy work_item_policies tables that are missing the composite repository/epic foreign key', () => {
+    const db = createDatabase(':memory:');
+
+    db.run(sql`CREATE TABLE work_items (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      repository_id INTEGER NOT NULL,
+      type TEXT NOT NULL,
+      status TEXT NOT NULL,
+      title TEXT NOT NULL,
+      parent_id INTEGER,
+      CONSTRAINT work_items_status_ck CHECK (status <> '')
+    )`);
+    db.run(sql`CREATE TABLE work_item_policies (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      repository_id INTEGER NOT NULL,
+      epic_work_item_id INTEGER,
+      payload TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    )`);
+
+    expect(() => migrateDatabase(db)).not.toThrow();
+
+    const workItemPoliciesDefinition = db.get<{ sql: string | null }>(
+      sql`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'work_item_policies'`,
+    )?.sql;
+
+    expect(workItemPoliciesDefinition).toContain('work_item_policies_repository_id_epic_work_item_id_fk');
   });
 
   it('allows only one draft workflow tree per tree key', () => {
@@ -1857,5 +1953,309 @@ describe('database schema hardening', () => {
     expect(names.has('run_node_stream_events_run_id_created_at_idx')).toBe(true);
     expect(names.has('run_node_stream_events_run_node_id_created_at_idx')).toBe(true);
     expect(names.has('run_node_stream_events_created_at_idx')).toBe(true);
+  });
+});
+
+describe('work items schema', () => {
+  it('enforces work item type checks', () => {
+    const db = createDatabase(':memory:');
+    migrateDatabase(db);
+
+    const repository = db
+      .insert(repositories)
+      .values({
+        name: 'work-items-repo',
+        provider: 'github',
+        remoteUrl: 'https://example.com/repo.git',
+        remoteRef: 'main',
+      })
+      .returning({ id: repositories.id })
+      .get();
+
+    expect(() =>
+      db.insert(workItems).values({
+        repositoryId: repository.id,
+        type: 'not-a-type',
+        status: 'Draft',
+        title: 'Invalid type',
+        revision: 0,
+      }).run(),
+    ).toThrow();
+
+    const inserted = db
+      .insert(workItems)
+      .values({
+        repositoryId: repository.id,
+        type: 'task',
+        status: 'Draft',
+        title: 'Valid type',
+        revision: 0,
+      })
+      .returning({ id: workItems.id })
+      .get();
+
+    expect(inserted.id).toBeGreaterThan(0);
+  });
+
+  it('cascades child work items when deleting parent', () => {
+    const db = createDatabase(':memory:');
+    migrateDatabase(db);
+
+    const repository = db
+      .insert(repositories)
+      .values({
+        name: 'cascade-repo',
+        provider: 'github',
+        remoteUrl: 'https://example.com/repo.git',
+        remoteRef: 'main',
+      })
+      .returning({ id: repositories.id })
+      .get();
+
+    const parent = db
+      .insert(workItems)
+      .values({
+        repositoryId: repository.id,
+        type: 'epic',
+        status: 'Draft',
+        title: 'Parent',
+        revision: 0,
+      })
+      .returning({ id: workItems.id })
+      .get();
+
+    const child = db
+      .insert(workItems)
+      .values({
+        repositoryId: repository.id,
+        type: 'feature',
+        status: 'Draft',
+        title: 'Child',
+        parentId: parent.id,
+        revision: 0,
+      })
+      .returning({ id: workItems.id })
+      .get();
+
+    expect(child.id).toBeGreaterThan(0);
+
+    db.delete(workItems).where(eq(workItems.id, parent.id)).run();
+
+    const remainingChildren = db
+      .select({ id: workItems.id })
+      .from(workItems)
+      .where(eq(workItems.id, child.id))
+      .all();
+
+    expect(remainingChildren).toHaveLength(0);
+  });
+
+  it('enforces work item event actor_type and event_type checks', () => {
+    const db = createDatabase(':memory:');
+    migrateDatabase(db);
+
+    const repository = db
+      .insert(repositories)
+      .values({
+        name: 'events-repo',
+        provider: 'github',
+        remoteUrl: 'https://example.com/repo.git',
+        remoteRef: 'main',
+      })
+      .returning({ id: repositories.id })
+      .get();
+
+    const item = db
+      .insert(workItems)
+      .values({
+        repositoryId: repository.id,
+        type: 'task',
+        status: 'Draft',
+        title: 'Task',
+        revision: 0,
+      })
+      .returning({ id: workItems.id })
+      .get();
+
+    const okEvent = db
+      .insert(workItemEvents)
+      .values({
+        repositoryId: repository.id,
+        workItemId: item.id,
+        eventType: 'created',
+        actorType: 'human',
+        actorLabel: 'alice',
+        payload: { note: 'created' },
+      })
+      .returning({ id: workItemEvents.id })
+      .get();
+
+    expect(okEvent.id).toBeGreaterThan(0);
+
+    expect(() =>
+      db.insert(workItemEvents).values({
+        repositoryId: repository.id,
+        workItemId: item.id,
+        eventType: 'created',
+        actorType: 'robot',
+        actorLabel: 'alice',
+        payload: {},
+      }).run(),
+    ).toThrow();
+
+    expect(() =>
+      db.insert(workItemEvents).values({
+        repositoryId: repository.id,
+        workItemId: item.id,
+        eventType: 'something_else',
+        actorType: 'human',
+        actorLabel: 'alice',
+        payload: {},
+      }).run(),
+    ).toThrow();
+  });
+
+  it('enforces policy uniqueness for repo-level and per-epic overrides', () => {
+    const db = createDatabase(':memory:');
+    migrateDatabase(db);
+
+    const repository = db
+      .insert(repositories)
+      .values({
+        name: 'policy-repo',
+        provider: 'github',
+        remoteUrl: 'https://example.com/repo.git',
+        remoteRef: 'main',
+      })
+      .returning({ id: repositories.id })
+      .get();
+
+    const epicA = db
+      .insert(workItems)
+      .values({
+        repositoryId: repository.id,
+        type: 'epic',
+        status: 'Draft',
+        title: 'Epic A',
+        revision: 0,
+      })
+      .returning({ id: workItems.id })
+      .get();
+
+    const epicB = db
+      .insert(workItems)
+      .values({
+        repositoryId: repository.id,
+        type: 'epic',
+        status: 'Draft',
+        title: 'Epic B',
+        revision: 0,
+      })
+      .returning({ id: workItems.id })
+      .get();
+
+    db.insert(workItemPolicies)
+      .values({
+        repositoryId: repository.id,
+        epicWorkItemId: null,
+        payload: { budget: 100 },
+      })
+      .run();
+
+    expect(() =>
+      db.insert(workItemPolicies).values({
+        repositoryId: repository.id,
+        epicWorkItemId: null,
+        payload: { budget: 200 },
+      }).run(),
+    ).toThrow();
+
+    db.insert(workItemPolicies)
+      .values({
+        repositoryId: repository.id,
+        epicWorkItemId: epicA.id,
+        payload: { budget: 50 },
+      })
+      .run();
+
+    expect(() =>
+      db.insert(workItemPolicies).values({
+        repositoryId: repository.id,
+        epicWorkItemId: epicA.id,
+        payload: { budget: 60 },
+      }).run(),
+    ).toThrow();
+
+    const secondEpicOverride = db
+      .insert(workItemPolicies)
+      .values({
+        repositoryId: repository.id,
+        epicWorkItemId: epicB.id,
+        payload: { budget: 70 },
+      })
+      .returning({ id: workItemPolicies.id })
+      .get();
+
+    expect(secondEpicOverride.id).toBeGreaterThan(0);
+  });
+
+  it('enforces per-type status checks', () => {
+    const db = createDatabase(':memory:');
+    migrateDatabase(db);
+
+    const repository = db
+      .insert(repositories)
+      .values({
+        name: 'status-repo',
+        provider: 'github',
+        remoteUrl: 'https://example.com/repo.git',
+        remoteRef: 'main',
+      })
+      .returning({ id: repositories.id })
+      .get();
+
+    expect(() =>
+      db.insert(workItems).values({
+        repositoryId: repository.id,
+        type: 'story',
+        status: 'Ready',
+        title: 'Story cannot be Ready',
+        revision: 0,
+      }).run(),
+    ).toThrow();
+
+    expect(() =>
+      db.insert(workItems).values({
+        repositoryId: repository.id,
+        type: 'task',
+        status: 'NeedsBreakdown',
+        title: 'Task cannot need breakdown',
+        revision: 0,
+      }).run(),
+    ).toThrow();
+
+    expect(() =>
+      db.insert(workItems).values({
+        repositoryId: repository.id,
+        type: 'epic',
+        status: 'NeedsBreakdown',
+        title: 'Epic cannot need breakdown',
+        revision: 0,
+      }).run(),
+    ).toThrow();
+
+    const okEpic = db
+      .insert(workItems)
+      .values({
+        repositoryId: repository.id,
+        type: 'epic',
+        status: 'Approved',
+        title: 'Epic approved',
+        revision: 0,
+      })
+      .returning({ id: workItems.id })
+      .get();
+
+    expect(okEpic.id).toBeGreaterThan(0);
   });
 });

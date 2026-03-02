@@ -2266,14 +2266,15 @@ describe('RunDetailContent realtime updates', () => {
       />,
     );
 
-    await waitFor(() => {
-      expect(
-        screen.getByText((content) => content.includes('stream payload payload payload payload payload')),
-      ).toBeInTheDocument();
-    });
+    const eventSummaryText = await screen.findByText((content) =>
+      content.includes('stream payload payload payload payload payload'),
+    );
+    await user.click(eventSummaryText.closest('button') ?? eventSummaryText);
 
     const detailPane = screen.getByLabelText('Agent stream inspector detail');
-    expect(detailPane).toHaveTextContent(longStreamPayload.trim());
+    await waitFor(() => {
+      expect(detailPane).toHaveTextContent(longStreamPayload.trim());
+    });
     await user.click(within(detailPane).getByRole('button', { name: 'Disable line wrap' }));
     expect(within(detailPane).getByRole('button', { name: 'Enable line wrap' })).toBeInTheDocument();
   });

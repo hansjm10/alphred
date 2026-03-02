@@ -1,5 +1,15 @@
 import { sql } from 'drizzle-orm';
 import { check, foreignKey, index, integer, sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqlite-core';
+import {
+  epicWorkItemStatuses,
+  featureWorkItemStatuses,
+  sqlEnumValues,
+  storyWorkItemStatuses,
+  taskWorkItemStatuses,
+  workItemActorTypes,
+  workItemEventTypes,
+  workItemTypes,
+} from './workItemEnums.js';
 
 const utcNow = sql`(strftime('%Y-%m-%dT%H:%M:%fZ','now'))`;
 
@@ -86,6 +96,118 @@ export const repositories = sqliteTable(
     providerCheck: check('repositories_provider_ck', sql`${table.provider} in ('github', 'azure-devops')`),
     cloneStatusCheck: check('repositories_clone_status_ck', sql`${table.cloneStatus} in ('pending', 'cloned', 'error')`),
     createdAtIdx: index('repositories_created_at_idx').on(table.createdAt),
+  }),
+);
+
+export const workItems = sqliteTable(
+  'work_items',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    repositoryId: integer('repository_id')
+      .notNull()
+      .references(() => repositories.id, { onDelete: 'restrict' }),
+    type: text('type').notNull(),
+    status: text('status').notNull(),
+    title: text('title').notNull(),
+    description: text('description'),
+    parentId: integer('parent_id'),
+    tags: text('tags', { mode: 'json' }),
+    plannedFiles: text('planned_files', { mode: 'json' }),
+    assignees: text('assignees', { mode: 'json' }),
+    priority: integer('priority'),
+    estimate: integer('estimate'),
+    revision: integer('revision').notNull().default(0),
+    createdAt: text('created_at').notNull().default(utcNow),
+    updatedAt: text('updated_at').notNull().default(utcNow),
+  },
+  table => ({
+    repositoryIdIdUnique: uniqueIndex('work_items_repository_id_id_uq').on(table.repositoryId, table.id),
+    parentFk: foreignKey({
+      columns: [table.parentId],
+      foreignColumns: [table.id],
+      name: 'work_items_parent_id_fk',
+    }).onDelete('cascade'),
+    typeCheck: check('work_items_type_ck', sql`${table.type} in (${sqlEnumValues(workItemTypes)})`),
+    statusCheck: check(
+      'work_items_status_ck',
+      sql`(
+        (${table.type} = 'epic' and ${table.status} in (${sqlEnumValues(epicWorkItemStatuses)}))
+        or (${table.type} = 'feature' and ${table.status} in (${sqlEnumValues(featureWorkItemStatuses)}))
+        or (${table.type} = 'story' and ${table.status} in (${sqlEnumValues(storyWorkItemStatuses)}))
+        or (${table.type} = 'task' and ${table.status} in (${sqlEnumValues(taskWorkItemStatuses)}))
+      )`,
+    ),
+    titleNotEmptyCheck: check('work_items_title_not_empty_ck', sql`${table.title} <> ''`),
+    revisionNonNegativeCheck: check('work_items_revision_non_negative_ck', sql`${table.revision} >= 0`),
+    parentSelfCheck: check(
+      'work_items_parent_self_ck',
+      sql`${table.parentId} is null or ${table.parentId} <> ${table.id}`,
+    ),
+    repositoryStatusIdx: index('work_items_repository_id_status_idx').on(table.repositoryId, table.status),
+    repositoryParentIdx: index('work_items_repository_id_parent_id_idx').on(table.repositoryId, table.parentId),
+  }),
+);
+
+export const workItemEvents = sqliteTable(
+  'work_item_events',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    repositoryId: integer('repository_id')
+      .notNull()
+      .references(() => repositories.id, { onDelete: 'restrict' }),
+    workItemId: integer('work_item_id')
+      .notNull()
+      .references(() => workItems.id, { onDelete: 'cascade' }),
+    eventType: text('event_type').notNull(),
+    actorType: text('actor_type').notNull(),
+    actorLabel: text('actor_label').notNull(),
+    payload: text('payload', { mode: 'json' }).notNull(),
+    createdAt: text('created_at').notNull().default(utcNow),
+  },
+  table => ({
+    workItemRepoFk: foreignKey({
+      columns: [table.repositoryId, table.workItemId],
+      foreignColumns: [workItems.repositoryId, workItems.id],
+      name: 'work_item_events_repository_id_work_item_id_fk',
+    }).onDelete('cascade'),
+    eventTypeCheck: check('work_item_events_event_type_ck', sql`${table.eventType} in (${sqlEnumValues(workItemEventTypes)})`),
+    actorTypeCheck: check('work_item_events_actor_type_ck', sql`${table.actorType} in (${sqlEnumValues(workItemActorTypes)})`),
+    actorLabelNotEmptyCheck: check('work_item_events_actor_label_not_empty_ck', sql`${table.actorLabel} <> ''`),
+    workItemCreatedAtIdx: index('work_item_events_work_item_id_created_at_idx').on(table.workItemId, table.createdAt),
+    repoCreatedAtIdx: index('work_item_events_repository_id_created_at_idx').on(table.repositoryId, table.createdAt),
+    createdAtIdx: index('work_item_events_created_at_idx').on(table.createdAt),
+  }),
+);
+
+export const workItemPolicies = sqliteTable(
+  'work_item_policies',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    repositoryId: integer('repository_id')
+      .notNull()
+      .references(() => repositories.id, { onDelete: 'restrict' }),
+    epicWorkItemId: integer('epic_work_item_id').references(() => workItems.id, { onDelete: 'cascade' }),
+    payload: text('payload', { mode: 'json' }).notNull(),
+    createdAt: text('created_at').notNull().default(utcNow),
+    updatedAt: text('updated_at').notNull().default(utcNow),
+  },
+  table => ({
+    epicWorkItemRepoFk: foreignKey({
+      columns: [table.repositoryId, table.epicWorkItemId],
+      foreignColumns: [workItems.repositoryId, workItems.id],
+      name: 'work_item_policies_repository_id_epic_work_item_id_fk',
+    }).onDelete('cascade'),
+    singleRepoPolicyUnique: uniqueIndex('work_item_policies_repo_single_uq')
+      .on(table.repositoryId)
+      .where(sql`${table.epicWorkItemId} is null`),
+    singleEpicOverrideUnique: uniqueIndex('work_item_policies_repo_epic_uq')
+      .on(table.repositoryId, table.epicWorkItemId)
+      .where(sql`${table.epicWorkItemId} is not null`),
+    repositoryEpicIdx: index('work_item_policies_repository_id_epic_work_item_id_idx').on(
+      table.repositoryId,
+      table.epicWorkItemId,
+    ),
+    repositoryIdx: index('work_item_policies_repository_id_idx').on(table.repositoryId),
   }),
 );
 
