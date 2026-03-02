@@ -1,7 +1,20 @@
 'use client';
 
 import { taskWorkItemStatuses, type TaskWorkItemStatus, type WorkItemStatus, type WorkItemType } from '@alphred/shared';
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import type { DragEndEvent, DragStartEvent, UniqueIdentifier } from '@dnd-kit/core';
+import {
+  DndContext,
+  DragOverlay,
+  MouseSensor,
+  rectIntersection,
+  useDndContext,
+  useDraggable,
+  useDroppable,
+  useSensor,
+  useSensors,
+} from '@dnd-kit/core';
+import { CSS } from '@dnd-kit/utilities';
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import type { DashboardRepositoryState, DashboardWorkItemSnapshot } from '../../../../src/server/dashboard-contracts';
 import { ActionButton } from '../../../ui/primitives';
 
@@ -96,6 +109,20 @@ function formatTaskStatusLabel(status: TaskWorkItemStatus): string {
     default:
       return status;
   }
+}
+
+type DragWorkItemData = Readonly<{
+  workItemId: number;
+  fromStatus: TaskWorkItemStatus;
+}>;
+
+function isDragWorkItemData(value: unknown): value is DragWorkItemData {
+  return (
+    isRecord(value) &&
+    typeof value.workItemId === 'number' &&
+    typeof value.fromStatus === 'string' &&
+    isTaskStatus(value.fromStatus)
+  );
 }
 
 function applyBoardEventToWorkItems(
@@ -331,6 +358,109 @@ function renderStringList(items: string[] | null): ReactNode {
   );
 }
 
+type BoardTaskCardProps = Readonly<{
+  task: DashboardWorkItemSnapshot;
+  selected: boolean;
+  moving: boolean;
+  onSelect: (workItemId: number) => void;
+}>;
+
+function BoardTaskCard({ task, selected, moving, onSelect }: BoardTaskCardProps) {
+  const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
+    id: task.id,
+    data: {
+      workItemId: task.id,
+      fromStatus: task.status as TaskWorkItemStatus,
+    } satisfies DragWorkItemData,
+    disabled: moving,
+  });
+
+  const { ['aria-pressed']: ariaPressedIgnored, ['aria-disabled']: ariaDisabledIgnored, ...draggableAttributes } = attributes;
+  void ariaPressedIgnored;
+  void ariaDisabledIgnored;
+
+  const style: CSSProperties = {
+    transform: transform ? CSS.Translate.toString(transform) : undefined,
+  };
+
+  return (
+    <li
+      ref={setNodeRef}
+      style={style}
+      className={`board-card-shell${isDragging ? ' board-card-shell--dragging' : ''}`}
+      data-dragging={isDragging ? 'true' : 'false'}
+    >
+      <button
+        className={`board-card ${selected ? 'board-card--selected' : ''}`}
+        data-selected={selected ? 'true' : 'false'}
+        type="button"
+        onClick={() => onSelect(task.id)}
+        aria-pressed={selected}
+        aria-disabled={moving || undefined}
+        disabled={moving}
+        {...draggableAttributes}
+        {...listeners}
+      >
+        <span className="board-card__title">{task.title}</span>
+        <span className="board-card__id meta-text">#{task.id}</span>
+      </button>
+    </li>
+  );
+}
+
+type BoardColumnProps = Readonly<{
+  status: TaskWorkItemStatus;
+  tasks: readonly DashboardWorkItemSnapshot[];
+  selectedWorkItemId: number | null;
+  movingWorkItemIds: ReadonlySet<number>;
+  onSelectWorkItem: (workItemId: number) => void;
+}>;
+
+function BoardColumn({ status, tasks, selectedWorkItemId, movingWorkItemIds, onSelectWorkItem }: BoardColumnProps) {
+  const { isOver, setNodeRef } = useDroppable({
+    id: status,
+  });
+  const { active } = useDndContext();
+
+  const activeData = active?.data.current;
+  const isValidDrag = isDragWorkItemData(activeData);
+  const isFromSameColumn = isValidDrag && activeData.fromStatus === status;
+
+  return (
+    <section
+      ref={setNodeRef}
+      className={`board-column${isOver ? ' board-column--over' : ''}${isFromSameColumn ? ' board-column--same' : ''}`}
+      aria-label={`Tasks ${status}`}
+      data-status={status}
+      data-over={isOver ? 'true' : 'false'}
+    >
+      <header className="board-column__header">
+        <h4 className="board-column__title">{formatTaskStatusLabel(status)}</h4>
+        <span className="board-column__count meta-text" aria-label={`${tasks.length} tasks`}>
+          {tasks.length}
+        </span>
+      </header>
+      {tasks.length === 0 ? (
+        <p className="meta-text board-column__empty" data-over={isOver ? 'true' : 'false'}>
+          {isValidDrag && isOver ? 'Drop to move here.' : 'No tasks.'}
+        </p>
+      ) : (
+        <ul className="board-column__list" aria-label={`${status} tasks`}>
+          {tasks.map(task => (
+            <BoardTaskCard
+              key={task.id}
+              task={task}
+              selected={selectedWorkItemId === task.id}
+              moving={movingWorkItemIds.has(task.id)}
+              onSelect={onSelectWorkItem}
+            />
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+}
+
 export type RepositoryBoardPageContentProps = Readonly<{
   repository: DashboardRepositoryState;
   actor: WorkItemActor;
@@ -352,6 +482,7 @@ export function RepositoryBoardPageContent({
   const [connectionError, setConnectionError] = useState<string | null>(null);
   const [actionMessage, setActionMessage] = useState<{ tone: 'success' | 'error'; message: string } | null>(null);
   const [movingWorkItemIds, setMovingWorkItemIds] = useState<ReadonlySet<number>>(() => new Set());
+  const [activeDragWorkItemId, setActiveDragWorkItemId] = useState<number | null>(null);
 
   const lastEventIdRef = useRef<number>(initialLatestEventId);
 
@@ -575,6 +706,43 @@ export function RepositoryBoardPageContent({
     }
   };
 
+  const sensors = useSensors(
+    useSensor(MouseSensor, {
+      activationConstraint: { distance: 8 },
+    }),
+  );
+
+  const handleDragStart = (event: DragStartEvent) => {
+    const id = event.active.id;
+    const workItemId = typeof id === 'number' ? id : Number(id);
+    if (!Number.isFinite(workItemId)) {
+      setActiveDragWorkItemId(null);
+      return;
+    }
+    setActiveDragWorkItemId(workItemId);
+  };
+
+  const handleDragEnd = async (event: DragEndEvent) => {
+    setActiveDragWorkItemId(null);
+
+    const activeId: UniqueIdentifier = event.active.id;
+    const workItemId = typeof activeId === 'number' ? activeId : Number(activeId);
+    if (!Number.isFinite(workItemId)) {
+      return;
+    }
+
+    const overId = event.over?.id;
+    if (typeof overId !== 'string') {
+      return;
+    }
+
+    if (movingWorkItemIds.has(workItemId)) {
+      return;
+    }
+
+    await handleMove(workItemId, overId);
+  };
+
   const renderConnectionLabel = (): ReactNode => {
     const label =
       connectionState === 'live'
@@ -610,46 +778,6 @@ export function RepositoryBoardPageContent({
       <output className={className} aria-live="polite">
         {actionMessage.message}
       </output>
-    );
-  };
-
-  const renderTaskCard = (task: DashboardWorkItemSnapshot): ReactNode => {
-    const selected = selectedWorkItemId === task.id;
-
-    return (
-      <li key={task.id}>
-        <button
-          className={`board-card ${selected ? 'board-card--selected' : ''}`}
-          data-selected={selected ? 'true' : 'false'}
-          type="button"
-          onClick={() => setSelectedWorkItemId(task.id)}
-          aria-pressed={selected}
-        >
-          <span className="board-card__title">{task.title}</span>
-          <span className="board-card__id meta-text">#{task.id}</span>
-        </button>
-      </li>
-    );
-  };
-
-  const renderColumn = (status: TaskWorkItemStatus): ReactNode => {
-    const tasks = tasksByStatus[status];
-    return (
-      <section key={status} className="board-column" aria-label={`Tasks ${status}`} data-status={status}>
-        <header className="board-column__header">
-          <h4 className="board-column__title">{formatTaskStatusLabel(status)}</h4>
-          <span className="board-column__count meta-text" aria-label={`${tasks.length} tasks`}>
-            {tasks.length}
-          </span>
-        </header>
-        {tasks.length === 0 ? (
-          <p className="meta-text board-column__empty">No tasks.</p>
-        ) : (
-          <ul className="board-column__list" aria-label={`${status} tasks`}>
-            {tasks.map(renderTaskCard)}
-          </ul>
-        )}
-      </section>
     );
   };
 
@@ -772,7 +900,7 @@ export function RepositoryBoardPageContent({
       <div className="board-page-header">
         <div>
           <h2 className="board-page-title">{repository.name} board</h2>
-          <p className="meta-text">Repo-scoped tasks grouped by status with realtime updates.</p>
+          <p className="meta-text">Repo-scoped tasks grouped by status with realtime updates. Drag cards between columns to move them.</p>
         </div>
         <div className="board-page-header__status">
           {renderConnectionLabel()}
@@ -787,11 +915,37 @@ export function RepositoryBoardPageContent({
       {renderBanner()}
 
       <div className="board-kanban" role="region" aria-label="Task board">
-        <div className="board-columns-shell" aria-label="Board columns">
-          <div className="board-columns">
-            {taskWorkItemStatuses.map(renderColumn)}
+        <DndContext
+          sensors={sensors}
+          collisionDetection={rectIntersection}
+          onDragStart={handleDragStart}
+          onDragEnd={(event) => {
+            void handleDragEnd(event);
+          }}
+        >
+          <div className="board-columns-shell" aria-label="Board columns">
+            <div className="board-columns">
+              {taskWorkItemStatuses.map(status => (
+                <BoardColumn
+                  key={status}
+                  status={status}
+                  tasks={tasksByStatus[status]}
+                  selectedWorkItemId={selectedWorkItemId}
+                  movingWorkItemIds={movingWorkItemIds}
+                  onSelectWorkItem={(workItemId) => setSelectedWorkItemId(workItemId)}
+                />
+              ))}
+            </div>
           </div>
-        </div>
+          <DragOverlay>
+            {activeDragWorkItemId !== null && workItemsById[activeDragWorkItemId] ? (
+              <div className="board-card board-card--overlay" role="presentation">
+                <span className="board-card__title">{workItemsById[activeDragWorkItemId]!.title}</span>
+                <span className="board-card__id meta-text">#{activeDragWorkItemId}</span>
+              </div>
+            ) : null}
+          </DragOverlay>
+        </DndContext>
         {renderDetails()}
       </div>
     </div>

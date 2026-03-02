@@ -551,14 +551,14 @@ output {
   background:
     radial-gradient(1200px 520px at 10% -10%, color-mix(in srgb, var(--accent-active) 10%, transparent), transparent 60%),
     linear-gradient(180deg, color-mix(in srgb, var(--bg-surface) 80%, var(--bg-canvas)), var(--bg-surface)),
-    linear-gradient(90deg, color-mix(in srgb, var(--border-default) 22%, transparent) 1px, transparent 1px),
-    linear-gradient(0deg, color-mix(in srgb, var(--border-default) 18%, transparent) 1px, transparent 1px),
+    linear-gradient(90deg, color-mix(in srgb, var(--border-default) 18%, transparent) 1px, transparent 1px),
+    linear-gradient(0deg, color-mix(in srgb, var(--border-default) 14%, transparent) 1px, transparent 1px),
     var(--bg-surface);
   background-size: auto, auto, 28px 28px, 28px 28px, auto;
   border: 1px solid var(--border-default);
-  border-radius: var(--radius-md);
+  border-radius: 16px;
   box-shadow: var(--shadow-sm);
-  padding: var(--space-2);
+  padding: var(--space-3);
 }
 
 .board-connection {
@@ -686,6 +686,24 @@ output {
   scroll-snap-align: start;
 }
 
+.board-column--over {
+  border-color: color-mix(in srgb, var(--board-status-accent) 42%, var(--border-default));
+  box-shadow:
+    0 1px 0 rgba(15, 23, 42, 0.05),
+    0 0 0 3px color-mix(in srgb, var(--board-status-accent) 18%, transparent);
+}
+
+.board-column--same.board-column--over {
+  box-shadow:
+    0 1px 0 rgba(15, 23, 42, 0.05),
+    0 0 0 3px color-mix(in srgb, var(--border-default) 18%, transparent);
+}
+
+.board-column,
+.board-column__empty {
+  transition: border-color var(--motion-fast), box-shadow var(--motion-fast), background-color var(--motion-fast);
+}
+
 .board-column[data-status="Draft"] {
   --board-status-accent: color-mix(in srgb, var(--text-muted) 58%, var(--border-default));
 }
@@ -757,6 +775,20 @@ output {
   padding: 10px;
 }
 
+.board-column__empty[data-over="true"] {
+  background: color-mix(in srgb, var(--board-status-accent) 12%, var(--bg-surface));
+  border-color: color-mix(in srgb, var(--board-status-accent) 35%, var(--border-default));
+  color: color-mix(in srgb, var(--text-secondary) 86%, var(--board-status-accent));
+}
+
+.board-card-shell {
+  position: relative;
+}
+
+.board-card-shell--dragging {
+  z-index: 10;
+}
+
 .board-card {
   appearance: none;
   background:
@@ -765,14 +797,58 @@ output {
   border: 1px solid color-mix(in srgb, var(--border-default) 82%, transparent);
   border-radius: var(--radius-md);
   box-shadow: 0 1px 0 rgba(15, 23, 42, 0.05);
-  cursor: pointer;
+  cursor: grab;
   display: flex;
   flex-direction: column;
   gap: 6px;
   min-height: 60px;
-  padding: 10px;
+  padding: 10px 10px 10px 16px;
+  position: relative;
   text-align: left;
   width: 100%;
+}
+
+.board-card::before {
+  background: color-mix(in srgb, var(--border-default) 60%, transparent);
+  border-radius: 999px;
+  content: '';
+  inset: 12px auto 12px 10px;
+  position: absolute;
+  width: 3px;
+}
+
+.board-column .board-card::before {
+  background: var(--board-status-accent);
+}
+
+.board-card::after {
+  background:
+    radial-gradient(
+        circle at 2px 2px,
+        color-mix(in srgb, var(--text-muted) 55%, transparent) 1.2px,
+        transparent 1.3px
+      )
+      0 0 / 6px 6px;
+  content: '';
+  height: 16px;
+  opacity: 0.22;
+  pointer-events: none;
+  position: absolute;
+  right: 10px;
+  top: 10px;
+  width: 16px;
+}
+
+.board-card:hover::after {
+  opacity: 0.34;
+}
+
+.board-card[aria-disabled="true"] {
+  cursor: not-allowed;
+}
+
+.board-card-shell[data-dragging="true"] .board-card {
+  opacity: 0.62;
 }
 
 .board-card:hover {
@@ -783,6 +859,7 @@ output {
 
 .board-card:active {
   box-shadow: 0 6px 12px rgba(15, 23, 42, 0.08);
+  cursor: grabbing;
   transform: translateY(0);
 }
 
@@ -798,6 +875,14 @@ output {
 .board-card:focus-visible {
   outline: 2px solid var(--accent-active);
   outline-offset: 2px;
+}
+
+.board-card--overlay {
+  box-shadow: 0 18px 38px rgba(15, 23, 42, 0.16);
+  cursor: grabbing;
+  pointer-events: none;
+  transform: rotate(-1deg);
+  width: min(320px, 68vw);
 }
 
 .board-card__title {
