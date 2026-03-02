@@ -1,6 +1,15 @@
 import type { AlphredDatabase } from './connection.js';
 import { sql, type SQL } from 'drizzle-orm';
-import { sqlEnumValues, workItemActorTypes, workItemEventTypes, workItemTypes } from './workItemEnums.js';
+import {
+  epicWorkItemStatuses,
+  featureWorkItemStatuses,
+  sqlEnumValues,
+  storyWorkItemStatuses,
+  taskWorkItemStatuses,
+  workItemActorTypes,
+  workItemEventTypes,
+  workItemTypes,
+} from './workItemEnums.js';
 
 type MigrationExecutor = Pick<AlphredDatabase, 'get' | 'run'>;
 
@@ -118,6 +127,15 @@ export function migrateDatabase(db: AlphredDatabase): void {
   tx.run(sql`CREATE INDEX IF NOT EXISTS repositories_created_at_idx
     ON repositories(created_at)`);
 
+  const workItemsDefinition = tx.get<{ sql: string | null }>(
+    sql`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'work_items'`,
+  )?.sql;
+  if (workItemsDefinition && !workItemsDefinition.includes('work_items_status_ck')) {
+    tx.run(sql`DROP TABLE IF EXISTS work_item_events`);
+    tx.run(sql`DROP TABLE IF EXISTS work_item_policies`);
+    tx.run(sql`DROP TABLE IF EXISTS work_items`);
+  }
+
   tx.run(sql`CREATE TABLE IF NOT EXISTS work_items (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     repository_id INTEGER NOT NULL REFERENCES repositories(id) ON DELETE RESTRICT,
@@ -136,8 +154,13 @@ export function migrateDatabase(db: AlphredDatabase): void {
     updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
     CONSTRAINT work_items_type_ck
       CHECK (type IN (${sqlEnumValues(workItemTypes)})),
-    CONSTRAINT work_items_status_not_empty_ck
-      CHECK (status <> ''),
+    CONSTRAINT work_items_status_ck
+      CHECK (
+        (type = 'epic' AND status IN (${sqlEnumValues(epicWorkItemStatuses)}))
+        OR (type = 'feature' AND status IN (${sqlEnumValues(featureWorkItemStatuses)}))
+        OR (type = 'story' AND status IN (${sqlEnumValues(storyWorkItemStatuses)}))
+        OR (type = 'task' AND status IN (${sqlEnumValues(taskWorkItemStatuses)}))
+      ),
     CONSTRAINT work_items_title_not_empty_ck
       CHECK (title <> ''),
     CONSTRAINT work_items_revision_non_negative_ck

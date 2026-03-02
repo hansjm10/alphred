@@ -1883,7 +1883,7 @@ describe('work items schema', () => {
       db.insert(workItems).values({
         repositoryId: repository.id,
         type: 'not-a-type',
-        status: 'draft',
+        status: 'Draft',
         title: 'Invalid type',
         revision: 0,
       }).run(),
@@ -1894,7 +1894,7 @@ describe('work items schema', () => {
       .values({
         repositoryId: repository.id,
         type: 'task',
-        status: 'draft',
+        status: 'Draft',
         title: 'Valid type',
         revision: 0,
       })
@@ -1924,7 +1924,7 @@ describe('work items schema', () => {
       .values({
         repositoryId: repository.id,
         type: 'epic',
-        status: 'draft',
+        status: 'Draft',
         title: 'Parent',
         revision: 0,
       })
@@ -1936,7 +1936,7 @@ describe('work items schema', () => {
       .values({
         repositoryId: repository.id,
         type: 'feature',
-        status: 'draft',
+        status: 'Draft',
         title: 'Child',
         parentId: parent.id,
         revision: 0,
@@ -1977,7 +1977,7 @@ describe('work items schema', () => {
       .values({
         repositoryId: repository.id,
         type: 'task',
-        status: 'draft',
+        status: 'Draft',
         title: 'Task',
         revision: 0,
       })
@@ -2042,7 +2042,7 @@ describe('work items schema', () => {
       .values({
         repositoryId: repository.id,
         type: 'epic',
-        status: 'draft',
+        status: 'Draft',
         title: 'Epic A',
         revision: 0,
       })
@@ -2054,7 +2054,7 @@ describe('work items schema', () => {
       .values({
         repositoryId: repository.id,
         type: 'epic',
-        status: 'draft',
+        status: 'Draft',
         title: 'Epic B',
         revision: 0,
       })
@@ -2104,5 +2104,65 @@ describe('work items schema', () => {
       .get();
 
     expect(secondEpicOverride.id).toBeGreaterThan(0);
+  });
+
+  it('enforces per-type status checks', () => {
+    const db = createDatabase(':memory:');
+    migrateDatabase(db);
+
+    const repository = db
+      .insert(repositories)
+      .values({
+        name: 'status-repo',
+        provider: 'github',
+        remoteUrl: 'https://example.com/repo.git',
+        remoteRef: 'main',
+      })
+      .returning({ id: repositories.id })
+      .get();
+
+    expect(() =>
+      db.insert(workItems).values({
+        repositoryId: repository.id,
+        type: 'story',
+        status: 'Ready',
+        title: 'Story cannot be Ready',
+        revision: 0,
+      }).run(),
+    ).toThrow();
+
+    expect(() =>
+      db.insert(workItems).values({
+        repositoryId: repository.id,
+        type: 'task',
+        status: 'NeedsBreakdown',
+        title: 'Task cannot need breakdown',
+        revision: 0,
+      }).run(),
+    ).toThrow();
+
+    expect(() =>
+      db.insert(workItems).values({
+        repositoryId: repository.id,
+        type: 'epic',
+        status: 'NeedsBreakdown',
+        title: 'Epic cannot need breakdown',
+        revision: 0,
+      }).run(),
+    ).toThrow();
+
+    const okEpic = db
+      .insert(workItems)
+      .values({
+        repositoryId: repository.id,
+        type: 'epic',
+        status: 'Approved',
+        title: 'Epic approved',
+        revision: 0,
+      })
+      .returning({ id: workItems.id })
+      .get();
+
+    expect(okEpic.id).toBeGreaterThan(0);
   });
 });

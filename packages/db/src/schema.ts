@@ -1,6 +1,15 @@
 import { sql } from 'drizzle-orm';
 import { check, foreignKey, index, integer, sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqlite-core';
-import { sqlEnumValues, workItemActorTypes, workItemEventTypes, workItemTypes } from './workItemEnums.js';
+import {
+  epicWorkItemStatuses,
+  featureWorkItemStatuses,
+  sqlEnumValues,
+  storyWorkItemStatuses,
+  taskWorkItemStatuses,
+  workItemActorTypes,
+  workItemEventTypes,
+  workItemTypes,
+} from './workItemEnums.js';
 
 const utcNow = sql`(strftime('%Y-%m-%dT%H:%M:%fZ','now'))`;
 
@@ -118,7 +127,15 @@ export const workItems = sqliteTable(
       name: 'work_items_parent_id_fk',
     }).onDelete('cascade'),
     typeCheck: check('work_items_type_ck', sql`${table.type} in (${sqlEnumValues(workItemTypes)})`),
-    statusNotEmptyCheck: check('work_items_status_not_empty_ck', sql`${table.status} <> ''`),
+    statusCheck: check(
+      'work_items_status_ck',
+      sql`(
+        (${table.type} = 'epic' and ${table.status} in (${sqlEnumValues(epicWorkItemStatuses)}))
+        or (${table.type} = 'feature' and ${table.status} in (${sqlEnumValues(featureWorkItemStatuses)}))
+        or (${table.type} = 'story' and ${table.status} in (${sqlEnumValues(storyWorkItemStatuses)}))
+        or (${table.type} = 'task' and ${table.status} in (${sqlEnumValues(taskWorkItemStatuses)}))
+      )`,
+    ),
     titleNotEmptyCheck: check('work_items_title_not_empty_ck', sql`${table.title} <> ''`),
     revisionNonNegativeCheck: check('work_items_revision_non_negative_ck', sql`${table.revision} >= 0`),
     parentSelfCheck: check(
