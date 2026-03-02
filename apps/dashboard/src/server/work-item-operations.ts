@@ -854,6 +854,15 @@ export function createWorkItemOperations(params: { withDatabase: WithDatabase })
             )
             .all();
 
+          if (children.length === 0) {
+            throw new DashboardIntegrationError('conflict', 'Cannot approve breakdown without child tasks.', {
+              status: 409,
+              details: {
+                storyId,
+              },
+            });
+          }
+
           const invalidChildren = children.filter(child => child.status !== 'Draft');
           if (invalidChildren.length > 0) {
             throw new DashboardIntegrationError(

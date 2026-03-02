@@ -260,4 +260,41 @@ describe('work-item-operations', () => {
     expect(eventTypes).toContain('breakdown_proposed');
     expect(eventTypes).toContain('breakdown_approved');
   });
+
+  it('rejects approving a story breakdown when no child tasks exist', async () => {
+    const { db, service } = createHarness();
+
+    const repository = insertRepository(db, {
+      name: 'repo',
+      provider: 'github',
+      remoteUrl: 'https://example.com/repo.git',
+      remoteRef: 'acme/repo',
+    });
+
+    const insertStory = db
+      .insert(workItems)
+      .values({
+        repositoryId: repository.id,
+        type: 'story',
+        status: 'BreakdownProposed',
+        title: 'Story without tasks',
+        revision: 0,
+      })
+      .run();
+    const storyId = Number(insertStory.lastInsertRowid);
+
+    await expect(
+      service.approveStoryBreakdown({
+        repositoryId: repository.id,
+        storyId,
+        expectedRevision: 0,
+        actorType: 'human',
+        actorLabel: 'alice',
+      }),
+    ).rejects.toMatchObject({
+      code: 'conflict',
+      status: 409,
+      message: 'Cannot approve breakdown without child tasks.',
+    });
+  });
 });
