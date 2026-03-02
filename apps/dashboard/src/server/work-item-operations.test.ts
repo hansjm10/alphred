@@ -72,6 +72,109 @@ function createHarness(): {
 }
 
 describe('work-item-operations', () => {
+  it('returns board-event snapshots with lastEventId resume semantics', async () => {
+    const { db, service } = createHarness();
+
+    const repository = insertRepository(db, {
+      name: 'repo',
+      provider: 'github',
+      remoteUrl: 'https://example.com/repo.git',
+      remoteRef: 'acme/repo',
+    });
+
+    const insertedWorkItem = db
+      .insert(workItems)
+      .values({
+        repositoryId: repository.id,
+        type: 'task',
+        status: 'Draft',
+        title: 'Task',
+        revision: 0,
+      })
+      .run();
+    const workItemId = Number(insertedWorkItem.lastInsertRowid);
+
+    const firstEventId = Number(
+      db.insert(workItemEvents)
+        .values({
+          repositoryId: repository.id,
+          workItemId,
+          eventType: 'created',
+          actorType: 'human',
+          actorLabel: 'alice',
+          payload: { title: 'Task' },
+          createdAt: '2026-03-02T18:50:00.000Z',
+        })
+        .run().lastInsertRowid,
+    );
+
+    const secondEventId = Number(
+      db.insert(workItemEvents)
+        .values({
+          repositoryId: repository.id,
+          workItemId,
+          eventType: 'updated',
+          actorType: 'agent',
+          actorLabel: 'codex',
+          payload: { changes: { title: 'Task v2' } },
+          createdAt: '2026-03-02T18:50:01.000Z',
+        })
+        .run().lastInsertRowid,
+    );
+
+    const snapshot = await service.getRepositoryBoardEventsSnapshot({
+      repositoryId: repository.id,
+      lastEventId: firstEventId,
+    });
+
+    expect(snapshot).toEqual({
+      repositoryId: repository.id,
+      latestEventId: secondEventId,
+      events: [
+        {
+          id: secondEventId,
+          repositoryId: repository.id,
+          workItemId,
+          eventType: 'updated',
+          actorType: 'agent',
+          actorLabel: 'codex',
+          payload: { changes: { title: 'Task v2' } },
+          createdAt: '2026-03-02T18:50:01.000Z',
+        },
+      ],
+    });
+  });
+
+  it('returns 404 for board-event snapshots when repository does not exist', async () => {
+    const { service } = createHarness();
+
+    await expect(
+      service.getRepositoryBoardEventsSnapshot({
+        repositoryId: 999,
+      }),
+    ).rejects.toMatchObject({
+      code: 'not_found',
+      status: 404,
+    });
+  });
+
+  it('rejects negative board-event resume pointers', async () => {
+    const { service } = createHarness();
+
+    expect(() =>
+      service.getRepositoryBoardEventsSnapshot({
+        repositoryId: 1,
+        lastEventId: -1,
+      }),
+    ).toThrowError(
+      expect.objectContaining({
+        code: 'invalid_request',
+        status: 400,
+        message: 'lastEventId must be a non-negative integer.',
+      }),
+    );
+  });
+
   it('returns 409 on expectedRevision mismatch for field updates', async () => {
     const { db, service } = createHarness();
 

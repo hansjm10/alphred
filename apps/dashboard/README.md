@@ -517,6 +517,30 @@ SSE transport events (`transport=sse`):
 - `stream_end`: terminal closure for the selected node attempt.
 - `stream_error`: stream-channel failure details.
 
+### `GET /repositories/[repositoryId]/board/events`
+
+Gets repo-scoped work-item board events and supports live SSE transport.
+
+Path parameters:
+- `repositoryId`: positive integer repository id.
+
+Query parameters:
+- `lastEventId` (optional): non-negative integer resume pointer.
+- `limit` (optional): non-negative integer snapshot limit (snapshot mode only).
+- `transport` (optional): set to `sse` for live Server-Sent Events.
+
+Request headers:
+- `Last-Event-ID` (optional): non-negative integer resume pointer.
+- Resume pointer resolution uses the greater of query `lastEventId` and `Last-Event-ID`.
+
+Snapshot response `200`: `DashboardBoardEventsSnapshot`.
+
+SSE transport events (`transport=sse`):
+- `board_event`: one persisted `work_item_events` row payload.
+- `board_state`: connection state + latest persisted board event id.
+- `heartbeat`: periodic keepalive containing the latest delivered board event id.
+- `board_error`: stream-channel failure details.
+
 ### `GET /runs/[runId]/nodes/[runNodeId]/diagnostics/[attempt]/commands/[eventIndex]`
 
 Gets full persisted output for a failed command-execution event within a run-node attempt.
