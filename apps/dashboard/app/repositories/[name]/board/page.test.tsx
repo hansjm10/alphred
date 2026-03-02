@@ -455,6 +455,78 @@ describe('RepositoryBoardPageContent', () => {
     expect(screen.getByText('Epic parent')).toBeInTheDocument();
   });
 
+  it('ignores malformed board_event payloads without mutating UI state', () => {
+    render(
+      <RepositoryBoardPageContent
+        repository={createRepository({ id: 1, name: 'demo-repo' })}
+        actor={{ actorType: 'human', actorLabel: 'octocat' }}
+        initialLatestEventId={0}
+        initialWorkItems={[createWorkItem({ id: 10, status: 'Draft', revision: 0, title: 'Write tests' })]}
+      />,
+    );
+
+    expect(MockEventSource.instances).toHaveLength(1);
+    MockEventSource.instances[0]?.emitOpen();
+
+    act(() => {
+      MockEventSource.instances[0]?.emit('board_event', {
+        id: 10,
+        repositoryId: 1,
+        workItemId: 99,
+        eventType: 'created',
+        payload: { type: 'task', status: 'Ready' },
+        createdAt: new Date('2026-03-02T03:00:00.000Z').toISOString(),
+      });
+    });
+
+    act(() => {
+      MockEventSource.instances[0]?.emit('board_event', {
+        id: 11,
+        repositoryId: 1,
+        workItemId: 10,
+        eventType: 'updated',
+        payload: { changes: null, revision: 1 },
+        createdAt: new Date('2026-03-02T03:01:00.000Z').toISOString(),
+      });
+    });
+
+    act(() => {
+      MockEventSource.instances[0]?.emit('board_event', {
+        id: 12,
+        repositoryId: 1,
+        workItemId: 10,
+        eventType: 'status_changed',
+        payload: { toStatus: 123, revision: 1 },
+        createdAt: new Date('2026-03-02T03:02:00.000Z').toISOString(),
+      });
+    });
+
+    act(() => {
+      MockEventSource.instances[0]?.emit('board_event', {
+        id: 13,
+        repositoryId: 1,
+        workItemId: 10,
+        eventType: 'reparented',
+        payload: null,
+        createdAt: new Date('2026-03-02T03:03:00.000Z').toISOString(),
+      });
+    });
+
+    act(() => {
+      MockEventSource.instances[0]?.emit('board_event', {
+        id: 14,
+        repositoryId: 1,
+        workItemId: 10,
+        eventType: 'noop',
+        payload: {},
+        createdAt: new Date('2026-03-02T03:04:00.000Z').toISOString(),
+      });
+    });
+
+    expect(within(screen.getByRole('region', { name: 'Tasks Draft' })).getByRole('button', { name: /Write tests/ })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /New task/ })).not.toBeInTheDocument();
+  });
+
   it('surfaces board channel errors, malformed events, reconnect state, and supports closing the drawer', async () => {
     const user = userEvent.setup();
 
