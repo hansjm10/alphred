@@ -3,8 +3,34 @@
 import { act, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { ReactElement } from 'react';
 import type { DashboardRepositoryState, DashboardWorkItemSnapshot } from '../../../../src/server/dashboard-contracts';
+import RepositoryBoardPage from './page';
 import { RepositoryBoardPageContent } from './repository-board-client';
+
+const { NOT_FOUND_ERROR, createDashboardServiceMock, loadGitHubAuthGateMock, notFoundMock } = vi.hoisted(() => {
+  const NOT_FOUND_ERROR = new Error('NOT_FOUND');
+  return {
+    NOT_FOUND_ERROR,
+    createDashboardServiceMock: vi.fn(),
+    loadGitHubAuthGateMock: vi.fn(),
+    notFoundMock: vi.fn(() => {
+      throw NOT_FOUND_ERROR;
+    }),
+  };
+});
+
+vi.mock('../../../../src/server/dashboard-service', () => ({
+  createDashboardService: createDashboardServiceMock,
+}));
+
+vi.mock('../../../ui/load-github-auth-gate', () => ({
+  loadGitHubAuthGate: loadGitHubAuthGateMock,
+}));
+
+vi.mock('next/navigation', () => ({
+  notFound: notFoundMock,
+}));
 
 type EventHandler = (event: Event) => void;
 
@@ -94,6 +120,9 @@ describe('RepositoryBoardPageContent', () => {
     vi.stubGlobal('EventSource', MockEventSource as unknown as typeof EventSource);
     MockEventSource.instances = [];
     vi.stubGlobal('fetch', vi.fn());
+    createDashboardServiceMock.mockReset();
+    loadGitHubAuthGateMock.mockReset();
+    notFoundMock.mockReset();
   });
 
   afterEach(() => {
@@ -274,5 +303,280 @@ describe('RepositoryBoardPageContent', () => {
     });
 
     expect(within(screen.getByRole('region', { name: 'Tasks Done' })).getByRole('button', { name: /Write tests/ })).toBeInTheDocument();
+  });
+
+  it('applies board_event created updates to UI state (created adds a new card)', async () => {
+    const user = userEvent.setup();
+
+    render(
+      <RepositoryBoardPageContent
+        repository={createRepository({ id: 1, name: 'demo-repo' })}
+        actor={{ actorType: 'human', actorLabel: 'octocat' }}
+        initialLatestEventId={0}
+        initialWorkItems={[]}
+      />,
+    );
+
+    expect(MockEventSource.instances).toHaveLength(1);
+    MockEventSource.instances[0]?.emitOpen();
+
+    act(() => {
+      MockEventSource.instances[0]?.emit('board_event', {
+        id: 1,
+        repositoryId: 1,
+        workItemId: 42,
+        eventType: 'created',
+        payload: {
+          type: 'task',
+          status: 'Ready',
+          title: 'New task',
+          plannedFiles: ['apps/dashboard/app/repositories/[name]/board/page.tsx'],
+          assignees: ['octocat'],
+          revision: 1,
+        },
+        createdAt: new Date('2026-03-02T02:00:00.000Z').toISOString(),
+      });
+    });
+
+    expect(within(screen.getByRole('region', { name: 'Tasks Ready' })).getByRole('button', { name: /New task/ })).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: /New task/ }));
+    expect(screen.getByRole('dialog', { name: 'New task' })).toBeInTheDocument();
+    expect(screen.getByText('apps/dashboard/app/repositories/[name]/board/page.tsx')).toBeInTheDocument();
+    expect(screen.getByText('octocat')).toBeInTheDocument();
+  });
+
+  it('applies board_event updated updates to UI state (updated merges supported fields)', async () => {
+    const user = userEvent.setup();
+
+    render(
+      <RepositoryBoardPageContent
+        repository={createRepository({ id: 1, name: 'demo-repo' })}
+        actor={{ actorType: 'human', actorLabel: 'octocat' }}
+        initialLatestEventId={0}
+        initialWorkItems={[
+          createWorkItem({
+            id: 10,
+            status: 'Ready',
+            revision: 1,
+            title: 'Old title',
+            plannedFiles: null,
+            assignees: ['octocat'],
+          }),
+        ]}
+      />,
+    );
+
+    expect(MockEventSource.instances).toHaveLength(1);
+    MockEventSource.instances[0]?.emitOpen();
+
+    act(() => {
+      MockEventSource.instances[0]?.emit('board_event', {
+        id: 2,
+        repositoryId: 1,
+        workItemId: 10,
+        eventType: 'updated',
+        payload: {
+          changes: {
+            title: 'New title',
+            plannedFiles: ['apps/dashboard/app/repositories/[name]/board/repository-board-client.tsx'],
+            assignees: null,
+            priority: 2,
+            estimate: null,
+          },
+          revision: 2,
+        },
+        createdAt: new Date('2026-03-02T02:05:00.000Z').toISOString(),
+      });
+    });
+
+    expect(within(screen.getByRole('region', { name: 'Tasks Ready' })).getByRole('button', { name: /New title/ })).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: /New title/ }));
+    expect(screen.getByRole('dialog', { name: 'New title' })).toBeInTheDocument();
+    expect(screen.getByText('apps/dashboard/app/repositories/[name]/board/repository-board-client.tsx')).toBeInTheDocument();
+    expect(within(screen.getByText('Assignees').closest('div') ?? document.body).getByText('None')).toBeInTheDocument();
+
+    act(() => {
+      MockEventSource.instances[0]?.emit('board_event', {
+        id: 3,
+        repositoryId: 1,
+        workItemId: 10,
+        eventType: 'updated',
+        payload: {
+          changes: {
+            plannedFiles: 'not-an-array',
+            assignees: ['octocat'],
+          },
+          revision: 3,
+        },
+        createdAt: new Date('2026-03-02T02:06:00.000Z').toISOString(),
+      });
+    });
+
+    expect(screen.getByText('apps/dashboard/app/repositories/[name]/board/repository-board-client.tsx')).toBeInTheDocument();
+    expect(screen.getByText('octocat')).toBeInTheDocument();
+  });
+
+  it('applies board_event reparented updates to UI state (reparented changes parent chain)', async () => {
+    const user = userEvent.setup();
+
+    render(
+      <RepositoryBoardPageContent
+        repository={createRepository({ id: 1, name: 'demo-repo' })}
+        actor={{ actorType: 'human', actorLabel: 'octocat' }}
+        initialLatestEventId={0}
+        initialWorkItems={[
+          createWorkItem({ id: 1, type: 'epic', title: 'Epic parent' }),
+          createWorkItem({ id: 2, type: 'story', title: 'Story parent', parentId: 1 }),
+          createWorkItem({ id: 10, type: 'task', status: 'Draft', title: 'Write tests', parentId: 2, revision: 0 }),
+        ]}
+      />,
+    );
+
+    expect(MockEventSource.instances).toHaveLength(1);
+    MockEventSource.instances[0]?.emitOpen();
+
+    await user.click(screen.getByRole('button', { name: /Write tests/ }));
+    expect(screen.getByText('Story parent')).toBeInTheDocument();
+
+    act(() => {
+      MockEventSource.instances[0]?.emit('board_event', {
+        id: 4,
+        repositoryId: 1,
+        workItemId: 10,
+        eventType: 'reparented',
+        payload: { toParentId: 1, revision: 1 },
+        createdAt: new Date('2026-03-02T02:10:00.000Z').toISOString(),
+      });
+    });
+
+    expect(screen.queryByText('Story parent')).not.toBeInTheDocument();
+    expect(screen.getByText('Epic parent')).toBeInTheDocument();
+  });
+
+  it('surfaces board channel errors, malformed events, reconnect state, and supports closing the drawer', async () => {
+    const user = userEvent.setup();
+
+    render(
+      <RepositoryBoardPageContent
+        repository={createRepository({ id: 1, name: 'demo-repo' })}
+        actor={{ actorType: 'human', actorLabel: 'octocat' }}
+        initialLatestEventId={0}
+        initialWorkItems={[createWorkItem({ id: 10, status: 'Draft', revision: 0, title: 'Write tests' })]}
+      />,
+    );
+
+    expect(MockEventSource.instances).toHaveLength(1);
+    MockEventSource.instances[0]?.emitOpen();
+
+    act(() => {
+      MockEventSource.instances[0]?.emit('board_state', { connectionState: 'live', latestEventId: 99 });
+    });
+    expect(screen.getByLabelText('Connection status: Live')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: /Write tests/ }));
+    const dialog = screen.getByRole('dialog', { name: 'Write tests' });
+
+    const closeButtons = screen.getAllByRole('button', { name: 'Close task details' });
+    const backdropButton = closeButtons.find(button => !dialog.contains(button));
+    expect(backdropButton).toBeDefined();
+    await user.click(backdropButton!);
+    expect(screen.queryByRole('dialog', { name: 'Write tests' })).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: /Write tests/ }));
+    expect(screen.getByRole('dialog', { name: 'Write tests' })).toBeInTheDocument();
+    await user.keyboard('{Escape}');
+    expect(screen.queryByRole('dialog', { name: 'Write tests' })).not.toBeInTheDocument();
+
+    act(() => {
+      MockEventSource.instances[0]?.emit('board_error', { message: 'Board stream exploded.' });
+    });
+    expect(screen.getByRole('alert')).toHaveTextContent('Board stream exploded.');
+
+    act(() => {
+      MockEventSource.instances[0]?.emit('board_event', { nope: true });
+    });
+    expect(screen.getByRole('alert')).toHaveTextContent('Board event payload was malformed.');
+
+    act(() => {
+      MockEventSource.instances[0]?.emitError();
+    });
+    expect(screen.getByLabelText('Connection status: Reconnecting')).toBeInTheDocument();
+  });
+});
+
+describe('RepositoryBoardPage (server wrapper)', () => {
+  beforeEach(() => {
+    createDashboardServiceMock.mockReset();
+    loadGitHubAuthGateMock.mockReset();
+    notFoundMock.mockReset();
+  });
+
+  it('loads repositories, work items, and board snapshot for the async page export', async () => {
+    const repository = createRepository({ id: 1, name: 'demo-repo' });
+    const workItems = [createWorkItem({ id: 10, status: 'Draft', title: 'Write tests' })];
+
+    const service = {
+      listRepositories: vi.fn().mockResolvedValue([repository]),
+      listWorkItems: vi.fn().mockResolvedValue({ workItems }),
+      getRepositoryBoardEventsSnapshot: vi.fn().mockResolvedValue({ latestEventId: 5, events: [] }),
+    };
+
+    createDashboardServiceMock.mockReturnValue(service);
+    loadGitHubAuthGateMock.mockResolvedValue({ state: 'authenticated', user: 'octocat' });
+
+    const root = (await RepositoryBoardPage({
+      params: Promise.resolve({ name: 'demo-repo' }),
+    })) as ReactElement<{
+      repository: DashboardRepositoryState;
+      actor: { actorType: 'human' | 'agent' | 'system'; actorLabel: string };
+      initialLatestEventId: number;
+      initialWorkItems: readonly DashboardWorkItemSnapshot[];
+    }>;
+
+    expect(service.listRepositories).toHaveBeenCalledTimes(1);
+    expect(service.listWorkItems).toHaveBeenCalledWith(1);
+    expect(service.getRepositoryBoardEventsSnapshot).toHaveBeenCalledWith({ repositoryId: 1, lastEventId: 0, limit: 1 });
+    expect(loadGitHubAuthGateMock).toHaveBeenCalledTimes(1);
+
+    expect(root.type).toBe(RepositoryBoardPageContent);
+    expect(root.props.repository).toEqual(repository);
+    expect(root.props.actor).toEqual({ actorType: 'human', actorLabel: 'octocat' });
+    expect(root.props.initialLatestEventId).toBe(5);
+    expect(root.props.initialWorkItems).toEqual(workItems);
+  });
+
+  it('calls notFound when repository does not exist', async () => {
+    const service = {
+      listRepositories: vi.fn().mockResolvedValue([]),
+      listWorkItems: vi.fn(),
+      getRepositoryBoardEventsSnapshot: vi.fn(),
+    };
+
+    createDashboardServiceMock.mockReturnValue(service);
+    loadGitHubAuthGateMock.mockResolvedValue({ state: 'authenticated', user: 'octocat' });
+
+    await expect(RepositoryBoardPage({ params: Promise.resolve({ name: 'missing' }) })).rejects.toBe(NOT_FOUND_ERROR);
+
+    expect(notFoundMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('falls back to dashboard actor label when the auth gate is unauthenticated', async () => {
+    const repository = createRepository({ id: 1, name: 'demo-repo' });
+    const service = {
+      listRepositories: vi.fn().mockResolvedValue([repository]),
+      listWorkItems: vi.fn().mockResolvedValue({ workItems: [] }),
+      getRepositoryBoardEventsSnapshot: vi.fn().mockResolvedValue({ latestEventId: 0, events: [] }),
+    };
+
+    createDashboardServiceMock.mockReturnValue(service);
+    loadGitHubAuthGateMock.mockResolvedValue({ state: 'unauthenticated', user: null });
+
+    const root = (await RepositoryBoardPage({
+      params: Promise.resolve({ name: 'demo-repo' }),
+    })) as ReactElement<{ actor: { actorType: string; actorLabel: string } }>;
+
+    expect(root.props.actor).toEqual({ actorType: 'human', actorLabel: 'dashboard' });
   });
 });
