@@ -2836,10 +2836,16 @@ describe('createSqlWorkflowExecutor', () => {
             metadata: { input_tokens: 9, output_tokens: 10 },
           },
           { type: 'usage', content: 'snake total cumulative', timestamp: 8, metadata: { total_tokens: 30 } },
-          { type: 'tool_use', content: '   ', timestamp: 9, metadata: { tool_name: 'gh_search' } },
-          { type: 'tool_result', content: '', timestamp: 10, metadata: {} },
-          { type: 'tool_use', content: ' ', timestamp: 11 },
-          { type: 'result', content: 'Design report body', timestamp: 12 },
+          {
+            type: 'usage',
+            content: 'nested token breakdown cumulative',
+            timestamp: 9,
+            metadata: { usage: { input_tokens: 15, output_tokens: 15, cached_input_tokens: 2 } },
+          },
+          { type: 'tool_use', content: '   ', timestamp: 10, metadata: { tool_name: 'gh_search' } },
+          { type: 'tool_result', content: '', timestamp: 11, metadata: {} },
+          { type: 'tool_use', content: ' ', timestamp: 12 },
+          { type: 'result', content: 'Design report body', timestamp: 13 },
         ]),
     });
 
@@ -2852,6 +2858,9 @@ describe('createSqlWorkflowExecutor', () => {
 
     const diagnostics = db
       .select({
+        inputTokens: runNodeDiagnostics.inputTokens,
+        outputTokens: runNodeDiagnostics.outputTokens,
+        cachedInputTokens: runNodeDiagnostics.cachedInputTokens,
         diagnostics: runNodeDiagnostics.diagnostics,
       })
       .from(runNodeDiagnostics)
@@ -2861,7 +2870,14 @@ describe('createSqlWorkflowExecutor', () => {
 
     expect(diagnostics).toHaveLength(1);
     const payload = diagnostics[0]?.diagnostics as {
-      summary: { redacted: boolean; truncated: boolean; tokensUsed: number };
+      summary: {
+        redacted: boolean;
+        truncated: boolean;
+        tokensUsed: number;
+        inputTokens: number | null;
+        outputTokens: number | null;
+        cachedInputTokens: number | null;
+      };
       events: {
         type: string;
         contentPreview: string;
@@ -2871,7 +2887,13 @@ describe('createSqlWorkflowExecutor', () => {
       toolEvents: { type: string; toolName: string | null; summary: string }[];
     };
 
+    expect(diagnostics[0]?.inputTokens).toBe(15);
+    expect(diagnostics[0]?.outputTokens).toBe(15);
+    expect(diagnostics[0]?.cachedInputTokens).toBe(2);
     expect(payload.summary.tokensUsed).toBe(30);
+    expect(payload.summary.inputTokens).toBe(15);
+    expect(payload.summary.outputTokens).toBe(15);
+    expect(payload.summary.cachedInputTokens).toBe(2);
     expect(payload.summary.redacted).toBe(true);
     expect(payload.summary.truncated).toBe(true);
     expect(payload.events[0]?.contentPreview).toBe('[REDACTED]');
@@ -2888,6 +2910,7 @@ describe('createSqlWorkflowExecutor', () => {
       { deltaTokens: 4, cumulativeTokens: 15 },
       { deltaTokens: 4, cumulativeTokens: 19 },
       { deltaTokens: 11, cumulativeTokens: 30 },
+      { deltaTokens: 0, cumulativeTokens: 30 },
     ]);
 
     expect(payload.toolEvents).toEqual(

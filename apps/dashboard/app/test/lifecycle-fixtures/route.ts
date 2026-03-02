@@ -233,6 +233,9 @@ function insertFixtureRun(params: {
           },
           summary: {
             tokensUsed: 0,
+            inputTokens: null,
+            outputTokens: null,
+            cachedInputTokens: null,
             eventCount: 3,
             retainedEventCount: 3,
             droppedEventCount: 0,

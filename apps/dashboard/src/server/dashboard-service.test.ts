@@ -236,6 +236,9 @@ function seedRunData(db: AlphredDatabase): void {
         },
         summary: {
           tokensUsed: 42,
+          inputTokens: 24,
+          outputTokens: 18,
+          cachedInputTokens: 5,
           eventCount: 3,
           retainedEventCount: 3,
           droppedEventCount: 0,
@@ -886,6 +889,9 @@ describe('createDashboardService', () => {
           },
           summary: {
             tokensUsed: 0,
+            inputTokens: null,
+            outputTokens: null,
+            cachedInputTokens: null,
             eventCount: 2,
             retainedEventCount: 2,
             droppedEventCount: 0,

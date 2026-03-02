@@ -153,21 +153,32 @@ function resolveTokenUsageRows(params: Readonly<{
     const attemptLabel = `attempt ${snapshot.attempt}`;
     const sequenceLabel = node?.sequencePath ? ` · ${node.sequencePath}` : '';
     const providerLabel = snapshot.diagnostics.provider ? ` · ${snapshot.diagnostics.provider}` : '';
-    const breakdown = (() => {
-      const events = snapshot.diagnostics.events;
-      for (let index = events.length - 1; index >= 0; index -= 1) {
-        const candidate = events[index];
-        if (!candidate) {
-          continue;
-        }
+    const summaryBreakdown: TokenBreakdown = {
+      inputTokens: snapshot.diagnostics.summary.inputTokens,
+      outputTokens: snapshot.diagnostics.summary.outputTokens,
+      cachedInputTokens: snapshot.diagnostics.summary.cachedInputTokens,
+    };
+    const hasSummaryBreakdown =
+      summaryBreakdown.inputTokens !== null
+      || summaryBreakdown.outputTokens !== null
+      || summaryBreakdown.cachedInputTokens !== null;
+    const breakdown = hasSummaryBreakdown
+      ? summaryBreakdown
+      : (() => {
+          const events = snapshot.diagnostics.events;
+          for (let index = events.length - 1; index >= 0; index -= 1) {
+            const candidate = events[index];
+            if (!candidate) {
+              continue;
+            }
 
-        const extracted = extractTokenBreakdown(candidate.metadata);
-        if (extracted) {
-          return extracted;
-        }
-      }
-      return null;
-    })();
+            const extracted = extractTokenBreakdown(candidate.metadata);
+            if (extracted) {
+              return extracted;
+            }
+          }
+          return null;
+        })();
 
     rows.push({
       key: `${snapshot.runNodeId}:${snapshot.attempt}`,

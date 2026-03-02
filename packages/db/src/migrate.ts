@@ -1118,6 +1118,9 @@ export function migrateDatabase(db: AlphredDatabase): void {
     redacted INTEGER NOT NULL DEFAULT 0,
     truncated INTEGER NOT NULL DEFAULT 0,
     payload_chars INTEGER NOT NULL DEFAULT 0,
+    input_tokens INTEGER,
+    output_tokens INTEGER,
+    cached_input_tokens INTEGER,
     diagnostics TEXT NOT NULL,
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
     CONSTRAINT run_node_diagnostics_run_id_run_node_id_fk
@@ -1134,6 +1137,12 @@ export function migrateDatabase(db: AlphredDatabase): void {
       CHECK (retained_event_count >= 0),
     CONSTRAINT run_node_diagnostics_dropped_event_count_ck
       CHECK (dropped_event_count >= 0),
+    CONSTRAINT run_node_diagnostics_input_tokens_ck
+      CHECK (input_tokens IS NULL OR input_tokens >= 0),
+    CONSTRAINT run_node_diagnostics_output_tokens_ck
+      CHECK (output_tokens IS NULL OR output_tokens >= 0),
+    CONSTRAINT run_node_diagnostics_cached_input_tokens_ck
+      CHECK (cached_input_tokens IS NULL OR cached_input_tokens >= 0),
     CONSTRAINT run_node_diagnostics_redacted_bool_ck
       CHECK (redacted IN (0, 1)),
     CONSTRAINT run_node_diagnostics_truncated_bool_ck
@@ -1141,6 +1150,18 @@ export function migrateDatabase(db: AlphredDatabase): void {
     CONSTRAINT run_node_diagnostics_payload_chars_ck
       CHECK (payload_chars >= 0)
   )`);
+  addColumnIfMissing(tx, {
+    existsQuery: sql`SELECT COUNT(*) AS count FROM pragma_table_info('run_node_diagnostics') WHERE name = 'input_tokens'`,
+    alterQuery: sql`ALTER TABLE run_node_diagnostics ADD COLUMN input_tokens INTEGER`,
+  });
+  addColumnIfMissing(tx, {
+    existsQuery: sql`SELECT COUNT(*) AS count FROM pragma_table_info('run_node_diagnostics') WHERE name = 'output_tokens'`,
+    alterQuery: sql`ALTER TABLE run_node_diagnostics ADD COLUMN output_tokens INTEGER`,
+  });
+  addColumnIfMissing(tx, {
+    existsQuery: sql`SELECT COUNT(*) AS count FROM pragma_table_info('run_node_diagnostics') WHERE name = 'cached_input_tokens'`,
+    alterQuery: sql`ALTER TABLE run_node_diagnostics ADD COLUMN cached_input_tokens INTEGER`,
+  });
   tx.run(sql`CREATE UNIQUE INDEX IF NOT EXISTS run_node_diagnostics_run_id_run_node_attempt_uq
     ON run_node_diagnostics(workflow_run_id, run_node_id, attempt)`);
   tx.run(sql`CREATE INDEX IF NOT EXISTS run_node_diagnostics_run_id_created_at_idx

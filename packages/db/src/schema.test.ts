@@ -1607,6 +1607,13 @@ describe('database schema hardening', () => {
     const db = createDatabase(':memory:');
     migrateDatabase(db);
     const seed = seedTreeState(db, 'diagnostics');
+    const columns = db
+      .all<{ name: string }>(sql`SELECT name FROM pragma_table_info('run_node_diagnostics') ORDER BY cid`)
+      .map(column => column.name);
+
+    expect(columns).toEqual(
+      expect.arrayContaining(['input_tokens', 'output_tokens', 'cached_input_tokens']),
+    );
 
     const runNode = db
       .insert(runNodes)
@@ -1632,6 +1639,9 @@ describe('database schema hardening', () => {
         redacted: 0,
         truncated: 0,
         payloadChars: 128,
+        inputTokens: 10,
+        outputTokens: 5,
+        cachedInputTokens: 2,
         diagnostics: { nodeKey: seed.sourceNodeKey },
       })
       .run();
@@ -1667,6 +1677,63 @@ describe('database schema hardening', () => {
           redacted: 0,
           truncated: 0,
           payloadChars: 16,
+          diagnostics: { invalid: true },
+        })
+        .run(),
+    ).toThrow();
+
+    expect(() =>
+      db.insert(runNodeDiagnostics)
+        .values({
+          workflowRunId: seed.runId,
+          runNodeId: runNode.id,
+          attempt: 2,
+          outcome: 'completed',
+          eventCount: 1,
+          retainedEventCount: 1,
+          droppedEventCount: 0,
+          redacted: 0,
+          truncated: 0,
+          payloadChars: 16,
+          inputTokens: -1,
+          diagnostics: { invalid: true },
+        })
+        .run(),
+    ).toThrow();
+
+    expect(() =>
+      db.insert(runNodeDiagnostics)
+        .values({
+          workflowRunId: seed.runId,
+          runNodeId: runNode.id,
+          attempt: 3,
+          outcome: 'completed',
+          eventCount: 1,
+          retainedEventCount: 1,
+          droppedEventCount: 0,
+          redacted: 0,
+          truncated: 0,
+          payloadChars: 16,
+          outputTokens: -1,
+          diagnostics: { invalid: true },
+        })
+        .run(),
+    ).toThrow();
+
+    expect(() =>
+      db.insert(runNodeDiagnostics)
+        .values({
+          workflowRunId: seed.runId,
+          runNodeId: runNode.id,
+          attempt: 4,
+          outcome: 'completed',
+          eventCount: 1,
+          retainedEventCount: 1,
+          droppedEventCount: 0,
+          redacted: 0,
+          truncated: 0,
+          payloadChars: 16,
+          cachedInputTokens: -1,
           diagnostics: { invalid: true },
         })
         .run(),
