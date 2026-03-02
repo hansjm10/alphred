@@ -348,7 +348,7 @@ function renderStringList(items: string[] | null): ReactNode {
   }
 
   return (
-    <ul className="entity-list board-string-list">
+    <ul className="board-string-list">
       {items.map(entry => (
         <li key={entry}>
           <code>{entry}</code>
@@ -868,10 +868,10 @@ export function RepositoryBoardPageContent({
             {selectedParentChain.length === 0 ? (
               <p className="meta-text">None</p>
             ) : (
-              <ol className="entity-list board-parent-chain">
+              <ol className="board-parent-chain">
                 {selectedParentChain.map(parent => (
                   <li key={parent.id}>
-                    <span>{parent.type}</span>
+                    <span className="board-pill">{parent.type}</span>
                     <span>
                       {parent.title} <span className="meta-text">#{parent.id}</span>
                     </span>

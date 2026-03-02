@@ -916,14 +916,16 @@ output {
 }
 
 .board-drawer {
+  --board-drawer-pad-x: var(--space-3);
+  --board-drawer-pad-y: var(--space-2);
   background: var(--bg-surface);
   border-left: 0;
   box-shadow: var(--shadow-md);
   display: grid;
-  gap: var(--space-3);
+  gap: var(--space-2);
   max-width: none;
   overflow: auto;
-  padding: var(--space-3);
+  padding: var(--board-drawer-pad-y) var(--board-drawer-pad-x);
   width: 100vw;
 }
 
@@ -976,8 +978,8 @@ output {
   border-top-left-radius: inherit;
   display: flex;
   justify-content: space-between;
-  margin: calc(var(--space-3) * -1) calc(var(--space-3) * -1) 0;
-  padding: var(--space-3);
+  margin: calc(var(--board-drawer-pad-y) * -1) calc(var(--board-drawer-pad-x) * -1) 0;
+  padding: var(--board-drawer-pad-y) var(--board-drawer-pad-x);
   position: sticky;
   top: 0;
   z-index: 1;
@@ -1012,7 +1014,7 @@ output {
 
 .board-drawer__summary {
   display: grid;
-  gap: var(--space-2);
+  gap: var(--space-1);
 }
 
 .board-drawer__title {
@@ -1038,11 +1040,14 @@ output {
 }
 
 .board-drawer__control {
+  align-items: center;
   display: grid;
-  gap: 6px;
+  gap: 6px var(--space-2);
+  grid-template-columns: 72px minmax(0, 1fr);
 }
 
 .board-drawer__moving {
+  grid-column: 2;
   justify-self: start;
 }
 
@@ -1052,7 +1057,9 @@ output {
   border-radius: var(--radius-sm);
   color: var(--text-primary);
   font: 500 13px/18px var(--font-data);
-  padding: 8px 10px;
+  min-width: 0;
+  padding: 6px 10px;
+  width: 100%;
 }
 
 .board-drawer__select:focus-visible {
@@ -1062,12 +1069,12 @@ output {
 
 .board-detail__section {
   display: grid;
-  gap: var(--space-1);
+  gap: 6px;
 }
 
 .board-detail__section--divider {
   border-top: 1px solid var(--border-default);
-  padding-top: var(--space-2);
+  padding-top: var(--space-1);
 }
 
 .board-detail__section h5 {
@@ -1077,8 +1084,30 @@ output {
   text-transform: uppercase;
 }
 
-.board-parent-chain {
-  gap: var(--space-1);
+.board-parent-chain,
+.board-string-list {
+  display: grid;
+  gap: 6px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.board-parent-chain li {
+  align-items: baseline;
+  display: flex;
+  gap: var(--space-2);
+  justify-content: flex-start;
+}
+
+.board-parent-chain li > span:last-child {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.board-string-list li {
+  align-items: center;
+  display: flex;
 }
 
 .board-string-list code {
