@@ -3995,11 +3995,12 @@ describe('RunDetailContent realtime updates', () => {
     const tokenUsage = screen.getByRole('region', { name: 'Token usage' });
     expect(tokenUsage).toBeInTheDocument();
     expect(within(tokenUsage).getByText(/Total 42 tokens/i)).toBeInTheDocument();
+    expect(within(tokenUsage).getAllByText('Input 24 · Output 18 · Cached 5').length).toBeGreaterThan(0);
     expect(within(tokenUsage).getByRole('list', { name: 'Token usage by node' })).toBeInTheDocument();
     expect(within(tokenUsage).getByText(/design \(attempt 1\)/i)).toBeInTheDocument();
   });
 
-  it('derives token usage breakdown from diagnostics metadata and ignores invalid numeric values', () => {
+  it('renders token usage breakdown from normalized diagnostics summary fields', () => {
     const baseDetail = createRunDetail();
     const baseDiagnostics = baseDetail.diagnostics[0]!;
     const diagnosticWithBreakdown: DashboardRunDetail['diagnostics'][number] = {
@@ -4010,21 +4011,18 @@ describe('RunDetailContent realtime updates', () => {
         summary: {
           ...baseDiagnostics.diagnostics.summary,
           tokensUsed: 77,
-          inputTokens: null,
-          outputTokens: null,
-          cachedInputTokens: null,
+          inputTokens: 7,
+          outputTokens: 5,
+          cachedInputTokens: 2,
         },
         events: [
           {
             ...baseDiagnostics.diagnostics.events[0]!,
             metadata: {
               input_tokens: -1,
-              inputTokens: 7,
               output_tokens: 3.14,
-              usage: {
-                output_tokens: 5,
-                cached_input_tokens: 2,
-              },
+              cached_input_tokens: 999,
+              usage: { input_tokens: 999, output_tokens: 999, cached_input_tokens: 999 },
             },
           },
         ],
@@ -4046,7 +4044,7 @@ describe('RunDetailContent realtime updates', () => {
     expect(within(tokenUsage).getByText(/Total 77 tokens/i)).toBeInTheDocument();
   });
 
-  it('omits aggregate token breakdown when metadata has no token keys and keeps tie ordering by sequence index', () => {
+  it('omits token breakdown when summary fields are absent and keeps tie ordering by sequence index', () => {
     const baseDetail = createRunDetail();
     const baseDiagnostics = baseDetail.diagnostics[0]!;
     const eventsWithoutTokenBreakdown = [
@@ -4145,6 +4143,49 @@ describe('RunDetailContent realtime updates', () => {
     expect(usageRows[0]).toHaveAccessibleName('Inspect alpha (attempt 1)');
     expect(usageRows[1]).toHaveAccessibleName('Inspect beta (attempt 1)');
     expect(within(tokenUsage).queryByText(/Input \d+ · Output \d+/i)).toBeNull();
+  });
+
+  it('does not derive token usage breakdown from diagnostics event metadata', () => {
+    const baseDetail = createRunDetail();
+    const baseDiagnostics = baseDetail.diagnostics[0]!;
+    const diagnosticWithoutSummaryBreakdown: DashboardRunDetail['diagnostics'][number] = {
+      ...baseDiagnostics,
+      id: 34,
+      diagnostics: {
+        ...baseDiagnostics.diagnostics,
+        summary: {
+          ...baseDiagnostics.diagnostics.summary,
+          tokensUsed: 77,
+          inputTokens: null,
+          outputTokens: null,
+          cachedInputTokens: null,
+        },
+        events: [
+          {
+            ...baseDiagnostics.diagnostics.events[0]!,
+            metadata: {
+              inputTokens: 123,
+              outputTokens: 456,
+              cachedInputTokens: 7,
+            },
+          },
+        ],
+      },
+    };
+
+    render(
+      <RunDetailContent
+        initialDetail={createRunDetail({
+          diagnostics: [diagnosticWithoutSummaryBreakdown],
+        })}
+        repositories={[createRepository()]}
+        enableRealtime={false}
+      />,
+    );
+
+    const tokenUsage = screen.getByRole('region', { name: 'Token usage' });
+    expect(within(tokenUsage).getByText(/Total 77 tokens/i)).toBeInTheDocument();
+    expect(within(tokenUsage).queryByText(/Input 123 · Output 456 · Cached 7/i)).toBeNull();
   });
 
   it('reports nodes with diagnostics by unique node id when retries emit multiple attempts', () => {

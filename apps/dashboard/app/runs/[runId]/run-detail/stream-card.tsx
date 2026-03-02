@@ -63,57 +63,6 @@ type TokenBreakdown = Readonly<{
   cachedInputTokens: number | null;
 }>;
 
-function toNonNegativeInteger(value: unknown): number | null {
-  if (typeof value !== 'number' || !Number.isFinite(value) || !Number.isInteger(value) || value < 0) {
-    return null;
-  }
-
-  return value;
-}
-
-function firstTokenCountFromRecord(metadata: Record<string, unknown>, keys: readonly string[]): number | null {
-  for (const key of keys) {
-    if (!(key in metadata)) {
-      continue;
-    }
-
-    const parsed = toNonNegativeInteger(metadata[key]);
-    if (parsed !== null) {
-      return parsed;
-    }
-  }
-
-  return null;
-}
-
-function extractTokenBreakdown(metadata: Record<string, unknown> | null): TokenBreakdown | null {
-  if (!metadata) {
-    return null;
-  }
-
-  const nestedUsage = metadata.usage && typeof metadata.usage === 'object' ? metadata.usage as Record<string, unknown> : null;
-
-  const inputTokens =
-    firstTokenCountFromRecord(metadata, ['input_tokens', 'inputTokens']) ??
-    (nestedUsage ? firstTokenCountFromRecord(nestedUsage, ['input_tokens', 'inputTokens']) : null);
-  const outputTokens =
-    firstTokenCountFromRecord(metadata, ['output_tokens', 'outputTokens']) ??
-    (nestedUsage ? firstTokenCountFromRecord(nestedUsage, ['output_tokens', 'outputTokens']) : null);
-  const cachedInputTokens =
-    firstTokenCountFromRecord(metadata, ['cached_input_tokens', 'cachedInputTokens']) ??
-    (nestedUsage ? firstTokenCountFromRecord(nestedUsage, ['cached_input_tokens', 'cachedInputTokens']) : null);
-
-  if (inputTokens === null && outputTokens === null && cachedInputTokens === null) {
-    return null;
-  }
-
-  return {
-    inputTokens,
-    outputTokens,
-    cachedInputTokens,
-  };
-}
-
 type TokenUsageRow = Readonly<{
   key: string;
   runNodeId: number;
@@ -162,23 +111,7 @@ function resolveTokenUsageRows(params: Readonly<{
       summaryBreakdown.inputTokens !== null
       || summaryBreakdown.outputTokens !== null
       || summaryBreakdown.cachedInputTokens !== null;
-    const breakdown = hasSummaryBreakdown
-      ? summaryBreakdown
-      : (() => {
-          const events = snapshot.diagnostics.events;
-          for (let index = events.length - 1; index >= 0; index -= 1) {
-            const candidate = events[index];
-            if (!candidate) {
-              continue;
-            }
-
-            const extracted = extractTokenBreakdown(candidate.metadata);
-            if (extracted) {
-              return extracted;
-            }
-          }
-          return null;
-        })();
+    const breakdown = hasSummaryBreakdown ? summaryBreakdown : null;
 
     rows.push({
       key: `${snapshot.runNodeId}:${snapshot.attempt}`,
@@ -230,25 +163,40 @@ function RunTokenUsagePanel(props: Readonly<{
     let inputTokens = 0;
     let outputTokens = 0;
     let cachedInputTokens = 0;
-    let any = false;
+    let sawInputTokens = false;
+    let sawOutputTokens = false;
+    let sawCachedInputTokens = false;
 
     for (const row of rows) {
       if (!row.breakdown) {
         continue;
       }
-      any = true;
-      inputTokens += row.breakdown.inputTokens ?? 0;
-      outputTokens += row.breakdown.outputTokens ?? 0;
-      cachedInputTokens += row.breakdown.cachedInputTokens ?? 0;
+
+      if (row.breakdown.inputTokens !== null) {
+        sawInputTokens = true;
+        inputTokens += row.breakdown.inputTokens;
+      }
+
+      if (row.breakdown.outputTokens !== null) {
+        sawOutputTokens = true;
+        outputTokens += row.breakdown.outputTokens;
+      }
+
+      if (row.breakdown.cachedInputTokens !== null) {
+        sawCachedInputTokens = true;
+        cachedInputTokens += row.breakdown.cachedInputTokens;
+      }
     }
 
-    return any
-      ? {
-          inputTokens,
-          outputTokens,
-          cachedInputTokens,
-        }
-      : null;
+    if (!sawInputTokens && !sawOutputTokens && !sawCachedInputTokens) {
+      return null;
+    }
+
+    return {
+      inputTokens: sawInputTokens ? inputTokens : null,
+      outputTokens: sawOutputTokens ? outputTokens : null,
+      cachedInputTokens: sawCachedInputTokens ? cachedInputTokens : null,
+    };
   }, [rows]);
   const maxTokens = useMemo(
     () => rows.reduce((max, row) => Math.max(max, row.tokensUsed), 0),
@@ -284,11 +232,11 @@ function RunTokenUsagePanel(props: Readonly<{
         <p className="run-token-usage__total">{`Total ${formatTokenCount(totalTokens)} tokens`}</p>
         {totalsBreakdown ? (
           <p className="meta-text">
-            {`Input ${formatTokenCount(totalsBreakdown.inputTokens)} · Output ${formatTokenCount(totalsBreakdown.outputTokens)}${
-              totalsBreakdown.cachedInputTokens > 0
-                ? ` · Cached ${formatTokenCount(totalsBreakdown.cachedInputTokens)}`
-                : ''
-            }`}
+            {[
+              totalsBreakdown.inputTokens === null ? null : `Input ${formatTokenCount(totalsBreakdown.inputTokens)}`,
+              totalsBreakdown.outputTokens === null ? null : `Output ${formatTokenCount(totalsBreakdown.outputTokens)}`,
+              totalsBreakdown.cachedInputTokens === null ? null : `Cached ${formatTokenCount(totalsBreakdown.cachedInputTokens)}`,
+            ].filter(Boolean).join(' · ')}
           </p>
         ) : null}
         <p className="meta-text">{`Across ${rows.length} ${attemptCountLabel}.`}</p>
