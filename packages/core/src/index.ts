@@ -3,6 +3,20 @@ export { canTransitionRun, canTransitionPhase, transitionRun, transitionPhase, i
 export { evaluateGuard } from './guards.js';
 export { evaluateTransitions, type TransitionResult } from './workflowEngine.js';
 export {
+  WorkItemHierarchyError,
+  WorkItemTransitionError,
+  canParentChildWorkItemTypes,
+  canTransitionWorkItem,
+  isWorkItemStatusForType,
+  validateParentChildWorkItemTypes,
+  validateTransition,
+  workItemAllowedParentTypesByChildType,
+  workItemTransitionsByType,
+  type WorkItemHierarchyErrorCode,
+  type WorkItemStatusTransition,
+  type WorkItemTransitionErrorCode,
+} from './workItemLifecycle.js';
+export {
   runPhase,
   type PhaseRunResult,
   type PhaseProvider,
