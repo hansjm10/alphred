@@ -154,7 +154,7 @@ describe('RepositoryBoardPageContent', () => {
 
     await user.click(screen.getByRole('button', { name: /Write tests/ }));
 
-    expect(screen.getByRole('heading', { name: 'Task details' })).toBeInTheDocument();
+    expect(screen.getByRole('dialog', { name: 'Task details' })).toBeInTheDocument();
     expect(screen.getByText('Parent chain')).toBeInTheDocument();
     expect(screen.getByText('epic')).toBeInTheDocument();
     expect(screen.getByText('feature')).toBeInTheDocument();
@@ -188,7 +188,8 @@ describe('RepositoryBoardPageContent', () => {
       />,
     );
 
-    await user.selectOptions(screen.getByRole('combobox', { name: 'Move Write tests' }), 'Done');
+    await user.click(screen.getByRole('button', { name: /Write tests/ }));
+    await user.selectOptions(screen.getByRole('combobox', { name: 'Status' }), 'Done');
 
     expect(fetchMock).toHaveBeenCalledWith('/api/dashboard/work-items/10/actions/move', {
       method: 'POST',
@@ -231,7 +232,8 @@ describe('RepositoryBoardPageContent', () => {
       />,
     );
 
-    await user.selectOptions(screen.getByRole('combobox', { name: 'Move Write tests' }), 'InProgress');
+    await user.click(screen.getByRole('button', { name: /Write tests/ }));
+    await user.selectOptions(screen.getByRole('combobox', { name: 'Status' }), 'InProgress');
 
     expect(await screen.findByRole('alert')).toHaveTextContent('Refreshed from server.');
     expect(within(screen.getByRole('region', { name: 'Tasks InProgress' })).getByRole('button', { name: /Write tests/ })).toBeInTheDocument();

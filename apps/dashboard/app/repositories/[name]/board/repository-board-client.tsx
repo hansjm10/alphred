@@ -3,7 +3,7 @@
 import { taskWorkItemStatuses, type TaskWorkItemStatus, type WorkItemStatus, type WorkItemType } from '@alphred/shared';
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import type { DashboardRepositoryState, DashboardWorkItemSnapshot } from '../../../../src/server/dashboard-contracts';
-import { ActionButton, Card, Panel } from '../../../ui/primitives';
+import { ActionButton } from '../../../ui/primitives';
 
 type WorkItemActor = Readonly<{
   actorType: 'human' | 'agent' | 'system';
@@ -85,6 +85,17 @@ function buildParentChain(
 
 function isTaskStatus(value: string): value is TaskWorkItemStatus {
   return (taskWorkItemStatuses as readonly string[]).includes(value);
+}
+
+function formatTaskStatusLabel(status: TaskWorkItemStatus): string {
+  switch (status) {
+    case 'InProgress':
+      return 'In progress';
+    case 'InReview':
+      return 'In review';
+    default:
+      return status;
+  }
 }
 
 function applyBoardEventToWorkItems(
@@ -485,6 +496,23 @@ export function RepositoryBoardPageContent({
     };
   }, [repository]);
 
+  useEffect(() => {
+    if (selectedWorkItemId === null) {
+      return () => undefined;
+    }
+
+    const handleKeyDown = (event: KeyboardEvent): void => {
+      if (event.key === 'Escape') {
+        setSelectedWorkItemId(null);
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [selectedWorkItemId]);
+
   const handleMove = async (workItemId: number, nextStatusRaw: string) => {
     const current = workItemsById[workItemId];
     if (!current || current.type !== 'task') {
@@ -586,37 +614,19 @@ export function RepositoryBoardPageContent({
   };
 
   const renderTaskCard = (task: DashboardWorkItemSnapshot): ReactNode => {
-    const moving = movingWorkItemIds.has(task.id);
     const selected = selectedWorkItemId === task.id;
 
     return (
-      <li key={task.id} className={`board-card ${selected ? 'board-card--selected' : ''}`}>
+      <li key={task.id}>
         <button
-          className="board-card__select"
+          className={`board-card ${selected ? 'board-card--selected' : ''}`}
           type="button"
           onClick={() => setSelectedWorkItemId(task.id)}
           aria-pressed={selected}
         >
           <span className="board-card__title">{task.title}</span>
-          <span className="meta-text">#{task.id}</span>
+          <span className="board-card__id meta-text">#{task.id}</span>
         </button>
-        <select
-          id={`move-${task.id}`}
-          className="board-card__move"
-          value={isTaskStatus(task.status) ? task.status : 'Draft'}
-          onChange={(event) => {
-            void handleMove(task.id, event.target.value);
-          }}
-          disabled={moving}
-          aria-disabled={moving}
-          aria-label={`Move ${task.title}`}
-        >
-          {taskWorkItemStatuses.map(status => (
-            <option key={status} value={status}>
-              {status}
-            </option>
-          ))}
-        </select>
       </li>
     );
   };
@@ -644,60 +654,103 @@ export function RepositoryBoardPageContent({
 
   const renderDetails = (): ReactNode => {
     if (!selectedWorkItem) {
-      return <p>Select a task to inspect details.</p>;
+      return null;
     }
 
+    const status =
+      selectedWorkItem.type === 'task' && isTaskStatus(selectedWorkItem.status)
+        ? selectedWorkItem.status
+        : null;
+    const moving = movingWorkItemIds.has(selectedWorkItem.id);
+    const dialogTitleId = `board-detail-dialog-title-${selectedWorkItem.id}`;
+    const statusSelectId = `board-detail-status-${selectedWorkItem.id}`;
+
     return (
-      <div className="page-stack">
-        <div className="board-detail__header">
+      <div
+        className="board-drawer-scrim"
+        role="presentation"
+        onClick={clearSelection}
+      >
+        <aside
+          className="board-drawer"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby={dialogTitleId}
+          onClick={(event) => event.stopPropagation()}
+        >
+          <div className="board-detail__header">
+            <h3 className="board-detail__dialog-title" id={dialogTitleId}>
+              Task details
+            </h3>
+            <ActionButton tone="secondary" onClick={clearSelection}>
+              Close
+            </ActionButton>
+          </div>
+
           <h4 className="board-detail__title">{selectedWorkItem.title}</h4>
-          <ActionButton tone="secondary" onClick={clearSelection}>
-            Clear
-          </ActionButton>
-        </div>
 
-        <ul className="entity-list board-detail__list">
-          <li>
-            <span>Id</span>
-            <span>#{selectedWorkItem.id}</span>
-          </li>
-          <li>
-            <span>Type</span>
-            <span>{selectedWorkItem.type}</span>
-          </li>
-          <li>
-            <span>Status</span>
-            <span>{selectedWorkItem.status}</span>
-          </li>
-        </ul>
+          <div className="board-detail__fields">
+            <div className="board-detail__field">
+              <span className="meta-text">Id</span>
+              <span>#{selectedWorkItem.id}</span>
+            </div>
+            <div className="board-detail__field">
+              <span className="meta-text">Type</span>
+              <span>{selectedWorkItem.type}</span>
+            </div>
+          </div>
 
-        <div className="board-detail__section">
-          <h5>Parent chain</h5>
-          {selectedParentChain.length === 0 ? (
-            <p className="meta-text">None</p>
-          ) : (
-            <ol className="entity-list board-parent-chain">
-              {selectedParentChain.map(parent => (
-                <li key={parent.id}>
-                  <span>{parent.type}</span>
-                  <span>
-                    {parent.title} <span className="meta-text">#{parent.id}</span>
-                  </span>
-                </li>
-              ))}
-            </ol>
-          )}
-        </div>
+          {status ? (
+            <div className="board-detail__status">
+              <label htmlFor={statusSelectId} className="meta-text">
+                Status
+              </label>
+              <select
+                id={statusSelectId}
+                value={status}
+                onChange={(event) => {
+                  void handleMove(selectedWorkItem.id, event.target.value);
+                }}
+                disabled={moving}
+                aria-disabled={moving}
+              >
+                {taskWorkItemStatuses.map(entry => (
+                  <option key={entry} value={entry}>
+                    {formatTaskStatusLabel(entry)}
+                  </option>
+                ))}
+              </select>
+            </div>
+          ) : null}
 
-        <div className="board-detail__section">
-          <h5>Planned files</h5>
-          {renderStringList(selectedWorkItem.plannedFiles)}
-        </div>
+          <div className="board-detail__section">
+            <h5>Parent chain</h5>
+            {selectedParentChain.length === 0 ? (
+              <p className="meta-text">None</p>
+            ) : (
+              <ol className="entity-list board-parent-chain">
+                {selectedParentChain.map(parent => (
+                  <li key={parent.id}>
+                    <span>{parent.type}</span>
+                    <span>
+                      {parent.title} <span className="meta-text">#{parent.id}</span>
+                    </span>
+                  </li>
+                ))}
+              </ol>
+            )}
+          </div>
 
-        <div className="board-detail__section">
-          <h5>Assignees</h5>
-          {renderStringList(selectedWorkItem.assignees)}
-        </div>
+          <div className="board-detail__section">
+            <h5>Planned files</h5>
+            {renderStringList(selectedWorkItem.plannedFiles)}
+          </div>
+
+          <div className="board-detail__section">
+            <h5>Assignees</h5>
+            {renderStringList(selectedWorkItem.assignees)}
+          </div>
+        </aside>
       </div>
     );
   };
@@ -721,16 +774,11 @@ export function RepositoryBoardPageContent({
       ) : null}
       {renderBanner()}
 
-      <div className="board-layout">
-        <Card title="Tasks" description="Move tasks between columns to update status.">
-          <div className="board-columns" role="region" aria-label="Task board">
-            {taskWorkItemStatuses.map(renderColumn)}
-          </div>
-        </Card>
-
-        <Panel title="Task details" description="Selection details (parents, planned files, assignees).">
-          {renderDetails()}
-        </Panel>
+      <div className="board-kanban" role="region" aria-label="Task board">
+        <div className="board-columns">
+          {taskWorkItemStatuses.map(renderColumn)}
+        </div>
+        {renderDetails()}
       </div>
     </div>
   );
