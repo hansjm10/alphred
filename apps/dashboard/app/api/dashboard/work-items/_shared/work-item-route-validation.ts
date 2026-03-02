@@ -27,7 +27,15 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function parsePositiveInteger(value: unknown, message: string): number {
-  const parsed = typeof value === 'number' ? value : Number(value);
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 1) {
+    throw invalidRequest(message);
+  }
+
+  return value;
+}
+
+function parsePositiveIntegerFromString(value: string, message: string): number {
+  const parsed = Number(value);
   if (!Number.isInteger(parsed) || parsed < 1) {
     throw invalidRequest(message);
   }
@@ -36,12 +44,11 @@ function parsePositiveInteger(value: unknown, message: string): number {
 }
 
 function parseNonNegativeInteger(value: unknown, message: string): number {
-  const parsed = typeof value === 'number' ? value : Number(value);
-  if (!Number.isInteger(parsed) || parsed < 0) {
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 0) {
     throw invalidRequest(message);
   }
 
-  return parsed;
+  return value;
 }
 
 function parseString(value: unknown, message: string): string {
@@ -154,11 +161,11 @@ export async function parseJsonObjectBody(
 }
 
 export function parseRepositoryIdFromPathSegment(value: string): number {
-  return parsePositiveInteger(value, 'repositoryId must be a positive integer.');
+  return parsePositiveIntegerFromString(value, 'repositoryId must be a positive integer.');
 }
 
 export function parseWorkItemIdFromPathSegment(value: string): number {
-  return parsePositiveInteger(value, 'workItemId must be a positive integer.');
+  return parsePositiveIntegerFromString(value, 'workItemId must be a positive integer.');
 }
 
 export function parseRepositoryIdFromQuery(request: Request): number {
@@ -168,7 +175,7 @@ export function parseRepositoryIdFromQuery(request: Request): number {
     throw invalidRequest('Query parameter "repositoryId" must be a positive integer.');
   }
 
-  return parsePositiveInteger(rawValue, 'Query parameter "repositoryId" must be a positive integer.');
+  return parsePositiveIntegerFromString(rawValue, 'Query parameter "repositoryId" must be a positive integer.');
 }
 
 export function parseCreateWorkItemRequest(

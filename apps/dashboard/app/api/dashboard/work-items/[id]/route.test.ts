@@ -181,6 +181,62 @@ describe('Route /api/dashboard/work-items/[id]', () => {
       });
     });
 
+    it('returns 400 when expectedRevision is null', async () => {
+      const response = await PATCH(
+        new Request('http://localhost/api/dashboard/work-items/12', {
+          method: 'PATCH',
+          headers: {
+            'content-type': 'application/json',
+          },
+          body: JSON.stringify({
+            repositoryId: 4,
+            expectedRevision: null,
+            title: 'Updated title',
+            actorType: 'human',
+            actorLabel: 'alice',
+          }),
+        }),
+        createContext('12'),
+      );
+
+      expect(updateWorkItemFieldsMock).not.toHaveBeenCalled();
+      expect(response.status).toBe(400);
+      await expect(response.json()).resolves.toEqual({
+        error: {
+          code: 'invalid_request',
+          message: 'Field "expectedRevision" must be a non-negative integer.',
+        },
+      });
+    });
+
+    it('returns 400 when repositoryId is not a number', async () => {
+      const response = await PATCH(
+        new Request('http://localhost/api/dashboard/work-items/12', {
+          method: 'PATCH',
+          headers: {
+            'content-type': 'application/json',
+          },
+          body: JSON.stringify({
+            repositoryId: true,
+            expectedRevision: 2,
+            title: 'Updated title',
+            actorType: 'human',
+            actorLabel: 'alice',
+          }),
+        }),
+        createContext('12'),
+      );
+
+      expect(updateWorkItemFieldsMock).not.toHaveBeenCalled();
+      expect(response.status).toBe(400);
+      await expect(response.json()).resolves.toEqual({
+        error: {
+          code: 'invalid_request',
+          message: 'Field "repositoryId" must be a positive integer.',
+        },
+      });
+    });
+
     it('returns 400 for malformed json payloads', async () => {
       const response = await PATCH(
         new Request('http://localhost/api/dashboard/work-items/12', {
