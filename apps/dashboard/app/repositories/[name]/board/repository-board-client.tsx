@@ -585,7 +585,7 @@ export function RepositoryBoardPageContent({
             ? 'Reconnecting'
             : 'Stale';
     return (
-      <div className="board-connection">
+      <div className="board-connection" aria-label={`Connection status: ${label}`}>
         <span className={`board-connection__dot board-connection__dot--${connectionState}`} aria-hidden="true" />
         <span className="meta-text">{label}</span>
       </div>
@@ -620,6 +620,7 @@ export function RepositoryBoardPageContent({
       <li key={task.id}>
         <button
           className={`board-card ${selected ? 'board-card--selected' : ''}`}
+          data-selected={selected ? 'true' : 'false'}
           type="button"
           onClick={() => setSelectedWorkItemId(task.id)}
           aria-pressed={selected}
@@ -634,10 +635,12 @@ export function RepositoryBoardPageContent({
   const renderColumn = (status: TaskWorkItemStatus): ReactNode => {
     const tasks = tasksByStatus[status];
     return (
-      <section key={status} className="board-column" aria-label={`Tasks ${status}`}>
+      <section key={status} className="board-column" aria-label={`Tasks ${status}`} data-status={status}>
         <header className="board-column__header">
-          <h4>{formatTaskStatusLabel(status)}</h4>
-          <span className="meta-text">{tasks.length}</span>
+          <h4 className="board-column__title">{formatTaskStatusLabel(status)}</h4>
+          <span className="board-column__count meta-text" aria-label={`${tasks.length} tasks`}>
+            {tasks.length}
+          </span>
         </header>
         {tasks.length === 0 ? (
           <p className="meta-text board-column__empty">No tasks.</p>
@@ -676,6 +679,7 @@ export function RepositoryBoardPageContent({
           role="dialog"
           aria-modal="true"
           aria-labelledby={dialogTitleId}
+          aria-busy={moving || undefined}
           onClick={(event) => event.stopPropagation()}
         >
           <header className="board-drawer__header">
@@ -723,6 +727,11 @@ export function RepositoryBoardPageContent({
                   </option>
                 ))}
               </select>
+              {moving ? (
+                <output className="meta-text board-drawer__moving" aria-live="polite">
+                  Moving…
+                </output>
+              ) : null}
             </div>
           ) : null}
 
@@ -778,8 +787,10 @@ export function RepositoryBoardPageContent({
       {renderBanner()}
 
       <div className="board-kanban" role="region" aria-label="Task board">
-        <div className="board-columns">
-          {taskWorkItemStatuses.map(renderColumn)}
+        <div className="board-columns-shell" aria-label="Board columns">
+          <div className="board-columns">
+            {taskWorkItemStatuses.map(renderColumn)}
+          </div>
         </div>
         {renderDetails()}
       </div>
