@@ -13,9 +13,9 @@ vi.mock('../../../../../../src/server/dashboard-service', () => ({
 
 import { GET, POST } from './route';
 
-function createContext(repositoryId: string): { params: Promise<{ repositoryId: string }> } {
+function createContext(name: string): { params: Promise<{ name: string }> } {
   return {
-    params: Promise.resolve({ repositoryId }),
+    params: Promise.resolve({ name }),
   };
 }
 
@@ -29,7 +29,7 @@ function createJsonRequest(payload: unknown): Request {
   });
 }
 
-describe('Route /api/dashboard/repositories/[repositoryId]/work-items', () => {
+describe('Route /api/dashboard/repositories/[name]/work-items', () => {
   beforeEach(() => {
     createDashboardServiceMock.mockReset();
     listWorkItemsMock.mockReset();
