@@ -1,4 +1,5 @@
-import type { GuardExpression, ProviderExecutionPermissions } from '@alphred/shared';
+import type { GuardExpression, ProviderExecutionPermissions, WorkItemStatus, WorkItemType } from '@alphred/shared';
+import type { WorkItemActorType } from '@alphred/db';
 
 export type DashboardNodeStatus = 'pending' | 'running' | 'completed' | 'failed' | 'skipped' | 'cancelled';
 
@@ -463,4 +464,138 @@ export type DashboardRunControlResult = {
   previousRunStatus: DashboardRunSummary['status'];
   runStatus: DashboardRunSummary['status'];
   retriedRunNodeIds: number[];
+};
+
+export type DashboardWorkItemSnapshot = {
+  id: number;
+  repositoryId: number;
+  type: WorkItemType;
+  status: WorkItemStatus;
+  title: string;
+  description: string | null;
+  parentId: number | null;
+  tags: string[] | null;
+  plannedFiles: string[] | null;
+  assignees: string[] | null;
+  priority: number | null;
+  estimate: number | null;
+  revision: number;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type DashboardListWorkItemsResult = {
+  workItems: DashboardWorkItemSnapshot[];
+};
+
+export type DashboardGetWorkItemResult = {
+  workItem: DashboardWorkItemSnapshot;
+};
+
+export type DashboardCreateWorkItemRequest = {
+  repositoryId: number;
+  type: WorkItemType;
+  status?: WorkItemStatus;
+  title: string;
+  description?: string | null;
+  parentId?: number | null;
+  tags?: string[] | null;
+  plannedFiles?: string[] | null;
+  assignees?: string[] | null;
+  priority?: number | null;
+  estimate?: number | null;
+  actorType: WorkItemActorType;
+  actorLabel: string;
+};
+
+export type DashboardCreateWorkItemResult = {
+  workItem: DashboardWorkItemSnapshot;
+};
+
+export type DashboardUpdateWorkItemFieldsRequest = {
+  repositoryId: number;
+  workItemId: number;
+  expectedRevision: number;
+  title?: string;
+  description?: string | null;
+  tags?: string[] | null;
+  plannedFiles?: string[] | null;
+  assignees?: string[] | null;
+  priority?: number | null;
+  estimate?: number | null;
+  actorType: WorkItemActorType;
+  actorLabel: string;
+};
+
+export type DashboardUpdateWorkItemFieldsResult = {
+  workItem: DashboardWorkItemSnapshot;
+};
+
+export type DashboardMoveWorkItemStatusRequest = {
+  repositoryId: number;
+  workItemId: number;
+  expectedRevision: number;
+  toStatus: WorkItemStatus;
+  actorType: WorkItemActorType;
+  actorLabel: string;
+};
+
+export type DashboardMoveWorkItemStatusResult = {
+  workItem: DashboardWorkItemSnapshot;
+};
+
+export type DashboardSetWorkItemParentRequest = {
+  repositoryId: number;
+  workItemId: number;
+  expectedRevision: number;
+  parentId: number | null;
+  actorType: WorkItemActorType;
+  actorLabel: string;
+};
+
+export type DashboardSetWorkItemParentResult = {
+  workItem: DashboardWorkItemSnapshot;
+};
+
+export type DashboardWorkItemProposedBreakdownTask = {
+  title: string;
+  description?: string | null;
+  tags?: string[] | null;
+  plannedFiles?: string[] | null;
+  assignees?: string[] | null;
+  priority?: number | null;
+  estimate?: number | null;
+  links?: string[] | null;
+};
+
+export type DashboardProposeStoryBreakdownRequest = {
+  repositoryId: number;
+  storyId: number;
+  expectedRevision: number;
+  proposed: {
+    tags?: string[] | null;
+    plannedFiles?: string[] | null;
+    links?: string[] | null;
+    tasks: DashboardWorkItemProposedBreakdownTask[];
+  };
+  actorType: WorkItemActorType;
+  actorLabel: string;
+};
+
+export type DashboardProposeStoryBreakdownResult = {
+  story: DashboardWorkItemSnapshot;
+  tasks: DashboardWorkItemSnapshot[];
+};
+
+export type DashboardApproveStoryBreakdownRequest = {
+  repositoryId: number;
+  storyId: number;
+  expectedRevision: number;
+  actorType: WorkItemActorType;
+  actorLabel: string;
+};
+
+export type DashboardApproveStoryBreakdownResult = {
+  story: DashboardWorkItemSnapshot;
+  tasks: DashboardWorkItemSnapshot[];
 };
