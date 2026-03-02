@@ -25,6 +25,7 @@ import { toDashboardIntegrationError } from './dashboard-errors';
 import { createRepositoryOperations } from './repository-operations';
 import { createRunOperations } from './run-operations';
 import { resolveDatabasePath } from './dashboard-utils';
+import { createWorkItemOperations } from './work-item-operations';
 import { createWorkflowDraftOperations } from './workflow-draft-operations';
 import { createWorkflowOperations } from './workflow-operations';
 
@@ -120,6 +121,7 @@ export function createDashboardService(options: {
     },
     environment,
   });
+  const workItemOperations = createWorkItemOperations({ withDatabase });
   const runOperations = createRunOperations({
     withDatabase,
     dependencies: {
@@ -140,6 +142,7 @@ export function createDashboardService(options: {
     ...workflowOperations,
     ...workflowDraftOperations,
     ...repositoryOperations,
+    ...workItemOperations,
     ...runOperations,
   };
 }
