@@ -698,6 +698,99 @@ describe('database schema hardening', () => {
     expect(trees).toHaveLength(1);
   });
 
+  it('drops legacy work_items tables that are missing the type/status checks', () => {
+    const db = createDatabase(':memory:');
+
+    db.run(sql`CREATE TABLE work_items (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      repository_id INTEGER NOT NULL,
+      type TEXT NOT NULL,
+      status TEXT NOT NULL,
+      title TEXT NOT NULL,
+      parent_id INTEGER
+    )`);
+    db.run(sql`CREATE TABLE work_item_events (id INTEGER PRIMARY KEY AUTOINCREMENT)`);
+    db.run(sql`CREATE TABLE work_item_policies (id INTEGER PRIMARY KEY AUTOINCREMENT)`);
+
+    expect(() => migrateDatabase(db)).not.toThrow();
+
+    const workItemsDefinition = db.get<{ sql: string | null }>(
+      sql`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'work_items'`,
+    )?.sql;
+    const workItemEventsDefinition = db.get<{ sql: string | null }>(
+      sql`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'work_item_events'`,
+    )?.sql;
+    const workItemPoliciesDefinition = db.get<{ sql: string | null }>(
+      sql`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'work_item_policies'`,
+    )?.sql;
+
+    expect(workItemsDefinition).toContain('work_items_status_ck');
+    expect(workItemEventsDefinition).toContain('work_item_events_repository_id_work_item_id_fk');
+    expect(workItemPoliciesDefinition).toContain('work_item_policies_repository_id_epic_work_item_id_fk');
+  });
+
+  it('drops legacy work_item_events tables that are missing the composite repository/work-item foreign key', () => {
+    const db = createDatabase(':memory:');
+
+    db.run(sql`CREATE TABLE work_items (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      repository_id INTEGER NOT NULL,
+      type TEXT NOT NULL,
+      status TEXT NOT NULL,
+      title TEXT NOT NULL,
+      parent_id INTEGER,
+      CONSTRAINT work_items_status_ck CHECK (status <> '')
+    )`);
+    db.run(sql`CREATE TABLE work_item_events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      repository_id INTEGER NOT NULL,
+      work_item_id INTEGER NOT NULL,
+      event_type TEXT NOT NULL,
+      actor_type TEXT NOT NULL,
+      actor_label TEXT NOT NULL,
+      payload TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    )`);
+
+    expect(() => migrateDatabase(db)).not.toThrow();
+
+    const workItemEventsDefinition = db.get<{ sql: string | null }>(
+      sql`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'work_item_events'`,
+    )?.sql;
+
+    expect(workItemEventsDefinition).toContain('work_item_events_repository_id_work_item_id_fk');
+  });
+
+  it('drops legacy work_item_policies tables that are missing the composite repository/epic foreign key', () => {
+    const db = createDatabase(':memory:');
+
+    db.run(sql`CREATE TABLE work_items (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      repository_id INTEGER NOT NULL,
+      type TEXT NOT NULL,
+      status TEXT NOT NULL,
+      title TEXT NOT NULL,
+      parent_id INTEGER,
+      CONSTRAINT work_items_status_ck CHECK (status <> '')
+    )`);
+    db.run(sql`CREATE TABLE work_item_policies (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      repository_id INTEGER NOT NULL,
+      epic_work_item_id INTEGER,
+      payload TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    )`);
+
+    expect(() => migrateDatabase(db)).not.toThrow();
+
+    const workItemPoliciesDefinition = db.get<{ sql: string | null }>(
+      sql`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'work_item_policies'`,
+    )?.sql;
+
+    expect(workItemPoliciesDefinition).toContain('work_item_policies_repository_id_epic_work_item_id_fk');
+  });
+
   it('allows only one draft workflow tree per tree key', () => {
     const db = createDatabase(':memory:');
     migrateDatabase(db);
