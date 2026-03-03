@@ -710,6 +710,10 @@ function toLinkedRunSnapshot(
   return snapshot;
 }
 
+function isReadableRunWorktreeStatus(status: string): boolean {
+  return status === 'active';
+}
+
 function loadTouchedFilesByWorkflowRunId(
   db: DbOrTx,
   params: {
@@ -763,7 +767,10 @@ function loadTouchedFilesByWorkflowRunId(
   const touchedFilesByRunId = new Map<number, string[] | null>();
   for (const workflowRunId of params.workflowRunIds) {
     const best = bestWorktreeByRunId.get(workflowRunId);
-    touchedFilesByRunId.set(workflowRunId, best ? readTouchedFilesFromWorktree(best.worktreePath) : null);
+    touchedFilesByRunId.set(
+      workflowRunId,
+      best && isReadableRunWorktreeStatus(best.status) ? readTouchedFilesFromWorktree(best.worktreePath) : null,
+    );
   }
 
   return touchedFilesByRunId;
@@ -822,7 +829,10 @@ async function loadTouchedFilesByWorkflowRunIdAsync(
   const entries = await Promise.all(
     params.workflowRunIds.map(async workflowRunId => {
       const best = bestWorktreeByRunId.get(workflowRunId);
-      const touchedFiles = best ? await readTouchedFilesFromWorktreeAsync(best.worktreePath) : null;
+      const touchedFiles =
+        best && isReadableRunWorktreeStatus(best.status)
+          ? await readTouchedFilesFromWorktreeAsync(best.worktreePath)
+          : null;
       return [workflowRunId, touchedFiles] as const;
     }),
   );
