@@ -113,6 +113,52 @@ export function coerceNullableNumber(value: unknown, fallback: number | null): n
   return fallback;
 }
 
+function isNullableNumber(value: unknown): value is number | null {
+  return value === null || typeof value === 'number';
+}
+
+function isNullableStringArray(value: unknown): value is string[] | null {
+  return value === null || (Array.isArray(value) && value.every((entry) => typeof entry === 'string'));
+}
+
+function isEffectivePolicySnapshot(value: unknown): value is DashboardWorkItemEffectivePolicySnapshot {
+  if (!isRecord(value)) {
+    return false;
+  }
+
+  if (value.appliesToType !== 'epic' && value.appliesToType !== 'task') {
+    return false;
+  }
+
+  if (!isNullableNumber(value.epicWorkItemId) || !isNullableNumber(value.repositoryPolicyId) || !isNullableNumber(value.epicPolicyId)) {
+    return false;
+  }
+
+  if (!isRecord(value.policy)) {
+    return false;
+  }
+
+  const { policy } = value;
+  if (
+    !isNullableStringArray(policy.allowedProviders) ||
+    !isNullableStringArray(policy.allowedModels) ||
+    !isNullableStringArray(policy.allowedSkillIdentifiers) ||
+    !isNullableStringArray(policy.allowedMcpServerIdentifiers)
+  ) {
+    return false;
+  }
+
+  if (!isRecord(policy.budgets) || !isNullableNumber(policy.budgets.maxConcurrentTasks) || !isNullableNumber(policy.budgets.maxConcurrentRuns)) {
+    return false;
+  }
+
+  if (!isRecord(policy.requiredGates) || typeof policy.requiredGates.breakdownApprovalRequired !== 'boolean') {
+    return false;
+  }
+
+  return true;
+}
+
 function coerceEffectivePolicy(
   value: unknown,
   fallback: DashboardWorkItemEffectivePolicySnapshot | null | undefined,
@@ -120,8 +166,8 @@ function coerceEffectivePolicy(
   if (value === null) {
     return null;
   }
-  if (isRecord(value)) {
-    return value as DashboardWorkItemEffectivePolicySnapshot;
+  if (isEffectivePolicySnapshot(value)) {
+    return value;
   }
   return fallback ?? null;
 }

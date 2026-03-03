@@ -175,6 +175,59 @@ describe('applyBoardEventToWorkItems', () => {
     );
     expect(ignored[10]?.status).toBe('BreakdownProposed');
   });
+
+  it('ignores malformed effectivePolicy payloads for created and reparented events', () => {
+    const validPolicy = {
+      appliesToType: 'task' as const,
+      epicWorkItemId: 101,
+      repositoryPolicyId: 5,
+      epicPolicyId: 9,
+      policy: {
+        allowedProviders: ['codex'],
+        allowedModels: ['gpt-5-codex'],
+        allowedSkillIdentifiers: ['working-on-github-issue'],
+        allowedMcpServerIdentifiers: ['github'],
+        budgets: {
+          maxConcurrentTasks: 3,
+          maxConcurrentRuns: 2,
+        },
+        requiredGates: {
+          breakdownApprovalRequired: false,
+        },
+      },
+    };
+    const previous = toWorkItemsById([
+      createWorkItem({
+        id: 10,
+        repositoryId: 1,
+        title: 'Existing',
+        revision: 1,
+        effectivePolicy: validPolicy,
+      }),
+    ]);
+
+    const malformedCreated = applyBoardEventToWorkItems(
+      previous,
+      1,
+      createEvent({
+        workItemId: 20,
+        eventType: 'created',
+        payload: { type: 'task', status: 'Draft', title: 'Task B', revision: 1, effectivePolicy: {} },
+      }),
+    );
+    expect(malformedCreated[20]?.effectivePolicy).toBeNull();
+
+    const malformedReparented = applyBoardEventToWorkItems(
+      previous,
+      1,
+      createEvent({
+        workItemId: 10,
+        eventType: 'reparented',
+        payload: { toParentId: 200, revision: 2, effectivePolicy: {} },
+      }),
+    );
+    expect(malformedReparented[10]?.effectivePolicy).toEqual(validPolicy);
+  });
 });
 
 describe('fetchWorkItem', () => {
