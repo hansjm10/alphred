@@ -476,6 +476,7 @@ export function StoryDetailPageContent(props: Readonly<{
   const latestEventIdRef = useRef(initialLatestEventId);
   const eventSourceRef = useRef<EventSource | null>(null);
   const reconnectTimeoutRef = useRef<number | null>(null);
+  const connectionSessionRef = useRef(0);
 
   const story = workItemsById[storyId] ?? null;
   const parentChain = useMemo(() => {
@@ -490,7 +491,11 @@ export function StoryDetailPageContent(props: Readonly<{
       .sort((a, b) => a.id - b.id);
   }, [workItemsById, story, storyId]);
 
-  const connect = () => {
+  const connect = (sessionId: number) => {
+    if (connectionSessionRef.current !== sessionId) {
+      return;
+    }
+
     if (eventSourceRef.current) {
       eventSourceRef.current.close();
       eventSourceRef.current = null;
@@ -506,6 +511,9 @@ export function StoryDetailPageContent(props: Readonly<{
     eventSourceRef.current = eventSource;
 
     eventSource.addEventListener('board_state', (event) => {
+      if (connectionSessionRef.current !== sessionId) {
+        return;
+      }
       const parsed = parseJsonSafely((event as MessageEvent).data);
       if (isRecord(parsed) && typeof parsed.latestEventId === 'number') {
         // board_state indicates a high watermark, but we still resume from last delivered event id.
@@ -514,10 +522,16 @@ export function StoryDetailPageContent(props: Readonly<{
     });
 
     eventSource.addEventListener('heartbeat', () => {
+      if (connectionSessionRef.current !== sessionId) {
+        return;
+      }
       setConnectionState('live');
     });
 
     eventSource.addEventListener('board_error', (event) => {
+      if (connectionSessionRef.current !== sessionId) {
+        return;
+      }
       const parsed = parseJsonSafely((event as MessageEvent).data);
       if (isRecord(parsed) && typeof parsed.message === 'string') {
         setConnectionError(parsed.message);
@@ -527,6 +541,9 @@ export function StoryDetailPageContent(props: Readonly<{
     });
 
     eventSource.addEventListener('board_event', (event) => {
+      if (connectionSessionRef.current !== sessionId) {
+        return;
+      }
       const parsed = parseJsonSafely((event as MessageEvent).data);
       const snapshot = parseBoardEventSnapshot(parsed);
       if (!snapshot) {
@@ -556,26 +573,41 @@ export function StoryDetailPageContent(props: Readonly<{
     });
 
     eventSource.onopen = () => {
+      if (connectionSessionRef.current !== sessionId) {
+        eventSource.close();
+        return;
+      }
       setConnectionState('live');
     };
 
     eventSource.onerror = () => {
+      if (connectionSessionRef.current !== sessionId) {
+        eventSource.close();
+        return;
+      }
       setConnectionState('stale');
       setConnectionError('Connection lost. Reconnecting…');
       eventSource.close();
-      eventSourceRef.current = null;
+      if (eventSourceRef.current === eventSource) {
+        eventSourceRef.current = null;
+      }
       if (reconnectTimeoutRef.current !== null) {
         window.clearTimeout(reconnectTimeoutRef.current);
       }
       reconnectTimeoutRef.current = window.setTimeout(() => {
-        connect();
+        connect(sessionId);
       }, 1000);
     };
   };
 
   useEffect(() => {
-    connect();
+    const sessionId = connectionSessionRef.current + 1;
+    connectionSessionRef.current = sessionId;
+    connect(sessionId);
     return () => {
+      if (connectionSessionRef.current === sessionId) {
+        connectionSessionRef.current = sessionId + 1;
+      }
       if (reconnectTimeoutRef.current !== null) {
         window.clearTimeout(reconnectTimeoutRef.current);
       }

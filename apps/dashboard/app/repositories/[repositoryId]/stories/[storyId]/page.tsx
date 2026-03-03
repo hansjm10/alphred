@@ -59,15 +59,13 @@ export default async function StoryDetailPage({ params }: StoryDetailPageProps) 
     notFound();
   }
 
-  const [bootstrap, proposal] = await Promise.all([
-    service.getRepositoryBoardBootstrap({ repositoryId: parsedRepositoryId }),
-    service.getStoryBreakdownProposal({ repositoryId: parsedRepositoryId, storyId: parsedStoryId }),
-  ]);
-
+  const bootstrap = await service.getRepositoryBoardBootstrap({ repositoryId: parsedRepositoryId });
   const story = bootstrap.workItems.find(item => item.id === parsedStoryId && item.type === 'story') ?? null;
   if (!story) {
     notFound();
   }
+
+  const proposal = await service.getStoryBreakdownProposal({ repositoryId: parsedRepositoryId, storyId: parsedStoryId });
 
   return (
     <StoryDetailPageContent
@@ -80,4 +78,3 @@ export default async function StoryDetailPage({ params }: StoryDetailPageProps) 
     />
   );
 }
-
