@@ -1408,6 +1408,7 @@ export function createWorkItemOperations(params: { withDatabase: WithDatabase })
           workItems: await toWorkItemSnapshotsWithPoliciesAsync(db, {
             repositoryId,
             rows,
+            includeTouchedFiles: false,
           }),
         };
       });
