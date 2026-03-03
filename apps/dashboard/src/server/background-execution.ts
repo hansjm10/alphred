@@ -337,6 +337,9 @@ export function createBackgroundExecutionManager(params: {
   function scheduleBackgroundRunExecutionReschedule(params: {
     runId: number;
     cleanupWorktree: boolean;
+    executionScope?: 'full' | 'single_node';
+    nodeSelector?: WorkflowRunNodeSelector;
+    assertRunExecutionAllowed?: RunExecutionPolicyAssertion;
   }): void {
     if (pendingBackgroundExecutionReschedules.has(params.runId)) {
       return;
@@ -370,6 +373,9 @@ export function createBackgroundExecutionManager(params: {
           workingDirectory: executionContext.workingDirectory,
           hasManagedWorktree: executionContext.hasManagedWorktree,
           cleanupWorktree: params.cleanupWorktree,
+          executionScope: params.executionScope,
+          nodeSelector: params.nodeSelector,
+          assertRunExecutionAllowed: params.assertRunExecutionAllowed,
         });
       }).catch((error: unknown) => {
         console.error(
@@ -396,6 +402,9 @@ export function createBackgroundExecutionManager(params: {
     scheduleBackgroundRunExecutionReschedule({
       runId: params.runId,
       cleanupWorktree: params.cleanupWorktree,
+      executionScope: params.executionScope,
+      nodeSelector: params.nodeSelector,
+      assertRunExecutionAllowed: params.assertRunExecutionAllowed,
     });
   }
 

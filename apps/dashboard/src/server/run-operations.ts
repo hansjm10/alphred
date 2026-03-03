@@ -62,6 +62,7 @@ const MAX_STREAM_SNAPSHOT_EVENTS = 500;
 const FAILED_COMMAND_OUTPUT_ARTIFACT_KIND = 'failed_command_output_v1';
 
 type WithDatabase = <T>(operation: (db: AlphredDatabase) => Promise<T> | T) => Promise<T>;
+type RunExecutionPolicyAssertion = (db: AlphredDatabase, runId: number) => Promise<void> | void;
 
 type RunOperationsDependencies = {
   createSqlWorkflowPlanner: (db: AlphredDatabase) => {
@@ -323,6 +324,42 @@ function assertLaunchPolicyAllowlists(
   }
 }
 
+function cloneLaunchPolicyConstraints(
+  policyConstraints: DashboardRunLaunchPolicyConstraints,
+): DashboardRunLaunchPolicyConstraints {
+  return {
+    allowedProviders: policyConstraints.allowedProviders === null ? null : [...policyConstraints.allowedProviders],
+    allowedModels: policyConstraints.allowedModels === null ? null : [...policyConstraints.allowedModels],
+    allowedSkillIdentifiers:
+      policyConstraints.allowedSkillIdentifiers === null ? null : [...policyConstraints.allowedSkillIdentifiers],
+    allowedMcpServerIdentifiers:
+      policyConstraints.allowedMcpServerIdentifiers === null ? null : [...policyConstraints.allowedMcpServerIdentifiers],
+  };
+}
+
+function hasLaunchPolicyConstraints(policyConstraints: DashboardRunLaunchPolicyConstraints): boolean {
+  return (
+    policyConstraints.allowedProviders !== null
+    || policyConstraints.allowedModels !== null
+    || policyConstraints.allowedSkillIdentifiers !== null
+    || policyConstraints.allowedMcpServerIdentifiers !== null
+  );
+}
+
+function createRunExecutionPolicyAssertion(
+  policyConstraints: DashboardRunLaunchPolicyConstraints | undefined,
+): RunExecutionPolicyAssertion | undefined {
+  if (policyConstraints === undefined || !hasLaunchPolicyConstraints(policyConstraints)) {
+    return undefined;
+  }
+
+  return (db, runId) =>
+    assertLaunchPolicyAllowlists(db, {
+      runId,
+      policyConstraints,
+    });
+}
+
 function isRunPolicyConflict(error: unknown): error is DashboardIntegrationError {
   if (!(error instanceof DashboardIntegrationError)) {
     return false;
@@ -496,6 +533,7 @@ export function createRunOperations(params: {
     repositoryAuthDependencies,
     backgroundExecution,
   } = params;
+  const runPolicyConstraintsByRunId = new Map<number, DashboardRunLaunchPolicyConstraints>();
 
   return {
     listWorkflowRuns(limit = 20): Promise<DashboardRunSummary[]> {
@@ -1057,19 +1095,18 @@ export function createRunOperations(params: {
         const runId = workflowRunId;
         let workingDirectory = cwd;
         let worktreeManager: Pick<WorktreeManager, 'createRunWorktree' | 'cleanupRun'> | null = null;
-        const policyConstraints = request.policyConstraints;
-        const assertRunExecutionAllowed =
-          policyConstraints === undefined
+        const policyConstraints =
+          request.policyConstraints === undefined
             ? undefined
-            : (executionDb: AlphredDatabase, executionRunId: number) =>
-                assertLaunchPolicyAllowlists(executionDb, {
-                  runId: executionRunId,
-                  policyConstraints,
-                });
+            : cloneLaunchPolicyConstraints(request.policyConstraints);
+        const assertRunExecutionAllowed = createRunExecutionPolicyAssertion(policyConstraints);
 
         try {
           if (assertRunExecutionAllowed !== undefined) {
             assertRunExecutionAllowed(db, runId);
+            if (policyConstraints !== undefined) {
+              runPolicyConstraintsByRunId.set(runId, policyConstraints);
+            }
           }
 
           if (repositoryName !== undefined) {
@@ -1139,6 +1176,7 @@ export function createRunOperations(params: {
             executedNodes: null,
           };
         } catch (error) {
+          runPolicyConstraintsByRunId.delete(runId);
           await backgroundExecution.markPendingRunCancelled(db, workflowRunId);
           if (isRunPolicyConflict(error)) {
             const executor = dependencies.createSqlWorkflowExecutor(db, {
@@ -1205,11 +1243,13 @@ export function createRunOperations(params: {
 
         if ((action === 'resume' || action === 'retry') && controlResult.runStatus === 'running') {
           const executionContext = backgroundExecution.resolveRunExecutionContext(db, runId);
+          const policyConstraints = runPolicyConstraintsByRunId.get(runId);
           backgroundExecution.ensureBackgroundRunExecution({
             runId,
             workingDirectory: executionContext.workingDirectory,
             hasManagedWorktree: executionContext.hasManagedWorktree,
             cleanupWorktree: false,
+            assertRunExecutionAllowed: createRunExecutionPolicyAssertion(policyConstraints),
           });
         }
 
