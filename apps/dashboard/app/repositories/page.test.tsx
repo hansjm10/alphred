@@ -110,6 +110,10 @@ describe('RepositoriesPage', () => {
     expect(screen.getByRole('button', { name: 'Retry sample-repo' })).toBeInTheDocument();
     expect(screen.getByText('Cloned')).toBeInTheDocument();
     expect(screen.getAllByText('/tmp/repos/demo-repo')).toHaveLength(2);
+    expect(screen.getByRole('link', { name: 'Open Board' })).toHaveAttribute(
+      'href',
+      '/repositories/demo-repo/board',
+    );
   });
 
   it('renders empty-state callout when no repositories exist', () => {
