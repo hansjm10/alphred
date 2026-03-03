@@ -4,6 +4,7 @@ import type { WorkItemStatus, WorkItemType } from '@alphred/shared';
 import type {
   DashboardWorkItemEffectivePolicySnapshot,
   DashboardWorkItemLinkedRunSnapshot,
+  DashboardRequestWorkItemReplanResult,
   DashboardWorkItemSnapshot,
 } from '@dashboard/server/dashboard-contracts';
 
@@ -138,6 +139,15 @@ function isLinkedWorkflowRunSnapshot(value: unknown): value is DashboardWorkItem
     || runStatus === 'completed'
     || runStatus === 'failed'
     || runStatus === 'cancelled';
+
+  if (
+    'touchedFiles' in value
+    && value.touchedFiles !== undefined
+    && value.touchedFiles !== null
+    && (!Array.isArray(value.touchedFiles) || value.touchedFiles.some((entry) => typeof entry !== 'string'))
+  ) {
+    return false;
+  }
 
   return typeof value.workflowRunId === 'number' && validRunStatus && typeof value.linkedAt === 'string';
 }
@@ -450,4 +460,54 @@ export async function moveWorkItemStatus<TStatus extends string>(params: {
   }
 
   return { ok: true, workItem: payload.workItem as DashboardWorkItemSnapshot };
+}
+
+export async function requestWorkItemReplan(params: {
+  repositoryId: number;
+  workItemId: number;
+  actor: WorkItemActor;
+  errorPrefix?: string;
+}): Promise<{ ok: true; result: DashboardRequestWorkItemReplanResult } | { ok: false; status: number; message: string }> {
+  const errorPrefix = params.errorPrefix ?? 'Unable to request replanning';
+  const response = await fetch(
+    `/api/dashboard/repositories/${params.repositoryId}/work-items/${params.workItemId}/actions/request-replan`,
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        actorType: params.actor.actorType,
+        actorLabel: params.actor.actorLabel,
+      }),
+    },
+  );
+
+  const payload = parseJsonSafely(await response.text());
+
+  if (!response.ok) {
+    return {
+      ok: false,
+      status: response.status,
+      message: resolveApiErrorMessage(response.status, payload, errorPrefix),
+    };
+  }
+
+  if (
+    !isRecord(payload)
+    || typeof payload.repositoryId !== 'number'
+    || typeof payload.workItemId !== 'number'
+    || typeof payload.workflowRunId !== 'number'
+    || typeof payload.eventId !== 'number'
+    || typeof payload.requestedAt !== 'string'
+    || !Array.isArray(payload.plannedButUntouched)
+    || !Array.isArray(payload.touchedButUnplanned)
+    || payload.plannedButUntouched.some((entry) => typeof entry !== 'string')
+    || payload.touchedButUnplanned.some((entry) => typeof entry !== 'string')
+  ) {
+    return { ok: false, status: 500, message: `${errorPrefix} (malformed response).` };
+  }
+
+  return {
+    ok: true,
+    result: payload as DashboardRequestWorkItemReplanResult,
+  };
 }

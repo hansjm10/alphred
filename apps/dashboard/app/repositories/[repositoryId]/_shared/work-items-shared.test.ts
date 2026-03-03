@@ -5,6 +5,7 @@ import {
   fetchWorkItem,
   moveWorkItemStatus,
   parseBoardEventSnapshot,
+  requestWorkItemReplan,
   toWorkItemsById,
   type BoardEventSnapshot,
   type WorkItemActor,
@@ -139,6 +140,7 @@ describe('applyBoardEventToWorkItems', () => {
             workflowRunId: 88,
             runStatus: 'running',
             linkedAt: '2026-03-03T00:00:00.000Z',
+            touchedFiles: ['src/a.ts'],
           },
         },
       }),
@@ -149,6 +151,7 @@ describe('applyBoardEventToWorkItems', () => {
       workflowRunId: 88,
       runStatus: 'running',
       linkedAt: '2026-03-03T00:00:00.000Z',
+      touchedFiles: ['src/a.ts'],
     });
 
     const breakdownProposed = applyBoardEventToWorkItems(
@@ -331,5 +334,90 @@ describe('moveWorkItemStatus', () => {
     if (!result.ok) {
       expect(result.message).toBe('Unable to move work item (malformed response).');
     }
+  });
+});
+
+describe('requestWorkItemReplan', () => {
+  it('returns ok=true for successful responses', async () => {
+    const fetchMock = vi.fn(async () =>
+      new Response(
+        JSON.stringify({
+          repositoryId: 1,
+          workItemId: 3,
+          workflowRunId: 12,
+          eventId: 40,
+          requestedAt: '2026-03-03T00:00:00.000Z',
+          plannedButUntouched: ['src/planned.ts'],
+          touchedButUnplanned: ['src/actual.ts'],
+        }),
+        { status: 200 },
+      ),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await requestWorkItemReplan({
+      repositoryId: 1,
+      workItemId: 3,
+      actor,
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/dashboard/repositories/1/work-items/3/actions/request-replan', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        actorType: 'human',
+        actorLabel: 'octocat',
+      }),
+    });
+    expect(result).toEqual({
+      ok: true,
+      result: {
+        repositoryId: 1,
+        workItemId: 3,
+        workflowRunId: 12,
+        eventId: 40,
+        requestedAt: '2026-03-03T00:00:00.000Z',
+        plannedButUntouched: ['src/planned.ts'],
+        touchedButUnplanned: ['src/actual.ts'],
+      },
+    });
+  });
+
+  it('returns ok=false with API error responses', async () => {
+    const fetchMock = vi.fn(async () =>
+      new Response(JSON.stringify({ error: { message: 'Conflict' } }), { status: 409 }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await requestWorkItemReplan({
+      repositoryId: 1,
+      workItemId: 3,
+      actor,
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      status: 409,
+      message: 'Conflict',
+    });
+  });
+
+  it('returns ok=false for malformed success payloads', async () => {
+    const fetchMock = vi.fn(async () =>
+      new Response(JSON.stringify({ repositoryId: 1 }), { status: 200 }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await requestWorkItemReplan({
+      repositoryId: 1,
+      workItemId: 3,
+      actor,
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      status: 500,
+      message: 'Unable to request replanning (malformed response).',
+    });
   });
 });

@@ -5,6 +5,7 @@ import type {
   DashboardCreateWorkItemRequest,
   DashboardMoveWorkItemStatusRequest,
   DashboardProposeStoryBreakdownRequest,
+  DashboardRequestWorkItemReplanRequest,
   DashboardUpdateWorkItemFieldsRequest,
   DashboardWorkItemProposedBreakdownTask,
 } from '@dashboard/server/dashboard-contracts';
@@ -324,6 +325,22 @@ export function parseMoveWorkItemStatusRequest(
     workItemId,
     expectedRevision,
     toStatus,
+    actorType,
+    actorLabel,
+  };
+}
+
+export function parseRequestWorkItemReplanRequest(
+  payload: Record<string, unknown>,
+  repositoryId: number,
+  workItemId: number,
+): DashboardRequestWorkItemReplanRequest {
+  const actorType = parseActorType(payload.actorType);
+  const actorLabel = parseActorLabel(payload.actorLabel);
+
+  return {
+    repositoryId,
+    workItemId,
     actorType,
     actorLabel,
   };

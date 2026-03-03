@@ -232,6 +232,66 @@ describe('RepositoryBoardPageContent', () => {
     expect(screen.getByText('running')).toBeInTheDocument();
   });
 
+  it('highlights planned-vs-actual mismatches and requests replanning', async () => {
+    const user = userEvent.setup();
+    const fetchMock = vi.mocked(global.fetch);
+    fetchMock.mockResolvedValueOnce(
+      createJsonResponse({
+        repositoryId: 1,
+        workItemId: 10,
+        workflowRunId: 42,
+        eventId: 77,
+        requestedAt: '2026-03-03T00:10:00.000Z',
+        plannedButUntouched: ['src/b.ts'],
+        touchedButUnplanned: ['src/c.ts'],
+      }),
+    );
+
+    render(
+      <RepositoryBoardPageContent
+        repository={createRepository({ id: 1, name: 'demo-repo' })}
+        actor={{ actorType: 'human', actorLabel: 'octocat' }}
+        initialLatestEventId={0}
+        initialWorkItems={[
+          createWorkItem({
+            id: 10,
+            type: 'task',
+            status: 'InProgress',
+            title: 'Plan mismatch task',
+            plannedFiles: ['src/a.ts', 'src/b.ts'],
+            linkedWorkflowRun: {
+              workflowRunId: 42,
+              runStatus: 'running',
+              linkedAt: '2026-03-03T00:00:00.000Z',
+              touchedFiles: ['src/a.ts', 'src/c.ts'],
+            },
+          }),
+        ]}
+      />,
+    );
+
+    await user.click(screen.getByRole('button', { name: /Plan mismatch task/ }));
+    expect(screen.getByText('Plan vs actual')).toBeInTheDocument();
+    const planVsActualSection = screen.getByText('Plan vs actual').closest('div');
+    expect(planVsActualSection).not.toBeNull();
+    expect(within(planVsActualSection ?? document.body).getByText('Planned but not touched')).toBeInTheDocument();
+    expect(within(planVsActualSection ?? document.body).getByText('Touched but not planned')).toBeInTheDocument();
+    expect(within(planVsActualSection ?? document.body).getByText('src/b.ts')).toBeInTheDocument();
+    expect(within(planVsActualSection ?? document.body).getByText('src/c.ts')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Request replanning for mismatch' }));
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/dashboard/repositories/1/work-items/10/actions/request-replan', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        actorType: 'human',
+        actorLabel: 'octocat',
+      }),
+    });
+    expect(await screen.findByText(/Replanning requested for "Plan mismatch task"/)).toBeInTheDocument();
+  });
+
   it('shows effective policy details for tasks and supports inspecting epic policy from parent chain', async () => {
     const user = userEvent.setup();
 

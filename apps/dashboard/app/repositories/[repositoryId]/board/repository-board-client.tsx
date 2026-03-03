@@ -27,6 +27,7 @@ import {
   moveWorkItemStatus,
   parseBoardEventSnapshot,
   parseJsonSafely,
+  requestWorkItemReplan,
   toWorkItemsById,
 } from '../_shared/work-items-shared';
 
@@ -90,6 +91,31 @@ function renderStringList(items: string[] | null): ReactNode {
       ))}
     </ul>
   );
+}
+
+function toUniqueSortedStrings(items: string[] | null | undefined): string[] {
+  if (!items || items.length === 0) {
+    return [];
+  }
+  return [...new Set(items)].sort((left, right) => left.localeCompare(right));
+}
+
+function resolvePlanVsActualDelta(
+  plannedFiles: string[] | null,
+  touchedFiles: string[] | null | undefined,
+): {
+  plannedButUntouched: string[];
+  touchedButUnplanned: string[];
+} {
+  const planned = toUniqueSortedStrings(plannedFiles);
+  const touched = toUniqueSortedStrings(touchedFiles);
+  const plannedSet = new Set(planned);
+  const touchedSet = new Set(touched);
+
+  return {
+    plannedButUntouched: planned.filter((path) => !touchedSet.has(path)),
+    touchedButUnplanned: touched.filter((path) => !plannedSet.has(path)),
+  };
 }
 
 function renderConcurrencyBudget(value: number | null): string {
@@ -216,6 +242,7 @@ export function RepositoryBoardPageContent({
   const [connectionError, setConnectionError] = useState<string | null>(null);
   const [actionMessage, setActionMessage] = useState<{ tone: 'success' | 'error'; message: string } | null>(null);
   const [movingWorkItemIds, setMovingWorkItemIds] = useState<ReadonlySet<number>>(() => new Set());
+  const [replanningWorkItemIds, setReplanningWorkItemIds] = useState<ReadonlySet<number>>(() => new Set());
   const [activeDragWorkItemId, setActiveDragWorkItemId] = useState<number | null>(null);
 
   const lastEventIdRef = useRef<number>(initialLatestEventId);
@@ -441,6 +468,45 @@ export function RepositoryBoardPageContent({
     }
   };
 
+  const handleRequestReplan = async (workItem: DashboardWorkItemSnapshot) => {
+    setActionMessage(null);
+    setReplanningWorkItemIds((previous) => new Set([...previous, workItem.id]));
+
+    try {
+      const result = await requestWorkItemReplan({
+        repositoryId: repository.id,
+        workItemId: workItem.id,
+        actor,
+      });
+
+      if (!result.ok) {
+        setActionMessage({ tone: 'error', message: result.message });
+        return;
+      }
+
+      const plannedGapCount = result.result.plannedButUntouched.length;
+      const touchedGapCount = result.result.touchedButUnplanned.length;
+      setActionMessage({
+        tone: 'success',
+        message:
+          plannedGapCount + touchedGapCount > 0
+            ? `Replanning requested for "${workItem.title}" (${plannedGapCount} planned-only, ${touchedGapCount} touched-only).`
+            : `Replanning requested for "${workItem.title}".`,
+      });
+    } catch (error) {
+      setActionMessage({
+        tone: 'error',
+        message: error instanceof Error ? error.message : 'Unable to request replanning.',
+      });
+    } finally {
+      setReplanningWorkItemIds((previous) => {
+        const next = new Set(previous);
+        next.delete(workItem.id);
+        return next;
+      });
+    }
+  };
+
   const sensors = useSensors(
     useSensor(MouseSensor, {
       activationConstraint: { distance: 8 },
@@ -532,6 +598,11 @@ export function RepositoryBoardPageContent({
     const statusSelectId = `board-detail-status-${selectedWorkItem.id}`;
     const detailTypeLabel = selectedWorkItem.type.charAt(0).toUpperCase() + selectedWorkItem.type.slice(1);
     const effectivePolicy = selectedWorkItem.effectivePolicy ?? null;
+    const touchedFiles = linkedWorkflowRun?.touchedFiles;
+    const planVsActual = resolvePlanVsActualDelta(selectedWorkItem.plannedFiles, touchedFiles);
+    const hasMismatch = planVsActual.plannedButUntouched.length > 0 || planVsActual.touchedButUnplanned.length > 0;
+    const canComparePlanVsActual = linkedWorkflowRun !== null && touchedFiles !== undefined;
+    const requestingReplan = replanningWorkItemIds.has(selectedWorkItem.id);
 
     return (
       <div className="board-drawer-scrim">
@@ -636,6 +707,41 @@ export function RepositoryBoardPageContent({
           <div className="board-detail__section board-detail__section--divider">
             <h5>Planned files</h5>
             {renderStringList(selectedWorkItem.plannedFiles)}
+          </div>
+
+          <div className="board-detail__section board-detail__section--divider">
+            <h5>Touched files</h5>
+            {linkedWorkflowRun === null ? (
+              <p className="meta-text">Link a run to compare actual file touches.</p>
+            ) : touchedFiles === undefined ? (
+              <p className="meta-text">Touched files are unavailable because the linked run worktree is unavailable.</p>
+            ) : (
+              renderStringList(touchedFiles)
+            )}
+          </div>
+
+          <div className="board-detail__section board-detail__section--divider">
+            <h5>Plan vs actual</h5>
+            {!canComparePlanVsActual ? (
+              <p className="meta-text">No plan-vs-actual diff available yet.</p>
+            ) : (
+              <>
+                <h6 className="meta-text">Planned but not touched</h6>
+                {renderStringList(planVsActual.plannedButUntouched)}
+                <h6 className="meta-text">Touched but not planned</h6>
+                {renderStringList(planVsActual.touchedButUnplanned)}
+                <ActionButton
+                  tone="secondary"
+                  onClick={() => {
+                    void handleRequestReplan(selectedWorkItem);
+                  }}
+                  disabled={requestingReplan}
+                  aria-disabled={requestingReplan}
+                >
+                  {requestingReplan ? 'Requesting replanning…' : hasMismatch ? 'Request replanning for mismatch' : 'Request replanning'}
+                </ActionButton>
+              </>
+            )}
           </div>
 
           <div className="board-detail__section board-detail__section--divider">

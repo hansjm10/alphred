@@ -541,6 +541,41 @@ SSE transport events (`transport=sse`):
 - `heartbeat`: periodic keepalive containing the latest delivered board event id.
 - `board_error`: stream-channel failure details.
 
+### `POST /repositories/[repositoryId]/work-items/[workItemId]/actions/request-replan`
+
+Appends an audit event requesting replanning for a task based on planned-vs-actual file deltas.
+
+Path parameters:
+- `repositoryId`: positive integer repository id.
+- `workItemId`: positive integer task id.
+
+Request body:
+
+```json
+{
+  "actorType": "human",
+  "actorLabel": "alice"
+}
+```
+
+Response `200`:
+
+```json
+{
+  "repositoryId": 4,
+  "workItemId": 9,
+  "workflowRunId": 22,
+  "eventId": 31,
+  "requestedAt": "2026-03-03T00:01:00.000Z",
+  "plannedButUntouched": ["src/planned.ts"],
+  "touchedButUnplanned": ["src/actual.ts"]
+}
+```
+
+Error semantics:
+- `400 invalid_request` when the target work item is not a task or actor payload is malformed.
+- `409 conflict` when the task has no linked run or touched-file data is unavailable.
+
 ### `GET /runs/[runId]/nodes/[runNodeId]/diagnostics/[attempt]/commands/[eventIndex]`
 
 Gets full persisted output for a failed command-execution event within a run-node attempt.

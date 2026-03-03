@@ -1,3 +1,5 @@
+import { execFileSync } from 'node:child_process';
+import { posix } from 'node:path';
 import { validateParentChildWorkItemTypes, validateTransition } from '@alphred/core';
 import {
   and,
@@ -6,6 +8,7 @@ import {
   eq,
   inArray,
   repositories,
+  runWorktrees,
   sql,
   workItemEvents,
   workItemPolicies,
@@ -33,6 +36,8 @@ import type {
   DashboardMoveWorkItemStatusResult,
   DashboardProposeStoryBreakdownRequest,
   DashboardProposeStoryBreakdownResult,
+  DashboardRequestWorkItemReplanRequest,
+  DashboardRequestWorkItemReplanResult,
   DashboardRepositoryBoardBootstrapResult,
   DashboardWorkItemLinkedRunSnapshot,
   DashboardSetWorkItemParentRequest,
@@ -54,6 +59,7 @@ type AlphredTransaction = Parameters<Parameters<AlphredDatabase['transaction']>[
 type DbOrTx = AlphredDatabase | AlphredTransaction;
 
 const MAX_BOARD_EVENT_SNAPSHOT_EVENTS = 200;
+const GIT_MAX_BUFFER_BYTES = 16 * 1024 * 1024;
 
 function toOptionalNonEmptyTrimmedString(value: string | null): string | null {
   if (value === null) return null;
@@ -70,6 +76,99 @@ function toStringArrayOrNull(value: unknown): string[] | null {
     strings.push(entry);
   }
   return strings;
+}
+
+function toUniqueSortedStrings(values: readonly string[]): string[] {
+  return [...new Set(values)].sort((left, right) => left.localeCompare(right));
+}
+
+function parseStatusPaths(statusOutput: string): string[] {
+  const entries = statusOutput.split('\u0000');
+  const paths = new Set<string>();
+  let skipNextEntry = false;
+
+  for (const entry of entries) {
+    if (skipNextEntry) {
+      skipNextEntry = false;
+      continue;
+    }
+
+    if (entry.length < 4) {
+      continue;
+    }
+
+    const status = entry.slice(0, 2);
+    const path = entry.slice(3);
+    const statusCodes = new Set(status);
+
+    const renamedOrCopied = statusCodes.has('R') || statusCodes.has('C');
+    if (renamedOrCopied) {
+      skipNextEntry = true;
+    }
+
+    if (path.length > 0) {
+      paths.add(path);
+    }
+  }
+
+  return toUniqueSortedStrings([...paths]);
+}
+
+function readTouchedFilesFromWorktree(worktreePath: string): string[] | null {
+  try {
+    const output = execFileSync(
+      'git',
+      ['-C', worktreePath, 'status', '--porcelain=v1', '--untracked-files=all', '-z'],
+      {
+        encoding: 'utf8',
+        maxBuffer: GIT_MAX_BUFFER_BYTES,
+      },
+    );
+    return parseStatusPaths(output);
+  } catch {
+    return null;
+  }
+}
+
+function normalizeRepoRelativePath(path: string): string | null {
+  const trimmed = path.trim();
+  if (trimmed.length === 0) {
+    return null;
+  }
+
+  const slashNormalized = trimmed.replaceAll('\\', '/');
+  if (slashNormalized.startsWith('/')) {
+    return null;
+  }
+
+  if (/^[A-Za-z]:\//.test(slashNormalized)) {
+    return null;
+  }
+
+  const normalized = posix.normalize(slashNormalized).replace(/^(\.\/)+/, '');
+  if (normalized.length === 0 || normalized === '.' || normalized === '..' || normalized.startsWith('../')) {
+    return null;
+  }
+
+  return normalized;
+}
+
+function toRepoRelativePathArrayOrNull(value: unknown): string[] | null {
+  const strings = toStringArrayOrNull(value);
+  if (strings === null) {
+    return null;
+  }
+
+  const normalized: string[] = [];
+  for (const entry of strings) {
+    const path = normalizeRepoRelativePath(entry);
+    if (path === null) {
+      return null;
+    }
+    normalized.push(path);
+  }
+
+  return toUniqueSortedStrings(normalized);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -578,12 +677,78 @@ function toLinkedRunSnapshot(
   row: Pick<WorkItemWorkflowRunRow, 'workflowRunId' | 'linkedAt'> & {
     runStatus: string;
   },
+  touchedFiles: string[] | null,
 ): DashboardWorkItemLinkedRunSnapshot {
-  return {
+  const snapshot: DashboardWorkItemLinkedRunSnapshot = {
     workflowRunId: row.workflowRunId,
     runStatus: row.runStatus as DashboardWorkItemLinkedRunSnapshot['runStatus'],
     linkedAt: row.linkedAt,
   };
+
+  if (touchedFiles !== null) {
+    snapshot.touchedFiles = touchedFiles;
+  }
+
+  return snapshot;
+}
+
+function loadTouchedFilesByWorkflowRunId(
+  db: DbOrTx,
+  params: {
+    repositoryId: number;
+    workflowRunIds: readonly number[];
+  },
+): ReadonlyMap<number, string[] | null> {
+  if (params.workflowRunIds.length === 0) {
+    return new Map();
+  }
+
+  const rows = db
+    .select({
+      workflowRunId: runWorktrees.workflowRunId,
+      worktreePath: runWorktrees.worktreePath,
+      status: runWorktrees.status,
+      id: runWorktrees.id,
+    })
+    .from(runWorktrees)
+    .where(
+      and(
+        eq(runWorktrees.repositoryId, params.repositoryId),
+        inArray(runWorktrees.workflowRunId, [...params.workflowRunIds]),
+      ),
+    )
+    .all();
+
+  const bestWorktreeByRunId = new Map<number, { worktreePath: string; status: string; id: number }>();
+  for (const row of rows) {
+    const existing = bestWorktreeByRunId.get(row.workflowRunId);
+    if (!existing) {
+      bestWorktreeByRunId.set(row.workflowRunId, {
+        worktreePath: row.worktreePath,
+        status: row.status,
+        id: row.id,
+      });
+      continue;
+    }
+
+    const rowPriority = row.status === 'active' ? 2 : 1;
+    const existingPriority = existing.status === 'active' ? 2 : 1;
+    if (rowPriority > existingPriority || (rowPriority === existingPriority && row.id > existing.id)) {
+      bestWorktreeByRunId.set(row.workflowRunId, {
+        worktreePath: row.worktreePath,
+        status: row.status,
+        id: row.id,
+      });
+    }
+  }
+
+  const touchedFilesByRunId = new Map<number, string[] | null>();
+  for (const workflowRunId of params.workflowRunIds) {
+    const best = bestWorktreeByRunId.get(workflowRunId);
+    touchedFilesByRunId.set(workflowRunId, best ? readTouchedFilesFromWorktree(best.worktreePath) : null);
+  }
+
+  return touchedFilesByRunId;
 }
 
 function loadLatestLinkedWorkflowRunsForTasks(
@@ -616,12 +781,31 @@ function loadLatestLinkedWorkflowRunsForTasks(
     .orderBy(asc(workItemWorkflowRuns.workItemId), desc(workItemWorkflowRuns.linkedAt), desc(workItemWorkflowRuns.id))
     .all();
 
-  const latestByTaskId = new Map<number, DashboardWorkItemLinkedRunSnapshot>();
+  const latestRowsByTaskId = new Map<number, typeof rows[number]>();
   for (const row of rows) {
-    if (latestByTaskId.has(row.workItemId)) {
+    if (latestRowsByTaskId.has(row.workItemId)) {
       continue;
     }
-    latestByTaskId.set(row.workItemId, toLinkedRunSnapshot(row));
+    latestRowsByTaskId.set(row.workItemId, row);
+  }
+
+  const workflowRunIds = [...new Set([...latestRowsByTaskId.values()].map(row => row.workflowRunId))].sort(
+    (left, right) => left - right,
+  );
+  const touchedFilesByRunId = loadTouchedFilesByWorkflowRunId(db, {
+    repositoryId: params.repositoryId,
+    workflowRunIds,
+  });
+
+  const latestByTaskId = new Map<number, DashboardWorkItemLinkedRunSnapshot>();
+  for (const [workItemId, row] of latestRowsByTaskId.entries()) {
+    latestByTaskId.set(
+      workItemId,
+      toLinkedRunSnapshot(
+        row,
+        touchedFilesByRunId.get(row.workflowRunId) ?? null,
+      ),
+    );
   }
 
   return latestByTaskId;
@@ -641,7 +825,7 @@ function toWorkItemSnapshot(
     description: row.description,
     parentId: row.parentId,
     tags: toStringArrayOrNull(row.tags),
-    plannedFiles: toStringArrayOrNull(row.plannedFiles),
+    plannedFiles: toRepoRelativePathArrayOrNull(row.plannedFiles) ?? toStringArrayOrNull(row.plannedFiles),
     assignees: toStringArrayOrNull(row.assignees),
     priority: row.priority,
     estimate: row.estimate,
@@ -950,6 +1134,24 @@ function toWorkItemSnapshotWithPolicy(
   );
 }
 
+function resolvePlanVsActualDelta(
+  plannedFiles: string[] | null,
+  touchedFiles: string[] | null,
+): {
+  plannedButUntouched: string[];
+  touchedButUnplanned: string[];
+} {
+  const planned = toUniqueSortedStrings(plannedFiles ?? []);
+  const touched = toUniqueSortedStrings(touchedFiles ?? []);
+  const touchedSet = new Set(touched);
+  const plannedSet = new Set(planned);
+
+  return {
+    plannedButUntouched: planned.filter(path => !touchedSet.has(path)),
+    touchedButUnplanned: touched.filter(path => !plannedSet.has(path)),
+  };
+}
+
 export type WorkItemOperations = {
   listWorkItems: (repositoryId: number) => Promise<DashboardListWorkItemsResult>;
   getRepositoryBoardBootstrap: (params: { repositoryId: number }) => Promise<DashboardRepositoryBoardBootstrapResult>;
@@ -963,6 +1165,7 @@ export type WorkItemOperations = {
   createWorkItem: (request: DashboardCreateWorkItemRequest) => Promise<DashboardCreateWorkItemResult>;
   updateWorkItemFields: (request: DashboardUpdateWorkItemFieldsRequest) => Promise<DashboardUpdateWorkItemFieldsResult>;
   moveWorkItemStatus: (request: DashboardMoveWorkItemStatusRequest) => Promise<DashboardMoveWorkItemStatusResult>;
+  requestWorkItemReplan: (request: DashboardRequestWorkItemReplanRequest) => Promise<DashboardRequestWorkItemReplanResult>;
   setWorkItemParent: (request: DashboardSetWorkItemParentRequest) => Promise<DashboardSetWorkItemParentResult>;
   proposeStoryBreakdown: (request: DashboardProposeStoryBreakdownRequest) => Promise<DashboardProposeStoryBreakdownResult>;
   approveStoryBreakdown: (request: DashboardApproveStoryBreakdownRequest) => Promise<DashboardApproveStoryBreakdownResult>;
@@ -1233,7 +1436,7 @@ export function createWorkItemOperations(params: { withDatabase: WithDatabase })
 
       const description = toOptionalNonEmptyTrimmedString(requestRaw.description ?? null);
       const tags = requestRaw.tags ?? null;
-      const plannedFiles = requestRaw.plannedFiles ?? null;
+      const plannedFilesRaw = requestRaw.plannedFiles ?? null;
       const assignees = requestRaw.assignees ?? null;
       const priority = requestRaw.priority ?? null;
       const estimate = requestRaw.estimate ?? null;
@@ -1244,10 +1447,15 @@ export function createWorkItemOperations(params: { withDatabase: WithDatabase })
           status: 400,
         });
       }
-      if (plannedFiles !== null && toStringArrayOrNull(plannedFiles) === null) {
-        throw new DashboardIntegrationError('invalid_request', 'plannedFiles must be an array of strings when provided.', {
-          status: 400,
-        });
+      const plannedFiles = plannedFilesRaw === null ? null : toRepoRelativePathArrayOrNull(plannedFilesRaw);
+      if (plannedFilesRaw !== null && plannedFiles === null) {
+        throw new DashboardIntegrationError(
+          'invalid_request',
+          'plannedFiles must be an array of repo-relative file paths when provided.',
+          {
+            status: 400,
+          },
+        );
       }
       if (assignees !== null && toStringArrayOrNull(assignees) === null) {
         throw new DashboardIntegrationError('invalid_request', 'assignees must be an array of strings when provided.', {
@@ -1353,7 +1561,7 @@ export function createWorkItemOperations(params: { withDatabase: WithDatabase })
 
       const description = requestRaw.description !== undefined ? toOptionalNonEmptyTrimmedString(requestRaw.description) : undefined;
       const tags = requestRaw.tags !== undefined ? requestRaw.tags : undefined;
-      const plannedFiles = requestRaw.plannedFiles !== undefined ? requestRaw.plannedFiles : undefined;
+      const plannedFilesRaw = requestRaw.plannedFiles !== undefined ? requestRaw.plannedFiles : undefined;
       const assignees = requestRaw.assignees !== undefined ? requestRaw.assignees : undefined;
       const priority = requestRaw.priority !== undefined ? requestRaw.priority : undefined;
       const estimate = requestRaw.estimate !== undefined ? requestRaw.estimate : undefined;
@@ -1363,10 +1571,18 @@ export function createWorkItemOperations(params: { withDatabase: WithDatabase })
           status: 400,
         });
       }
-      if (plannedFiles !== undefined && plannedFiles !== null && toStringArrayOrNull(plannedFiles) === null) {
-        throw new DashboardIntegrationError('invalid_request', 'plannedFiles must be an array of strings when provided.', {
-          status: 400,
-        });
+      const plannedFiles =
+        plannedFilesRaw === undefined || plannedFilesRaw === null
+          ? plannedFilesRaw
+          : toRepoRelativePathArrayOrNull(plannedFilesRaw);
+      if (plannedFilesRaw !== undefined && plannedFilesRaw !== null && plannedFiles === null) {
+        throw new DashboardIntegrationError(
+          'invalid_request',
+          'plannedFiles must be an array of repo-relative file paths when provided.',
+          {
+            status: 400,
+          },
+        );
       }
       if (assignees !== undefined && assignees !== null && toStringArrayOrNull(assignees) === null) {
         throw new DashboardIntegrationError('invalid_request', 'assignees must be an array of strings when provided.', {
@@ -1565,6 +1781,100 @@ export function createWorkItemOperations(params: { withDatabase: WithDatabase })
       );
     },
 
+    requestWorkItemReplan(requestRaw): Promise<DashboardRequestWorkItemReplanResult> {
+      const repositoryId = requireRepositoryId(requestRaw.repositoryId);
+      const workItemId = requireWorkItemId(requestRaw.workItemId);
+      const actor = requireActor(requestRaw);
+      const occurredAt = new Date().toISOString();
+
+      return withDatabase(db =>
+        db.transaction(tx => {
+          const existing = readWorkItemOrThrow(tx, { repositoryId, workItemId });
+          if (existing.type !== 'task') {
+            throw new DashboardIntegrationError('invalid_request', `Work item id=${workItemId} is not a task.`, {
+              status: 400,
+            });
+          }
+
+          const latestLinkedRuns = loadLatestLinkedWorkflowRunsForTasks(tx, {
+            repositoryId,
+            taskWorkItemIds: [workItemId],
+          });
+          const linkedRun = latestLinkedRuns.get(workItemId) ?? null;
+          if (linkedRun === null) {
+            throw new DashboardIntegrationError(
+              'conflict',
+              `Task id=${workItemId} is not linked to a workflow run. Replanning requires linked run context.`,
+              {
+                status: 409,
+                details: {
+                  kind: 'work_item_replan',
+                  reason: 'missing_linked_run',
+                  workItemId,
+                },
+              },
+            );
+          }
+
+          if (linkedRun.touchedFiles === undefined) {
+            throw new DashboardIntegrationError(
+              'conflict',
+              `Task id=${workItemId} touched files are unavailable because the linked run worktree is unavailable.`,
+              {
+                status: 409,
+                details: {
+                  kind: 'work_item_replan',
+                  reason: 'missing_touched_files',
+                  workItemId,
+                  workflowRunId: linkedRun.workflowRunId,
+                },
+              },
+            );
+          }
+
+          const plannedFiles = toRepoRelativePathArrayOrNull(existing.plannedFiles) ?? toStringArrayOrNull(existing.plannedFiles) ?? [];
+          const touchedFiles = linkedRun.touchedFiles;
+          const delta = resolvePlanVsActualDelta(plannedFiles, touchedFiles);
+
+          const eventResult = tx
+            .insert(workItemEvents)
+            .values({
+              repositoryId,
+              workItemId,
+              eventType: 'updated',
+              actorType: actor.actorType,
+              actorLabel: actor.actorLabel,
+              payload: {
+                expectedRevision: existing.revision,
+                revision: existing.revision,
+                changes: {},
+                replanRequest: {
+                  requestedAt: occurredAt,
+                  workflowRunId: linkedRun.workflowRunId,
+                  plannedFiles,
+                  touchedFiles,
+                  plannedButUntouched: delta.plannedButUntouched,
+                  touchedButUnplanned: delta.touchedButUnplanned,
+                },
+              },
+              createdAt: occurredAt,
+            })
+            .run();
+          const eventId = Number(eventResult.lastInsertRowid);
+
+          return {
+            repositoryId,
+            workItemId,
+            workflowRunId: linkedRun.workflowRunId,
+            eventId,
+            requestedAt: occurredAt,
+            plannedButUntouched: delta.plannedButUntouched,
+            touchedButUnplanned: delta.touchedButUnplanned,
+          };
+        }),
+      );
+    },
+
     setWorkItemParent(requestRaw): Promise<DashboardSetWorkItemParentResult> {
       const repositoryId = requireRepositoryId(requestRaw.repositoryId);
       const workItemId = requireWorkItemId(requestRaw.workItemId);
@@ -1711,7 +2021,7 @@ export function createWorkItemOperations(params: { withDatabase: WithDatabase })
         throw new DashboardIntegrationError('invalid_request', 'proposed.tasks cannot be empty.', { status: 400 });
       }
 
-      for (const [idx, task] of proposed.tasks.entries()) {
+      const normalizedTasks = proposed.tasks.map((task, idx) => {
         const taskTitle = task.title.trim();
         if (taskTitle.length === 0) {
           throw new DashboardIntegrationError('invalid_request', `proposed.tasks[${idx}].title cannot be empty.`, {
@@ -1725,10 +2035,14 @@ export function createWorkItemOperations(params: { withDatabase: WithDatabase })
             { status: 400 },
           );
         }
-        if (task.plannedFiles !== undefined && task.plannedFiles !== null && toStringArrayOrNull(task.plannedFiles) === null) {
+        const normalizedPlannedFiles =
+          task.plannedFiles === undefined || task.plannedFiles === null
+            ? null
+            : toRepoRelativePathArrayOrNull(task.plannedFiles);
+        if (task.plannedFiles !== undefined && task.plannedFiles !== null && normalizedPlannedFiles === null) {
           throw new DashboardIntegrationError(
             'invalid_request',
-            `proposed.tasks[${idx}].plannedFiles must be an array of strings when provided.`,
+            `proposed.tasks[${idx}].plannedFiles must be an array of repo-relative file paths when provided.`,
             { status: 400 },
           );
         }
@@ -1746,17 +2060,32 @@ export function createWorkItemOperations(params: { withDatabase: WithDatabase })
             { status: 400 },
           );
         }
-      }
+
+        return {
+          title: taskTitle,
+          description: toOptionalNonEmptyTrimmedString(task.description ?? null),
+          tags: task.tags ?? null,
+          plannedFiles: normalizedPlannedFiles,
+          assignees: task.assignees ?? null,
+          priority: task.priority ?? null,
+          estimate: task.estimate ?? null,
+          links: task.links ?? null,
+        };
+      });
 
       if (proposed.tags !== undefined && proposed.tags !== null && toStringArrayOrNull(proposed.tags) === null) {
         throw new DashboardIntegrationError('invalid_request', 'proposed.tags must be an array of strings when provided.', {
           status: 400,
         });
       }
-      if (proposed.plannedFiles !== undefined && proposed.plannedFiles !== null && toStringArrayOrNull(proposed.plannedFiles) === null) {
+      const normalizedProposedPlannedFiles =
+        proposed.plannedFiles === undefined || proposed.plannedFiles === null
+          ? null
+          : toRepoRelativePathArrayOrNull(proposed.plannedFiles);
+      if (proposed.plannedFiles !== undefined && proposed.plannedFiles !== null && normalizedProposedPlannedFiles === null) {
         throw new DashboardIntegrationError(
           'invalid_request',
-          'proposed.plannedFiles must be an array of strings when provided.',
+          'proposed.plannedFiles must be an array of repo-relative file paths when provided.',
           { status: 400 },
         );
       }
@@ -1792,15 +2121,15 @@ export function createWorkItemOperations(params: { withDatabase: WithDatabase })
 
           const insertedTasks: WorkItemRow[] = [];
           const createdTaskIds: number[] = [];
-          for (const task of proposed.tasks) {
+          for (const task of normalizedTasks) {
             const insertResult = tx
               .insert(workItems)
               .values({
                 repositoryId,
                 type: 'task',
                 status: 'Draft',
-                title: task.title.trim(),
-                description: toOptionalNonEmptyTrimmedString(task.description ?? null),
+                title: task.title,
+                description: task.description,
                 parentId: storyId,
                 tags: task.tags ?? null,
                 plannedFiles: task.plannedFiles ?? null,
@@ -1876,11 +2205,11 @@ export function createWorkItemOperations(params: { withDatabase: WithDatabase })
               createdTaskIds,
               proposed: {
                 tags: proposed.tags ?? null,
-                plannedFiles: proposed.plannedFiles ?? null,
+                plannedFiles: normalizedProposedPlannedFiles,
                 links: proposed.links ?? null,
-                tasks: proposed.tasks.map(task => ({
-                  title: task.title.trim(),
-                  description: toOptionalNonEmptyTrimmedString(task.description ?? null),
+                tasks: normalizedTasks.map(task => ({
+                  title: task.title,
+                  description: task.description,
                   tags: task.tags ?? null,
                   plannedFiles: task.plannedFiles ?? null,
                   assignees: task.assignees ?? null,
