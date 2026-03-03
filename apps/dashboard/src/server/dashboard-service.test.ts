@@ -3744,6 +3744,63 @@ describe('createDashboardService', () => {
     });
   }
 
+  it('clears cached launch policy assertions after terminal async completion', async () => {
+    const assertAvailabilityByExecution: boolean[] = [];
+    let currentAssertRunExecutionAllowed:
+      | ((params: { workflowRunId: number }) => Promise<void> | void)
+      | undefined;
+    const executeRun = vi.fn(async () => {
+      assertAvailabilityByExecution.push(typeof currentAssertRunExecutionAllowed === 'function');
+      return {
+        finalStep: {
+          runStatus: 'completed',
+          outcome: 'completed',
+        },
+        executedNodes: 1,
+      };
+    });
+    const retryRun = vi.fn(async (params: { workflowRunId: number }) => ({
+      action: 'retry' as const,
+      outcome: 'applied' as const,
+      workflowRunId: params.workflowRunId,
+      previousRunStatus: 'completed' as const,
+      runStatus: 'running' as const,
+      retriedRunNodeIds: [] as number[],
+    }));
+
+    const { db, dependencies } = createHarness({
+      createSqlWorkflowExecutor: (_inputDb, options) => {
+        currentAssertRunExecutionAllowed = options.assertRunExecutionAllowed;
+        return {
+          executeRun,
+          cancelRun: vi.fn(),
+          pauseRun: vi.fn(),
+          resumeRun: vi.fn(),
+          retryRun,
+        } as unknown as ReturnType<DashboardServiceDependencies['createSqlWorkflowExecutor']>;
+      },
+    });
+    seedRunData(db);
+    const service = createDashboardService({ dependencies });
+
+    const launchResult = await service.launchWorkflowRun({
+      treeKey: 'demo-tree',
+      executionMode: 'async',
+      policyConstraints: {
+        allowedProviders: ['codex'],
+        allowedModels: null,
+        allowedSkillIdentifiers: null,
+        allowedMcpServerIdentifiers: null,
+      },
+    });
+    await waitForBackgroundExecution(service, launchResult.workflowRunId);
+
+    await service.controlWorkflowRun(launchResult.workflowRunId, 'retry');
+    await waitForBackgroundExecution(service, launchResult.workflowRunId);
+
+    expect(assertAvailabilityByExecution).toEqual([true, false]);
+  });
+
   it('falls back to cwd when resume control has only removed run worktrees', async () => {
     const resumeRun = vi.fn(async () => ({
       action: 'resume' as const,

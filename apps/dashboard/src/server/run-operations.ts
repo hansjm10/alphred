@@ -20,7 +20,7 @@ import {
   type AlphredDatabase,
 } from '@alphred/db';
 import type { WorktreeManager } from '@alphred/git';
-import type { BackgroundExecutionManager } from './background-execution';
+import type { BackgroundExecutionManager, BackgroundRunExecutionSettlement } from './background-execution';
 import type {
   DashboardRunControlAction,
   DashboardRunControlResult,
@@ -347,6 +347,10 @@ function hasLaunchPolicyConstraints(policyConstraints: DashboardRunLaunchPolicyC
   );
 }
 
+function isTerminalRunStatus(status: RunStatus): boolean {
+  return status === 'completed' || status === 'failed' || status === 'cancelled';
+}
+
 function createRunExecutionPolicyAssertion(
   policyConstraints: DashboardRunLaunchPolicyConstraints | undefined,
 ): RunExecutionPolicyAssertion | undefined {
@@ -534,6 +538,12 @@ export function createRunOperations(params: {
     repositoryAuthDependencies,
     backgroundExecution,
   } = params;
+
+  const clearCachedRunPolicyConstraints = ({ runId, runStatus }: BackgroundRunExecutionSettlement): void => {
+    if (runStatus !== null && isTerminalRunStatus(runStatus)) {
+      runPolicyConstraintsByRunId.delete(runId);
+    }
+  };
 
   return {
     listWorkflowRuns(limit = 20): Promise<DashboardRunSummary[]> {
@@ -1143,7 +1153,7 @@ export function createRunOperations(params: {
               assertRunExecutionAllowed,
             );
 
-            if (execution.runStatus === 'completed' || execution.runStatus === 'failed' || execution.runStatus === 'cancelled') {
+            if (isTerminalRunStatus(execution.runStatus)) {
               runPolicyConstraintsByRunId.delete(runId);
             }
 
@@ -1169,6 +1179,7 @@ export function createRunOperations(params: {
             executionScope,
             nodeSelector,
             assertRunExecutionAllowed,
+            onBackgroundExecutionSettled: clearCachedRunPolicyConstraints,
           });
 
           return {
@@ -1245,11 +1256,7 @@ export function createRunOperations(params: {
           throw error;
         }
 
-        if (
-          controlResult.runStatus === 'completed'
-          || controlResult.runStatus === 'failed'
-          || controlResult.runStatus === 'cancelled'
-        ) {
+        if (isTerminalRunStatus(controlResult.runStatus as RunStatus)) {
           runPolicyConstraintsByRunId.delete(runId);
         }
 
@@ -1262,6 +1269,7 @@ export function createRunOperations(params: {
             hasManagedWorktree: executionContext.hasManagedWorktree,
             cleanupWorktree: false,
             assertRunExecutionAllowed: createRunExecutionPolicyAssertion(policyConstraints),
+            onBackgroundExecutionSettled: clearCachedRunPolicyConstraints,
           });
         }
 
