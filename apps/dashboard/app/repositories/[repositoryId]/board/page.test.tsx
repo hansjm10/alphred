@@ -275,6 +275,52 @@ describe('RepositoryBoardPageContent', () => {
     expect(screen.getByText('Repo policy #5 · Epic policy #6')).toBeInTheDocument();
   });
 
+  it('renders effective policy fallback values when ids and budgets are unset', async () => {
+    const user = userEvent.setup();
+
+    render(
+      <RepositoryBoardPageContent
+        repository={createRepository({ id: 1, name: 'demo-repo' })}
+        actor={{ actorType: 'human', actorLabel: 'octocat' }}
+        initialLatestEventId={0}
+        initialWorkItems={[
+          createWorkItem({
+            id: 10,
+            type: 'task',
+            status: 'Ready',
+            title: 'Task with fallback policy',
+            effectivePolicy: {
+              appliesToType: 'task',
+              epicWorkItemId: null,
+              repositoryPolicyId: null,
+              epicPolicyId: null,
+              policy: {
+                allowedProviders: ['codex'],
+                allowedModels: ['codex-pro'],
+                allowedSkillIdentifiers: ['working-on-github-issue'],
+                allowedMcpServerIdentifiers: ['github'],
+                budgets: {
+                  maxConcurrentTasks: null,
+                  maxConcurrentRuns: null,
+                },
+                requiredGates: {
+                  breakdownApprovalRequired: true,
+                },
+              },
+            },
+          }),
+        ]}
+      />,
+    );
+
+    await user.click(screen.getByRole('button', { name: /Task with fallback policy/ }));
+
+    expect(screen.getByText('Repo policy #none · Epic policy #none')).toBeInTheDocument();
+    expect(screen.getByText('Max concurrent tasks: Unlimited')).toBeInTheDocument();
+    expect(screen.getByText('Max concurrent runs: Unlimited')).toBeInTheDocument();
+    expect(screen.getByText('Breakdown approval required: Yes')).toBeInTheDocument();
+  });
+
   it('moves a task via the move API and updates the UI', async () => {
     const user = userEvent.setup();
     const fetchMock = vi.mocked(global.fetch);
