@@ -179,20 +179,6 @@ function mergeLinkedWorkflowRun(
     return nextLinkedWorkflowRun;
   }
 
-  const nextHasTouchedFiles = Object.prototype.hasOwnProperty.call(nextLinkedWorkflowRun, 'touchedFiles');
-  const previousHasTouchedFiles = Object.prototype.hasOwnProperty.call(previousLinkedWorkflowRun, 'touchedFiles');
-
-  if (
-    !nextHasTouchedFiles
-    && previousHasTouchedFiles
-    && nextLinkedWorkflowRun.workflowRunId === previousLinkedWorkflowRun.workflowRunId
-  ) {
-    return {
-      ...nextLinkedWorkflowRun,
-      touchedFiles: previousLinkedWorkflowRun.touchedFiles,
-    };
-  }
-
   return nextLinkedWorkflowRun;
 }
 

@@ -292,7 +292,7 @@ describe('RepositoryBoardPageContent', () => {
     expect(await screen.findByText(/Replanning requested for "Plan mismatch task"/)).toBeInTheDocument();
   });
 
-  it('keeps existing touched files when linked-run updates omit touchedFiles', async () => {
+  it('marks touched files unavailable when linked-run updates omit touchedFiles', async () => {
     const user = userEvent.setup();
 
     render(
@@ -345,17 +345,16 @@ describe('RepositoryBoardPageContent', () => {
       });
     });
 
-    expect(screen.queryByText('No plan-vs-actual diff available yet.')).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Request replanning' })).toBeInTheDocument();
+    expect(screen.getByText('No plan-vs-actual diff available yet.')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Request replanning' })).not.toBeInTheDocument();
 
     const touchedFilesSection = screen.getByText('Touched files').closest('div');
     expect(touchedFilesSection).not.toBeNull();
-    expect(within(touchedFilesSection ?? document.body).getByText('src/a.ts')).toBeInTheDocument();
     expect(
-      within(touchedFilesSection ?? document.body).queryByText(
+      within(touchedFilesSection ?? document.body).getByText(
         'Touched files are unavailable because the linked run worktree is unavailable.',
       ),
-    ).not.toBeInTheDocument();
+    ).toBeInTheDocument();
   });
 
   it('hides plan-vs-actual comparison and replanning when touched files are unavailable', async () => {

@@ -175,7 +175,6 @@ describe('applyBoardEventToWorkItems', () => {
       workflowRunId: 88,
       runStatus: 'running',
       linkedAt: '2026-03-03T00:01:00.000Z',
-      touchedFiles: ['src/a.ts'],
     });
 
     const breakdownProposed = applyBoardEventToWorkItems(
