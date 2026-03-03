@@ -144,6 +144,7 @@ describe('RepositoryBoardPageContent', () => {
     );
 
     expect(screen.getByRole('heading', { name: 'demo-repo board' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Stories' })).toHaveAttribute('href', '/repositories/1/stories');
     expect(screen.getByRole('region', { name: 'Tasks Draft' })).toBeInTheDocument();
     expect(screen.getByRole('region', { name: 'Tasks Ready' })).toBeInTheDocument();
     expect(screen.getByRole('region', { name: 'Tasks InProgress' })).toBeInTheDocument();

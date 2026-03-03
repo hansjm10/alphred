@@ -8,7 +8,7 @@ import type {
   DashboardStoryBreakdownProposalSnapshot,
   DashboardWorkItemSnapshot,
 } from '../../../../../src/server/dashboard-contracts';
-import { ActionButton } from '../../../../ui/primitives';
+import { ActionButton, ButtonLink } from '../../../../ui/primitives';
 
 type WorkItemActor = Readonly<{
   actorType: 'human' | 'agent' | 'system';
@@ -740,7 +740,12 @@ export function StoryDetailPageContent(props: Readonly<{
           <p className="meta-text">{story.title}</p>
         </div>
         <div className="board-page-header__status">
-          <span className="meta-text">Board stream: {connectionState}</span>
+          <div className="board-page-header__actions">
+            <ButtonLink href={`/repositories/${repository.id}/stories`} tone="secondary">
+              Stories
+            </ButtonLink>
+            <span className="meta-text">Board stream: {connectionState}</span>
+          </div>
         </div>
       </header>
 

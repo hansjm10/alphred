@@ -135,6 +135,7 @@ describe('StoryDetailPageContent', () => {
     );
 
     expect(screen.getByRole('heading', { name: 'demo-repo / Story #3' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Stories' })).toHaveAttribute('href', '/repositories/1/stories');
     expect(screen.getByText('Story title')).toBeInTheDocument();
     const storyHeader = screen.getByRole('heading', { name: 'Story' }).closest('header') as HTMLElement;
     expect(within(storyHeader).getByText('Draft')).toBeInTheDocument();

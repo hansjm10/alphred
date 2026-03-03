@@ -17,7 +17,7 @@ import { CSS } from '@dnd-kit/utilities';
 import Link from 'next/link';
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import type { DashboardRepositoryState, DashboardWorkItemSnapshot } from '@dashboard/server/dashboard-contracts';
-import { ActionButton } from '../../../ui/primitives';
+import { ActionButton, ButtonLink } from '../../../ui/primitives';
 
 type WorkItemActor = Readonly<{
   actorType: 'human' | 'agent' | 'system';
@@ -966,7 +966,12 @@ export function RepositoryBoardPageContent({
           <p className="meta-text">Repo-scoped tasks grouped by status with realtime updates. Drag cards between columns to move them.</p>
         </div>
         <div className="board-page-header__status">
-          {renderConnectionLabel()}
+          <div className="board-page-header__actions">
+            <ButtonLink href={`/repositories/${repository.id}/stories`} tone="secondary">
+              Stories
+            </ButtonLink>
+            {renderConnectionLabel()}
+          </div>
         </div>
       </div>
 
