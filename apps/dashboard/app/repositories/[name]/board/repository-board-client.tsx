@@ -624,9 +624,6 @@ export function RepositoryBoardPageContent({
         return;
       }
       setConnectionState('live');
-      if (typeof payload.latestEventId === 'number') {
-        lastEventIdRef.current = Math.max(lastEventIdRef.current, payload.latestEventId);
-      }
     };
 
     const handleBoardEvent = (rawEvent: Event): void => {

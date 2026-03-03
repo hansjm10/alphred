@@ -35,17 +35,14 @@ export default async function RepositoryBoardPage({ params }: RepositoryBoardPag
     notFound();
   }
 
-  const [workItemsResult, boardEventsSnapshot] = await Promise.all([
-    service.listWorkItems(repository.id),
-    service.getRepositoryBoardEventsSnapshot({ repositoryId: repository.id, lastEventId: 0, limit: 1 }),
-  ]);
+  const bootstrap = await service.getRepositoryBoardBootstrap({ repositoryId: repository.id });
 
   return (
     <RepositoryBoardPageContent
       repository={repository}
       actor={resolveActor(authGate)}
-      initialLatestEventId={boardEventsSnapshot.latestEventId}
-      initialWorkItems={workItemsResult.workItems}
+      initialLatestEventId={bootstrap.latestEventId}
+      initialWorkItems={bootstrap.workItems}
     />
   );
 }

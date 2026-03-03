@@ -483,6 +483,12 @@ export type DashboardBoardEventsSnapshot = {
   events: DashboardBoardEventSnapshot[];
 };
 
+export type DashboardRepositoryBoardBootstrapResult = {
+  repositoryId: number;
+  latestEventId: number;
+  workItems: DashboardWorkItemSnapshot[];
+};
+
 export type DashboardWorkItemSnapshot = {
   id: number;
   repositoryId: number;
