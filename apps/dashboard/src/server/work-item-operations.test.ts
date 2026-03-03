@@ -433,6 +433,89 @@ describe('work-item-operations', () => {
     expect(statusPayload.linkedWorkflowRun?.workflowRunId).toBe(workflowRunId);
   });
 
+  it('returns linked run touchedFiles in move status responses', async () => {
+    const { db, service } = createHarness();
+    const tempRoot = await mkdtemp(join(tmpdir(), 'alphred-work-item-move-touched-files-'));
+    const worktreePath = join(tempRoot, 'repo');
+
+    try {
+      await mkdir(worktreePath);
+      await runGit(worktreePath, ['init']);
+      await runGit(worktreePath, ['config', 'user.name', 'Test Runner']);
+      await runGit(worktreePath, ['config', 'user.email', 'test@example.com']);
+      await mkdir(join(worktreePath, 'src'));
+      await writeFile(join(worktreePath, 'src', 'a.ts'), 'export const value = 1;\n');
+      await runGit(worktreePath, ['add', '.']);
+      await runGit(worktreePath, ['commit', '-m', 'seed']);
+      await writeFile(join(worktreePath, 'src', 'a.ts'), 'export const value = 2;\n');
+      await writeFile(join(worktreePath, 'src', 'c.ts'), 'export const c = true;\n');
+
+      const repository = insertRepository(db, {
+        name: 'repo',
+        provider: 'github',
+        remoteUrl: 'https://example.com/repo.git',
+        remoteRef: 'acme/repo',
+      });
+
+      const treeId = seedPublishedWorkflowTree(db);
+      const workflowRunId = Number(
+        db.insert(workflowRuns)
+          .values({
+            workflowTreeId: treeId,
+            status: 'running',
+            startedAt: '2026-03-03T00:01:00.000Z',
+            completedAt: null,
+            createdAt: '2026-03-03T00:01:00.000Z',
+            updatedAt: '2026-03-03T00:01:00.000Z',
+          })
+          .run().lastInsertRowid,
+      );
+
+      db.insert(runWorktrees)
+        .values({
+          repositoryId: repository.id,
+          workflowRunId,
+          worktreePath,
+          branch: 'main',
+          status: 'active',
+          commitHash: null,
+          createdAt: '2026-03-03T00:02:00.000Z',
+          removedAt: null,
+        })
+        .run();
+
+      const taskId = Number(
+        db.insert(workItems)
+          .values({
+            repositoryId: repository.id,
+            type: 'task',
+            status: 'Ready',
+            title: 'Implement issue',
+            revision: 0,
+          })
+          .run().lastInsertRowid,
+      );
+
+      const moved = await service.moveWorkItemStatus({
+        repositoryId: repository.id,
+        workItemId: taskId,
+        expectedRevision: 0,
+        toStatus: 'InProgress',
+        actorType: 'human',
+        actorLabel: 'alice',
+        linkedWorkflowRunId: workflowRunId,
+      });
+
+      expect(moved.workItem.linkedWorkflowRun).toMatchObject({
+        workflowRunId,
+        runStatus: 'running',
+        touchedFiles: ['src/a.ts', 'src/c.ts'],
+      });
+    } finally {
+      await rm(tempRoot, { recursive: true, force: true });
+    }
+  });
+
   it('derives linked run touchedFiles from run worktree git status output', async () => {
     const { db, service } = createHarness();
     const tempRoot = await mkdtemp(join(tmpdir(), 'alphred-work-item-touched-files-'));
