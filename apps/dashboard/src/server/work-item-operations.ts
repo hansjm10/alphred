@@ -1396,18 +1396,24 @@ export function createWorkItemOperations(params: { withDatabase: WithDatabase })
           });
         }
 
-        const rows = db.select().from(workItems).where(eq(workItems.repositoryId, repositoryId)).all();
-        const latestEvent = db
-          .select({ id: workItemEvents.id })
-          .from(workItemEvents)
-          .where(eq(workItemEvents.repositoryId, repositoryId))
-          .orderBy(desc(workItemEvents.id))
-          .limit(1)
-          .get();
+        const { rows, latestEventId } = db.transaction(tx => {
+          const latestEvent = tx
+            .select({ id: workItemEvents.id })
+            .from(workItemEvents)
+            .where(eq(workItemEvents.repositoryId, repositoryId))
+            .orderBy(desc(workItemEvents.id))
+            .limit(1)
+            .get();
+          const rows = tx.select().from(workItems).where(eq(workItems.repositoryId, repositoryId)).all();
+          return {
+            rows,
+            latestEventId: latestEvent?.id ?? 0,
+          };
+        });
 
         return {
           repositoryId,
-          latestEventId: latestEvent?.id ?? 0,
+          latestEventId,
           workItems: await toWorkItemSnapshotsWithPoliciesAsync(db, {
             repositoryId,
             rows,
