@@ -5,6 +5,7 @@ import {
   insertRepository,
   migrateDatabase,
   workItemEvents,
+  workItemPolicies,
   workItems,
   type AlphredDatabase,
 } from '@alphred/db';
@@ -288,6 +289,179 @@ describe('work-item-operations', () => {
         status: 400,
       });
     }
+  });
+
+  it('resolves effective policies for epics and tasks from repo defaults plus epic overrides', async () => {
+    const { db, service } = createHarness();
+
+    const repository = insertRepository(db, {
+      name: 'repo',
+      provider: 'github',
+      remoteUrl: 'https://example.com/repo.git',
+      remoteRef: 'acme/repo',
+    });
+
+    const epicInsert = db
+      .insert(workItems)
+      .values({
+        repositoryId: repository.id,
+        type: 'epic',
+        status: 'Draft',
+        title: 'Epic',
+        revision: 0,
+      })
+      .run();
+    const epicId = Number(epicInsert.lastInsertRowid);
+
+    const storyInsert = db
+      .insert(workItems)
+      .values({
+        repositoryId: repository.id,
+        type: 'story',
+        status: 'Draft',
+        title: 'Story',
+        parentId: epicId,
+        revision: 0,
+      })
+      .run();
+    const storyId = Number(storyInsert.lastInsertRowid);
+
+    const taskInsert = db
+      .insert(workItems)
+      .values({
+        repositoryId: repository.id,
+        type: 'task',
+        status: 'Draft',
+        title: 'Task',
+        parentId: storyId,
+        revision: 0,
+      })
+      .run();
+    const taskId = Number(taskInsert.lastInsertRowid);
+
+    const repoPolicyId = Number(
+      db.insert(workItemPolicies)
+        .values({
+          repositoryId: repository.id,
+          epicWorkItemId: null,
+          payload: {
+            allowedProviders: ['claude'],
+            allowedModels: ['claude-3-7-sonnet'],
+            allowedSkillIdentifiers: ['working-on-github-issue'],
+            allowedMcpServerIdentifiers: ['github'],
+            budgets: {
+              maxConcurrentTasks: 6,
+              maxConcurrentRuns: 2,
+            },
+            requiredGates: {
+              breakdownApprovalRequired: true,
+            },
+          },
+        })
+        .run().lastInsertRowid,
+    );
+
+    const epicPolicyId = Number(
+      db.insert(workItemPolicies)
+        .values({
+          repositoryId: repository.id,
+          epicWorkItemId: epicId,
+          payload: {
+            allowedProviders: ['codex'],
+            budgets: {
+              maxConcurrentTasks: 3,
+            },
+            requiredGates: {
+              breakdownApprovalRequired: false,
+            },
+          },
+        })
+        .run().lastInsertRowid,
+    );
+
+    const result = await service.listWorkItems(repository.id);
+    const epic = result.workItems.find(item => item.id === epicId);
+    const story = result.workItems.find(item => item.id === storyId);
+    const task = result.workItems.find(item => item.id === taskId);
+
+    expect(epic?.effectivePolicy).toEqual({
+      appliesToType: 'epic',
+      epicWorkItemId: epicId,
+      repositoryPolicyId: repoPolicyId,
+      epicPolicyId,
+      policy: {
+        allowedProviders: ['codex'],
+        allowedModels: ['claude-3-7-sonnet'],
+        allowedSkillIdentifiers: ['working-on-github-issue'],
+        allowedMcpServerIdentifiers: ['github'],
+        budgets: {
+          maxConcurrentTasks: 3,
+          maxConcurrentRuns: 2,
+        },
+        requiredGates: {
+          breakdownApprovalRequired: false,
+        },
+      },
+    });
+    expect(story?.effectivePolicy ?? null).toBeNull();
+    expect(task?.effectivePolicy).toEqual({
+      appliesToType: 'task',
+      epicWorkItemId: epicId,
+      repositoryPolicyId: repoPolicyId,
+      epicPolicyId,
+      policy: {
+        allowedProviders: ['codex'],
+        allowedModels: ['claude-3-7-sonnet'],
+        allowedSkillIdentifiers: ['working-on-github-issue'],
+        allowedMcpServerIdentifiers: ['github'],
+        budgets: {
+          maxConcurrentTasks: 3,
+          maxConcurrentRuns: 2,
+        },
+        requiredGates: {
+          breakdownApprovalRequired: false,
+        },
+      },
+    });
+  });
+
+  it('rejects policy overrides that target non-epic work items', async () => {
+    const { db, service } = createHarness();
+
+    const repository = insertRepository(db, {
+      name: 'repo',
+      provider: 'github',
+      remoteUrl: 'https://example.com/repo.git',
+      remoteRef: 'acme/repo',
+    });
+
+    const taskInsert = db
+      .insert(workItems)
+      .values({
+        repositoryId: repository.id,
+        type: 'task',
+        status: 'Draft',
+        title: 'Task',
+        revision: 0,
+      })
+      .run();
+    const taskId = Number(taskInsert.lastInsertRowid);
+
+    db.insert(workItemPolicies)
+      .values({
+        repositoryId: repository.id,
+        epicWorkItemId: taskId,
+        payload: {
+          allowedProviders: ['codex'],
+        },
+      })
+      .run();
+
+    await expect(service.listWorkItems(repository.id)).rejects.toMatchObject({
+      code: 'conflict',
+      status: 409,
+      message: expect.stringContaining('not an epic'),
+    });
   });
 
   it('proposes and approves a story breakdown (Draft -> Ready for child tasks)', async () => {

@@ -7,6 +7,7 @@ import {
   repositories,
   sql,
   workItemEvents,
+  workItemPolicies,
   workItems,
   type AlphredDatabase,
   type WorkItemActorType,
@@ -21,6 +22,7 @@ import type {
   DashboardBoardEventsSnapshot,
   DashboardCreateWorkItemRequest,
   DashboardCreateWorkItemResult,
+  DashboardWorkItemEffectivePolicySnapshot,
   DashboardGetStoryBreakdownProposalResult,
   DashboardGetWorkItemResult,
   DashboardListWorkItemsResult,
@@ -34,6 +36,7 @@ import type {
   DashboardStoryBreakdownProposalSnapshot,
   DashboardUpdateWorkItemFieldsRequest,
   DashboardUpdateWorkItemFieldsResult,
+  DashboardWorkItemPolicySnapshot,
   DashboardWorkItemSnapshot,
 } from './dashboard-contracts';
 
@@ -41,6 +44,7 @@ type WithDatabase = <T>(operation: (db: AlphredDatabase) => Promise<T> | T) => P
 
 type WorkItemRow = typeof workItems.$inferSelect;
 type WorkItemEventRow = typeof workItemEvents.$inferSelect;
+type WorkItemPolicyRow = typeof workItemPolicies.$inferSelect;
 type AlphredTransaction = Parameters<Parameters<AlphredDatabase['transaction']>[0]>[0];
 type DbOrTx = AlphredDatabase | AlphredTransaction;
 
@@ -63,7 +67,312 @@ function toStringArrayOrNull(value: unknown): string[] | null {
   return strings;
 }
 
-function toWorkItemSnapshot(row: WorkItemRow): DashboardWorkItemSnapshot {
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+type ParsedPolicyOverride = {
+  allowedProviders?: string[] | null;
+  allowedModels?: string[] | null;
+  allowedSkillIdentifiers?: string[] | null;
+  allowedMcpServerIdentifiers?: string[] | null;
+  budgets?: {
+    maxConcurrentTasks?: number | null;
+    maxConcurrentRuns?: number | null;
+  };
+  requiredGates?: {
+    breakdownApprovalRequired?: boolean;
+  };
+};
+
+type PolicyResolutionContext = {
+  workItemIdentityById: ReadonlyMap<number, { id: number; type: WorkItemType; parentId: number | null }>;
+  repositoryPolicy: { id: number; override: ParsedPolicyOverride } | null;
+  epicPoliciesByEpicId: ReadonlyMap<number, { id: number; override: ParsedPolicyOverride }>;
+};
+
+function toPolicyConflictError(message: string, details?: Record<string, unknown>): DashboardIntegrationError {
+  return new DashboardIntegrationError('conflict', message, {
+    status: 409,
+    details: {
+      kind: 'work_item_policy',
+      ...(details ?? {}),
+    },
+  });
+}
+
+function normalizeStringList(value: unknown, fieldName: string, policyId: number): string[] | null {
+  if (value === null) {
+    return null;
+  }
+
+  if (!Array.isArray(value)) {
+    throw toPolicyConflictError(`Policy id=${policyId} field "${fieldName}" must be an array of strings or null.`);
+  }
+
+  const values: string[] = [];
+  for (const entry of value) {
+    if (typeof entry !== 'string') {
+      throw toPolicyConflictError(`Policy id=${policyId} field "${fieldName}" must contain only strings.`);
+    }
+    const normalized = entry.trim();
+    if (normalized.length === 0) {
+      throw toPolicyConflictError(`Policy id=${policyId} field "${fieldName}" cannot contain empty values.`);
+    }
+    values.push(normalized);
+  }
+  return values;
+}
+
+function parseOptionalNonNegativeInteger(value: unknown, fieldName: string, policyId: number): number | null {
+  if (value === null) {
+    return null;
+  }
+
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 0) {
+    throw toPolicyConflictError(`Policy id=${policyId} field "${fieldName}" must be a non-negative integer or null.`);
+  }
+
+  return value;
+}
+
+function parsePolicyOverride(row: WorkItemPolicyRow): ParsedPolicyOverride {
+  if (!isRecord(row.payload)) {
+    throw toPolicyConflictError(`Policy id=${row.id} payload must be a JSON object.`);
+  }
+
+  const payload = row.payload;
+  const override: ParsedPolicyOverride = {};
+
+  if ('allowedProviders' in payload) {
+    override.allowedProviders = normalizeStringList(payload.allowedProviders, 'allowedProviders', row.id);
+  }
+  if ('allowedModels' in payload) {
+    override.allowedModels = normalizeStringList(payload.allowedModels, 'allowedModels', row.id);
+  }
+  if ('allowedSkillIdentifiers' in payload) {
+    override.allowedSkillIdentifiers = normalizeStringList(payload.allowedSkillIdentifiers, 'allowedSkillIdentifiers', row.id);
+  }
+  if ('allowedMcpServerIdentifiers' in payload) {
+    override.allowedMcpServerIdentifiers = normalizeStringList(payload.allowedMcpServerIdentifiers, 'allowedMcpServerIdentifiers', row.id);
+  }
+
+  if ('budgets' in payload) {
+    const budgets = payload.budgets;
+    if (!isRecord(budgets)) {
+      throw toPolicyConflictError(`Policy id=${row.id} field "budgets" must be an object.`);
+    }
+    const parsedBudgets: ParsedPolicyOverride['budgets'] = {};
+    if ('maxConcurrentTasks' in budgets) {
+      parsedBudgets.maxConcurrentTasks = parseOptionalNonNegativeInteger(
+        budgets.maxConcurrentTasks,
+        'budgets.maxConcurrentTasks',
+        row.id,
+      );
+    }
+    if ('maxConcurrentRuns' in budgets) {
+      parsedBudgets.maxConcurrentRuns = parseOptionalNonNegativeInteger(
+        budgets.maxConcurrentRuns,
+        'budgets.maxConcurrentRuns',
+        row.id,
+      );
+    }
+    override.budgets = parsedBudgets;
+  }
+
+  if ('requiredGates' in payload) {
+    const requiredGates = payload.requiredGates;
+    if (!isRecord(requiredGates)) {
+      throw toPolicyConflictError(`Policy id=${row.id} field "requiredGates" must be an object.`);
+    }
+    const parsedRequiredGates: ParsedPolicyOverride['requiredGates'] = {};
+    if ('breakdownApprovalRequired' in requiredGates) {
+      if (typeof requiredGates.breakdownApprovalRequired !== 'boolean') {
+        throw toPolicyConflictError(
+          `Policy id=${row.id} field "requiredGates.breakdownApprovalRequired" must be a boolean.`,
+        );
+      }
+      parsedRequiredGates.breakdownApprovalRequired = requiredGates.breakdownApprovalRequired;
+    }
+    override.requiredGates = parsedRequiredGates;
+  }
+
+  return override;
+}
+
+function createDefaultEffectivePolicy(): DashboardWorkItemPolicySnapshot {
+  return {
+    allowedProviders: null,
+    allowedModels: null,
+    allowedSkillIdentifiers: null,
+    allowedMcpServerIdentifiers: null,
+    budgets: {
+      maxConcurrentTasks: null,
+      maxConcurrentRuns: null,
+    },
+    requiredGates: {
+      breakdownApprovalRequired: true,
+    },
+  };
+}
+
+function applyPolicyOverride(target: DashboardWorkItemPolicySnapshot, override: ParsedPolicyOverride | null): void {
+  if (!override) {
+    return;
+  }
+
+  if ('allowedProviders' in override) {
+    target.allowedProviders = override.allowedProviders ?? null;
+  }
+  if ('allowedModels' in override) {
+    target.allowedModels = override.allowedModels ?? null;
+  }
+  if ('allowedSkillIdentifiers' in override) {
+    target.allowedSkillIdentifiers = override.allowedSkillIdentifiers ?? null;
+  }
+  if ('allowedMcpServerIdentifiers' in override) {
+    target.allowedMcpServerIdentifiers = override.allowedMcpServerIdentifiers ?? null;
+  }
+
+  if (override.budgets) {
+    if ('maxConcurrentTasks' in override.budgets) {
+      target.budgets.maxConcurrentTasks = override.budgets.maxConcurrentTasks ?? null;
+    }
+    if ('maxConcurrentRuns' in override.budgets) {
+      target.budgets.maxConcurrentRuns = override.budgets.maxConcurrentRuns ?? null;
+    }
+  }
+
+  if (override.requiredGates && 'breakdownApprovalRequired' in override.requiredGates) {
+    target.requiredGates.breakdownApprovalRequired = override.requiredGates.breakdownApprovalRequired ?? true;
+  }
+}
+
+function resolveEpicWorkItemId(
+  workItemId: number,
+  workItemIdentityById: ReadonlyMap<number, { id: number; type: WorkItemType; parentId: number | null }>,
+): number | null {
+  let currentId: number | null = workItemId;
+  const visited = new Set<number>();
+
+  while (currentId !== null) {
+    if (visited.has(currentId)) {
+      throw toPolicyConflictError(`Detected a parent cycle while resolving work item id=${workItemId}.`);
+    }
+    visited.add(currentId);
+
+    const current = workItemIdentityById.get(currentId);
+    if (!current) {
+      return null;
+    }
+
+    if (current.type === 'epic') {
+      return current.id;
+    }
+
+    currentId = current.parentId;
+  }
+
+  return null;
+}
+
+function loadPolicyResolutionContext(db: DbOrTx, repositoryId: number): PolicyResolutionContext {
+  const identityRows = db
+    .select({
+      id: workItems.id,
+      type: workItems.type,
+      parentId: workItems.parentId,
+    })
+    .from(workItems)
+    .where(eq(workItems.repositoryId, repositoryId))
+    .all();
+
+  const workItemIdentityById = new Map<number, { id: number; type: WorkItemType; parentId: number | null }>();
+  for (const identityRow of identityRows) {
+    workItemIdentityById.set(identityRow.id, {
+      id: identityRow.id,
+      type: identityRow.type as WorkItemType,
+      parentId: identityRow.parentId,
+    });
+  }
+
+  const policyRows = db
+    .select()
+    .from(workItemPolicies)
+    .where(eq(workItemPolicies.repositoryId, repositoryId))
+    .all();
+
+  let repositoryPolicy: { id: number; override: ParsedPolicyOverride } | null = null;
+  const epicPoliciesByEpicId = new Map<number, { id: number; override: ParsedPolicyOverride }>();
+
+  for (const row of policyRows) {
+    const parsedOverride = parsePolicyOverride(row);
+    if (row.epicWorkItemId === null) {
+      if (repositoryPolicy !== null) {
+        throw toPolicyConflictError(`Repository id=${repositoryId} has multiple repo-level policies.`);
+      }
+      repositoryPolicy = {
+        id: row.id,
+        override: parsedOverride,
+      };
+      continue;
+    }
+
+    const target = workItemIdentityById.get(row.epicWorkItemId);
+    if (!target || target.type !== 'epic') {
+      throw toPolicyConflictError(`Policy id=${row.id} targets work item id=${row.epicWorkItemId}, which is not an epic.`, {
+        policyId: row.id,
+        epicWorkItemId: row.epicWorkItemId,
+      });
+    }
+
+    if (epicPoliciesByEpicId.has(row.epicWorkItemId)) {
+      throw toPolicyConflictError(
+        `Repository id=${repositoryId} has multiple policy overrides for epic id=${row.epicWorkItemId}.`,
+      );
+    }
+
+    epicPoliciesByEpicId.set(row.epicWorkItemId, {
+      id: row.id,
+      override: parsedOverride,
+    });
+  }
+
+  return {
+    workItemIdentityById,
+    repositoryPolicy,
+    epicPoliciesByEpicId,
+  };
+}
+
+function resolveEffectivePolicyForWorkItem(
+  row: WorkItemRow,
+  context: PolicyResolutionContext,
+): DashboardWorkItemEffectivePolicySnapshot | null {
+  if (row.type !== 'epic' && row.type !== 'task') {
+    return null;
+  }
+
+  const epicWorkItemId = row.type === 'epic' ? row.id : resolveEpicWorkItemId(row.id, context.workItemIdentityById);
+  const epicPolicy = epicWorkItemId === null ? null : (context.epicPoliciesByEpicId.get(epicWorkItemId) ?? null);
+
+  const policy = createDefaultEffectivePolicy();
+  applyPolicyOverride(policy, context.repositoryPolicy?.override ?? null);
+  applyPolicyOverride(policy, epicPolicy?.override ?? null);
+
+  return {
+    appliesToType: row.type,
+    epicWorkItemId,
+    repositoryPolicyId: context.repositoryPolicy?.id ?? null,
+    epicPolicyId: epicPolicy?.id ?? null,
+    policy,
+  };
+}
+
+function toWorkItemSnapshot(
+  row: WorkItemRow,
+  effectivePolicy: DashboardWorkItemEffectivePolicySnapshot | null,
+): DashboardWorkItemSnapshot {
   return {
     id: row.id,
     repositoryId: row.repositoryId,
@@ -80,6 +389,7 @@ function toWorkItemSnapshot(row: WorkItemRow): DashboardWorkItemSnapshot {
     revision: row.revision,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
+    effectivePolicy,
   };
 }
 
@@ -244,6 +554,28 @@ function toHierarchyConflictError(error: unknown): DashboardIntegrationError {
   });
 }
 
+function toWorkItemSnapshotsWithPolicies(
+  db: DbOrTx,
+  params: {
+    repositoryId: number;
+    rows: readonly WorkItemRow[];
+  },
+): DashboardWorkItemSnapshot[] {
+  const context = loadPolicyResolutionContext(db, params.repositoryId);
+  return params.rows.map(row => toWorkItemSnapshot(row, resolveEffectivePolicyForWorkItem(row, context)));
+}
+
+function toWorkItemSnapshotWithPolicy(
+  db: DbOrTx,
+  params: {
+    repositoryId: number;
+    row: WorkItemRow;
+  },
+): DashboardWorkItemSnapshot {
+  const context = loadPolicyResolutionContext(db, params.repositoryId);
+  return toWorkItemSnapshot(params.row, resolveEffectivePolicyForWorkItem(params.row, context));
+}
+
 export type WorkItemOperations = {
   listWorkItems: (repositoryId: number) => Promise<DashboardListWorkItemsResult>;
   getRepositoryBoardBootstrap: (params: { repositoryId: number }) => Promise<DashboardRepositoryBoardBootstrapResult>;
@@ -281,7 +613,12 @@ export function createWorkItemOperations(params: { withDatabase: WithDatabase })
         }
 
         const rows = db.select().from(workItems).where(eq(workItems.repositoryId, repositoryId)).all();
-        return { workItems: rows.map(toWorkItemSnapshot) };
+        return {
+          workItems: toWorkItemSnapshotsWithPolicies(db, {
+            repositoryId,
+            rows,
+          }),
+        };
       });
     },
 
@@ -313,7 +650,10 @@ export function createWorkItemOperations(params: { withDatabase: WithDatabase })
           return {
             repositoryId,
             latestEventId: latestEvent?.id ?? 0,
-            workItems: rows.map(toWorkItemSnapshot),
+            workItems: toWorkItemSnapshotsWithPolicies(tx, {
+              repositoryId,
+              rows,
+            }),
           };
         }),
       );
@@ -370,7 +710,12 @@ export function createWorkItemOperations(params: { withDatabase: WithDatabase })
       const workItemId = requireWorkItemId(paramsRaw.workItemId);
       return withDatabase(db => {
         const row = readWorkItemOrThrow(db, { repositoryId, workItemId });
-        return { workItem: toWorkItemSnapshot(row) };
+        return {
+          workItem: toWorkItemSnapshotWithPolicy(db, {
+            repositoryId,
+            row,
+          }),
+        };
       });
     },
 
@@ -610,7 +955,10 @@ export function createWorkItemOperations(params: { withDatabase: WithDatabase })
           });
 
           return {
-            workItem: toWorkItemSnapshot(inserted),
+            workItem: toWorkItemSnapshotWithPolicy(tx, {
+              repositoryId,
+              row: inserted,
+            }),
           };
         }),
       );
@@ -724,7 +1072,10 @@ export function createWorkItemOperations(params: { withDatabase: WithDatabase })
 
           const reloaded = readWorkItemOrThrow(tx, { repositoryId, workItemId });
           return {
-            workItem: toWorkItemSnapshot(reloaded),
+            workItem: toWorkItemSnapshotWithPolicy(tx, {
+              repositoryId,
+              row: reloaded,
+            }),
           };
         }),
       );
@@ -788,7 +1139,12 @@ export function createWorkItemOperations(params: { withDatabase: WithDatabase })
           });
 
           const reloaded = readWorkItemOrThrow(tx, { repositoryId, workItemId });
-          return { workItem: toWorkItemSnapshot(reloaded) };
+          return {
+            workItem: toWorkItemSnapshotWithPolicy(tx, {
+              repositoryId,
+              row: reloaded,
+            }),
+          };
         }),
       );
     },
@@ -862,7 +1218,12 @@ export function createWorkItemOperations(params: { withDatabase: WithDatabase })
           });
 
           const reloaded = readWorkItemOrThrow(tx, { repositoryId, workItemId });
-          return { workItem: toWorkItemSnapshot(reloaded) };
+          return {
+            workItem: toWorkItemSnapshotWithPolicy(tx, {
+              repositoryId,
+              row: reloaded,
+            }),
+          };
         }),
       );
     },
@@ -1055,9 +1416,20 @@ export function createWorkItemOperations(params: { withDatabase: WithDatabase })
           });
 
           const reloadedStory = readWorkItemOrThrow(tx, { repositoryId, workItemId: storyId });
+          const workItemSnapshots = toWorkItemSnapshotsWithPolicies(tx, {
+            repositoryId,
+            rows: [reloadedStory, ...insertedTasks],
+          });
+          const storySnapshot = workItemSnapshots.find(item => item.id === reloadedStory.id);
+          const taskSnapshots = workItemSnapshots.filter(item => item.type === 'task' && item.parentId === storyId);
+          if (!storySnapshot) {
+            throw new DashboardIntegrationError('internal_error', `Story id=${storyId} could not be reloaded after breakdown proposal.`, {
+              status: 500,
+            });
+          }
           return {
-            story: toWorkItemSnapshot(reloadedStory),
-            tasks: insertedTasks.map(toWorkItemSnapshot),
+            story: storySnapshot,
+            tasks: taskSnapshots,
           };
         }),
       );
@@ -1218,9 +1590,20 @@ export function createWorkItemOperations(params: { withDatabase: WithDatabase })
           }
 
           const reloadedStory = readWorkItemOrThrow(tx, { repositoryId, workItemId: storyId });
+          const workItemSnapshots = toWorkItemSnapshotsWithPolicies(tx, {
+            repositoryId,
+            rows: [reloadedStory, ...updatedTasks],
+          });
+          const storySnapshot = workItemSnapshots.find(item => item.id === reloadedStory.id);
+          const taskSnapshots = workItemSnapshots.filter(item => item.type === 'task' && item.parentId === storyId);
+          if (!storySnapshot) {
+            throw new DashboardIntegrationError('internal_error', `Story id=${storyId} could not be reloaded after breakdown approval.`, {
+              status: 500,
+            });
+          }
           return {
-            story: toWorkItemSnapshot(reloadedStory),
-            tasks: updatedTasks.map(toWorkItemSnapshot),
+            story: storySnapshot,
+            tasks: taskSnapshots,
           };
         }),
       );

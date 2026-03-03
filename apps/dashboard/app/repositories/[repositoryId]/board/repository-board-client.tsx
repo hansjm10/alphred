@@ -92,6 +92,10 @@ function renderStringList(items: string[] | null): ReactNode {
   );
 }
 
+function renderConcurrencyBudget(value: number | null): string {
+  return value === null ? 'Unlimited' : String(value);
+}
+
 type BoardTaskCardProps = Readonly<{
   task: DashboardWorkItemSnapshot;
   selected: boolean;
@@ -525,6 +529,8 @@ export function RepositoryBoardPageContent({
     const moving = movingWorkItemIds.has(selectedWorkItem.id);
     const dialogTitleId = `board-detail-dialog-title-${selectedWorkItem.id}`;
     const statusSelectId = `board-detail-status-${selectedWorkItem.id}`;
+    const detailTypeLabel = selectedWorkItem.type.charAt(0).toUpperCase() + selectedWorkItem.type.slice(1);
+    const effectivePolicy = selectedWorkItem.effectivePolicy ?? null;
 
     return (
       <div className="board-drawer-scrim">
@@ -532,17 +538,17 @@ export function RepositoryBoardPageContent({
           type="button"
           className="board-drawer-scrim__backdrop"
           onClick={clearSelection}
-          aria-label="Close task details"
+          aria-label="Close work item details"
           title="Close"
         />
         <dialog className="board-drawer" open aria-modal="true" aria-labelledby={dialogTitleId} aria-busy={moving || undefined}>
           <header className="board-drawer__header">
-            <span className="board-drawer__kicker meta-text">Task</span>
+            <span className="board-drawer__kicker meta-text">{detailTypeLabel}</span>
             <ActionButton
               tone="secondary"
               className="board-drawer__close"
               onClick={clearSelection}
-              aria-label="Close task details"
+              aria-label="Close work item details"
               title="Close"
             >
               ×
@@ -602,7 +608,9 @@ export function RepositoryBoardPageContent({
                       {parent.type === 'story' ? (
                         <Link href={`/repositories/${repository.id}/stories/${parent.id}`}>{parent.title}</Link>
                       ) : (
-                        parent.title
+                        <button type="button" onClick={() => setSelectedWorkItemId(parent.id)}>
+                          {parent.title}
+                        </button>
                       )}{' '}
                       <span className="meta-text">#{parent.id}</span>
                     </span>
@@ -621,6 +629,35 @@ export function RepositoryBoardPageContent({
             <h5>Assignees</h5>
             {renderStringList(selectedWorkItem.assignees)}
           </div>
+
+          {effectivePolicy ? (
+            <div className="board-detail__section board-detail__section--divider">
+              <h5>Effective policy</h5>
+              <p className="meta-text">
+                Repo policy #{effectivePolicy.repositoryPolicyId ?? 'none'} · Epic policy #{effectivePolicy.epicPolicyId ?? 'none'}
+              </p>
+              <h6 className="meta-text">Allowed providers</h6>
+              {renderStringList(effectivePolicy.policy.allowedProviders)}
+              <h6 className="meta-text">Allowed models</h6>
+              {renderStringList(effectivePolicy.policy.allowedModels)}
+              <h6 className="meta-text">Allowed skill identifiers</h6>
+              {renderStringList(effectivePolicy.policy.allowedSkillIdentifiers)}
+              <h6 className="meta-text">Allowed MCP server identifiers</h6>
+              {renderStringList(effectivePolicy.policy.allowedMcpServerIdentifiers)}
+              <h6 className="meta-text">Budgets</h6>
+              <ul className="board-detail__list">
+                <li>Max concurrent tasks: {renderConcurrencyBudget(effectivePolicy.policy.budgets.maxConcurrentTasks)}</li>
+                <li>Max concurrent runs: {renderConcurrencyBudget(effectivePolicy.policy.budgets.maxConcurrentRuns)}</li>
+              </ul>
+              <h6 className="meta-text">Required gates</h6>
+              <ul className="board-detail__list">
+                <li>
+                  Breakdown approval required:{' '}
+                  {effectivePolicy.policy.requiredGates.breakdownApprovalRequired ? 'Yes' : 'No'}
+                </li>
+              </ul>
+            </div>
+          ) : null}
         </dialog>
       </div>
     );

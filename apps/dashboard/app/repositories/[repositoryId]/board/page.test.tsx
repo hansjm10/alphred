@@ -108,6 +108,7 @@ function createWorkItem(overrides: Partial<DashboardWorkItemSnapshot> = {}): Das
     revision: overrides.revision ?? 0,
     createdAt: overrides.createdAt ?? new Date('2026-03-02T00:00:00.000Z').toISOString(),
     updatedAt: overrides.updatedAt ?? new Date('2026-03-02T00:00:00.000Z').toISOString(),
+    effectivePolicy: overrides.effectivePolicy ?? null,
   };
 }
 
@@ -197,6 +198,81 @@ describe('RepositoryBoardPageContent', () => {
     expect(screen.getByText('apps/dashboard/app/repositories/[repositoryId]/board/page.tsx')).toBeInTheDocument();
     expect(screen.getByText('Assignees')).toBeInTheDocument();
     expect(screen.getByText('octocat')).toBeInTheDocument();
+  });
+
+  it('shows effective policy details for tasks and supports inspecting epic policy from parent chain', async () => {
+    const user = userEvent.setup();
+
+    render(
+      <RepositoryBoardPageContent
+        repository={createRepository({ id: 1, name: 'demo-repo' })}
+        actor={{ actorType: 'human', actorLabel: 'octocat' }}
+        initialLatestEventId={0}
+        initialWorkItems={[
+          createWorkItem({
+            id: 1,
+            type: 'epic',
+            title: 'Epic policy',
+            effectivePolicy: {
+              appliesToType: 'epic',
+              epicWorkItemId: 1,
+              repositoryPolicyId: 5,
+              epicPolicyId: 6,
+              policy: {
+                allowedProviders: ['codex'],
+                allowedModels: ['codex-pro'],
+                allowedSkillIdentifiers: ['working-on-github-issue'],
+                allowedMcpServerIdentifiers: ['github'],
+                budgets: {
+                  maxConcurrentTasks: 2,
+                  maxConcurrentRuns: 1,
+                },
+                requiredGates: {
+                  breakdownApprovalRequired: false,
+                },
+              },
+            },
+          }),
+          createWorkItem({ id: 2, type: 'story', title: 'Story', parentId: 1 }),
+          createWorkItem({
+            id: 3,
+            type: 'task',
+            status: 'Ready',
+            title: 'Task with policy',
+            parentId: 2,
+            effectivePolicy: {
+              appliesToType: 'task',
+              epicWorkItemId: 1,
+              repositoryPolicyId: 5,
+              epicPolicyId: 6,
+              policy: {
+                allowedProviders: ['codex'],
+                allowedModels: ['codex-pro'],
+                allowedSkillIdentifiers: ['working-on-github-issue'],
+                allowedMcpServerIdentifiers: ['github'],
+                budgets: {
+                  maxConcurrentTasks: 2,
+                  maxConcurrentRuns: 1,
+                },
+                requiredGates: {
+                  breakdownApprovalRequired: false,
+                },
+              },
+            },
+          }),
+        ]}
+      />,
+    );
+
+    await user.click(screen.getByRole('button', { name: /Task with policy/ }));
+    expect(screen.getByText('Effective policy')).toBeInTheDocument();
+    expect(screen.getByText('Allowed providers')).toBeInTheDocument();
+    expect(screen.getByText('codex')).toBeInTheDocument();
+    expect(screen.getByText('Breakdown approval required: No')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Epic policy' }));
+    expect(screen.getByRole('dialog', { name: 'Epic policy' })).toBeInTheDocument();
+    expect(screen.getByText('Repo policy #5 · Epic policy #6')).toBeInTheDocument();
   });
 
   it('moves a task via the move API and updates the UI', async () => {
@@ -551,7 +627,7 @@ describe('RepositoryBoardPageContent', () => {
     await user.click(screen.getByRole('button', { name: /Write tests/ }));
     const dialog = screen.getByRole('dialog', { name: 'Write tests' });
 
-    const closeButtons = screen.getAllByRole('button', { name: 'Close task details' });
+    const closeButtons = screen.getAllByRole('button', { name: 'Close work item details' });
     const backdropButton = closeButtons.find(button => !dialog.contains(button));
     expect(backdropButton).toBeDefined();
     await user.click(backdropButton!);
