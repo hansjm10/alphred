@@ -17,37 +17,47 @@ const vitestCommand = existsSync(localVitest) ? localVitest : process.platform =
 const child = spawn(vitestCommand, ['run', ...args], {
   stdio: 'inherit',
   shell: process.platform === 'win32',
+  detached: process.platform !== 'win32',
 });
 
 let shutdownSignal;
 let forceKillTimer;
+let postKillExitTimer;
 
 function terminateWithSignal(signal) {
   for (const s of signalsToForward) process.removeAllListeners(s);
   process.kill(process.pid, signal);
 }
 
-function forwardAndExit(signal) {
-  if (shutdownSignal) return;
-  shutdownSignal = signal;
+function killChild(signal) {
+  if (process.platform !== 'win32' && child.pid) {
+    try {
+      process.kill(-child.pid, signal);
+      return;
+    } catch {
+      // ignore and fall back
+    }
+  }
 
   try {
     child.kill(signal);
   } catch {
     // ignore
   }
+}
+
+function forwardAndExit(signal) {
+  if (shutdownSignal) return void killChild('SIGKILL');
+  shutdownSignal = signal;
+
+  killChild(signal);
 
   forceKillTimer = setTimeout(() => {
-    try {
-      child.kill('SIGKILL');
-    } catch {
-      // ignore
-    }
+    killChild('SIGKILL');
+    postKillExitTimer = setTimeout(() => terminateWithSignal(signal), 1000);
+    postKillExitTimer.unref?.();
   }, 5000);
   forceKillTimer.unref?.();
-
-  const selfExitTimer = setTimeout(() => terminateWithSignal(signal), 250);
-  selfExitTimer.unref?.();
 }
 
 const signalsToForward =
@@ -59,6 +69,7 @@ for (const signal of signalsToForward) {
 
 child.on('exit', (code, signal) => {
   if (forceKillTimer) clearTimeout(forceKillTimer);
+  if (postKillExitTimer) clearTimeout(postKillExitTimer);
   if (shutdownSignal) return void terminateWithSignal(shutdownSignal);
   if (signal) return void terminateWithSignal(signal);
   process.exit(code ?? 1);
