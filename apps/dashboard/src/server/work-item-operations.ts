@@ -4,11 +4,14 @@ import {
   asc,
   desc,
   eq,
+  inArray,
   repositories,
   sql,
   workItemEvents,
   workItemPolicies,
+  workItemWorkflowRuns,
   workItems,
+  workflowRuns,
   type AlphredDatabase,
   type WorkItemActorType,
   type WorkItemEventType,
@@ -31,6 +34,7 @@ import type {
   DashboardProposeStoryBreakdownRequest,
   DashboardProposeStoryBreakdownResult,
   DashboardRepositoryBoardBootstrapResult,
+  DashboardWorkItemLinkedRunSnapshot,
   DashboardSetWorkItemParentRequest,
   DashboardSetWorkItemParentResult,
   DashboardStoryBreakdownProposalSnapshot,
@@ -45,6 +49,7 @@ type WithDatabase = <T>(operation: (db: AlphredDatabase) => Promise<T> | T) => P
 type WorkItemRow = typeof workItems.$inferSelect;
 type WorkItemEventRow = typeof workItemEvents.$inferSelect;
 type WorkItemPolicyRow = typeof workItemPolicies.$inferSelect;
+type WorkItemWorkflowRunRow = typeof workItemWorkflowRuns.$inferSelect;
 type AlphredTransaction = Parameters<Parameters<AlphredDatabase['transaction']>[0]>[0];
 type DbOrTx = AlphredDatabase | AlphredTransaction;
 
@@ -569,9 +574,63 @@ function resolveEffectivePolicyForWorkItem(
   };
 }
 
+function toLinkedRunSnapshot(
+  row: Pick<WorkItemWorkflowRunRow, 'workflowRunId' | 'linkedAt'> & {
+    runStatus: string;
+  },
+): DashboardWorkItemLinkedRunSnapshot {
+  return {
+    workflowRunId: row.workflowRunId,
+    runStatus: row.runStatus as DashboardWorkItemLinkedRunSnapshot['runStatus'],
+    linkedAt: row.linkedAt,
+  };
+}
+
+function loadLatestLinkedWorkflowRunsForTasks(
+  db: DbOrTx,
+  params: {
+    repositoryId: number;
+    taskWorkItemIds: readonly number[];
+  },
+): ReadonlyMap<number, DashboardWorkItemLinkedRunSnapshot> {
+  if (params.taskWorkItemIds.length === 0) {
+    return new Map();
+  }
+
+  const rows = db
+    .select({
+      id: workItemWorkflowRuns.id,
+      workItemId: workItemWorkflowRuns.workItemId,
+      workflowRunId: workItemWorkflowRuns.workflowRunId,
+      linkedAt: workItemWorkflowRuns.linkedAt,
+      runStatus: workflowRuns.status,
+    })
+    .from(workItemWorkflowRuns)
+    .innerJoin(workflowRuns, eq(workItemWorkflowRuns.workflowRunId, workflowRuns.id))
+    .where(
+      and(
+        eq(workItemWorkflowRuns.repositoryId, params.repositoryId),
+        inArray(workItemWorkflowRuns.workItemId, [...params.taskWorkItemIds]),
+      ),
+    )
+    .orderBy(asc(workItemWorkflowRuns.workItemId), desc(workItemWorkflowRuns.linkedAt), desc(workItemWorkflowRuns.id))
+    .all();
+
+  const latestByTaskId = new Map<number, DashboardWorkItemLinkedRunSnapshot>();
+  for (const row of rows) {
+    if (latestByTaskId.has(row.workItemId)) {
+      continue;
+    }
+    latestByTaskId.set(row.workItemId, toLinkedRunSnapshot(row));
+  }
+
+  return latestByTaskId;
+}
+
 function toWorkItemSnapshot(
   row: WorkItemRow,
   effectivePolicy: DashboardWorkItemEffectivePolicySnapshot | null,
+  linkedWorkflowRun: DashboardWorkItemLinkedRunSnapshot | null,
 ): DashboardWorkItemSnapshot {
   return {
     id: row.id,
@@ -590,6 +649,7 @@ function toWorkItemSnapshot(
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
     effectivePolicy,
+    linkedWorkflowRun,
   };
 }
 
@@ -640,6 +700,16 @@ function requireWorkItemId(workItemId: number, label = 'workItemId'): number {
   return workItemId;
 }
 
+function requireWorkflowRunId(workflowRunId: number): number {
+  if (!Number.isInteger(workflowRunId) || workflowRunId < 1) {
+    throw new DashboardIntegrationError('invalid_request', 'linkedWorkflowRunId must be a positive integer.', {
+      status: 400,
+    });
+  }
+
+  return workflowRunId;
+}
+
 function requireExpectedRevision(expectedRevision: number): number {
   if (!Number.isInteger(expectedRevision) || expectedRevision < 0) {
     throw new DashboardIntegrationError('invalid_request', 'expectedRevision must be a non-negative integer.', {
@@ -647,6 +717,36 @@ function requireExpectedRevision(expectedRevision: number): number {
     });
   }
   return expectedRevision;
+}
+
+type ParsedMoveWorkItemStatusRequest = {
+  repositoryId: number;
+  workItemId: number;
+  expectedRevision: number;
+  toStatus: DashboardMoveWorkItemStatusRequest['toStatus'];
+  linkedWorkflowRunId: number | null;
+  actor: {
+    actorType: WorkItemActorType;
+    actorLabel: string;
+  };
+};
+
+function parseMoveWorkItemStatusRequest(
+  requestRaw: DashboardMoveWorkItemStatusRequest,
+): ParsedMoveWorkItemStatusRequest {
+  return {
+    repositoryId: requireRepositoryId(requestRaw.repositoryId),
+    workItemId: requireWorkItemId(requestRaw.workItemId),
+    expectedRevision: requireExpectedRevision(requestRaw.expectedRevision),
+    toStatus: requestRaw.toStatus,
+    linkedWorkflowRunId:
+      requestRaw.linkedWorkflowRunId === undefined ? null : requireWorkflowRunId(requestRaw.linkedWorkflowRunId),
+    actor: requireActor(requestRaw),
+  };
+}
+
+export function validateMoveWorkItemStatusRequest(requestRaw: DashboardMoveWorkItemStatusRequest): void {
+  parseMoveWorkItemStatusRequest(requestRaw);
 }
 
 function requireLastEventId(lastEventId: number): number {
@@ -814,7 +914,18 @@ function toWorkItemSnapshotsWithPolicies(
   },
 ): DashboardWorkItemSnapshot[] {
   const context = loadPolicyResolutionContext(db, params.repositoryId);
-  return params.rows.map(row => toWorkItemSnapshot(row, resolveEffectivePolicyForWorkItem(row, context)));
+  const taskWorkItemIds = params.rows.filter(row => row.type === 'task').map(row => row.id);
+  const latestLinkedRuns = loadLatestLinkedWorkflowRunsForTasks(db, {
+    repositoryId: params.repositoryId,
+    taskWorkItemIds,
+  });
+  return params.rows.map(row =>
+    toWorkItemSnapshot(
+      row,
+      resolveEffectivePolicyForWorkItem(row, context),
+      row.type === 'task' ? (latestLinkedRuns.get(row.id) ?? null) : null,
+    ),
+  );
 }
 
 function toWorkItemSnapshotWithPolicy(
@@ -825,7 +936,18 @@ function toWorkItemSnapshotWithPolicy(
   },
 ): DashboardWorkItemSnapshot {
   const context = loadPolicyResolutionContextForWorkItem(db, params);
-  return toWorkItemSnapshot(params.row, resolveEffectivePolicyForWorkItem(params.row, context));
+  const latestLinkedRuns =
+    params.row.type === 'task'
+      ? loadLatestLinkedWorkflowRunsForTasks(db, {
+          repositoryId: params.repositoryId,
+          taskWorkItemIds: [params.row.id],
+        })
+      : new Map<number, DashboardWorkItemLinkedRunSnapshot>();
+  return toWorkItemSnapshot(
+    params.row,
+    resolveEffectivePolicyForWorkItem(params.row, context),
+    params.row.type === 'task' ? (latestLinkedRuns.get(params.row.id) ?? null) : null,
+  );
 }
 
 export type WorkItemOperations = {
@@ -1336,11 +1458,8 @@ export function createWorkItemOperations(params: { withDatabase: WithDatabase })
     },
 
     moveWorkItemStatus(requestRaw): Promise<DashboardMoveWorkItemStatusResult> {
-      const repositoryId = requireRepositoryId(requestRaw.repositoryId);
-      const workItemId = requireWorkItemId(requestRaw.workItemId);
-      const expectedRevision = requireExpectedRevision(requestRaw.expectedRevision);
-      const toStatus = requestRaw.toStatus;
-      const actor = requireActor(requestRaw);
+      const { repositoryId, workItemId, expectedRevision, toStatus, linkedWorkflowRunId, actor } =
+        parseMoveWorkItemStatusRequest(requestRaw);
 
       const occurredAt = new Date().toISOString();
 
@@ -1357,6 +1476,17 @@ export function createWorkItemOperations(params: { withDatabase: WithDatabase })
             validateTransition({ type, from: fromStatus, to: toStatus });
           } catch (error) {
             throw toTransitionConflictError(error);
+          }
+
+          if (
+            linkedWorkflowRunId !== null
+            && (type !== 'task' || fromStatus !== 'Ready' || toStatus !== 'InProgress')
+          ) {
+            throw new DashboardIntegrationError(
+              'invalid_request',
+              'linkedWorkflowRunId can only be set for task Ready -> InProgress transitions.',
+              { status: 400 },
+            );
           }
 
           const nextRevision = expectedRevision + 1;
@@ -1376,6 +1506,41 @@ export function createWorkItemOperations(params: { withDatabase: WithDatabase })
             throwRevisionConflict({ workItemId, expectedRevision });
           }
 
+          if (linkedWorkflowRunId !== null) {
+            const linkedRun = tx
+              .select({
+                id: workflowRuns.id,
+                status: workflowRuns.status,
+              })
+              .from(workflowRuns)
+              .where(eq(workflowRuns.id, linkedWorkflowRunId))
+              .get();
+
+            if (!linkedRun) {
+              throw new DashboardIntegrationError(
+                'not_found',
+                `Workflow run id=${linkedWorkflowRunId} was not found for task linking.`,
+                { status: 404 },
+              );
+            }
+
+            tx.insert(workItemWorkflowRuns)
+              .values({
+                repositoryId,
+                workItemId,
+                workflowRunId: linkedRun.id,
+                linkedAt: occurredAt,
+              })
+              .onConflictDoNothing()
+              .run();
+          }
+
+          const reloaded = readWorkItemOrThrow(tx, { repositoryId, workItemId });
+          const reloadedSnapshot = toWorkItemSnapshotWithPolicy(tx, {
+            repositoryId,
+            row: reloaded,
+          });
+
           insertEvent(tx, {
             repositoryId,
             workItemId,
@@ -1389,15 +1554,12 @@ export function createWorkItemOperations(params: { withDatabase: WithDatabase })
               toStatus,
               expectedRevision,
               revision: nextRevision,
+              linkedWorkflowRun: reloadedSnapshot.linkedWorkflowRun ?? null,
             },
           });
 
-          const reloaded = readWorkItemOrThrow(tx, { repositoryId, workItemId });
           return {
-            workItem: toWorkItemSnapshotWithPolicy(tx, {
-              repositoryId,
-              row: reloaded,
-            }),
+            workItem: reloadedSnapshot,
           };
         }),
       );

@@ -436,6 +436,13 @@ export type DashboardRunNodeSelector =
       nodeKey: string;
     };
 
+export type DashboardRunLaunchPolicyConstraints = {
+  allowedProviders: string[] | null;
+  allowedModels: string[] | null;
+  allowedSkillIdentifiers: string[] | null;
+  allowedMcpServerIdentifiers: string[] | null;
+};
+
 export type DashboardRunLaunchRequest = {
   treeKey: string;
   repositoryName?: string;
@@ -444,6 +451,7 @@ export type DashboardRunLaunchRequest = {
   executionScope?: DashboardRunExecutionScope;
   nodeSelector?: DashboardRunNodeSelector;
   cleanupWorktree?: boolean;
+  policyConstraints?: DashboardRunLaunchPolicyConstraints;
 };
 
 export type DashboardRunLaunchResult = {
@@ -511,6 +519,12 @@ export type DashboardWorkItemEffectivePolicySnapshot = {
   policy: DashboardWorkItemPolicySnapshot;
 };
 
+export type DashboardWorkItemLinkedRunSnapshot = {
+  workflowRunId: number;
+  runStatus: DashboardRunSummary['status'];
+  linkedAt: string;
+};
+
 export type DashboardWorkItemSnapshot = {
   id: number;
   repositoryId: number;
@@ -528,6 +542,7 @@ export type DashboardWorkItemSnapshot = {
   createdAt: string;
   updatedAt: string;
   effectivePolicy?: DashboardWorkItemEffectivePolicySnapshot | null;
+  linkedWorkflowRun?: DashboardWorkItemLinkedRunSnapshot | null;
 };
 
 export type DashboardListWorkItemsResult = {
@@ -584,6 +599,7 @@ export type DashboardMoveWorkItemStatusRequest = {
   toStatus: WorkItemStatus;
   actorType: WorkItemActorType;
   actorLabel: string;
+  linkedWorkflowRunId?: number;
 };
 
 export type DashboardMoveWorkItemStatusResult = {

@@ -210,6 +210,7 @@ export type ClaimedNodeSuccessParams = {
   currentAttempt: number;
   contextManifest: ContextHandoffManifest;
   phaseResult: Awaited<ReturnType<typeof runPhase>>;
+  executionScope: WorkflowExecutionScope;
 };
 
 export type ClaimedNodeFailure = {
@@ -585,7 +586,7 @@ export function handleClaimedNodeSuccess(
   edgeRows: EdgeRow[],
   params: ClaimedNodeSuccessParams,
 ): ClaimedNodeSuccess {
-  const { currentAttempt, contextManifest, phaseResult } = params;
+  const { currentAttempt, contextManifest, phaseResult, executionScope } = params;
   const latestNodeAttempts = getLatestRunNodeAttempts(loadRunNodeExecutionRows(db, run.id));
   const shouldSpawnChildren = node.nodeRole === 'spawner';
   const spawnedSubtasks = shouldSpawnChildren
@@ -682,7 +683,10 @@ export function handleClaimedNodeSuccess(
 
   let runStatus: WorkflowRunStatus;
   if (routingOutcome.decisionType === 'no_route') {
-    runStatus = transitionRunToCurrentForExecutor(db, run.id, 'failed');
+    runStatus =
+      executionScope === 'single_node'
+        ? 'failed'
+        : transitionRunToCurrentForExecutor(db, run.id, 'failed');
   } else {
     reactivateSelectedTargetNode(db, {
       workflowRunId: run.id,
@@ -704,7 +708,10 @@ export function handleClaimedNodeSuccess(
       latestAfterSuccess,
       routingSelectionAfterSuccess.handledFailedSourceNodeIds,
     );
-    runStatus = transitionRunToCurrentForExecutor(db, run.id, targetRunStatus);
+    runStatus =
+      executionScope === 'single_node'
+        ? targetRunStatus
+        : transitionRunToCurrentForExecutor(db, run.id, targetRunStatus);
   }
 
   return {
@@ -1235,6 +1242,7 @@ export async function executeClaimedRunnableNode(
           currentAttempt,
           contextManifest: contextAssembly.manifest,
           phaseResult,
+          executionScope,
         },
       );
       currentRunStatus = success.runStatus;

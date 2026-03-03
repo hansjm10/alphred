@@ -132,11 +132,24 @@ describe('applyBoardEventToWorkItems', () => {
       createEvent({
         workItemId: 10,
         eventType: 'status_changed',
-        payload: { toStatus: 'Approved', revision: 3 },
+        payload: {
+          toStatus: 'Approved',
+          revision: 3,
+          linkedWorkflowRun: {
+            workflowRunId: 88,
+            runStatus: 'running',
+            linkedAt: '2026-03-03T00:00:00.000Z',
+          },
+        },
       }),
     );
     expect(statusChanged[10]?.status).toBe('Approved');
     expect(statusChanged[10]?.revision).toBe(3);
+    expect(statusChanged[10]?.linkedWorkflowRun).toEqual({
+      workflowRunId: 88,
+      runStatus: 'running',
+      linkedAt: '2026-03-03T00:00:00.000Z',
+    });
 
     const breakdownProposed = applyBoardEventToWorkItems(
       statusChanged,

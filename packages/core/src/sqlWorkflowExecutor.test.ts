@@ -9105,6 +9105,34 @@ describe('createSqlWorkflowExecutor', () => {
     ).rejects.toThrow('Workflow run id=999 was not found.');
   });
 
+  it('invokes assertRunExecutionAllowed before and after each executed step', async () => {
+    const { db, runId } = seedSingleAgentRun();
+    const assertRunExecutionAllowed = vi.fn(async () => undefined);
+    const executor = createSqlWorkflowExecutor(db, {
+      resolveProvider: () =>
+        createProvider([
+          { type: 'result', content: 'Design report body', timestamp: 102 },
+        ]),
+      assertRunExecutionAllowed,
+    });
+
+    const result = await executor.executeRun({
+      workflowRunId: runId,
+      options: {
+        workingDirectory: '/tmp/alphred-worktree',
+      },
+    });
+
+    expect(result.finalStep.runStatus).toBe('completed');
+    expect(assertRunExecutionAllowed).toHaveBeenCalledTimes(2);
+    expect(assertRunExecutionAllowed).toHaveBeenNthCalledWith(1, {
+      workflowRunId: runId,
+    });
+    expect(assertRunExecutionAllowed).toHaveBeenNthCalledWith(2, {
+      workflowRunId: runId,
+    });
+  });
+
   it('invokes onRunTerminal when execution transitions a run into a terminal status', async () => {
     const { db, runId } = seedSingleAgentRun();
     const onRunTerminal = vi.fn(async () => undefined);
@@ -10410,6 +10438,47 @@ describe('createSqlWorkflowExecutor', () => {
       status: 'failed',
       attempt: 1,
     });
+  });
+
+  it('executeSingleNode asserts execution policy before terminalizing the run', async () => {
+    const { db, runId } = seedSingleAgentRun();
+    const assertRunExecutionAllowed = vi
+      .fn<(params: { workflowRunId: number }) => Promise<void>>()
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(new Error('single-node policy rejected after execution'));
+    const executor = createSqlWorkflowExecutor(db, {
+      resolveProvider: () =>
+        createProvider([
+          {
+            type: 'result',
+            content: 'single node completed',
+            timestamp: 1,
+          },
+        ]),
+      assertRunExecutionAllowed,
+    });
+
+    await expect(
+      executor.executeSingleNode({
+        workflowRunId: runId,
+        options: {
+          workingDirectory: '/tmp/alphred',
+        },
+      }),
+    ).rejects.toThrow('single-node policy rejected after execution');
+
+    expect(assertRunExecutionAllowed).toHaveBeenCalledTimes(2);
+    expect(assertRunExecutionAllowed).toHaveBeenNthCalledWith(1, { workflowRunId: runId });
+    expect(assertRunExecutionAllowed).toHaveBeenNthCalledWith(2, { workflowRunId: runId });
+
+    const run = db
+      .select({
+        status: workflowRuns.status,
+      })
+      .from(workflowRuns)
+      .where(eq(workflowRuns.id, runId))
+      .get();
+    expect(run?.status).toBe('running');
   });
 
   it('executeSingleNode returns typed validation errors for missing node_key selectors', async () => {

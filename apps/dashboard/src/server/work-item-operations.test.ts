@@ -2,12 +2,17 @@ import { describe, expect, it } from 'vitest';
 import {
   and,
   createDatabase,
+  desc,
   eq,
   insertRepository,
   migrateDatabase,
   workItemEvents,
   workItemPolicies,
+  workItemWorkflowRuns,
   workItems,
+  workflowRuns,
+  workflowTrees,
+  treeNodes,
   type AlphredDatabase,
 } from '@alphred/db';
 import type { AuthStatus, RepositoryConfig } from '@alphred/shared';
@@ -15,7 +20,10 @@ import { createSqlWorkflowExecutor, createSqlWorkflowPlanner } from '@alphred/co
 import { createDashboardService, type DashboardServiceDependencies } from './dashboard-service';
 import { DashboardIntegrationError } from './dashboard-errors';
 
-function createHarness(): {
+function createHarness(options: {
+  dependencies?: Partial<DashboardServiceDependencies>;
+  environment?: NodeJS.ProcessEnv;
+} = {}): {
   db: AlphredDatabase;
   service: ReturnType<typeof createDashboardService>;
 } {
@@ -65,12 +73,53 @@ function createHarness(): {
       }),
       cleanupRun: async () => undefined,
     }),
+    ...(options.dependencies ?? {}),
   };
 
   return {
     db,
-    service: createDashboardService({ dependencies }),
+    service: createDashboardService({ dependencies, environment: options.environment }),
   };
+}
+
+function seedPublishedWorkflowTree(
+  db: AlphredDatabase,
+  params: {
+    treeKey?: string;
+    provider?: 'codex' | 'claude';
+    model?: string;
+  } = {},
+): number {
+  const treeId = Number(
+    db
+      .insert(workflowTrees)
+      .values({
+        treeKey: params.treeKey ?? 'design-implement-review',
+        version: 1,
+        status: 'published',
+        name: 'Autolaunch Tree',
+        createdAt: '2026-03-03T00:00:00.000Z',
+        updatedAt: '2026-03-03T00:00:00.000Z',
+      })
+      .run().lastInsertRowid,
+  );
+
+  db.insert(treeNodes)
+    .values({
+      workflowTreeId: treeId,
+      nodeKey: 'design',
+      nodeType: 'agent',
+      provider: params.provider ?? 'codex',
+      model: params.model ?? 'gpt-5.3-codex',
+      promptTemplateId: null,
+      maxRetries: 0,
+      sequenceIndex: 0,
+      createdAt: '2026-03-03T00:00:00.000Z',
+      updatedAt: '2026-03-03T00:00:00.000Z',
+    })
+    .run();
+
+  return treeId;
 }
 
 describe('work-item-operations', () => {
@@ -249,6 +298,296 @@ describe('work-item-operations', () => {
       code: 'conflict',
       status: 409,
     });
+  });
+
+  it('links a workflow run when moving a task from Ready to InProgress with linkedWorkflowRunId', async () => {
+    const { db, service } = createHarness();
+
+    const repository = insertRepository(db, {
+      name: 'repo',
+      provider: 'github',
+      remoteUrl: 'https://example.com/repo.git',
+      remoteRef: 'acme/repo',
+    });
+
+    const treeId = seedPublishedWorkflowTree(db);
+    const workflowRunId = Number(
+      db.insert(workflowRuns)
+        .values({
+          workflowTreeId: treeId,
+          status: 'running',
+          startedAt: '2026-03-03T00:01:00.000Z',
+          completedAt: null,
+          createdAt: '2026-03-03T00:01:00.000Z',
+          updatedAt: '2026-03-03T00:01:00.000Z',
+        })
+        .run().lastInsertRowid,
+    );
+
+    const taskId = Number(
+      db.insert(workItems)
+        .values({
+          repositoryId: repository.id,
+          type: 'task',
+          status: 'Ready',
+          title: 'Implement issue',
+          revision: 0,
+        })
+        .run().lastInsertRowid,
+    );
+
+    const moved = await service.moveWorkItemStatus({
+      repositoryId: repository.id,
+      workItemId: taskId,
+      expectedRevision: 0,
+      toStatus: 'InProgress',
+      actorType: 'human',
+      actorLabel: 'alice',
+      linkedWorkflowRunId: workflowRunId,
+    });
+
+    expect(moved.workItem.status).toBe('InProgress');
+    expect(moved.workItem.linkedWorkflowRun).toEqual({
+      workflowRunId,
+      runStatus: 'running',
+      linkedAt: moved.workItem.linkedWorkflowRun?.linkedAt,
+    });
+
+    const linkedRow = db
+      .select()
+      .from(workItemWorkflowRuns)
+      .where(and(eq(workItemWorkflowRuns.repositoryId, repository.id), eq(workItemWorkflowRuns.workItemId, taskId)))
+      .get();
+    expect(linkedRow?.workflowRunId).toBe(workflowRunId);
+
+    const statusEvent = db
+      .select()
+      .from(workItemEvents)
+      .where(
+        and(
+          eq(workItemEvents.repositoryId, repository.id),
+          eq(workItemEvents.workItemId, taskId),
+          eq(workItemEvents.eventType, 'status_changed'),
+        ),
+      )
+      .orderBy(desc(workItemEvents.id))
+      .limit(1)
+      .get();
+    expect(statusEvent).not.toBeUndefined();
+    const statusPayload = statusEvent?.payload as { linkedWorkflowRun?: { workflowRunId?: number } | null };
+    expect(statusPayload.linkedWorkflowRun?.workflowRunId).toBe(workflowRunId);
+  });
+
+  it('auto-launches and links a run when task transitions Ready -> InProgress and autolaunch is enabled', async () => {
+    const { db, service } = createHarness({
+      environment: {
+        ...process.env,
+        ALPHRED_DASHBOARD_TASK_RUN_AUTOLAUNCH: '1',
+        ALPHRED_DASHBOARD_TASK_RUN_TREE_KEY: 'design-implement-review',
+      },
+    });
+
+    const repository = insertRepository(db, {
+      name: 'repo',
+      provider: 'github',
+      remoteUrl: 'https://example.com/repo.git',
+      remoteRef: 'acme/repo',
+    });
+
+    seedPublishedWorkflowTree(db, { treeKey: 'design-implement-review', provider: 'codex' });
+
+    const taskId = Number(
+      db.insert(workItems)
+        .values({
+          repositoryId: repository.id,
+          type: 'task',
+          status: 'Ready',
+          title: 'Autolaunch me',
+          revision: 0,
+        })
+        .run().lastInsertRowid,
+    );
+
+    const moved = await service.moveWorkItemStatus({
+      repositoryId: repository.id,
+      workItemId: taskId,
+      expectedRevision: 0,
+      toStatus: 'InProgress',
+      actorType: 'human',
+      actorLabel: 'alice',
+    });
+
+    expect(moved.workItem.status).toBe('InProgress');
+    expect(moved.workItem.linkedWorkflowRun?.workflowRunId).toBeGreaterThan(0);
+
+    const linkedRows = db
+      .select()
+      .from(workItemWorkflowRuns)
+      .where(and(eq(workItemWorkflowRuns.repositoryId, repository.id), eq(workItemWorkflowRuns.workItemId, taskId)))
+      .all();
+    expect(linkedRows).toHaveLength(1);
+
+    const event = db
+      .select()
+      .from(workItemEvents)
+      .where(
+        and(
+          eq(workItemEvents.repositoryId, repository.id),
+          eq(workItemEvents.workItemId, taskId),
+          eq(workItemEvents.eventType, 'status_changed'),
+        ),
+      )
+      .orderBy(desc(workItemEvents.id))
+      .limit(1)
+      .get();
+    const eventPayload = event?.payload as { linkedWorkflowRun?: { workflowRunId?: number } | null };
+    expect(eventPayload.linkedWorkflowRun?.workflowRunId).toBe(moved.workItem.linkedWorkflowRun?.workflowRunId);
+  });
+
+  it('rejects invalid autolaunch move requests before creating workflow runs', async () => {
+    const { db, service } = createHarness({
+      environment: {
+        ...process.env,
+        ALPHRED_DASHBOARD_TASK_RUN_AUTOLAUNCH: '1',
+        ALPHRED_DASHBOARD_TASK_RUN_TREE_KEY: 'design-implement-review',
+      },
+    });
+
+    const repository = insertRepository(db, {
+      name: 'repo',
+      provider: 'github',
+      remoteUrl: 'https://example.com/repo.git',
+      remoteRef: 'acme/repo',
+    });
+
+    seedPublishedWorkflowTree(db, { treeKey: 'design-implement-review', provider: 'codex' });
+
+    const taskId = Number(
+      db.insert(workItems)
+        .values({
+          repositoryId: repository.id,
+          type: 'task',
+          status: 'Ready',
+          title: 'Invalid autolaunch request',
+          revision: 0,
+        })
+        .run().lastInsertRowid,
+    );
+
+    await expect(
+      service.moveWorkItemStatus({
+        repositoryId: repository.id,
+        workItemId: taskId,
+        expectedRevision: 0,
+        toStatus: 'InProgress',
+        actorType: 'human',
+        actorLabel: '   ',
+      }),
+    ).rejects.toMatchObject({
+      code: 'invalid_request',
+      status: 400,
+      message: 'actorLabel cannot be empty.',
+    });
+
+    const persistedTask = db
+      .select({
+        status: workItems.status,
+        revision: workItems.revision,
+      })
+      .from(workItems)
+      .where(and(eq(workItems.repositoryId, repository.id), eq(workItems.id, taskId)))
+      .get();
+    expect(persistedTask).toEqual({
+      status: 'Ready',
+      revision: 0,
+    });
+
+    const linkedRows = db
+      .select()
+      .from(workItemWorkflowRuns)
+      .where(and(eq(workItemWorkflowRuns.repositoryId, repository.id), eq(workItemWorkflowRuns.workItemId, taskId)))
+      .all();
+    expect(linkedRows).toHaveLength(0);
+
+    const runRows = db.select().from(workflowRuns).orderBy(desc(workflowRuns.id)).all();
+    expect(runRows).toHaveLength(0);
+  });
+
+  it('blocks autolaunch when policy provider allowlist rejects workflow node providers', async () => {
+    const { db, service } = createHarness({
+      environment: {
+        ...process.env,
+        ALPHRED_DASHBOARD_TASK_RUN_AUTOLAUNCH: '1',
+        ALPHRED_DASHBOARD_TASK_RUN_TREE_KEY: 'design-implement-review',
+      },
+    });
+
+    const repository = insertRepository(db, {
+      name: 'repo',
+      provider: 'github',
+      remoteUrl: 'https://example.com/repo.git',
+      remoteRef: 'acme/repo',
+    });
+
+    seedPublishedWorkflowTree(db, { treeKey: 'design-implement-review', provider: 'codex' });
+
+    db.insert(workItemPolicies)
+      .values({
+        repositoryId: repository.id,
+        epicWorkItemId: null,
+        payload: {
+          allowedProviders: ['claude'],
+          allowedModels: null,
+          allowedSkillIdentifiers: null,
+          allowedMcpServerIdentifiers: null,
+        },
+      })
+      .run();
+
+    const taskId = Number(
+      db.insert(workItems)
+        .values({
+          repositoryId: repository.id,
+          type: 'task',
+          status: 'Ready',
+          title: 'Policy-gated task',
+          revision: 0,
+        })
+        .run().lastInsertRowid,
+    );
+
+    await expect(
+      service.moveWorkItemStatus({
+        repositoryId: repository.id,
+        workItemId: taskId,
+        expectedRevision: 0,
+        toStatus: 'InProgress',
+        actorType: 'human',
+        actorLabel: 'alice',
+      }),
+    ).rejects.toMatchObject({
+      code: 'conflict',
+      status: 409,
+    });
+
+    const taskRow = db
+      .select()
+      .from(workItems)
+      .where(and(eq(workItems.repositoryId, repository.id), eq(workItems.id, taskId)))
+      .get();
+    expect(taskRow?.status).toBe('Ready');
+    expect(taskRow?.revision).toBe(0);
+
+    const linkedRows = db
+      .select()
+      .from(workItemWorkflowRuns)
+      .where(and(eq(workItemWorkflowRuns.repositoryId, repository.id), eq(workItemWorkflowRuns.workItemId, taskId)))
+      .all();
+    expect(linkedRows).toHaveLength(0);
+
+    const runRows = db.select().from(workflowRuns).orderBy(desc(workflowRuns.id)).all();
+    expect(runRows).toHaveLength(1);
+    expect(runRows[0]?.status).toBe('cancelled');
   });
 
   it('requires non-empty actorLabel', async () => {

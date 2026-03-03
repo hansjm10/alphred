@@ -20,12 +20,13 @@ import {
   type AlphredDatabase,
 } from '@alphred/db';
 import type { WorktreeManager } from '@alphred/git';
-import type { BackgroundExecutionManager } from './background-execution';
+import type { BackgroundExecutionManager, BackgroundRunExecutionSettlement } from './background-execution';
 import type {
   DashboardRunControlAction,
   DashboardRunControlResult,
   DashboardRunDetail,
   DashboardRunLaunchRequest,
+  DashboardRunLaunchPolicyConstraints,
   DashboardRunLaunchResult,
   DashboardFanOutGroupSnapshot,
   DashboardRunNodeDiagnosticsSnapshot,
@@ -59,8 +60,10 @@ const BACKGROUND_RUN_STATUS: RunStatus = 'running';
 const RECENT_SNAPSHOT_LIMIT = 30;
 const MAX_STREAM_SNAPSHOT_EVENTS = 500;
 const FAILED_COMMAND_OUTPUT_ARTIFACT_KIND = 'failed_command_output_v1';
+const runPolicyConstraintsByRunId = new Map<number, DashboardRunLaunchPolicyConstraints>();
 
 type WithDatabase = <T>(operation: (db: AlphredDatabase) => Promise<T> | T) => Promise<T>;
+type RunExecutionPolicyAssertion = (db: AlphredDatabase, runId: number) => Promise<void> | void;
 
 type RunOperationsDependencies = {
   createSqlWorkflowPlanner: (db: AlphredDatabase) => {
@@ -74,6 +77,7 @@ type RunOperationsDependencies = {
     db: AlphredDatabase,
     dependencies: {
       resolveProvider: PhaseProviderResolver;
+      assertRunExecutionAllowed?: (params: { workflowRunId: number }) => Promise<void> | void;
     },
   ) => {
     cancelRun: (params: { workflowRunId: number }) => Promise<{
@@ -177,6 +181,195 @@ function normalizeLaunchNodeSelector(
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function toExecutionPermissionStringList(
+  value: unknown,
+  key: 'allowedSkillIdentifiers' | 'allowedMcpServerIdentifiers',
+): string[] {
+  if (!isRecord(value)) {
+    return [];
+  }
+
+  const candidate = value[key];
+  if (!Array.isArray(candidate)) {
+    return [];
+  }
+
+  return candidate.filter((entry): entry is string => typeof entry === 'string');
+}
+
+function assertLaunchPolicyAllowlists(
+  db: AlphredDatabase,
+  params: {
+    runId: number;
+    policyConstraints: DashboardRunLaunchPolicyConstraints;
+  },
+): void {
+  const { policyConstraints } = params;
+  const hasAnyConstraint =
+    policyConstraints.allowedProviders !== null
+    || policyConstraints.allowedModels !== null
+    || policyConstraints.allowedSkillIdentifiers !== null
+    || policyConstraints.allowedMcpServerIdentifiers !== null;
+
+  if (!hasAnyConstraint) {
+    return;
+  }
+
+  const agentNodes = db
+    .select({
+      nodeKey: runNodes.nodeKey,
+      provider: runNodes.provider,
+      model: runNodes.model,
+      executionPermissions: runNodes.executionPermissions,
+    })
+    .from(runNodes)
+    .where(and(eq(runNodes.workflowRunId, params.runId), eq(runNodes.nodeType, 'agent')))
+    .all();
+
+  if (policyConstraints.allowedProviders !== null) {
+    const allowedProviders = new Set(policyConstraints.allowedProviders);
+    for (const node of agentNodes) {
+      if (node.provider === null || !allowedProviders.has(node.provider)) {
+        throw new DashboardIntegrationError(
+          'conflict',
+          `Run launch blocked by policy: provider "${node.provider ?? 'null'}" is not allowed for node "${node.nodeKey}".`,
+          {
+            status: 409,
+            details: {
+              kind: 'work_item_policy_launch',
+              workflowRunId: params.runId,
+              nodeKey: node.nodeKey,
+              provider: node.provider,
+            },
+          },
+        );
+      }
+    }
+  }
+
+  if (policyConstraints.allowedModels !== null) {
+    const allowedModels = new Set(policyConstraints.allowedModels);
+    for (const node of agentNodes) {
+      if (node.model === null || !allowedModels.has(node.model)) {
+        throw new DashboardIntegrationError(
+          'conflict',
+          `Run launch blocked by policy: model "${node.model ?? 'null'}" is not allowed for node "${node.nodeKey}".`,
+          {
+            status: 409,
+            details: {
+              kind: 'work_item_policy_launch',
+              workflowRunId: params.runId,
+              nodeKey: node.nodeKey,
+              model: node.model,
+            },
+          },
+        );
+      }
+    }
+  }
+
+  if (policyConstraints.allowedSkillIdentifiers !== null) {
+    const allowedSkillIdentifiers = new Set(policyConstraints.allowedSkillIdentifiers);
+    for (const node of agentNodes) {
+      const requestedSkillIdentifiers = toExecutionPermissionStringList(
+        node.executionPermissions,
+        'allowedSkillIdentifiers',
+      );
+      for (const skillIdentifier of requestedSkillIdentifiers) {
+        if (!allowedSkillIdentifiers.has(skillIdentifier)) {
+          throw new DashboardIntegrationError(
+            'conflict',
+            `Run launch blocked by policy: skill "${skillIdentifier}" is not allowed for node "${node.nodeKey}".`,
+            {
+              status: 409,
+              details: {
+                kind: 'work_item_policy_launch',
+                workflowRunId: params.runId,
+                nodeKey: node.nodeKey,
+                skillIdentifier,
+              },
+            },
+          );
+        }
+      }
+    }
+  }
+
+  if (policyConstraints.allowedMcpServerIdentifiers !== null) {
+    const allowedMcpServerIdentifiers = new Set(policyConstraints.allowedMcpServerIdentifiers);
+    for (const node of agentNodes) {
+      const requestedMcpServerIdentifiers = toExecutionPermissionStringList(
+        node.executionPermissions,
+        'allowedMcpServerIdentifiers',
+      );
+      for (const mcpServerIdentifier of requestedMcpServerIdentifiers) {
+        if (!allowedMcpServerIdentifiers.has(mcpServerIdentifier)) {
+          throw new DashboardIntegrationError(
+            'conflict',
+            `Run launch blocked by policy: MCP server "${mcpServerIdentifier}" is not allowed for node "${node.nodeKey}".`,
+            {
+              status: 409,
+              details: {
+                kind: 'work_item_policy_launch',
+                workflowRunId: params.runId,
+                nodeKey: node.nodeKey,
+                mcpServerIdentifier,
+              },
+            },
+          );
+        }
+      }
+    }
+  }
+}
+
+function cloneLaunchPolicyConstraints(
+  policyConstraints: DashboardRunLaunchPolicyConstraints,
+): DashboardRunLaunchPolicyConstraints {
+  return {
+    allowedProviders: policyConstraints.allowedProviders === null ? null : [...policyConstraints.allowedProviders],
+    allowedModels: policyConstraints.allowedModels === null ? null : [...policyConstraints.allowedModels],
+    allowedSkillIdentifiers:
+      policyConstraints.allowedSkillIdentifiers === null ? null : [...policyConstraints.allowedSkillIdentifiers],
+    allowedMcpServerIdentifiers:
+      policyConstraints.allowedMcpServerIdentifiers === null ? null : [...policyConstraints.allowedMcpServerIdentifiers],
+  };
+}
+
+function hasLaunchPolicyConstraints(policyConstraints: DashboardRunLaunchPolicyConstraints): boolean {
+  return (
+    policyConstraints.allowedProviders !== null
+    || policyConstraints.allowedModels !== null
+    || policyConstraints.allowedSkillIdentifiers !== null
+    || policyConstraints.allowedMcpServerIdentifiers !== null
+  );
+}
+
+function isTerminalRunStatus(status: RunStatus): boolean {
+  return status === 'completed' || status === 'failed' || status === 'cancelled';
+}
+
+function createRunExecutionPolicyAssertion(
+  policyConstraints: DashboardRunLaunchPolicyConstraints | undefined,
+): RunExecutionPolicyAssertion | undefined {
+  if (policyConstraints === undefined || !hasLaunchPolicyConstraints(policyConstraints)) {
+    return undefined;
+  }
+
+  return (db, runId) =>
+    assertLaunchPolicyAllowlists(db, {
+      runId,
+      policyConstraints,
+    });
+}
+
+function isRunPolicyConflict(error: unknown): error is DashboardIntegrationError {
+  if (!(error instanceof DashboardIntegrationError)) {
+    return false;
+  }
+  return error.code === 'conflict' && error.details?.kind === 'work_item_policy_launch';
 }
 
 function toOptionalNonNegativeInteger(value: unknown): number | null {
@@ -345,6 +538,12 @@ export function createRunOperations(params: {
     repositoryAuthDependencies,
     backgroundExecution,
   } = params;
+
+  const clearCachedRunPolicyConstraints = ({ runId, runStatus }: BackgroundRunExecutionSettlement): void => {
+    if (runStatus !== null && isTerminalRunStatus(runStatus)) {
+      runPolicyConstraintsByRunId.delete(runId);
+    }
+  };
 
   return {
     listWorkflowRuns(limit = 20): Promise<DashboardRunSummary[]> {
@@ -906,8 +1105,20 @@ export function createRunOperations(params: {
         const runId = workflowRunId;
         let workingDirectory = cwd;
         let worktreeManager: Pick<WorktreeManager, 'createRunWorktree' | 'cleanupRun'> | null = null;
+        const policyConstraints =
+          request.policyConstraints === undefined
+            ? undefined
+            : cloneLaunchPolicyConstraints(request.policyConstraints);
+        const assertRunExecutionAllowed = createRunExecutionPolicyAssertion(policyConstraints);
 
         try {
+          if (assertRunExecutionAllowed !== undefined) {
+            assertRunExecutionAllowed(db, runId);
+            if (policyConstraints !== undefined) {
+              runPolicyConstraintsByRunId.set(runId, policyConstraints);
+            }
+          }
+
           if (repositoryName !== undefined) {
             const repository = getRepositoryByName(db, repositoryName);
             if (!repository) {
@@ -939,7 +1150,12 @@ export function createRunOperations(params: {
               request.cleanupWorktree ?? false,
               executionScope,
               nodeSelector,
+              assertRunExecutionAllowed,
             );
+
+            if (isTerminalRunStatus(execution.runStatus)) {
+              runPolicyConstraintsByRunId.delete(runId);
+            }
 
             return {
               workflowRunId,
@@ -962,6 +1178,8 @@ export function createRunOperations(params: {
             cleanupWorktree: request.cleanupWorktree ?? false,
             executionScope,
             nodeSelector,
+            assertRunExecutionAllowed,
+            onBackgroundExecutionSettled: clearCachedRunPolicyConstraints,
           });
 
           return {
@@ -973,7 +1191,20 @@ export function createRunOperations(params: {
             executedNodes: null,
           };
         } catch (error) {
+          runPolicyConstraintsByRunId.delete(runId);
           await backgroundExecution.markPendingRunCancelled(db, workflowRunId);
+          if (isRunPolicyConflict(error)) {
+            const executor = dependencies.createSqlWorkflowExecutor(db, {
+              resolveProvider: dependencies.resolveProvider,
+            });
+            try {
+              await executor.cancelRun({ workflowRunId });
+            } catch (cancelError) {
+              if (!(cancelError instanceof WorkflowRunControlError)) {
+                throw cancelError;
+              }
+            }
+          }
           if (error instanceof WorkflowRunExecutionValidationError) {
             throw new DashboardIntegrationError('invalid_request', error.message, {
               status: 400,
@@ -1025,13 +1256,20 @@ export function createRunOperations(params: {
           throw error;
         }
 
+        if (isTerminalRunStatus(controlResult.runStatus as RunStatus)) {
+          runPolicyConstraintsByRunId.delete(runId);
+        }
+
         if ((action === 'resume' || action === 'retry') && controlResult.runStatus === 'running') {
           const executionContext = backgroundExecution.resolveRunExecutionContext(db, runId);
+          const policyConstraints = runPolicyConstraintsByRunId.get(runId);
           backgroundExecution.ensureBackgroundRunExecution({
             runId,
             workingDirectory: executionContext.workingDirectory,
             hasManagedWorktree: executionContext.hasManagedWorktree,
             cleanupWorktree: false,
+            assertRunExecutionAllowed: createRunExecutionPolicyAssertion(policyConstraints),
+            onBackgroundExecutionSettled: clearCachedRunPolicyConstraints,
           });
         }
 

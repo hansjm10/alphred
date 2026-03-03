@@ -20,12 +20,14 @@ import {
 } from './dashboard-utils';
 
 type WithDatabase = <T>(operation: (db: AlphredDatabase) => Promise<T> | T) => Promise<T>;
+type RunExecutionPolicyAssertion = (db: AlphredDatabase, runId: number) => Promise<void> | void;
 
 type BackgroundExecutionDependencies = {
   createSqlWorkflowExecutor: (
     db: AlphredDatabase,
     dependencies: {
       resolveProvider: PhaseProviderResolver;
+      assertRunExecutionAllowed?: (params: { workflowRunId: number }) => Promise<void> | void;
     },
   ) => {
     validateSingleNodeSelection: (params: { workflowRunId: number; nodeSelector?: WorkflowRunNodeSelector }) => void;
@@ -66,6 +68,11 @@ export type RunExecutionContext = {
   hasManagedWorktree: boolean;
 };
 
+export type BackgroundRunExecutionSettlement = {
+  runId: number;
+  runStatus: RunStatus | null;
+};
+
 export type BackgroundExecutionManager = {
   executeWorkflowRun: (
     db: AlphredDatabase,
@@ -75,6 +82,7 @@ export type BackgroundExecutionManager = {
     cleanupWorktree: boolean,
     executionScope?: 'full' | 'single_node',
     nodeSelector?: WorkflowRunNodeSelector,
+    assertRunExecutionAllowed?: RunExecutionPolicyAssertion,
   ) => Promise<{
     runStatus: RunStatus;
     executionOutcome: string;
@@ -94,6 +102,8 @@ export type BackgroundExecutionManager = {
     cleanupWorktree: boolean;
     executionScope?: 'full' | 'single_node';
     nodeSelector?: WorkflowRunNodeSelector;
+    assertRunExecutionAllowed?: RunExecutionPolicyAssertion;
+    onBackgroundExecutionSettled?: (settlement: BackgroundRunExecutionSettlement) => void;
   }) => boolean;
   ensureBackgroundRunExecution: (params: {
     runId: number;
@@ -102,6 +112,8 @@ export type BackgroundExecutionManager = {
     cleanupWorktree: boolean;
     executionScope?: 'full' | 'single_node';
     nodeSelector?: WorkflowRunNodeSelector;
+    assertRunExecutionAllowed?: RunExecutionPolicyAssertion;
+    onBackgroundExecutionSettled?: (settlement: BackgroundRunExecutionSettlement) => void;
   }) => void;
   getBackgroundExecutionCount: () => number;
   hasBackgroundExecution: (runId: number) => boolean;
@@ -124,6 +136,7 @@ export function createBackgroundExecutionManager(params: {
     cleanupWorktree: boolean,
     executionScope: 'full' | 'single_node' = 'full',
     nodeSelector?: WorkflowRunNodeSelector,
+    assertRunExecutionAllowed?: RunExecutionPolicyAssertion,
   ): Promise<{
     runStatus: RunStatus;
     executionOutcome: string;
@@ -131,11 +144,21 @@ export function createBackgroundExecutionManager(params: {
   }> {
     const executor = dependencies.createSqlWorkflowExecutor(db, {
       resolveProvider: dependencies.resolveProvider,
+      ...(assertRunExecutionAllowed === undefined
+        ? {}
+        : {
+            assertRunExecutionAllowed: ({ workflowRunId }: { workflowRunId: number }) =>
+              assertRunExecutionAllowed(db, workflowRunId),
+          }),
     });
 
     let execution: Awaited<ReturnType<typeof executor.executeRun>> | undefined;
     let executionError: unknown = null;
     try {
+      if (executionScope === 'single_node' && assertRunExecutionAllowed !== undefined) {
+        await assertRunExecutionAllowed(db, runId);
+      }
+
       execution =
         executionScope === 'single_node'
           ? await executor.executeSingleNode({
@@ -251,6 +274,24 @@ export function createBackgroundExecutionManager(params: {
     }
   }
 
+  async function resolveWorkflowRunStatus(runId: number): Promise<RunStatus | null> {
+    try {
+      return await withDatabase(db => {
+        const run = db
+          .select({
+            status: workflowRuns.status,
+          })
+          .from(workflowRuns)
+          .where(eq(workflowRuns.id, runId))
+          .get();
+        return (run?.status as RunStatus | undefined) ?? null;
+      });
+    } catch (error) {
+      console.error(`Run id=${runId} background status lookup failed: ${toErrorMessage(error)}`);
+      return null;
+    }
+  }
+
   function resolveRunExecutionContext(db: Pick<AlphredDatabase, 'select'>, runId: number): RunExecutionContext {
     const worktreeRows = db
       .select({
@@ -283,16 +324,19 @@ export function createBackgroundExecutionManager(params: {
     cleanupWorktree: boolean;
     executionScope?: 'full' | 'single_node';
     nodeSelector?: WorkflowRunNodeSelector;
+    assertRunExecutionAllowed?: RunExecutionPolicyAssertion;
+    onBackgroundExecutionSettled?: (settlement: BackgroundRunExecutionSettlement) => void;
   }): boolean {
     if (backgroundRunExecutions.has(params.runId)) {
       return false;
     }
 
+    let settledRunStatus: RunStatus | null = null;
     const executionPromise = withDatabase(async backgroundDb => {
       const backgroundWorktreeManager = params.hasManagedWorktree
         ? dependencies.createWorktreeManager(backgroundDb, environment)
         : null;
-      await executeWorkflowRun(
+      const execution = await executeWorkflowRun(
         backgroundDb,
         params.runId,
         params.workingDirectory,
@@ -300,15 +344,30 @@ export function createBackgroundExecutionManager(params: {
         params.cleanupWorktree,
         params.executionScope ?? 'full',
         params.nodeSelector,
+        params.assertRunExecutionAllowed,
       );
+      settledRunStatus = execution.runStatus;
     })
-      .then(() => undefined)
       .catch(async (error: unknown) => {
         await markRunTerminalAfterBackgroundFailure(params.runId, error);
+        settledRunStatus = await resolveWorkflowRunStatus(params.runId);
       })
       .finally(() => {
         if (backgroundRunExecutions.get(params.runId) === executionPromise) {
           backgroundRunExecutions.delete(params.runId);
+        }
+        if (!params.onBackgroundExecutionSettled) {
+          return;
+        }
+        try {
+          params.onBackgroundExecutionSettled({
+            runId: params.runId,
+            runStatus: settledRunStatus,
+          });
+        } catch (error) {
+          console.error(
+            `Run id=${params.runId} background settled callback failed: ${toErrorMessage(error)}`,
+          );
         }
       });
 
@@ -319,6 +378,10 @@ export function createBackgroundExecutionManager(params: {
   function scheduleBackgroundRunExecutionReschedule(params: {
     runId: number;
     cleanupWorktree: boolean;
+    executionScope?: 'full' | 'single_node';
+    nodeSelector?: WorkflowRunNodeSelector;
+    assertRunExecutionAllowed?: RunExecutionPolicyAssertion;
+    onBackgroundExecutionSettled?: (settlement: BackgroundRunExecutionSettlement) => void;
   }): void {
     if (pendingBackgroundExecutionReschedules.has(params.runId)) {
       return;
@@ -352,6 +415,10 @@ export function createBackgroundExecutionManager(params: {
           workingDirectory: executionContext.workingDirectory,
           hasManagedWorktree: executionContext.hasManagedWorktree,
           cleanupWorktree: params.cleanupWorktree,
+          executionScope: params.executionScope,
+          nodeSelector: params.nodeSelector,
+          assertRunExecutionAllowed: params.assertRunExecutionAllowed,
+          onBackgroundExecutionSettled: params.onBackgroundExecutionSettled,
         });
       }).catch((error: unknown) => {
         console.error(
@@ -368,6 +435,8 @@ export function createBackgroundExecutionManager(params: {
     cleanupWorktree: boolean;
     executionScope?: 'full' | 'single_node';
     nodeSelector?: WorkflowRunNodeSelector;
+    assertRunExecutionAllowed?: RunExecutionPolicyAssertion;
+    onBackgroundExecutionSettled?: (settlement: BackgroundRunExecutionSettlement) => void;
   }): void {
     const didEnqueue = enqueueBackgroundRunExecution(params);
     if (didEnqueue) {
@@ -377,6 +446,10 @@ export function createBackgroundExecutionManager(params: {
     scheduleBackgroundRunExecutionReschedule({
       runId: params.runId,
       cleanupWorktree: params.cleanupWorktree,
+      executionScope: params.executionScope,
+      nodeSelector: params.nodeSelector,
+      assertRunExecutionAllowed: params.assertRunExecutionAllowed,
+      onBackgroundExecutionSettled: params.onBackgroundExecutionSettled,
     });
   }
 

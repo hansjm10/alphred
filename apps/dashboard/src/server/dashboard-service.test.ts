@@ -5,7 +5,7 @@ import {
   createSqlWorkflowExecutor,
   createSqlWorkflowPlanner,
 } from '@alphred/core';
-import { and, eq } from 'drizzle-orm';
+import { and, asc, desc, eq } from 'drizzle-orm';
 import {
   createDatabase,
   migrateDatabase,
@@ -739,6 +739,108 @@ describe('createDashboardService', () => {
     } finally {
       consoleErrorSpy.mockRestore();
     }
+  });
+
+  it('cancels sync launches when runtime-spawned nodes violate policy allowlists', async () => {
+    const { db, dependencies } = createHarness({
+      createSqlWorkflowExecutor: (inputDb, options) => {
+        const baseExecutor = createSqlWorkflowExecutor(inputDb, options);
+        return {
+          ...baseExecutor,
+          executeRun: async (params: { workflowRunId: number }) => {
+            transitionWorkflowRunStatus(inputDb, {
+              workflowRunId: params.workflowRunId,
+              expectedFrom: 'pending',
+              to: 'running',
+            });
+
+            const materializedNode = inputDb
+              .select({
+                id: runNodes.id,
+                treeNodeId: runNodes.treeNodeId,
+                sequenceIndex: runNodes.sequenceIndex,
+              })
+              .from(runNodes)
+              .where(eq(runNodes.workflowRunId, params.workflowRunId))
+              .orderBy(asc(runNodes.sequenceIndex))
+              .get();
+            if (!materializedNode) {
+              throw new Error('Expected a materialized run node.');
+            }
+
+            inputDb.insert(runNodes)
+              .values({
+                workflowRunId: params.workflowRunId,
+                treeNodeId: materializedNode.treeNodeId,
+                nodeKey: 'dynamic-disallowed-provider',
+                nodeRole: 'standard',
+                nodeType: 'agent',
+                provider: 'claude',
+                model: 'claude-3-7-sonnet',
+                prompt: 'Dynamic child prompt',
+                promptContentType: 'markdown',
+                maxChildren: 0,
+                maxRetries: 0,
+                spawnerNodeId: materializedNode.id,
+                lineageDepth: 1,
+                sequencePath: '0.1',
+                status: 'pending',
+                sequenceIndex: materializedNode.sequenceIndex + 100,
+                attempt: 1,
+              })
+              .run();
+
+            await options.assertRunExecutionAllowed?.({
+              workflowRunId: params.workflowRunId,
+            });
+
+            return {
+              workflowRunId: params.workflowRunId,
+              finalStep: {
+                outcome: 'run_terminal',
+                workflowRunId: params.workflowRunId,
+                runStatus: 'completed',
+              },
+              executedNodes: 1,
+            };
+          },
+        };
+      },
+    });
+    seedRunData(db);
+    const service = createDashboardService({ dependencies });
+
+    await expect(
+      service.launchWorkflowRun({
+        treeKey: 'demo-tree',
+        executionMode: 'sync',
+        policyConstraints: {
+          allowedProviders: ['codex'],
+          allowedModels: null,
+          allowedSkillIdentifiers: null,
+          allowedMcpServerIdentifiers: null,
+        },
+      }),
+    ).rejects.toMatchObject({
+      name: 'DashboardIntegrationError',
+      code: 'conflict',
+      status: 409,
+      message: 'Run launch blocked by policy: provider "claude" is not allowed for node "dynamic-disallowed-provider".',
+      details: expect.objectContaining({
+        kind: 'work_item_policy_launch',
+      }),
+    });
+
+    const launchedRun = db
+      .select({
+        id: workflowRuns.id,
+        status: workflowRuns.status,
+      })
+      .from(workflowRuns)
+      .orderBy(desc(workflowRuns.id))
+      .get();
+
+    expect(launchedRun?.status).toBe('cancelled');
   });
 
   it('marks resumed runs as cancelled when detached execution fails after pausing mid-flight', async () => {
@@ -3570,6 +3672,133 @@ describe('createDashboardService', () => {
 
     expect(executeRun).toHaveBeenCalledTimes(1);
     expect(service.hasBackgroundExecution(77)).toBe(false);
+  });
+
+  for (const controlAction of ['resume', 'retry'] as const) {
+    it(`reapplies launch policy assertions when ${controlAction} restarts background execution`, async () => {
+      const assertAvailabilityByExecution: boolean[] = [];
+      let executeCallCount = 0;
+      const resumeRun = vi.fn(async (params: { workflowRunId: number }) => ({
+        action: 'resume' as const,
+        outcome: 'applied' as const,
+        workflowRunId: params.workflowRunId,
+        previousRunStatus: 'paused' as const,
+        runStatus: 'running' as const,
+        retriedRunNodeIds: [] as number[],
+      }));
+      const retryRun = vi.fn(async (params: { workflowRunId: number }) => ({
+        action: 'retry' as const,
+        outcome: 'applied' as const,
+        workflowRunId: params.workflowRunId,
+        previousRunStatus: 'failed' as const,
+        runStatus: 'running' as const,
+        retriedRunNodeIds: [] as number[],
+      }));
+      let currentAssertRunExecutionAllowed:
+        | ((params: { workflowRunId: number }) => Promise<void> | void)
+        | undefined;
+      const executeRun = vi.fn(async () => {
+        executeCallCount += 1;
+        assertAvailabilityByExecution.push(typeof currentAssertRunExecutionAllowed === 'function');
+        return {
+          finalStep: {
+            runStatus: executeCallCount === 1 ? 'paused' : 'completed',
+            outcome: executeCallCount === 1 ? 'paused' : 'completed',
+          },
+          executedNodes: executeCallCount === 1 ? 0 : 1,
+        };
+      });
+
+      const { db, dependencies } = createHarness({
+        createSqlWorkflowExecutor: (_inputDb, options) => {
+          currentAssertRunExecutionAllowed = options.assertRunExecutionAllowed;
+          return {
+            executeRun,
+            cancelRun: vi.fn(),
+            pauseRun: vi.fn(),
+            resumeRun,
+            retryRun,
+          } as unknown as ReturnType<DashboardServiceDependencies['createSqlWorkflowExecutor']>;
+        },
+      });
+      seedRunData(db);
+      const launchService = createDashboardService({ dependencies });
+
+      const launchResult = await launchService.launchWorkflowRun({
+        treeKey: 'demo-tree',
+        executionMode: 'async',
+        policyConstraints: {
+          allowedProviders: ['codex'],
+          allowedModels: null,
+          allowedSkillIdentifiers: null,
+          allowedMcpServerIdentifiers: null,
+        },
+      });
+      await waitForBackgroundExecution(launchService, launchResult.workflowRunId);
+
+      const controlService = createDashboardService({ dependencies });
+      await controlService.controlWorkflowRun(launchResult.workflowRunId, controlAction);
+      await waitForBackgroundExecution(controlService, launchResult.workflowRunId);
+
+      expect(assertAvailabilityByExecution).toEqual([true, true]);
+    });
+  }
+
+  it('clears cached launch policy assertions after terminal async completion', async () => {
+    const assertAvailabilityByExecution: boolean[] = [];
+    let currentAssertRunExecutionAllowed:
+      | ((params: { workflowRunId: number }) => Promise<void> | void)
+      | undefined;
+    const executeRun = vi.fn(async () => {
+      assertAvailabilityByExecution.push(typeof currentAssertRunExecutionAllowed === 'function');
+      return {
+        finalStep: {
+          runStatus: 'completed',
+          outcome: 'completed',
+        },
+        executedNodes: 1,
+      };
+    });
+    const retryRun = vi.fn(async (params: { workflowRunId: number }) => ({
+      action: 'retry' as const,
+      outcome: 'applied' as const,
+      workflowRunId: params.workflowRunId,
+      previousRunStatus: 'completed' as const,
+      runStatus: 'running' as const,
+      retriedRunNodeIds: [] as number[],
+    }));
+
+    const { db, dependencies } = createHarness({
+      createSqlWorkflowExecutor: (_inputDb, options) => {
+        currentAssertRunExecutionAllowed = options.assertRunExecutionAllowed;
+        return {
+          executeRun,
+          cancelRun: vi.fn(),
+          pauseRun: vi.fn(),
+          resumeRun: vi.fn(),
+          retryRun,
+        } as unknown as ReturnType<DashboardServiceDependencies['createSqlWorkflowExecutor']>;
+      },
+    });
+    seedRunData(db);
+    const service = createDashboardService({ dependencies });
+
+    const launchResult = await service.launchWorkflowRun({
+      treeKey: 'demo-tree',
+      executionMode: 'async',
+      policyConstraints: {
+        allowedProviders: ['codex'],
+        allowedModels: null,
+        allowedSkillIdentifiers: null,
+        allowedMcpServerIdentifiers: null,
+      },
+    });
+    await waitForBackgroundExecution(service, launchResult.workflowRunId);
+
+    await service.controlWorkflowRun(launchResult.workflowRunId, 'retry');
+    await waitForBackgroundExecution(service, launchResult.workflowRunId);
+
+    expect(assertAvailabilityByExecution).toEqual([true, false]);
   });
 
   it('falls back to cwd when resume control has only removed run worktrees', async () => {

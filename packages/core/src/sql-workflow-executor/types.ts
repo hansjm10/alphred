@@ -451,6 +451,7 @@ export type WorkflowRunControlResult = {
 export type SqlWorkflowExecutorDependencies = {
   resolveProvider: PhaseProviderResolver;
   onRunTerminal?: (params: { workflowRunId: number; runStatus: TerminalWorkflowRunStatus }) => Promise<void> | void;
+  assertRunExecutionAllowed?: (params: { workflowRunId: number }) => Promise<void> | void;
 };
 
 export type SqlWorkflowExecutor = {
