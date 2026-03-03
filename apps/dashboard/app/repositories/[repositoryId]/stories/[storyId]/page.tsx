@@ -1,6 +1,6 @@
 import { notFound } from 'next/navigation';
-import type { DashboardRepositoryState } from '../../../../../src/server/dashboard-contracts';
-import { createDashboardService } from '../../../../../src/server/dashboard-service';
+import type { DashboardRepositoryState } from '@dashboard/server/dashboard-contracts';
+import { createDashboardService } from '@dashboard/server/dashboard-service';
 import { loadGitHubAuthGate } from '../../../../ui/load-github-auth-gate';
 import { loadDashboardRepositories } from '../../../load-dashboard-repositories';
 import { StoryDetailPageContent } from './story-detail-client';

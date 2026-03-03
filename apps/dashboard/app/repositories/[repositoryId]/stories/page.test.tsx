@@ -2,7 +2,7 @@
 
 import { render, screen, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { DashboardRepositoryState, DashboardWorkItemSnapshot } from '../../../../src/server/dashboard-contracts';
+import type { DashboardRepositoryState, DashboardWorkItemSnapshot } from '@dashboard/server/dashboard-contracts';
 import StoriesIndexPage from './page';
 
 const { NOT_FOUND_ERROR, createDashboardServiceMock, loadDashboardRepositoriesMock, notFoundMock } = vi.hoisted(() => {
@@ -17,7 +17,7 @@ const { NOT_FOUND_ERROR, createDashboardServiceMock, loadDashboardRepositoriesMo
   };
 });
 
-vi.mock('../../../../src/server/dashboard-service', () => ({
+vi.mock('@dashboard/server/dashboard-service', () => ({
   createDashboardService: createDashboardServiceMock,
 }));
 

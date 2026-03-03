@@ -3,7 +3,7 @@
 import { act, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { DashboardRepositoryState, DashboardStoryBreakdownProposalSnapshot, DashboardWorkItemSnapshot } from '../../../../../src/server/dashboard-contracts';
+import type { DashboardRepositoryState, DashboardStoryBreakdownProposalSnapshot, DashboardWorkItemSnapshot } from '@dashboard/server/dashboard-contracts';
 import { StoryDetailPageContent } from './story-detail-client';
 
 type EventHandler = (event: Event) => void;

@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
-import { toErrorResponse } from '../../../../../../src/server/dashboard-http';
-import { createDashboardService } from '../../../../../../src/server/dashboard-service';
+import { toErrorResponse } from '@dashboard/server/dashboard-http';
+import { createDashboardService } from '@dashboard/server/dashboard-service';
 import { parseRepositoryIdFromQuery, parseWorkItemIdFromPathSegment } from '../../_shared/work-item-route-validation';
 
 type RouteContext = {

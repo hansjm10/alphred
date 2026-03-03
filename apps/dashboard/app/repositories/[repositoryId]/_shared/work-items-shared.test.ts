@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { DashboardWorkItemSnapshot } from '../../../../src/server/dashboard-contracts';
+import type { DashboardWorkItemSnapshot } from '@dashboard/server/dashboard-contracts';
 import {
   applyBoardEventToWorkItems,
   fetchWorkItem,

@@ -1,7 +1,7 @@
 'use client';
 
 import type { WorkItemStatus, WorkItemType } from '@alphred/shared';
-import type { DashboardWorkItemSnapshot } from '../../../../src/server/dashboard-contracts';
+import type { DashboardWorkItemSnapshot } from '@dashboard/server/dashboard-contracts';
 
 export type WorkItemActor = Readonly<{
   actorType: 'human' | 'agent' | 'system';

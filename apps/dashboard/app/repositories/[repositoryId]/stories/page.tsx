@@ -1,8 +1,8 @@
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import type { WorkItemStatus } from '@alphred/shared';
-import type { DashboardRepositoryState, DashboardWorkItemSnapshot } from '../../../../src/server/dashboard-contracts';
-import { createDashboardService } from '../../../../src/server/dashboard-service';
+import type { DashboardRepositoryState, DashboardWorkItemSnapshot } from '@dashboard/server/dashboard-contracts';
+import { createDashboardService } from '@dashboard/server/dashboard-service';
 import { ButtonLink } from '../../../ui/primitives';
 import { loadDashboardRepositories } from '../../load-dashboard-repositories';
 

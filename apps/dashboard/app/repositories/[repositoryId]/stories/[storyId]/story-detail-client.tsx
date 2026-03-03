@@ -7,7 +7,7 @@ import type {
   DashboardRepositoryState,
   DashboardStoryBreakdownProposalSnapshot,
   DashboardWorkItemSnapshot,
-} from '../../../../../src/server/dashboard-contracts';
+} from '@dashboard/server/dashboard-contracts';
 import { ActionButton, ButtonLink } from '../../../../ui/primitives';
 import type { BoardConnectionState, WorkItemActor } from '../../_shared/work-items-shared';
 import {

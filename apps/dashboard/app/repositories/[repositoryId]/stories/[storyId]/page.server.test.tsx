@@ -2,7 +2,7 @@
 
 import { render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
-import type { DashboardRepositoryState, DashboardWorkItemSnapshot } from '../../../../../src/server/dashboard-contracts';
+import type { DashboardRepositoryState, DashboardWorkItemSnapshot } from '@dashboard/server/dashboard-contracts';
 import StoryDetailPage from './page';
 
 const {
@@ -26,7 +26,7 @@ const {
   };
 });
 
-vi.mock('../../../../../src/server/dashboard-service', () => ({
+vi.mock('@dashboard/server/dashboard-service', () => ({
   createDashboardService: createDashboardServiceMock,
 }));
 

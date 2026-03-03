@@ -5,7 +5,7 @@ const { createDashboardServiceMock, getStoryBreakdownProposalMock } = vi.hoisted
   getStoryBreakdownProposalMock: vi.fn(),
 }));
 
-vi.mock('../../../../../../src/server/dashboard-service', () => ({
+vi.mock('@dashboard/server/dashboard-service', () => ({
   createDashboardService: createDashboardServiceMock,
 }));
 
