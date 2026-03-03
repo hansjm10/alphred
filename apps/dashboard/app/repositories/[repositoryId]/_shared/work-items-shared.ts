@@ -167,6 +167,35 @@ function coerceLinkedWorkflowRun(
   return fallback ?? null;
 }
 
+function mergeLinkedWorkflowRun(
+  nextLinkedWorkflowRun: DashboardWorkItemLinkedRunSnapshot | null,
+  previousLinkedWorkflowRun: DashboardWorkItemLinkedRunSnapshot | null | undefined,
+): DashboardWorkItemLinkedRunSnapshot | null {
+  if (nextLinkedWorkflowRun === null) {
+    return null;
+  }
+
+  if (!previousLinkedWorkflowRun) {
+    return nextLinkedWorkflowRun;
+  }
+
+  const nextHasTouchedFiles = Object.prototype.hasOwnProperty.call(nextLinkedWorkflowRun, 'touchedFiles');
+  const previousHasTouchedFiles = Object.prototype.hasOwnProperty.call(previousLinkedWorkflowRun, 'touchedFiles');
+
+  if (
+    !nextHasTouchedFiles
+    && previousHasTouchedFiles
+    && nextLinkedWorkflowRun.workflowRunId === previousLinkedWorkflowRun.workflowRunId
+  ) {
+    return {
+      ...nextLinkedWorkflowRun,
+      touchedFiles: previousLinkedWorkflowRun.touchedFiles,
+    };
+  }
+
+  return nextLinkedWorkflowRun;
+}
+
 function isEffectivePolicySnapshot(value: unknown): value is DashboardWorkItemEffectivePolicySnapshot {
   if (!isRecord(value)) {
     return false;
@@ -282,7 +311,10 @@ function applyUpdatedBoardEvent(
     updatedAt: event.createdAt,
     linkedWorkflowRun:
       'linkedWorkflowRun' in changes
-        ? coerceLinkedWorkflowRun(changes.linkedWorkflowRun, existing.linkedWorkflowRun)
+        ? mergeLinkedWorkflowRun(
+            coerceLinkedWorkflowRun(changes.linkedWorkflowRun, existing.linkedWorkflowRun),
+            existing.linkedWorkflowRun,
+          )
         : existing.linkedWorkflowRun ?? null,
   };
 
@@ -341,7 +373,10 @@ function applyStatusChangedBoardEvent(
     updatedAt: event.createdAt,
     linkedWorkflowRun:
       'linkedWorkflowRun' in payload
-        ? coerceLinkedWorkflowRun(payload.linkedWorkflowRun, existing.linkedWorkflowRun)
+        ? mergeLinkedWorkflowRun(
+            coerceLinkedWorkflowRun(payload.linkedWorkflowRun, existing.linkedWorkflowRun),
+            existing.linkedWorkflowRun,
+          )
         : existing.linkedWorkflowRun ?? null,
   };
 

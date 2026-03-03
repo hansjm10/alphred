@@ -292,7 +292,7 @@ describe('RepositoryBoardPageContent', () => {
     expect(await screen.findByText(/Replanning requested for "Plan mismatch task"/)).toBeInTheDocument();
   });
 
-  it('keeps plan-vs-actual and replanning visible when linked-run updates omit touchedFiles', async () => {
+  it('keeps existing touched files when linked-run updates omit touchedFiles', async () => {
     const user = userEvent.setup();
 
     render(
@@ -346,16 +346,57 @@ describe('RepositoryBoardPageContent', () => {
     });
 
     expect(screen.queryByText('No plan-vs-actual diff available yet.')).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Request replanning for mismatch' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Request replanning' })).toBeInTheDocument();
 
     const touchedFilesSection = screen.getByText('Touched files').closest('div');
     expect(touchedFilesSection).not.toBeNull();
-    expect(within(touchedFilesSection ?? document.body).getByText('None')).toBeInTheDocument();
+    expect(within(touchedFilesSection ?? document.body).getByText('src/a.ts')).toBeInTheDocument();
     expect(
       within(touchedFilesSection ?? document.body).queryByText(
         'Touched files are unavailable because the linked run worktree is unavailable.',
       ),
     ).not.toBeInTheDocument();
+  });
+
+  it('hides plan-vs-actual comparison and replanning when touched files are unavailable', async () => {
+    const user = userEvent.setup();
+
+    render(
+      <RepositoryBoardPageContent
+        repository={createRepository({ id: 1, name: 'demo-repo' })}
+        actor={{ actorType: 'human', actorLabel: 'octocat' }}
+        initialLatestEventId={0}
+        initialWorkItems={[
+          createWorkItem({
+            id: 10,
+            type: 'task',
+            status: 'InProgress',
+            title: 'Unavailable touched files',
+            plannedFiles: ['src/a.ts'],
+            linkedWorkflowRun: {
+              workflowRunId: 42,
+              runStatus: 'running',
+              linkedAt: '2026-03-03T00:00:00.000Z',
+            },
+          }),
+        ]}
+      />,
+    );
+
+    await user.click(screen.getByRole('button', { name: /Unavailable touched files/ }));
+
+    const touchedFilesSection = screen.getByText('Touched files').closest('div');
+    expect(touchedFilesSection).not.toBeNull();
+    expect(
+      within(touchedFilesSection ?? document.body).getByText(
+        'Touched files are unavailable because the linked run worktree is unavailable.',
+      ),
+    ).toBeInTheDocument();
+
+    const planVsActualSection = screen.getByText('Plan vs actual').closest('div');
+    expect(planVsActualSection).not.toBeNull();
+    expect(within(planVsActualSection ?? document.body).getByText('No plan-vs-actual diff available yet.')).toBeInTheDocument();
+    expect(within(planVsActualSection ?? document.body).queryByRole('button', { name: /Request replanning/ })).not.toBeInTheDocument();
   });
 
   it('shows effective policy details for tasks and supports inspecting epic policy from parent chain', async () => {

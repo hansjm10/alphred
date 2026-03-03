@@ -154,17 +154,41 @@ describe('applyBoardEventToWorkItems', () => {
       touchedFiles: ['src/a.ts'],
     });
 
-    const breakdownProposed = applyBoardEventToWorkItems(
+    const statusChangedWithoutTouchedFiles = applyBoardEventToWorkItems(
       statusChanged,
       1,
       createEvent({
         workItemId: 10,
+        eventType: 'status_changed',
+        payload: {
+          toStatus: 'InReview',
+          revision: 4,
+          linkedWorkflowRun: {
+            workflowRunId: 88,
+            runStatus: 'running',
+            linkedAt: '2026-03-03T00:01:00.000Z',
+          },
+        },
+      }),
+    );
+    expect(statusChangedWithoutTouchedFiles[10]?.linkedWorkflowRun).toEqual({
+      workflowRunId: 88,
+      runStatus: 'running',
+      linkedAt: '2026-03-03T00:01:00.000Z',
+      touchedFiles: ['src/a.ts'],
+    });
+
+    const breakdownProposed = applyBoardEventToWorkItems(
+      statusChangedWithoutTouchedFiles,
+      1,
+      createEvent({
+        workItemId: 10,
         eventType: 'breakdown_proposed',
-        payload: { toStatus: 'BreakdownProposed', revision: 4 },
+        payload: { toStatus: 'BreakdownProposed', revision: 5 },
       }),
     );
     expect(breakdownProposed[10]?.status).toBe('BreakdownProposed');
-    expect(breakdownProposed[10]?.revision).toBe(4);
+    expect(breakdownProposed[10]?.revision).toBe(5);
 
     const reparented = applyBoardEventToWorkItems(
       breakdownProposed,
@@ -172,11 +196,11 @@ describe('applyBoardEventToWorkItems', () => {
       createEvent({
         workItemId: 10,
         eventType: 'reparented',
-        payload: { toParentId: 200, revision: 5, effectivePolicy: reparentedPolicy },
+        payload: { toParentId: 200, revision: 6, effectivePolicy: reparentedPolicy },
       }),
     );
     expect(reparented[10]?.parentId).toBe(200);
-    expect(reparented[10]?.revision).toBe(5);
+    expect(reparented[10]?.revision).toBe(6);
     expect(reparented[10]?.effectivePolicy).toEqual(reparentedPolicy);
 
     const ignored = applyBoardEventToWorkItems(
@@ -186,7 +210,7 @@ describe('applyBoardEventToWorkItems', () => {
         repositoryId: 1,
         workItemId: 10,
         eventType: 'status_changed',
-        payload: { toStatus: 'Cancelled', revision: 4 },
+        payload: { toStatus: 'Cancelled', revision: 5 },
       }),
     );
     expect(ignored[10]?.status).toBe('BreakdownProposed');

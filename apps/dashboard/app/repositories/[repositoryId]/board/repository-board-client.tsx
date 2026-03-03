@@ -599,9 +599,12 @@ export function RepositoryBoardPageContent({
     const detailTypeLabel = selectedWorkItem.type.charAt(0).toUpperCase() + selectedWorkItem.type.slice(1);
     const effectivePolicy = selectedWorkItem.effectivePolicy ?? null;
     const touchedFiles = linkedWorkflowRun?.touchedFiles;
-    const planVsActual = resolvePlanVsActualDelta(selectedWorkItem.plannedFiles, touchedFiles);
+    const hasTouchedFiles = touchedFiles !== null && touchedFiles !== undefined;
+    const canComparePlanVsActual = linkedWorkflowRun !== null && hasTouchedFiles;
+    const planVsActual = canComparePlanVsActual
+      ? resolvePlanVsActualDelta(selectedWorkItem.plannedFiles, touchedFiles)
+      : { plannedButUntouched: [], touchedButUnplanned: [] };
     const hasMismatch = planVsActual.plannedButUntouched.length > 0 || planVsActual.touchedButUnplanned.length > 0;
-    const canComparePlanVsActual = linkedWorkflowRun !== null;
     const requestingReplan = replanningWorkItemIds.has(selectedWorkItem.id);
 
     return (
@@ -713,10 +716,10 @@ export function RepositoryBoardPageContent({
             <h5>Touched files</h5>
             {linkedWorkflowRun === null ? (
               <p className="meta-text">Link a run to compare actual file touches.</p>
-            ) : touchedFiles === null ? (
+            ) : !hasTouchedFiles ? (
               <p className="meta-text">Touched files are unavailable because the linked run worktree is unavailable.</p>
             ) : (
-              renderStringList(touchedFiles ?? null)
+              renderStringList(touchedFiles)
             )}
           </div>
 
