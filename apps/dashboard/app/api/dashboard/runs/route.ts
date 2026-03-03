@@ -1,8 +1,8 @@
 import { NextResponse } from 'next/server';
-import { DashboardIntegrationError } from '../../../../src/server/dashboard-errors';
-import { toErrorResponse } from '../../../../src/server/dashboard-http';
-import { createDashboardService } from '../../../../src/server/dashboard-service';
-import type { DashboardRunLaunchRequest } from '../../../../src/server/dashboard-contracts';
+import { DashboardIntegrationError } from '@dashboard/server/dashboard-errors';
+import { toErrorResponse } from '@dashboard/server/dashboard-http';
+import { createDashboardService } from '@dashboard/server/dashboard-service';
+import type { DashboardRunLaunchRequest } from '@dashboard/server/dashboard-contracts';
 
 function throwInvalidRequest(message: string): never {
   throw new DashboardIntegrationError('invalid_request', message, {

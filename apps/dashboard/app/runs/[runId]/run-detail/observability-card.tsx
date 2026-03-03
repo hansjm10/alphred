@@ -1,5 +1,5 @@
 import { Card } from '../../../ui/primitives';
-import type { DashboardRunDetail } from '../../../../src/server/dashboard-contracts';
+import type { DashboardRunDetail } from '@dashboard/server/dashboard-contracts';
 import { ExpandablePreview } from './expandable-preview';
 import { partitionByRecency } from './timeline';
 import { RUN_OBSERVABILITY_RECENT_ENTRY_COUNT } from './types';

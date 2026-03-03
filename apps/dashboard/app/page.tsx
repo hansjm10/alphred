@@ -1,5 +1,5 @@
 import Link from 'next/link';
-import type { DashboardRunSummary } from '../src/server/dashboard-contracts';
+import type { DashboardRunSummary } from '@dashboard/server/dashboard-contracts';
 import { loadDashboardRunSummaries } from './runs/load-dashboard-runs';
 import { isActiveRunStatus, sortRunsForDashboard } from './runs/run-summary-utils';
 import { AuthRemediation } from './ui/auth-remediation';

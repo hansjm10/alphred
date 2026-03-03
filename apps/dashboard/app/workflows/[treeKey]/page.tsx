@@ -1,6 +1,6 @@
 import { notFound } from 'next/navigation';
-import { createDashboardService } from '../../../src/server/dashboard-service';
-import { DashboardIntegrationError } from '../../../src/server/dashboard-errors';
+import { createDashboardService } from '@dashboard/server/dashboard-service';
+import { DashboardIntegrationError } from '@dashboard/server/dashboard-errors';
 import { ButtonLink, Card, Panel } from '../../ui/primitives';
 import { WorkflowFanoutSettingsPanel, WorkflowJsonPanel } from '../workflow-snapshot-panels';
 

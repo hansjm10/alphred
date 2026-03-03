@@ -1,7 +1,7 @@
 'use client';
 
 import { useMemo, useState, type DragEvent } from 'react';
-import type { DashboardWorkflowDraftNode } from '../../../../src/server/dashboard-contracts';
+import type { DashboardWorkflowDraftNode } from '@dashboard/server/dashboard-contracts';
 import { ActionButton, Card } from '../../../ui/primitives';
 
 function setDragPayload(event: DragEvent<HTMLButtonElement>, nodeType: DashboardWorkflowDraftNode['nodeType']) {

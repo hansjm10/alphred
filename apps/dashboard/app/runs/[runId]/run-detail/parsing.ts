@@ -4,7 +4,7 @@ import type {
   DashboardRunDetail,
   DashboardRunNodeStreamSnapshot,
   DashboardRunSummary,
-} from '../../../../src/server/dashboard-contracts';
+} from '@dashboard/server/dashboard-contracts';
 import { RUN_CONTROL_ACTIONS, RUN_CONTROL_OUTCOMES, RUN_STATUSES, type ErrorEnvelope } from './types';
 import {
   hasRunNodeStreamSnapshotShape,

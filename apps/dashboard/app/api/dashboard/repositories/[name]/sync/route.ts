@@ -2,10 +2,10 @@ import { NextResponse } from 'next/server';
 import type {
   DashboardRepositorySyncRequest,
   DashboardRepositorySyncStrategy,
-} from '../../../../../../src/server/dashboard-contracts';
-import { DashboardIntegrationError } from '../../../../../../src/server/dashboard-errors';
-import { toErrorResponse } from '../../../../../../src/server/dashboard-http';
-import { createDashboardService } from '../../../../../../src/server/dashboard-service';
+} from '@dashboard/server/dashboard-contracts';
+import { DashboardIntegrationError } from '@dashboard/server/dashboard-errors';
+import { toErrorResponse } from '@dashboard/server/dashboard-http';
+import { createDashboardService } from '@dashboard/server/dashboard-service';
 
 type RouteContext = {
   params: Promise<{

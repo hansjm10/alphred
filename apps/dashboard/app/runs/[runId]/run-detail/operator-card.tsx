@@ -1,5 +1,5 @@
 import { ActionButton, ButtonLink, Card, StatusBadge } from '../../../ui/primitives';
-import type { DashboardRunControlAction, DashboardRunDetail } from '../../../../src/server/dashboard-contracts';
+import type { DashboardRunControlAction, DashboardRunDetail } from '@dashboard/server/dashboard-contracts';
 import { resolveActionButtonLabel, triggerRunControlAction } from './actions';
 import { formatLastUpdated, formatTimelineTime } from './formatting';
 import type { OperatorActionState, RealtimeChannelState, TimelineItem } from './types';

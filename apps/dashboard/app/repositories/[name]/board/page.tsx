@@ -1,4 +1,4 @@
-import { createDashboardService } from '../../../../src/server/dashboard-service';
+import { createDashboardService } from '@dashboard/server/dashboard-service';
 import { loadGitHubAuthGate } from '../../../ui/load-github-auth-gate';
 import { notFound } from 'next/navigation';
 import { RepositoryBoardPageContent } from './repository-board-client';

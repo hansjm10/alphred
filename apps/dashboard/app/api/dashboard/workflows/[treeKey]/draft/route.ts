@@ -6,14 +6,14 @@ import {
   type GuardExpression,
   type ProviderExecutionPermissions,
 } from '@alphred/shared';
-import { toErrorResponse } from '../../../../../../src/server/dashboard-http';
+import { toErrorResponse } from '@dashboard/server/dashboard-http';
 import type {
   DashboardSaveWorkflowDraftRequest,
   DashboardWorkflowDraftEdge,
   DashboardWorkflowDraftNode,
-} from '../../../../../../src/server/dashboard-contracts';
-import { DashboardIntegrationError } from '../../../../../../src/server/dashboard-errors';
-import { createDashboardService } from '../../../../../../src/server/dashboard-service';
+} from '@dashboard/server/dashboard-contracts';
+import { DashboardIntegrationError } from '@dashboard/server/dashboard-errors';
+import { createDashboardService } from '@dashboard/server/dashboard-service';
 import { isRecord, optionalStringField, parsePositiveIntegerQueryParam, requireRecord } from '../../_shared/validation';
 
 type RouteContext = {

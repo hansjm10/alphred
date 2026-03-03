@@ -3,8 +3,8 @@ import type {
   DashboardRunDetail,
   DashboardRunSummary,
   DashboardWorkflowTreeSummary,
-} from '../../src/server/dashboard-contracts';
-import { createDashboardService } from '../../src/server/dashboard-service';
+} from '@dashboard/server/dashboard-contracts';
+import { createDashboardService } from '@dashboard/server/dashboard-service';
 
 const DEFAULT_RUN_LIST_LIMIT = 50;
 

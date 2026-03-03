@@ -1,6 +1,6 @@
-import { DashboardIntegrationError } from '../../../../../src/server/dashboard-errors';
-import { toErrorResponse } from '../../../../../src/server/dashboard-http';
-import { createDashboardService, type DashboardService } from '../../../../../src/server/dashboard-service';
+import { DashboardIntegrationError } from '@dashboard/server/dashboard-errors';
+import { toErrorResponse } from '@dashboard/server/dashboard-http';
+import { createDashboardService, type DashboardService } from '@dashboard/server/dashboard-service';
 
 export type RunIdRouteContext = {
   params: Promise<{

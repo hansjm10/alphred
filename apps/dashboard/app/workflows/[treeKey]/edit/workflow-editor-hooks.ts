@@ -4,7 +4,7 @@ import type {
   DashboardSaveWorkflowDraftRequest,
   DashboardWorkflowDraftEdge,
   DashboardWorkflowDraftNode,
-} from '../../../../src/server/dashboard-contracts';
+} from '@dashboard/server/dashboard-contracts';
 import { resolveApiError } from '../../workflows-shared';
 
 export type SaveState = 'draft' | 'saving' | 'saved' | 'error';

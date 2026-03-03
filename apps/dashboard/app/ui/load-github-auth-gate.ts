@@ -1,5 +1,5 @@
 import { cache } from 'react';
-import { createDashboardService } from '../../src/server/dashboard-service';
+import { createDashboardService } from '@dashboard/server/dashboard-service';
 import { createGitHubAuthErrorGate, createGitHubAuthGate, type GitHubAuthGate } from './github-auth';
 
 function logAuthGateLoadFailure(error: unknown): void {

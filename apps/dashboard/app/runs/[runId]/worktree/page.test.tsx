@@ -2,8 +2,8 @@
 
 import { render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { DashboardRunDetail } from '../../../../src/server/dashboard-contracts';
-import { DashboardIntegrationError } from '../../../../src/server/dashboard-errors';
+import type { DashboardRunDetail } from '@dashboard/server/dashboard-contracts';
+import { DashboardIntegrationError } from '@dashboard/server/dashboard-errors';
 import type { PersistedRunWorktreeExplorer } from './load-persisted-worktree-explorer';
 
 const {

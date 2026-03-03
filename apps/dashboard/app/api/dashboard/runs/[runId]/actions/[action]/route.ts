@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
-import type { DashboardRunControlAction } from '../../../../../../../src/server/dashboard-contracts';
-import { DashboardIntegrationError } from '../../../../../../../src/server/dashboard-errors';
+import type { DashboardRunControlAction } from '@dashboard/server/dashboard-contracts';
+import { DashboardIntegrationError } from '@dashboard/server/dashboard-errors';
 import { withRunIdRoute, type RunIdRouteContext } from '../../run-id-route';
 
 type RunActionRouteContext = RunIdRouteContext & {

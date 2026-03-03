@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useRef } from 'react';
-import type { DashboardWorkflowDraftNode } from '../../../../src/server/dashboard-contracts';
+import type { DashboardWorkflowDraftNode } from '@dashboard/server/dashboard-contracts';
 import { ActionButton } from '../../../ui/primitives';
 
 export function WorkflowEditorAddNodeDialog(args: Readonly<{

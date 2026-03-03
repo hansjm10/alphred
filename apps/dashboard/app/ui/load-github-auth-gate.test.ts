@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { DashboardGitHubAuthStatus } from '../../src/server/dashboard-contracts';
+import type { DashboardGitHubAuthStatus } from '@dashboard/server/dashboard-contracts';
 
 async function loadModuleWithAuthCheck(
   checkGitHubAuthImpl: () => Promise<DashboardGitHubAuthStatus>,
@@ -9,7 +9,7 @@ async function loadModuleWithAuthCheck(
 }> {
   const checkGitHubAuth = vi.fn(checkGitHubAuthImpl);
 
-  vi.doMock('../../src/server/dashboard-service', () => ({
+  vi.doMock('@dashboard/server/dashboard-service', () => ({
     createDashboardService: () => ({
       checkGitHubAuth,
     }),

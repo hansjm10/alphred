@@ -2,7 +2,7 @@ import type {
   DashboardRunDetail,
   DashboardRunNodeStreamEvent,
   DashboardRunNodeStreamSnapshot,
-} from '../../../../src/server/dashboard-contracts';
+} from '@dashboard/server/dashboard-contracts';
 import { isActiveRunStatus } from '../../run-summary-utils';
 import {
   AGENT_STREAM_RECONNECT_MAX_MS,

@@ -6,7 +6,7 @@ const { createDashboardServiceMock, listWorkflowRunsMock, launchWorkflowRunMock 
   launchWorkflowRunMock: vi.fn(),
 }));
 
-vi.mock('../../../../src/server/dashboard-service', () => ({
+vi.mock('@dashboard/server/dashboard-service', () => ({
   createDashboardService: createDashboardServiceMock,
 }));
 

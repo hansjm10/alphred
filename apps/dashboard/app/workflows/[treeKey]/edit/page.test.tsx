@@ -4,7 +4,7 @@ import { render, screen } from '@testing-library/react';
 import type { ReactElement } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import WorkflowEditorPage from './page';
-import { DashboardIntegrationError } from '../../../../src/server/dashboard-errors';
+import { DashboardIntegrationError } from '@dashboard/server/dashboard-errors';
 
 const { notFoundMock } = vi.hoisted(() => ({
   notFoundMock: vi.fn(() => {
@@ -23,7 +23,7 @@ vi.mock('next/navigation', () => ({
   notFound: notFoundMock,
 }));
 
-vi.mock('../../../../src/server/dashboard-service', () => ({
+vi.mock('@dashboard/server/dashboard-service', () => ({
   createDashboardService: createDashboardServiceMock,
 }));
 

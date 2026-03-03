@@ -1,4 +1,4 @@
-import { DashboardIntegrationError } from '../../../../../src/server/dashboard-errors';
+import { DashboardIntegrationError } from '@dashboard/server/dashboard-errors';
 
 export function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);

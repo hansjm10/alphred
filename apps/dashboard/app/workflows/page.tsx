@@ -1,4 +1,4 @@
-import type { DashboardWorkflowCatalogItem } from '../../src/server/dashboard-contracts';
+import type { DashboardWorkflowCatalogItem } from '@dashboard/server/dashboard-contracts';
 import { loadDashboardWorkflowCatalog } from './load-dashboard-workflows';
 import { WorkflowsPageContent } from './workflows-client';
 

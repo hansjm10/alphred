@@ -18,7 +18,7 @@ import type {
   DashboardWorkflowDraftNode,
   DashboardWorkflowValidationIssue,
   DashboardWorkflowValidationResult,
-} from '../../../../src/server/dashboard-contracts';
+} from '@dashboard/server/dashboard-contracts';
 import { ActionButton, Panel } from '../../../ui/primitives';
 
 const guardOperators: readonly GuardOperator[] = ['==', '!=', '>', '<', '>=', '<='];

@@ -5,7 +5,7 @@ const { createDashboardServiceMock, getRunWorktreesMock } = vi.hoisted(() => ({
   getRunWorktreesMock: vi.fn(),
 }));
 
-vi.mock('../../../../../../src/server/dashboard-service', () => ({
+vi.mock('@dashboard/server/dashboard-service', () => ({
   createDashboardService: createDashboardServiceMock,
 }));
 

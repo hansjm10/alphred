@@ -6,7 +6,7 @@ import type {
   DashboardRunDetail,
   DashboardRunNodeStreamEvent,
   DashboardRunSummary,
-} from '../../../../src/server/dashboard-contracts';
+} from '@dashboard/server/dashboard-contracts';
 
 export type TimelineCategory = 'lifecycle' | 'node' | 'artifact' | 'diagnostics' | 'routing';
 

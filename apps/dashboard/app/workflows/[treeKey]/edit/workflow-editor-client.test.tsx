@@ -6,7 +6,7 @@ import type {
   DashboardWorkflowDraftEdge,
   DashboardWorkflowDraftNode,
   DashboardWorkflowDraftTopology,
-} from '../../../../src/server/dashboard-contracts';
+} from '@dashboard/server/dashboard-contracts';
 
 const { pushMock } = vi.hoisted(() => ({
   pushMock: vi.fn(),

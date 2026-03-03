@@ -4,7 +4,7 @@ import { render, screen } from '@testing-library/react';
 import type { ReactElement } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import Page, { OverviewPageContent } from './page';
-import type { DashboardRunSummary } from '../src/server/dashboard-contracts';
+import type { DashboardRunSummary } from '@dashboard/server/dashboard-contracts';
 import type { GitHubAuthGate } from './ui/github-auth';
 import { createCheckingGitHubAuthGate, createGitHubAuthErrorGate, createGitHubAuthGate } from './ui/github-auth';
 

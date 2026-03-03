@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
-import { toErrorResponse } from '../../../../../../../src/server/dashboard-http';
-import { DashboardIntegrationError } from '../../../../../../../src/server/dashboard-errors';
-import { createDashboardService } from '../../../../../../../src/server/dashboard-service';
+import { toErrorResponse } from '@dashboard/server/dashboard-http';
+import { DashboardIntegrationError } from '@dashboard/server/dashboard-errors';
+import { createDashboardService } from '@dashboard/server/dashboard-service';
 
 type RouteContext = {
   params: Promise<{

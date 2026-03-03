@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { DashboardIntegrationError } from '../../../../../src/server/dashboard-errors';
+import { DashboardIntegrationError } from '@dashboard/server/dashboard-errors';
 import {
   parseApproveStoryBreakdownRequest,
   parseCreateWorkItemRequest,

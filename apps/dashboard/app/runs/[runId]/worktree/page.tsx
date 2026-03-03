@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react';
 import { notFound } from 'next/navigation';
-import type { DashboardRunDetail } from '../../../../src/server/dashboard-contracts';
-import { DashboardIntegrationError } from '../../../../src/server/dashboard-errors';
+import type { DashboardRunDetail } from '@dashboard/server/dashboard-contracts';
+import { DashboardIntegrationError } from '@dashboard/server/dashboard-errors';
 import { loadDashboardRunDetail } from '../../load-dashboard-runs';
 import { buildRunWorktreeHref, findRunByParam, resolveWorktreePath } from '../../run-route-fixtures';
 import { ButtonLink, Card, Panel } from '../../../ui/primitives';

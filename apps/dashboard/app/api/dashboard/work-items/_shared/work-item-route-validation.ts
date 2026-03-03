@@ -7,8 +7,8 @@ import type {
   DashboardProposeStoryBreakdownRequest,
   DashboardUpdateWorkItemFieldsRequest,
   DashboardWorkItemProposedBreakdownTask,
-} from '../../../../../src/server/dashboard-contracts';
-import { DashboardIntegrationError } from '../../../../../src/server/dashboard-errors';
+} from '@dashboard/server/dashboard-contracts';
+import { DashboardIntegrationError } from '@dashboard/server/dashboard-errors';
 
 const workItemTypeValues = new Set<WorkItemType>(workItemTypes);
 const workItemActorTypeValues = new Set<WorkItemActorType>(['human', 'agent', 'system']);

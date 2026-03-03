@@ -1,6 +1,6 @@
 import type { Node } from '@xyflow/react';
 import { describe, expect, it } from 'vitest';
-import type { DashboardWorkflowDraftEdge, DashboardWorkflowDraftNode } from '../../../../src/server/dashboard-contracts';
+import type { DashboardWorkflowDraftEdge, DashboardWorkflowDraftNode } from '@dashboard/server/dashboard-contracts';
 import { buildReactFlowEdges, createDraftNode, mapNodeFromReactFlow } from './workflow-editor-helpers';
 
 function createDraftNodeData(overrides: Partial<DashboardWorkflowDraftNode> = {}): DashboardWorkflowDraftNode {

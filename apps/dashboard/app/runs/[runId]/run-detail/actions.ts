@@ -4,7 +4,7 @@ import type {
   DashboardRunControlResult,
   DashboardRunDetail,
   DashboardRunSummary,
-} from '../../../../src/server/dashboard-contracts';
+} from '@dashboard/server/dashboard-contracts';
 import type {
   ActionFeedbackState,
   ExecuteRunControlActionParams,
