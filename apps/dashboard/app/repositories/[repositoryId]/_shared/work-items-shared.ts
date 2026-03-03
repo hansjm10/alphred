@@ -1,7 +1,7 @@
 'use client';
 
 import type { WorkItemStatus, WorkItemType } from '@alphred/shared';
-import type { DashboardWorkItemSnapshot } from '@dashboard/server/dashboard-contracts';
+import type { DashboardWorkItemEffectivePolicySnapshot, DashboardWorkItemSnapshot } from '@dashboard/server/dashboard-contracts';
 
 export type WorkItemActor = Readonly<{
   actorType: 'human' | 'agent' | 'system';
@@ -113,6 +113,65 @@ export function coerceNullableNumber(value: unknown, fallback: number | null): n
   return fallback;
 }
 
+function isNullableNumber(value: unknown): value is number | null {
+  return value === null || typeof value === 'number';
+}
+
+function isNullableStringArray(value: unknown): value is string[] | null {
+  return value === null || (Array.isArray(value) && value.every((entry) => typeof entry === 'string'));
+}
+
+function isEffectivePolicySnapshot(value: unknown): value is DashboardWorkItemEffectivePolicySnapshot {
+  if (!isRecord(value)) {
+    return false;
+  }
+
+  if (value.appliesToType !== 'epic' && value.appliesToType !== 'task') {
+    return false;
+  }
+
+  if (!isNullableNumber(value.epicWorkItemId) || !isNullableNumber(value.repositoryPolicyId) || !isNullableNumber(value.epicPolicyId)) {
+    return false;
+  }
+
+  if (!isRecord(value.policy)) {
+    return false;
+  }
+
+  const { policy } = value;
+  if (
+    !isNullableStringArray(policy.allowedProviders) ||
+    !isNullableStringArray(policy.allowedModels) ||
+    !isNullableStringArray(policy.allowedSkillIdentifiers) ||
+    !isNullableStringArray(policy.allowedMcpServerIdentifiers)
+  ) {
+    return false;
+  }
+
+  if (!isRecord(policy.budgets) || !isNullableNumber(policy.budgets.maxConcurrentTasks) || !isNullableNumber(policy.budgets.maxConcurrentRuns)) {
+    return false;
+  }
+
+  if (!isRecord(policy.requiredGates) || typeof policy.requiredGates.breakdownApprovalRequired !== 'boolean') {
+    return false;
+  }
+
+  return true;
+}
+
+function coerceEffectivePolicy(
+  value: unknown,
+  fallback: DashboardWorkItemEffectivePolicySnapshot | null | undefined,
+): DashboardWorkItemEffectivePolicySnapshot | null {
+  if (value === null) {
+    return null;
+  }
+  if (isEffectivePolicySnapshot(value)) {
+    return value;
+  }
+  return fallback ?? null;
+}
+
 function applyCreatedBoardEvent(
   previous: Readonly<Record<number, DashboardWorkItemSnapshot>>,
   event: BoardEventSnapshot,
@@ -139,6 +198,7 @@ function applyCreatedBoardEvent(
     revision: typeof payload.revision === 'number' ? payload.revision : 0,
     createdAt: event.createdAt,
     updatedAt: event.createdAt,
+    effectivePolicy: coerceEffectivePolicy(payload.effectivePolicy, existing?.effectivePolicy),
   };
 
   return {
@@ -202,6 +262,7 @@ function applyReparentedBoardEvent(
     parentId,
     revision: typeof payload.revision === 'number' ? payload.revision : existing.revision,
     updatedAt: event.createdAt,
+    effectivePolicy: coerceEffectivePolicy(payload.effectivePolicy, existing.effectivePolicy),
   };
 
   return { ...previous, [existing.id]: next };

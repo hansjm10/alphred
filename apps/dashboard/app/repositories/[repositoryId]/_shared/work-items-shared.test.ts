@@ -27,6 +27,7 @@ function createWorkItem(overrides: Partial<DashboardWorkItemSnapshot> = {}): Das
     revision: overrides.revision ?? 0,
     createdAt: overrides.createdAt ?? new Date('2026-03-02T00:00:00.000Z').toISOString(),
     updatedAt: overrides.updatedAt ?? new Date('2026-03-02T00:00:00.000Z').toISOString(),
+    effectivePolicy: overrides.effectivePolicy ?? null,
   };
 }
 
@@ -66,7 +67,39 @@ describe('parseBoardEventSnapshot', () => {
 
 describe('applyBoardEventToWorkItems', () => {
   it('applies created/updated/status changes and ignores other repositories', () => {
-    const previous = toWorkItemsById([createWorkItem({ id: 10, repositoryId: 1, title: 'Old', revision: 1 })]);
+    const createdPolicy = {
+      appliesToType: 'task' as const,
+      epicWorkItemId: 101,
+      repositoryPolicyId: 5,
+      epicPolicyId: 9,
+      policy: {
+        allowedProviders: ['codex'],
+        allowedModels: ['gpt-5-codex'],
+        allowedSkillIdentifiers: ['working-on-github-issue'],
+        allowedMcpServerIdentifiers: ['github'],
+        budgets: {
+          maxConcurrentTasks: 3,
+          maxConcurrentRuns: 2,
+        },
+        requiredGates: {
+          breakdownApprovalRequired: false,
+        },
+      },
+    };
+    const reparentedPolicy = {
+      ...createdPolicy,
+      epicWorkItemId: 202,
+      epicPolicyId: 10,
+    };
+    const previous = toWorkItemsById([
+      createWorkItem({
+        id: 10,
+        repositoryId: 1,
+        title: 'Old',
+        revision: 1,
+        effectivePolicy: createdPolicy,
+      }),
+    ]);
 
     const created = applyBoardEventToWorkItems(
       previous,
@@ -74,10 +107,11 @@ describe('applyBoardEventToWorkItems', () => {
       createEvent({
         workItemId: 20,
         eventType: 'created',
-        payload: { type: 'task', status: 'Draft', title: 'Task A', revision: 1 },
+        payload: { type: 'task', status: 'Draft', title: 'Task A', revision: 1, effectivePolicy: createdPolicy },
       }),
     );
     expect(created[20]?.title).toBe('Task A');
+    expect(created[20]?.effectivePolicy).toEqual(createdPolicy);
 
     const updated = applyBoardEventToWorkItems(
       created,
@@ -122,11 +156,12 @@ describe('applyBoardEventToWorkItems', () => {
       createEvent({
         workItemId: 10,
         eventType: 'reparented',
-        payload: { toParentId: 200, revision: 5 },
+        payload: { toParentId: 200, revision: 5, effectivePolicy: reparentedPolicy },
       }),
     );
     expect(reparented[10]?.parentId).toBe(200);
     expect(reparented[10]?.revision).toBe(5);
+    expect(reparented[10]?.effectivePolicy).toEqual(reparentedPolicy);
 
     const ignored = applyBoardEventToWorkItems(
       reparented,
@@ -139,6 +174,59 @@ describe('applyBoardEventToWorkItems', () => {
       }),
     );
     expect(ignored[10]?.status).toBe('BreakdownProposed');
+  });
+
+  it('ignores malformed effectivePolicy payloads for created and reparented events', () => {
+    const validPolicy = {
+      appliesToType: 'task' as const,
+      epicWorkItemId: 101,
+      repositoryPolicyId: 5,
+      epicPolicyId: 9,
+      policy: {
+        allowedProviders: ['codex'],
+        allowedModels: ['gpt-5-codex'],
+        allowedSkillIdentifiers: ['working-on-github-issue'],
+        allowedMcpServerIdentifiers: ['github'],
+        budgets: {
+          maxConcurrentTasks: 3,
+          maxConcurrentRuns: 2,
+        },
+        requiredGates: {
+          breakdownApprovalRequired: false,
+        },
+      },
+    };
+    const previous = toWorkItemsById([
+      createWorkItem({
+        id: 10,
+        repositoryId: 1,
+        title: 'Existing',
+        revision: 1,
+        effectivePolicy: validPolicy,
+      }),
+    ]);
+
+    const malformedCreated = applyBoardEventToWorkItems(
+      previous,
+      1,
+      createEvent({
+        workItemId: 20,
+        eventType: 'created',
+        payload: { type: 'task', status: 'Draft', title: 'Task B', revision: 1, effectivePolicy: {} },
+      }),
+    );
+    expect(malformedCreated[20]?.effectivePolicy).toBeNull();
+
+    const malformedReparented = applyBoardEventToWorkItems(
+      previous,
+      1,
+      createEvent({
+        workItemId: 10,
+        eventType: 'reparented',
+        payload: { toParentId: 200, revision: 2, effectivePolicy: {} },
+      }),
+    );
+    expect(malformedReparented[10]?.effectivePolicy).toEqual(validPolicy);
   });
 });
 

@@ -489,6 +489,28 @@ export type DashboardRepositoryBoardBootstrapResult = {
   workItems: DashboardWorkItemSnapshot[];
 };
 
+export type DashboardWorkItemPolicySnapshot = {
+  allowedProviders: string[] | null;
+  allowedModels: string[] | null;
+  allowedSkillIdentifiers: string[] | null;
+  allowedMcpServerIdentifiers: string[] | null;
+  budgets: {
+    maxConcurrentTasks: number | null;
+    maxConcurrentRuns: number | null;
+  };
+  requiredGates: {
+    breakdownApprovalRequired: boolean;
+  };
+};
+
+export type DashboardWorkItemEffectivePolicySnapshot = {
+  appliesToType: 'epic' | 'task';
+  epicWorkItemId: number | null;
+  repositoryPolicyId: number | null;
+  epicPolicyId: number | null;
+  policy: DashboardWorkItemPolicySnapshot;
+};
+
 export type DashboardWorkItemSnapshot = {
   id: number;
   repositoryId: number;
@@ -505,6 +527,7 @@ export type DashboardWorkItemSnapshot = {
   revision: number;
   createdAt: string;
   updatedAt: string;
+  effectivePolicy?: DashboardWorkItemEffectivePolicySnapshot | null;
 };
 
 export type DashboardListWorkItemsResult = {

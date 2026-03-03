@@ -108,6 +108,7 @@ function createWorkItem(overrides: Partial<DashboardWorkItemSnapshot> = {}): Das
     revision: overrides.revision ?? 0,
     createdAt: overrides.createdAt ?? new Date('2026-03-02T00:00:00.000Z').toISOString(),
     updatedAt: overrides.updatedAt ?? new Date('2026-03-02T00:00:00.000Z').toISOString(),
+    effectivePolicy: overrides.effectivePolicy ?? null,
   };
 }
 
@@ -197,6 +198,127 @@ describe('RepositoryBoardPageContent', () => {
     expect(screen.getByText('apps/dashboard/app/repositories/[repositoryId]/board/page.tsx')).toBeInTheDocument();
     expect(screen.getByText('Assignees')).toBeInTheDocument();
     expect(screen.getByText('octocat')).toBeInTheDocument();
+  });
+
+  it('shows effective policy details for tasks and supports inspecting epic policy from parent chain', async () => {
+    const user = userEvent.setup();
+
+    render(
+      <RepositoryBoardPageContent
+        repository={createRepository({ id: 1, name: 'demo-repo' })}
+        actor={{ actorType: 'human', actorLabel: 'octocat' }}
+        initialLatestEventId={0}
+        initialWorkItems={[
+          createWorkItem({
+            id: 1,
+            type: 'epic',
+            title: 'Epic policy',
+            effectivePolicy: {
+              appliesToType: 'epic',
+              epicWorkItemId: 1,
+              repositoryPolicyId: 5,
+              epicPolicyId: 6,
+              policy: {
+                allowedProviders: ['codex'],
+                allowedModels: ['codex-pro'],
+                allowedSkillIdentifiers: ['working-on-github-issue'],
+                allowedMcpServerIdentifiers: ['github'],
+                budgets: {
+                  maxConcurrentTasks: 2,
+                  maxConcurrentRuns: 1,
+                },
+                requiredGates: {
+                  breakdownApprovalRequired: false,
+                },
+              },
+            },
+          }),
+          createWorkItem({ id: 2, type: 'story', title: 'Story', parentId: 1 }),
+          createWorkItem({
+            id: 3,
+            type: 'task',
+            status: 'Ready',
+            title: 'Task with policy',
+            parentId: 2,
+            effectivePolicy: {
+              appliesToType: 'task',
+              epicWorkItemId: 1,
+              repositoryPolicyId: 5,
+              epicPolicyId: 6,
+              policy: {
+                allowedProviders: ['codex'],
+                allowedModels: ['codex-pro'],
+                allowedSkillIdentifiers: ['working-on-github-issue'],
+                allowedMcpServerIdentifiers: ['github'],
+                budgets: {
+                  maxConcurrentTasks: 2,
+                  maxConcurrentRuns: 1,
+                },
+                requiredGates: {
+                  breakdownApprovalRequired: false,
+                },
+              },
+            },
+          }),
+        ]}
+      />,
+    );
+
+    await user.click(screen.getByRole('button', { name: /Task with policy/ }));
+    expect(screen.getByText('Effective policy')).toBeInTheDocument();
+    expect(screen.getByText('Allowed providers')).toBeInTheDocument();
+    expect(screen.getByText('codex')).toBeInTheDocument();
+    expect(screen.getByText('Breakdown approval required: No')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Epic policy' }));
+    expect(screen.getByRole('dialog', { name: 'Epic policy' })).toBeInTheDocument();
+    expect(screen.getByText('Repo policy #5 · Epic policy #6')).toBeInTheDocument();
+  });
+
+  it('renders effective policy fallback values when ids and budgets are unset', async () => {
+    const user = userEvent.setup();
+
+    render(
+      <RepositoryBoardPageContent
+        repository={createRepository({ id: 1, name: 'demo-repo' })}
+        actor={{ actorType: 'human', actorLabel: 'octocat' }}
+        initialLatestEventId={0}
+        initialWorkItems={[
+          createWorkItem({
+            id: 10,
+            type: 'task',
+            status: 'Ready',
+            title: 'Task with fallback policy',
+            effectivePolicy: {
+              appliesToType: 'task',
+              epicWorkItemId: null,
+              repositoryPolicyId: null,
+              epicPolicyId: null,
+              policy: {
+                allowedProviders: ['codex'],
+                allowedModels: ['codex-pro'],
+                allowedSkillIdentifiers: ['working-on-github-issue'],
+                allowedMcpServerIdentifiers: ['github'],
+                budgets: {
+                  maxConcurrentTasks: null,
+                  maxConcurrentRuns: null,
+                },
+                requiredGates: {
+                  breakdownApprovalRequired: true,
+                },
+              },
+            },
+          }),
+        ]}
+      />,
+    );
+
+    await user.click(screen.getByRole('button', { name: /Task with fallback policy/ }));
+
+    expect(screen.getByText('Repo policy #none · Epic policy #none')).toBeInTheDocument();
+    expect(screen.getByText('Max concurrent tasks: Unlimited')).toBeInTheDocument();
+    expect(screen.getByText('Max concurrent runs: Unlimited')).toBeInTheDocument();
+    expect(screen.getByText('Breakdown approval required: Yes')).toBeInTheDocument();
   });
 
   it('moves a task via the move API and updates the UI', async () => {
@@ -334,6 +456,25 @@ describe('RepositoryBoardPageContent', () => {
           plannedFiles: ['apps/dashboard/app/repositories/[repositoryId]/board/page.tsx'],
           assignees: ['octocat'],
           revision: 1,
+          effectivePolicy: {
+            appliesToType: 'task',
+            epicWorkItemId: 101,
+            repositoryPolicyId: 11,
+            epicPolicyId: 21,
+            policy: {
+              allowedProviders: ['codex'],
+              allowedModels: ['gpt-5-codex'],
+              allowedSkillIdentifiers: ['working-on-github-issue'],
+              allowedMcpServerIdentifiers: ['github'],
+              budgets: {
+                maxConcurrentTasks: 2,
+                maxConcurrentRuns: 1,
+              },
+              requiredGates: {
+                breakdownApprovalRequired: false,
+              },
+            },
+          },
         },
         createdAt: new Date('2026-03-02T02:00:00.000Z').toISOString(),
       });
@@ -345,6 +486,7 @@ describe('RepositoryBoardPageContent', () => {
     expect(screen.getByRole('dialog', { name: 'New task' })).toBeInTheDocument();
     expect(screen.getByText('apps/dashboard/app/repositories/[repositoryId]/board/page.tsx')).toBeInTheDocument();
     expect(screen.getByText('octocat')).toBeInTheDocument();
+    expect(screen.getByText('Repo policy #11 · Epic policy #21')).toBeInTheDocument();
   });
 
   it('applies board_event updated updates to UI state (updated merges supported fields)', async () => {
@@ -430,7 +572,33 @@ describe('RepositoryBoardPageContent', () => {
         initialWorkItems={[
           createWorkItem({ id: 1, type: 'epic', title: 'Epic parent' }),
           createWorkItem({ id: 2, type: 'story', title: 'Story parent', parentId: 1 }),
-          createWorkItem({ id: 10, type: 'task', status: 'Draft', title: 'Write tests', parentId: 2, revision: 0 }),
+          createWorkItem({
+            id: 10,
+            type: 'task',
+            status: 'Draft',
+            title: 'Write tests',
+            parentId: 2,
+            revision: 0,
+            effectivePolicy: {
+              appliesToType: 'task',
+              epicWorkItemId: 1,
+              repositoryPolicyId: 7,
+              epicPolicyId: 13,
+              policy: {
+                allowedProviders: ['codex'],
+                allowedModels: ['gpt-5-codex'],
+                allowedSkillIdentifiers: ['working-on-github-issue'],
+                allowedMcpServerIdentifiers: ['github'],
+                budgets: {
+                  maxConcurrentTasks: 2,
+                  maxConcurrentRuns: 1,
+                },
+                requiredGates: {
+                  breakdownApprovalRequired: false,
+                },
+              },
+            },
+          }),
         ]}
       />,
     );
@@ -440,6 +608,7 @@ describe('RepositoryBoardPageContent', () => {
 
     await user.click(screen.getByRole('button', { name: /Write tests/ }));
     expect(screen.getByText('Story parent')).toBeInTheDocument();
+    expect(screen.getByText('Repo policy #7 · Epic policy #13')).toBeInTheDocument();
 
     act(() => {
       MockEventSource.instances[0]?.emit('board_event', {
@@ -447,13 +616,37 @@ describe('RepositoryBoardPageContent', () => {
         repositoryId: 1,
         workItemId: 10,
         eventType: 'reparented',
-        payload: { toParentId: 1, revision: 1 },
+        payload: {
+          toParentId: 1,
+          revision: 1,
+          effectivePolicy: {
+            appliesToType: 'task',
+            epicWorkItemId: 1,
+            repositoryPolicyId: 7,
+            epicPolicyId: 22,
+            policy: {
+              allowedProviders: ['codex'],
+              allowedModels: ['gpt-5-codex'],
+              allowedSkillIdentifiers: ['working-on-github-issue'],
+              allowedMcpServerIdentifiers: ['github'],
+              budgets: {
+                maxConcurrentTasks: 4,
+                maxConcurrentRuns: 2,
+              },
+              requiredGates: {
+                breakdownApprovalRequired: true,
+              },
+            },
+          },
+        },
         createdAt: new Date('2026-03-02T02:10:00.000Z').toISOString(),
       });
     });
 
     expect(screen.queryByText('Story parent')).not.toBeInTheDocument();
     expect(screen.getByText('Epic parent')).toBeInTheDocument();
+    expect(screen.queryByText('Repo policy #7 · Epic policy #13')).not.toBeInTheDocument();
+    expect(screen.getByText('Repo policy #7 · Epic policy #22')).toBeInTheDocument();
   });
 
   it('ignores malformed board_event payloads without mutating UI state', () => {
@@ -551,7 +744,7 @@ describe('RepositoryBoardPageContent', () => {
     await user.click(screen.getByRole('button', { name: /Write tests/ }));
     const dialog = screen.getByRole('dialog', { name: 'Write tests' });
 
-    const closeButtons = screen.getAllByRole('button', { name: 'Close task details' });
+    const closeButtons = screen.getAllByRole('button', { name: 'Close work item details' });
     const backdropButton = closeButtons.find(button => !dialog.contains(button));
     expect(backdropButton).toBeDefined();
     await user.click(backdropButton!);
