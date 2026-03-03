@@ -306,6 +306,26 @@ export function migrateDatabase(db: AlphredDatabase): void {
   tx.run(sql`CREATE INDEX IF NOT EXISTS workflow_runs_created_at_idx
     ON workflow_runs(created_at)`);
 
+  tx.run(sql`CREATE TABLE IF NOT EXISTS work_item_workflow_runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    repository_id INTEGER NOT NULL REFERENCES repositories(id) ON DELETE RESTRICT,
+    work_item_id INTEGER NOT NULL REFERENCES work_items(id) ON DELETE CASCADE,
+    workflow_run_id INTEGER NOT NULL REFERENCES workflow_runs(id) ON DELETE CASCADE,
+    linked_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    CONSTRAINT work_item_workflow_runs_repository_id_work_item_id_fk
+      FOREIGN KEY (repository_id, work_item_id)
+      REFERENCES work_items(repository_id, id)
+      ON DELETE CASCADE
+  )`);
+  tx.run(sql`CREATE UNIQUE INDEX IF NOT EXISTS work_item_workflow_runs_work_item_id_workflow_run_id_uq
+    ON work_item_workflow_runs(work_item_id, workflow_run_id)`);
+  tx.run(sql`CREATE INDEX IF NOT EXISTS work_item_workflow_runs_repository_id_work_item_linked_at_idx
+    ON work_item_workflow_runs(repository_id, work_item_id, linked_at)`);
+  tx.run(sql`CREATE INDEX IF NOT EXISTS work_item_workflow_runs_workflow_run_id_idx
+    ON work_item_workflow_runs(workflow_run_id)`);
+  tx.run(sql`CREATE INDEX IF NOT EXISTS work_item_workflow_runs_linked_at_idx
+    ON work_item_workflow_runs(linked_at)`);
+
   tx.run(sql`CREATE TABLE IF NOT EXISTS run_worktrees (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     workflow_run_id INTEGER NOT NULL REFERENCES workflow_runs(id) ON DELETE CASCADE,

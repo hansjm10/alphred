@@ -7,7 +7,9 @@ import {
 } from '@alphred/core';
 import {
   createDatabase,
+  eq,
   migrateDatabase,
+  repositories as repositoriesTable,
   type AlphredDatabase,
 } from '@alphred/db';
 import {
@@ -21,7 +23,7 @@ import type {
   AuthStatus,
 } from '@alphred/shared';
 import { createBackgroundExecutionManager } from './background-execution';
-import { toDashboardIntegrationError } from './dashboard-errors';
+import { DashboardIntegrationError, toDashboardIntegrationError } from './dashboard-errors';
 import { createRepositoryOperations } from './repository-operations';
 import { createRunOperations } from './run-operations';
 import { resolveDatabasePath } from './dashboard-utils';
@@ -138,11 +140,88 @@ export function createDashboardService(options: {
     backgroundExecution,
   });
 
+  const taskRunAutolaunchEnabled = environment.ALPHRED_DASHBOARD_TASK_RUN_AUTOLAUNCH === '1';
+  const configuredTaskRunTreeKey = (environment.ALPHRED_DASHBOARD_TASK_RUN_TREE_KEY ?? 'design-implement-review').trim();
+  const taskRunTreeKey = configuredTaskRunTreeKey.length > 0 ? configuredTaskRunTreeKey : 'design-implement-review';
+
+  async function resolveRepositoryNameById(repositoryId: number): Promise<string> {
+    return withDatabase(db => {
+      const repository = db
+        .select({
+          name: repositoriesTable.name,
+        })
+        .from(repositoriesTable)
+        .where(eq(repositoriesTable.id, repositoryId))
+        .get();
+      if (!repository) {
+        throw new DashboardIntegrationError('not_found', `Repository id=${repositoryId} was not found.`, {
+          status: 404,
+        });
+      }
+      return repository.name;
+    });
+  }
+
+  async function moveWorkItemStatusWithTaskRunOrchestration(
+    request: Parameters<typeof workItemOperations.moveWorkItemStatus>[0],
+  ): Promise<Awaited<ReturnType<typeof workItemOperations.moveWorkItemStatus>>> {
+    const shouldAttemptTaskRunAutolaunch =
+      taskRunAutolaunchEnabled && request.toStatus === 'InProgress' && request.linkedWorkflowRunId === undefined;
+    if (!shouldAttemptTaskRunAutolaunch) {
+      return workItemOperations.moveWorkItemStatus(request);
+    }
+
+    const existing = await workItemOperations.getWorkItem({
+      repositoryId: request.repositoryId,
+      workItemId: request.workItemId,
+    });
+    if (
+      existing.workItem.type !== 'task'
+      || existing.workItem.status !== 'Ready'
+      || existing.workItem.revision !== request.expectedRevision
+    ) {
+      return workItemOperations.moveWorkItemStatus(request);
+    }
+
+    const repositoryName = await resolveRepositoryNameById(request.repositoryId);
+    const policyConstraints =
+      existing.workItem.effectivePolicy?.policy === undefined
+        ? undefined
+        : {
+            allowedProviders: existing.workItem.effectivePolicy.policy.allowedProviders,
+            allowedModels: existing.workItem.effectivePolicy.policy.allowedModels,
+            allowedSkillIdentifiers: existing.workItem.effectivePolicy.policy.allowedSkillIdentifiers,
+            allowedMcpServerIdentifiers: existing.workItem.effectivePolicy.policy.allowedMcpServerIdentifiers,
+          };
+
+    const launchedRun = await runOperations.launchWorkflowRun({
+      treeKey: taskRunTreeKey,
+      repositoryName,
+      executionMode: 'async',
+      policyConstraints,
+    });
+
+    try {
+      return await workItemOperations.moveWorkItemStatus({
+        ...request,
+        linkedWorkflowRunId: launchedRun.workflowRunId,
+      });
+    } catch (error) {
+      try {
+        await runOperations.controlWorkflowRun(launchedRun.workflowRunId, 'cancel');
+      } catch {
+        // Best-effort cleanup if move fails after launching.
+      }
+      throw error;
+    }
+  }
+
   return {
     ...workflowOperations,
     ...workflowDraftOperations,
     ...repositoryOperations,
     ...workItemOperations,
+    moveWorkItemStatus: moveWorkItemStatusWithTaskRunOrchestration,
     ...runOperations,
   };
 }

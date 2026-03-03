@@ -109,6 +109,7 @@ function createWorkItem(overrides: Partial<DashboardWorkItemSnapshot> = {}): Das
     createdAt: overrides.createdAt ?? new Date('2026-03-02T00:00:00.000Z').toISOString(),
     updatedAt: overrides.updatedAt ?? new Date('2026-03-02T00:00:00.000Z').toISOString(),
     effectivePolicy: overrides.effectivePolicy ?? null,
+    linkedWorkflowRun: overrides.linkedWorkflowRun ?? null,
   };
 }
 
@@ -198,6 +199,37 @@ describe('RepositoryBoardPageContent', () => {
     expect(screen.getByText('apps/dashboard/app/repositories/[repositoryId]/board/page.tsx')).toBeInTheDocument();
     expect(screen.getByText('Assignees')).toBeInTheDocument();
     expect(screen.getByText('octocat')).toBeInTheDocument();
+    expect(screen.getByText('Linked run')).toBeInTheDocument();
+  });
+
+  it('shows linked run metadata in task details when available', async () => {
+    const user = userEvent.setup();
+
+    render(
+      <RepositoryBoardPageContent
+        repository={createRepository({ id: 1, name: 'demo-repo' })}
+        actor={{ actorType: 'human', actorLabel: 'octocat' }}
+        initialLatestEventId={0}
+        initialWorkItems={[
+          createWorkItem({
+            id: 10,
+            type: 'task',
+            status: 'InProgress',
+            title: 'Linked task',
+            linkedWorkflowRun: {
+              workflowRunId: 42,
+              runStatus: 'running',
+              linkedAt: '2026-03-03T00:00:00.000Z',
+            },
+          }),
+        ]}
+      />,
+    );
+
+    await user.click(screen.getByRole('button', { name: /Linked task/ }));
+    expect(screen.getByText('Linked run')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Run #42' })).toHaveAttribute('href', '/runs/42');
+    expect(screen.getByText('running')).toBeInTheDocument();
   });
 
   it('shows effective policy details for tasks and supports inspecting epic policy from parent chain', async () => {

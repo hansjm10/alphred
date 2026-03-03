@@ -1,7 +1,11 @@
 'use client';
 
 import type { WorkItemStatus, WorkItemType } from '@alphred/shared';
-import type { DashboardWorkItemEffectivePolicySnapshot, DashboardWorkItemSnapshot } from '@dashboard/server/dashboard-contracts';
+import type {
+  DashboardWorkItemEffectivePolicySnapshot,
+  DashboardWorkItemLinkedRunSnapshot,
+  DashboardWorkItemSnapshot,
+} from '@dashboard/server/dashboard-contracts';
 
 export type WorkItemActor = Readonly<{
   actorType: 'human' | 'agent' | 'system';
@@ -121,6 +125,38 @@ function isNullableStringArray(value: unknown): value is string[] | null {
   return value === null || (Array.isArray(value) && value.every((entry) => typeof entry === 'string'));
 }
 
+function isLinkedWorkflowRunSnapshot(value: unknown): value is DashboardWorkItemLinkedRunSnapshot {
+  if (!isRecord(value)) {
+    return false;
+  }
+
+  const runStatus = value.runStatus;
+  const validRunStatus =
+    runStatus === 'pending'
+    || runStatus === 'running'
+    || runStatus === 'paused'
+    || runStatus === 'completed'
+    || runStatus === 'failed'
+    || runStatus === 'cancelled';
+
+  return typeof value.workflowRunId === 'number' && validRunStatus && typeof value.linkedAt === 'string';
+}
+
+function coerceLinkedWorkflowRun(
+  value: unknown,
+  fallback: DashboardWorkItemLinkedRunSnapshot | null | undefined,
+): DashboardWorkItemLinkedRunSnapshot | null {
+  if (value === null) {
+    return null;
+  }
+
+  if (isLinkedWorkflowRunSnapshot(value)) {
+    return value;
+  }
+
+  return fallback ?? null;
+}
+
 function isEffectivePolicySnapshot(value: unknown): value is DashboardWorkItemEffectivePolicySnapshot {
   if (!isRecord(value)) {
     return false;
@@ -199,6 +235,7 @@ function applyCreatedBoardEvent(
     createdAt: event.createdAt,
     updatedAt: event.createdAt,
     effectivePolicy: coerceEffectivePolicy(payload.effectivePolicy, existing?.effectivePolicy),
+    linkedWorkflowRun: coerceLinkedWorkflowRun(payload.linkedWorkflowRun, existing?.linkedWorkflowRun),
   };
 
   return {
@@ -233,6 +270,10 @@ function applyUpdatedBoardEvent(
     estimate: coerceNullableNumber(changes.estimate, existing.estimate),
     revision: typeof payload.revision === 'number' ? payload.revision : existing.revision,
     updatedAt: event.createdAt,
+    linkedWorkflowRun:
+      'linkedWorkflowRun' in changes
+        ? coerceLinkedWorkflowRun(changes.linkedWorkflowRun, existing.linkedWorkflowRun)
+        : existing.linkedWorkflowRun ?? null,
   };
 
   return {
@@ -288,6 +329,10 @@ function applyStatusChangedBoardEvent(
     status: nextStatus as WorkItemStatus,
     revision: typeof payload.revision === 'number' ? payload.revision : existing.revision,
     updatedAt: event.createdAt,
+    linkedWorkflowRun:
+      'linkedWorkflowRun' in payload
+        ? coerceLinkedWorkflowRun(payload.linkedWorkflowRun, existing.linkedWorkflowRun)
+        : existing.linkedWorkflowRun ?? null,
   };
 
   return { ...previous, [existing.id]: next };

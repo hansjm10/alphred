@@ -526,6 +526,7 @@ export function RepositoryBoardPageContent({
       selectedWorkItem.type === 'task' && isTaskStatus(selectedWorkItem.status)
         ? selectedWorkItem.status
         : null;
+    const linkedWorkflowRun = selectedWorkItem.linkedWorkflowRun ?? null;
     const moving = movingWorkItemIds.has(selectedWorkItem.id);
     const dialogTitleId = `board-detail-dialog-title-${selectedWorkItem.id}`;
     const statusSelectId = `board-detail-status-${selectedWorkItem.id}`;
@@ -617,6 +618,18 @@ export function RepositoryBoardPageContent({
                   </li>
                 ))}
               </ol>
+            )}
+          </div>
+
+          <div className="board-detail__section board-detail__section--divider">
+            <h5>Linked run</h5>
+            {linkedWorkflowRun ? (
+              <p>
+                <Link href={`/runs/${linkedWorkflowRun.workflowRunId}`}>Run #{linkedWorkflowRun.workflowRunId}</Link>{' '}
+                <span className="meta-text">{linkedWorkflowRun.runStatus}</span>
+              </p>
+            ) : (
+              <p className="meta-text">None</p>
             )}
           </div>
 

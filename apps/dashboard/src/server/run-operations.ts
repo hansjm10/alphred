@@ -26,6 +26,7 @@ import type {
   DashboardRunControlResult,
   DashboardRunDetail,
   DashboardRunLaunchRequest,
+  DashboardRunLaunchPolicyConstraints,
   DashboardRunLaunchResult,
   DashboardFanOutGroupSnapshot,
   DashboardRunNodeDiagnosticsSnapshot,
@@ -177,6 +178,148 @@ function normalizeLaunchNodeSelector(
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function toExecutionPermissionStringList(
+  value: unknown,
+  key: 'allowedSkillIdentifiers' | 'allowedMcpServerIdentifiers',
+): string[] {
+  if (!isRecord(value)) {
+    return [];
+  }
+
+  const candidate = value[key];
+  if (!Array.isArray(candidate)) {
+    return [];
+  }
+
+  return candidate.filter((entry): entry is string => typeof entry === 'string');
+}
+
+function assertLaunchPolicyAllowlists(
+  db: AlphredDatabase,
+  params: {
+    runId: number;
+    policyConstraints: DashboardRunLaunchPolicyConstraints;
+  },
+): void {
+  const { policyConstraints } = params;
+  const hasAnyConstraint =
+    policyConstraints.allowedProviders !== null
+    || policyConstraints.allowedModels !== null
+    || policyConstraints.allowedSkillIdentifiers !== null
+    || policyConstraints.allowedMcpServerIdentifiers !== null;
+
+  if (!hasAnyConstraint) {
+    return;
+  }
+
+  const agentNodes = db
+    .select({
+      nodeKey: runNodes.nodeKey,
+      provider: runNodes.provider,
+      model: runNodes.model,
+      executionPermissions: runNodes.executionPermissions,
+    })
+    .from(runNodes)
+    .where(and(eq(runNodes.workflowRunId, params.runId), eq(runNodes.nodeType, 'agent')))
+    .all();
+
+  if (policyConstraints.allowedProviders !== null) {
+    const allowedProviders = new Set(policyConstraints.allowedProviders);
+    for (const node of agentNodes) {
+      if (node.provider === null || !allowedProviders.has(node.provider)) {
+        throw new DashboardIntegrationError(
+          'conflict',
+          `Run launch blocked by policy: provider "${node.provider ?? 'null'}" is not allowed for node "${node.nodeKey}".`,
+          {
+            status: 409,
+            details: {
+              kind: 'work_item_policy_launch',
+              workflowRunId: params.runId,
+              nodeKey: node.nodeKey,
+              provider: node.provider,
+            },
+          },
+        );
+      }
+    }
+  }
+
+  if (policyConstraints.allowedModels !== null) {
+    const allowedModels = new Set(policyConstraints.allowedModels);
+    for (const node of agentNodes) {
+      if (node.model === null || !allowedModels.has(node.model)) {
+        throw new DashboardIntegrationError(
+          'conflict',
+          `Run launch blocked by policy: model "${node.model ?? 'null'}" is not allowed for node "${node.nodeKey}".`,
+          {
+            status: 409,
+            details: {
+              kind: 'work_item_policy_launch',
+              workflowRunId: params.runId,
+              nodeKey: node.nodeKey,
+              model: node.model,
+            },
+          },
+        );
+      }
+    }
+  }
+
+  if (policyConstraints.allowedSkillIdentifiers !== null) {
+    const allowedSkillIdentifiers = new Set(policyConstraints.allowedSkillIdentifiers);
+    for (const node of agentNodes) {
+      const requestedSkillIdentifiers = toExecutionPermissionStringList(
+        node.executionPermissions,
+        'allowedSkillIdentifiers',
+      );
+      for (const skillIdentifier of requestedSkillIdentifiers) {
+        if (!allowedSkillIdentifiers.has(skillIdentifier)) {
+          throw new DashboardIntegrationError(
+            'conflict',
+            `Run launch blocked by policy: skill "${skillIdentifier}" is not allowed for node "${node.nodeKey}".`,
+            {
+              status: 409,
+              details: {
+                kind: 'work_item_policy_launch',
+                workflowRunId: params.runId,
+                nodeKey: node.nodeKey,
+                skillIdentifier,
+              },
+            },
+          );
+        }
+      }
+    }
+  }
+
+  if (policyConstraints.allowedMcpServerIdentifiers !== null) {
+    const allowedMcpServerIdentifiers = new Set(policyConstraints.allowedMcpServerIdentifiers);
+    for (const node of agentNodes) {
+      const requestedMcpServerIdentifiers = toExecutionPermissionStringList(
+        node.executionPermissions,
+        'allowedMcpServerIdentifiers',
+      );
+      for (const mcpServerIdentifier of requestedMcpServerIdentifiers) {
+        if (!allowedMcpServerIdentifiers.has(mcpServerIdentifier)) {
+          throw new DashboardIntegrationError(
+            'conflict',
+            `Run launch blocked by policy: MCP server "${mcpServerIdentifier}" is not allowed for node "${node.nodeKey}".`,
+            {
+              status: 409,
+              details: {
+                kind: 'work_item_policy_launch',
+                workflowRunId: params.runId,
+                nodeKey: node.nodeKey,
+                mcpServerIdentifier,
+              },
+            },
+          );
+        }
+      }
+    }
+  }
 }
 
 function toOptionalNonNegativeInteger(value: unknown): number | null {
@@ -908,6 +1051,13 @@ export function createRunOperations(params: {
         let worktreeManager: Pick<WorktreeManager, 'createRunWorktree' | 'cleanupRun'> | null = null;
 
         try {
+          if (request.policyConstraints !== undefined) {
+            assertLaunchPolicyAllowlists(db, {
+              runId,
+              policyConstraints: request.policyConstraints,
+            });
+          }
+
           if (repositoryName !== undefined) {
             const repository = getRepositoryByName(db, repositoryName);
             if (!repository) {
