@@ -1,7 +1,7 @@
 'use client';
 
 import type { WorkItemStatus, WorkItemType } from '@alphred/shared';
-import type { DashboardWorkItemSnapshot } from '@dashboard/server/dashboard-contracts';
+import type { DashboardWorkItemEffectivePolicySnapshot, DashboardWorkItemSnapshot } from '@dashboard/server/dashboard-contracts';
 
 export type WorkItemActor = Readonly<{
   actorType: 'human' | 'agent' | 'system';
@@ -113,6 +113,19 @@ export function coerceNullableNumber(value: unknown, fallback: number | null): n
   return fallback;
 }
 
+function coerceEffectivePolicy(
+  value: unknown,
+  fallback: DashboardWorkItemEffectivePolicySnapshot | null | undefined,
+): DashboardWorkItemEffectivePolicySnapshot | null {
+  if (value === null) {
+    return null;
+  }
+  if (isRecord(value)) {
+    return value as DashboardWorkItemEffectivePolicySnapshot;
+  }
+  return fallback ?? null;
+}
+
 function applyCreatedBoardEvent(
   previous: Readonly<Record<number, DashboardWorkItemSnapshot>>,
   event: BoardEventSnapshot,
@@ -139,6 +152,7 @@ function applyCreatedBoardEvent(
     revision: typeof payload.revision === 'number' ? payload.revision : 0,
     createdAt: event.createdAt,
     updatedAt: event.createdAt,
+    effectivePolicy: coerceEffectivePolicy(payload.effectivePolicy, existing?.effectivePolicy),
   };
 
   return {
@@ -202,6 +216,7 @@ function applyReparentedBoardEvent(
     parentId,
     revision: typeof payload.revision === 'number' ? payload.revision : existing.revision,
     updatedAt: event.createdAt,
+    effectivePolicy: coerceEffectivePolicy(payload.effectivePolicy, existing.effectivePolicy),
   };
 
   return { ...previous, [existing.id]: next };

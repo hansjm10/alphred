@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  and,
   createDatabase,
   eq,
   insertRepository,
@@ -423,6 +424,23 @@ describe('work-item-operations', () => {
         },
       },
     });
+
+    await expect(
+      service.getWorkItem({
+        repositoryId: repository.id,
+        workItemId: taskId,
+      }),
+    ).resolves.toMatchObject({
+      workItem: {
+        id: taskId,
+        effectivePolicy: {
+          appliesToType: 'task',
+          epicWorkItemId: epicId,
+          repositoryPolicyId: repoPolicyId,
+          epicPolicyId,
+        },
+      },
+    });
   });
 
   it('rejects policy overrides that target non-epic work items', async () => {
@@ -461,6 +479,160 @@ describe('work-item-operations', () => {
       code: 'conflict',
       status: 409,
       message: expect.stringContaining('not an epic'),
+    });
+  });
+
+  it('emits created and reparented events with effectivePolicy snapshots', async () => {
+    const { db, service } = createHarness();
+
+    const repository = insertRepository(db, {
+      name: 'repo',
+      provider: 'github',
+      remoteUrl: 'https://example.com/repo.git',
+      remoteRef: 'acme/repo',
+    });
+
+    const epicA = Number(
+      db.insert(workItems)
+        .values({
+          repositoryId: repository.id,
+          type: 'epic',
+          status: 'Draft',
+          title: 'Epic A',
+          revision: 0,
+        })
+        .run().lastInsertRowid,
+    );
+    const storyA = Number(
+      db.insert(workItems)
+        .values({
+          repositoryId: repository.id,
+          type: 'story',
+          status: 'Draft',
+          title: 'Story A',
+          parentId: epicA,
+          revision: 0,
+        })
+        .run().lastInsertRowid,
+    );
+
+    const epicB = Number(
+      db.insert(workItems)
+        .values({
+          repositoryId: repository.id,
+          type: 'epic',
+          status: 'Draft',
+          title: 'Epic B',
+          revision: 0,
+        })
+        .run().lastInsertRowid,
+    );
+    const storyB = Number(
+      db.insert(workItems)
+        .values({
+          repositoryId: repository.id,
+          type: 'story',
+          status: 'Draft',
+          title: 'Story B',
+          parentId: epicB,
+          revision: 0,
+        })
+        .run().lastInsertRowid,
+    );
+
+    const repositoryPolicyId = Number(
+      db.insert(workItemPolicies)
+        .values({
+          repositoryId: repository.id,
+          epicWorkItemId: null,
+          payload: {
+            allowedProviders: ['codex'],
+          },
+        })
+        .run().lastInsertRowid,
+    );
+    const epicAPolicyId = Number(
+      db.insert(workItemPolicies)
+        .values({
+          repositoryId: repository.id,
+          epicWorkItemId: epicA,
+          payload: {
+            budgets: {
+              maxConcurrentTasks: 2,
+            },
+          },
+        })
+        .run().lastInsertRowid,
+    );
+    const epicBPolicyId = Number(
+      db.insert(workItemPolicies)
+        .values({
+          repositoryId: repository.id,
+          epicWorkItemId: epicB,
+          payload: {
+            budgets: {
+              maxConcurrentTasks: 4,
+            },
+          },
+        })
+        .run().lastInsertRowid,
+    );
+
+    const created = await service.createWorkItem({
+      repositoryId: repository.id,
+      type: 'task',
+      status: 'Draft',
+      title: 'Task under story A',
+      parentId: storyA,
+      actorType: 'human',
+      actorLabel: 'alice',
+    });
+
+    expect(created.workItem.effectivePolicy).toMatchObject({
+      appliesToType: 'task',
+      epicWorkItemId: epicA,
+      repositoryPolicyId,
+      epicPolicyId: epicAPolicyId,
+    });
+
+    const reparented = await service.setWorkItemParent({
+      repositoryId: repository.id,
+      workItemId: created.workItem.id,
+      parentId: storyB,
+      expectedRevision: created.workItem.revision,
+      actorType: 'human',
+      actorLabel: 'alice',
+    });
+
+    expect(reparented.workItem.effectivePolicy).toMatchObject({
+      appliesToType: 'task',
+      epicWorkItemId: epicB,
+      repositoryPolicyId,
+      epicPolicyId: epicBPolicyId,
+    });
+
+    const taskEvents = db
+      .select()
+      .from(workItemEvents)
+      .where(and(eq(workItemEvents.repositoryId, repository.id), eq(workItemEvents.workItemId, created.workItem.id)))
+      .all();
+
+    const createdEvent = taskEvents.find(event => event.eventType === 'created');
+    const reparentedEvent = taskEvents.find(event => event.eventType === 'reparented');
+    expect(createdEvent).toBeDefined();
+    expect(reparentedEvent).toBeDefined();
+
+    expect((createdEvent!.payload as { effectivePolicy?: unknown }).effectivePolicy).toMatchObject({
+      appliesToType: 'task',
+      epicWorkItemId: epicA,
+      repositoryPolicyId,
+      epicPolicyId: epicAPolicyId,
+    });
+    expect((reparentedEvent!.payload as { effectivePolicy?: unknown }).effectivePolicy).toMatchObject({
+      appliesToType: 'task',
+      epicWorkItemId: epicB,
+      repositoryPolicyId,
+      epicPolicyId: epicBPolicyId,
     });
   });
 

@@ -85,8 +85,14 @@ type ParsedPolicyOverride = {
   };
 };
 
+type WorkItemIdentity = {
+  id: number;
+  type: WorkItemType;
+  parentId: number | null;
+};
+
 type PolicyResolutionContext = {
-  workItemIdentityById: ReadonlyMap<number, { id: number; type: WorkItemType; parentId: number | null }>;
+  workItemIdentityById: ReadonlyMap<number, WorkItemIdentity>;
   repositoryPolicy: { id: number; override: ParsedPolicyOverride } | null;
   epicPoliciesByEpicId: ReadonlyMap<number, { id: number; override: ParsedPolicyOverride }>;
 };
@@ -250,7 +256,7 @@ function applyPolicyOverride(target: DashboardWorkItemPolicySnapshot, override: 
 
 function resolveEpicWorkItemId(
   workItemId: number,
-  workItemIdentityById: ReadonlyMap<number, { id: number; type: WorkItemType; parentId: number | null }>,
+  workItemIdentityById: ReadonlyMap<number, WorkItemIdentity>,
 ): number | null {
   let currentId: number | null = workItemId;
   const visited = new Set<number>();
@@ -287,7 +293,7 @@ function loadPolicyResolutionContext(db: DbOrTx, repositoryId: number): PolicyRe
     .where(eq(workItems.repositoryId, repositoryId))
     .all();
 
-  const workItemIdentityById = new Map<number, { id: number; type: WorkItemType; parentId: number | null }>();
+  const workItemIdentityById = new Map<number, WorkItemIdentity>();
   for (const identityRow of identityRows) {
     workItemIdentityById.set(identityRow.id, {
       id: identityRow.id,
@@ -342,6 +348,162 @@ function loadPolicyResolutionContext(db: DbOrTx, repositoryId: number): PolicyRe
     workItemIdentityById,
     repositoryPolicy,
     epicPoliciesByEpicId,
+  };
+}
+
+function loadWorkItemIdentityChain(
+  db: DbOrTx,
+  params: { repositoryId: number; row: WorkItemRow },
+): ReadonlyMap<number, WorkItemIdentity> {
+  const workItemIdentityById = new Map<number, WorkItemIdentity>();
+  const initialIdentity: WorkItemIdentity = {
+    id: params.row.id,
+    type: params.row.type as WorkItemType,
+    parentId: params.row.parentId,
+  };
+  workItemIdentityById.set(initialIdentity.id, initialIdentity);
+
+  if (initialIdentity.type !== 'task') {
+    return workItemIdentityById;
+  }
+
+  let parentId = initialIdentity.parentId;
+  const visited = new Set<number>([initialIdentity.id]);
+  while (parentId !== null) {
+    if (visited.has(parentId)) {
+      throw toPolicyConflictError(`Detected a parent cycle while resolving work item id=${params.row.id}.`);
+    }
+    visited.add(parentId);
+
+    const parent = db
+      .select({
+        id: workItems.id,
+        type: workItems.type,
+        parentId: workItems.parentId,
+      })
+      .from(workItems)
+      .where(and(eq(workItems.repositoryId, params.repositoryId), eq(workItems.id, parentId)))
+      .get();
+
+    if (!parent) {
+      break;
+    }
+
+    const identity: WorkItemIdentity = {
+      id: parent.id,
+      type: parent.type as WorkItemType,
+      parentId: parent.parentId,
+    };
+    workItemIdentityById.set(identity.id, identity);
+    parentId = identity.parentId;
+  }
+
+  return workItemIdentityById;
+}
+
+function loadRepositoryPolicyOverride(
+  db: DbOrTx,
+  repositoryId: number,
+): { id: number; override: ParsedPolicyOverride } | null {
+  const repositoryPolicyRows = db
+    .select()
+    .from(workItemPolicies)
+    .where(and(eq(workItemPolicies.repositoryId, repositoryId), sql`${workItemPolicies.epicWorkItemId} is null`))
+    .limit(2)
+    .all();
+
+  if (repositoryPolicyRows.length > 1) {
+    throw toPolicyConflictError(`Repository id=${repositoryId} has multiple repo-level policies.`);
+  }
+
+  const repositoryPolicyRow = repositoryPolicyRows[0];
+  if (!repositoryPolicyRow) {
+    return null;
+  }
+
+  return {
+    id: repositoryPolicyRow.id,
+    override: parsePolicyOverride(repositoryPolicyRow),
+  };
+}
+
+function loadEpicPolicyOverrides(
+  db: DbOrTx,
+  params: {
+    repositoryId: number;
+    epicWorkItemId: number | null;
+    workItemIdentityById: ReadonlyMap<number, WorkItemIdentity>;
+  },
+): ReadonlyMap<number, { id: number; override: ParsedPolicyOverride }> {
+  if (params.epicWorkItemId === null) {
+    return new Map();
+  }
+
+  const epicPolicyRows = db
+    .select()
+    .from(workItemPolicies)
+    .where(
+      and(
+        eq(workItemPolicies.repositoryId, params.repositoryId),
+        eq(workItemPolicies.epicWorkItemId, params.epicWorkItemId),
+      ),
+    )
+    .limit(2)
+    .all();
+
+  if (epicPolicyRows.length > 1) {
+    throw toPolicyConflictError(
+      `Repository id=${params.repositoryId} has multiple policy overrides for epic id=${params.epicWorkItemId}.`,
+    );
+  }
+
+  const epicPolicyRow = epicPolicyRows[0];
+  if (!epicPolicyRow) {
+    return new Map();
+  }
+
+  const target = params.workItemIdentityById.get(params.epicWorkItemId);
+  if (!target || target.type !== 'epic') {
+    throw toPolicyConflictError(`Policy id=${epicPolicyRow.id} targets work item id=${params.epicWorkItemId}, which is not an epic.`, {
+      policyId: epicPolicyRow.id,
+      epicWorkItemId: params.epicWorkItemId,
+    });
+  }
+
+  const epicPoliciesByEpicId = new Map<number, { id: number; override: ParsedPolicyOverride }>();
+  epicPoliciesByEpicId.set(params.epicWorkItemId, {
+    id: epicPolicyRow.id,
+    override: parsePolicyOverride(epicPolicyRow),
+  });
+  return epicPoliciesByEpicId;
+}
+
+function loadPolicyResolutionContextForWorkItem(
+  db: DbOrTx,
+  params: {
+    repositoryId: number;
+    row: WorkItemRow;
+  },
+): PolicyResolutionContext {
+  const workItemIdentityById = loadWorkItemIdentityChain(db, {
+    repositoryId: params.repositoryId,
+    row: params.row,
+  });
+  const epicWorkItemId =
+    params.row.type === 'epic'
+      ? params.row.id
+      : params.row.type === 'task'
+        ? resolveEpicWorkItemId(params.row.id, workItemIdentityById)
+        : null;
+
+  return {
+    workItemIdentityById,
+    repositoryPolicy: loadRepositoryPolicyOverride(db, params.repositoryId),
+    epicPoliciesByEpicId: loadEpicPolicyOverrides(db, {
+      repositoryId: params.repositoryId,
+      epicWorkItemId,
+      workItemIdentityById,
+    }),
   };
 }
 
@@ -572,7 +734,7 @@ function toWorkItemSnapshotWithPolicy(
     row: WorkItemRow;
   },
 ): DashboardWorkItemSnapshot {
-  const context = loadPolicyResolutionContext(db, params.repositoryId);
+  const context = loadPolicyResolutionContextForWorkItem(db, params);
   return toWorkItemSnapshot(params.row, resolveEffectivePolicyForWorkItem(params.row, context));
 }
 
@@ -932,6 +1094,10 @@ export function createWorkItemOperations(params: { withDatabase: WithDatabase })
             .run();
           const workItemId = Number(insertResult.lastInsertRowid);
           const inserted = readWorkItemOrThrow(tx, { repositoryId, workItemId });
+          const insertedSnapshot = toWorkItemSnapshotWithPolicy(tx, {
+            repositoryId,
+            row: inserted,
+          });
 
           insertEvent(tx, {
             repositoryId,
@@ -951,14 +1117,12 @@ export function createWorkItemOperations(params: { withDatabase: WithDatabase })
               priority,
               estimate,
               revision: 0,
+              effectivePolicy: insertedSnapshot.effectivePolicy ?? null,
             },
           });
 
           return {
-            workItem: toWorkItemSnapshotWithPolicy(tx, {
-              repositoryId,
-              row: inserted,
-            }),
+            workItem: insertedSnapshot,
           };
         }),
       );
@@ -1200,6 +1364,12 @@ export function createWorkItemOperations(params: { withDatabase: WithDatabase })
             throwRevisionConflict({ workItemId, expectedRevision });
           }
 
+          const reloaded = readWorkItemOrThrow(tx, { repositoryId, workItemId });
+          const reloadedSnapshot = toWorkItemSnapshotWithPolicy(tx, {
+            repositoryId,
+            row: reloaded,
+          });
+
           insertEvent(tx, {
             repositoryId,
             workItemId,
@@ -1214,15 +1384,12 @@ export function createWorkItemOperations(params: { withDatabase: WithDatabase })
               childType: existing.type,
               expectedRevision,
               revision: nextRevision,
+              effectivePolicy: reloadedSnapshot.effectivePolicy ?? null,
             },
           });
 
-          const reloaded = readWorkItemOrThrow(tx, { repositoryId, workItemId });
           return {
-            workItem: toWorkItemSnapshotWithPolicy(tx, {
-              repositoryId,
-              row: reloaded,
-            }),
+            workItem: reloadedSnapshot,
           };
         }),
       );
@@ -1343,6 +1510,10 @@ export function createWorkItemOperations(params: { withDatabase: WithDatabase })
 
             const insertedId = Number(insertResult.lastInsertRowid);
             const inserted = readWorkItemOrThrow(tx, { repositoryId, workItemId: insertedId });
+            const insertedSnapshot = toWorkItemSnapshotWithPolicy(tx, {
+              repositoryId,
+              row: inserted,
+            });
 
             insertedTasks.push(inserted);
             createdTaskIds.push(insertedId);
@@ -1366,6 +1537,7 @@ export function createWorkItemOperations(params: { withDatabase: WithDatabase })
                 estimate: inserted.estimate,
                 revision: 0,
                 links: task.links ?? null,
+                effectivePolicy: insertedSnapshot.effectivePolicy ?? null,
               },
             });
           }

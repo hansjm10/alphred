@@ -456,6 +456,25 @@ describe('RepositoryBoardPageContent', () => {
           plannedFiles: ['apps/dashboard/app/repositories/[repositoryId]/board/page.tsx'],
           assignees: ['octocat'],
           revision: 1,
+          effectivePolicy: {
+            appliesToType: 'task',
+            epicWorkItemId: 101,
+            repositoryPolicyId: 11,
+            epicPolicyId: 21,
+            policy: {
+              allowedProviders: ['codex'],
+              allowedModels: ['gpt-5-codex'],
+              allowedSkillIdentifiers: ['working-on-github-issue'],
+              allowedMcpServerIdentifiers: ['github'],
+              budgets: {
+                maxConcurrentTasks: 2,
+                maxConcurrentRuns: 1,
+              },
+              requiredGates: {
+                breakdownApprovalRequired: false,
+              },
+            },
+          },
         },
         createdAt: new Date('2026-03-02T02:00:00.000Z').toISOString(),
       });
@@ -467,6 +486,7 @@ describe('RepositoryBoardPageContent', () => {
     expect(screen.getByRole('dialog', { name: 'New task' })).toBeInTheDocument();
     expect(screen.getByText('apps/dashboard/app/repositories/[repositoryId]/board/page.tsx')).toBeInTheDocument();
     expect(screen.getByText('octocat')).toBeInTheDocument();
+    expect(screen.getByText('Repo policy #11 · Epic policy #21')).toBeInTheDocument();
   });
 
   it('applies board_event updated updates to UI state (updated merges supported fields)', async () => {
@@ -552,7 +572,33 @@ describe('RepositoryBoardPageContent', () => {
         initialWorkItems={[
           createWorkItem({ id: 1, type: 'epic', title: 'Epic parent' }),
           createWorkItem({ id: 2, type: 'story', title: 'Story parent', parentId: 1 }),
-          createWorkItem({ id: 10, type: 'task', status: 'Draft', title: 'Write tests', parentId: 2, revision: 0 }),
+          createWorkItem({
+            id: 10,
+            type: 'task',
+            status: 'Draft',
+            title: 'Write tests',
+            parentId: 2,
+            revision: 0,
+            effectivePolicy: {
+              appliesToType: 'task',
+              epicWorkItemId: 1,
+              repositoryPolicyId: 7,
+              epicPolicyId: 13,
+              policy: {
+                allowedProviders: ['codex'],
+                allowedModels: ['gpt-5-codex'],
+                allowedSkillIdentifiers: ['working-on-github-issue'],
+                allowedMcpServerIdentifiers: ['github'],
+                budgets: {
+                  maxConcurrentTasks: 2,
+                  maxConcurrentRuns: 1,
+                },
+                requiredGates: {
+                  breakdownApprovalRequired: false,
+                },
+              },
+            },
+          }),
         ]}
       />,
     );
@@ -562,6 +608,7 @@ describe('RepositoryBoardPageContent', () => {
 
     await user.click(screen.getByRole('button', { name: /Write tests/ }));
     expect(screen.getByText('Story parent')).toBeInTheDocument();
+    expect(screen.getByText('Repo policy #7 · Epic policy #13')).toBeInTheDocument();
 
     act(() => {
       MockEventSource.instances[0]?.emit('board_event', {
@@ -569,13 +616,37 @@ describe('RepositoryBoardPageContent', () => {
         repositoryId: 1,
         workItemId: 10,
         eventType: 'reparented',
-        payload: { toParentId: 1, revision: 1 },
+        payload: {
+          toParentId: 1,
+          revision: 1,
+          effectivePolicy: {
+            appliesToType: 'task',
+            epicWorkItemId: 1,
+            repositoryPolicyId: 7,
+            epicPolicyId: 22,
+            policy: {
+              allowedProviders: ['codex'],
+              allowedModels: ['gpt-5-codex'],
+              allowedSkillIdentifiers: ['working-on-github-issue'],
+              allowedMcpServerIdentifiers: ['github'],
+              budgets: {
+                maxConcurrentTasks: 4,
+                maxConcurrentRuns: 2,
+              },
+              requiredGates: {
+                breakdownApprovalRequired: true,
+              },
+            },
+          },
+        },
         createdAt: new Date('2026-03-02T02:10:00.000Z').toISOString(),
       });
     });
 
     expect(screen.queryByText('Story parent')).not.toBeInTheDocument();
     expect(screen.getByText('Epic parent')).toBeInTheDocument();
+    expect(screen.queryByText('Repo policy #7 · Epic policy #13')).not.toBeInTheDocument();
+    expect(screen.getByText('Repo policy #7 · Epic policy #22')).toBeInTheDocument();
   });
 
   it('ignores malformed board_event payloads without mutating UI state', () => {
