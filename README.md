@@ -55,8 +55,8 @@ pnpm test
 # Run a single test file
 pnpm test -- apps/dashboard/app/repositories/[name]/board/page.test.tsx
 
-# Pass through additional args to the test process (Vitest `--` delimiter)
-pnpm test -- apps/dashboard/app/repositories/[name]/board/page.test.tsx -- --some-arg=value
+# Pass through additional args to Vitest
+pnpm test -- apps/dashboard/app/repositories/[name]/board/page.test.tsx --reporter=verbose
 
 # Dashboard dev server (Next.js on port 8080)
 pnpm dev:dashboard
