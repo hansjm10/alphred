@@ -99,6 +99,7 @@ export const workItemTransitionsByType = {
   story: [
     { from: storyWorkItemStatuses[0], to: 'NeedsBreakdown' },
     { from: 'NeedsBreakdown', to: 'BreakdownProposed' },
+    { from: 'BreakdownProposed', to: 'NeedsBreakdown' },
     { from: 'BreakdownProposed', to: 'Approved' },
     { from: 'Approved', to: 'InProgress' },
     { from: 'InProgress', to: 'InReview' },
@@ -168,4 +169,3 @@ export function validateTransition(params: { type: WorkItemType; from: string; t
     );
   }
 }
-

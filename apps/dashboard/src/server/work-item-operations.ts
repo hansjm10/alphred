@@ -21,6 +21,7 @@ import type {
   DashboardBoardEventsSnapshot,
   DashboardCreateWorkItemRequest,
   DashboardCreateWorkItemResult,
+  DashboardGetStoryBreakdownProposalResult,
   DashboardGetWorkItemResult,
   DashboardListWorkItemsResult,
   DashboardMoveWorkItemStatusRequest,
@@ -30,6 +31,7 @@ import type {
   DashboardRepositoryBoardBootstrapResult,
   DashboardSetWorkItemParentRequest,
   DashboardSetWorkItemParentResult,
+  DashboardStoryBreakdownProposalSnapshot,
   DashboardUpdateWorkItemFieldsRequest,
   DashboardUpdateWorkItemFieldsResult,
   DashboardWorkItemSnapshot,
@@ -251,6 +253,7 @@ export type WorkItemOperations = {
     limit?: number;
   }) => Promise<DashboardBoardEventsSnapshot>;
   getWorkItem: (params: { repositoryId: number; workItemId: number }) => Promise<DashboardGetWorkItemResult>;
+  getStoryBreakdownProposal: (params: { repositoryId: number; storyId: number }) => Promise<DashboardGetStoryBreakdownProposalResult>;
   createWorkItem: (request: DashboardCreateWorkItemRequest) => Promise<DashboardCreateWorkItemResult>;
   updateWorkItemFields: (request: DashboardUpdateWorkItemFieldsRequest) => Promise<DashboardUpdateWorkItemFieldsResult>;
   moveWorkItemStatus: (request: DashboardMoveWorkItemStatusRequest) => Promise<DashboardMoveWorkItemStatusResult>;
@@ -369,6 +372,127 @@ export function createWorkItemOperations(params: { withDatabase: WithDatabase })
         const row = readWorkItemOrThrow(db, { repositoryId, workItemId });
         return { workItem: toWorkItemSnapshot(row) };
       });
+    },
+
+    getStoryBreakdownProposal(paramsRaw): Promise<DashboardGetStoryBreakdownProposalResult> {
+      const repositoryId = requireRepositoryId(paramsRaw.repositoryId);
+      const storyId = requireWorkItemId(paramsRaw.storyId, 'storyId');
+
+      return withDatabase(db =>
+        db.transaction(tx => {
+          const story = readWorkItemOrThrow(tx, {
+            repositoryId,
+            workItemId: storyId,
+            notFoundMessage: `Story id=${storyId} was not found.`,
+          });
+          if (story.type !== 'story') {
+            throw new DashboardIntegrationError('invalid_request', `Work item id=${storyId} is not a story.`, {
+              status: 400,
+            });
+          }
+
+          const event = tx
+            .select({ id: workItemEvents.id, payload: workItemEvents.payload, createdAt: workItemEvents.createdAt })
+            .from(workItemEvents)
+            .where(
+              and(
+                eq(workItemEvents.repositoryId, repositoryId),
+                eq(workItemEvents.workItemId, storyId),
+                eq(workItemEvents.eventType, 'breakdown_proposed'),
+              ),
+            )
+            .orderBy(desc(workItemEvents.id))
+            .limit(1)
+            .get();
+
+          if (!event) {
+            return { proposal: null };
+          }
+
+          const payload = event.payload as unknown;
+          if (payload === null || typeof payload !== 'object' || Array.isArray(payload)) {
+            return { proposal: null };
+          }
+
+          const payloadRecord = payload as Record<string, unknown>;
+          const proposedRaw = payloadRecord.proposed;
+          if (proposedRaw === null || typeof proposedRaw !== 'object' || Array.isArray(proposedRaw)) {
+            return { proposal: null };
+          }
+
+          const proposedRecord = proposedRaw as Record<string, unknown>;
+          const tasksRaw = proposedRecord.tasks;
+          if (!Array.isArray(tasksRaw) || tasksRaw.length === 0) {
+            return { proposal: null };
+          }
+
+          const coerceStringArrayOrNull = (value: unknown): string[] | null => {
+            return toStringArrayOrNull(value);
+          };
+
+          const tasks = tasksRaw
+            .map((task): DashboardStoryBreakdownProposalSnapshot['proposed']['tasks'][number] | null => {
+              if (task === null || typeof task !== 'object' || Array.isArray(task)) {
+                return null;
+              }
+              const record = task as Record<string, unknown>;
+              if (typeof record.title !== 'string' || record.title.trim().length === 0) {
+                return null;
+              }
+
+              const parsed: DashboardStoryBreakdownProposalSnapshot['proposed']['tasks'][number] = {
+                title: record.title,
+              };
+
+              if ('description' in record) {
+                parsed.description = typeof record.description === 'string' ? record.description : record.description === null ? null : undefined;
+              }
+              if ('tags' in record) {
+                parsed.tags = coerceStringArrayOrNull(record.tags);
+              }
+              if ('plannedFiles' in record) {
+                parsed.plannedFiles = coerceStringArrayOrNull(record.plannedFiles);
+              }
+              if ('assignees' in record) {
+                parsed.assignees = coerceStringArrayOrNull(record.assignees);
+              }
+              if ('priority' in record) {
+                parsed.priority = typeof record.priority === 'number' ? record.priority : record.priority === null ? null : undefined;
+              }
+              if ('estimate' in record) {
+                parsed.estimate = typeof record.estimate === 'number' ? record.estimate : record.estimate === null ? null : undefined;
+              }
+              if ('links' in record) {
+                parsed.links = coerceStringArrayOrNull(record.links);
+              }
+
+              return parsed;
+            })
+            .filter((entry): entry is DashboardStoryBreakdownProposalSnapshot['proposed']['tasks'][number] => entry !== null);
+
+          if (tasks.length === 0) {
+            return { proposal: null };
+          }
+
+          const createdTaskIds = Array.isArray(payloadRecord.createdTaskIds)
+            ? payloadRecord.createdTaskIds.filter((entry): entry is number => typeof entry === 'number' && Number.isInteger(entry) && entry > 0)
+            : [];
+
+          return {
+            proposal: {
+              eventId: event.id,
+              createdAt: event.createdAt,
+              createdTaskIds,
+              proposed: {
+                tags: coerceStringArrayOrNull(proposedRecord.tags),
+                plannedFiles: coerceStringArrayOrNull(proposedRecord.plannedFiles),
+                links: coerceStringArrayOrNull(proposedRecord.links),
+                tasks,
+              },
+            },
+          };
+        }),
+      );
     },
 
     createWorkItem(requestRaw): Promise<DashboardCreateWorkItemResult> {

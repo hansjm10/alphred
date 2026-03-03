@@ -5,7 +5,7 @@ import { RepositoryBoardPageContent } from './repository-board-client';
 
 type RepositoryBoardPageProps = Readonly<{
   params: Promise<{
-    name: string;
+    repositoryId: string;
   }>;
 }>;
 
@@ -22,7 +22,11 @@ function resolveActor(authGate: Awaited<ReturnType<typeof loadGitHubAuthGate>>):
 }
 
 export default async function RepositoryBoardPage({ params }: RepositoryBoardPageProps) {
-  const { name } = await params;
+  const { repositoryId } = await params;
+  const parsedRepositoryId = Number(repositoryId);
+  if (!Number.isInteger(parsedRepositoryId) || parsedRepositoryId < 1) {
+    notFound();
+  }
   const service = createDashboardService();
 
   const [repositories, authGate] = await Promise.all([
@@ -30,7 +34,7 @@ export default async function RepositoryBoardPage({ params }: RepositoryBoardPag
     loadGitHubAuthGate(),
   ]);
 
-  const repository = repositories.find(candidate => candidate.name === name) ?? null;
+  const repository = repositories.find(candidate => candidate.id === parsedRepositoryId) ?? null;
   if (!repository) {
     notFound();
   }

@@ -546,6 +546,14 @@ output {
   min-width: 160px;
 }
 
+.board-page-header__actions {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  justify-content: flex-end;
+}
+
 .board-kanban {
   position: relative;
   background:
@@ -1133,6 +1141,46 @@ output {
   overflow-wrap: anywhere;
   padding: 2px 6px;
   word-break: break-word;
+}
+
+.stories-list {
+  display: grid;
+  gap: var(--space-2);
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.stories-list__item {
+  align-items: flex-start;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  display: flex;
+  gap: var(--space-2);
+  justify-content: space-between;
+  padding: var(--space-2);
+}
+
+.stories-list__content {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.stories-list__content a {
+  overflow-wrap: anywhere;
+  text-decoration: none;
+}
+
+.stories-list__content a:hover {
+  text-decoration: underline;
+}
+
+.stories-list__meta {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
 }
 
 .run-launch-form {

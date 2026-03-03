@@ -112,7 +112,7 @@ describe('RepositoriesPage', () => {
     expect(screen.getAllByText('/tmp/repos/demo-repo')).toHaveLength(2);
     expect(screen.getByRole('link', { name: 'Open Board' })).toHaveAttribute(
       'href',
-      '/repositories/demo-repo/board',
+      '/repositories/1/board',
     );
   });
 

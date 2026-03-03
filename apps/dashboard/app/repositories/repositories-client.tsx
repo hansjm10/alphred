@@ -216,7 +216,7 @@ function renderLaunchAction(
 
 function renderBoardAction(selectedRepository: DashboardRepositoryState | null): ReactNode {
   if (selectedRepository !== null) {
-    const boardHref = `/repositories/${encodeURIComponent(selectedRepository.name)}/board`;
+    const boardHref = `/repositories/${selectedRepository.id}/board`;
 
     return (
       <ButtonLink href={boardHref}>
