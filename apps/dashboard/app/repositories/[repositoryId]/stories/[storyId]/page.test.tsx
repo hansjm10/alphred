@@ -300,4 +300,82 @@ describe('StoryDetailPageContent', () => {
 
     expect(await screen.findByText('Proposed plan')).toBeInTheDocument();
   });
+
+  it('shows a not-found state when the story is missing', () => {
+    render(
+      <StoryDetailPageContent
+        repository={createRepository({ id: 1, name: 'demo-repo' })}
+        actor={{ actorType: 'human', actorLabel: 'octocat' }}
+        storyId={3}
+        initialLatestEventId={0}
+        initialProposal={null}
+        initialWorkItems={[]}
+      />,
+    );
+
+    expect(screen.getByRole('alert')).toHaveTextContent('Story not found.');
+  });
+
+  it('surfaces board stream errors and reconnects after drops', async () => {
+    vi.useFakeTimers();
+    try {
+      render(
+        <StoryDetailPageContent
+          repository={createRepository({ id: 1, name: 'demo-repo' })}
+          actor={{ actorType: 'human', actorLabel: 'octocat' }}
+          storyId={3}
+          initialLatestEventId={0}
+          initialProposal={null}
+          initialWorkItems={[createWorkItem({ id: 3, type: 'story', title: 'Story title', status: 'NeedsBreakdown', revision: 0 })]}
+        />,
+      );
+
+      act(() => {
+        MockEventSource.instances[0]?.emit('board_error', { message: 'Board said nope.' });
+      });
+
+      expect(screen.getByText('Board said nope.')).toBeInTheDocument();
+
+      act(() => {
+        MockEventSource.instances[0]?.emitError();
+      });
+
+      expect(screen.getByText('Connection lost. Reconnecting…')).toBeInTheDocument();
+
+      act(() => {
+        vi.advanceTimersByTime(1000);
+      });
+
+      expect(MockEventSource.instances).toHaveLength(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('refreshes story state when move requests hit a revision conflict', async () => {
+    const user = userEvent.setup();
+    const fetchMock = vi.mocked(global.fetch);
+
+    fetchMock
+      .mockResolvedValueOnce(createJsonResponse({ error: { message: 'Revision conflict' } }, { status: 409 }))
+      .mockResolvedValueOnce(createJsonResponse({ workItems: [createWorkItem({ id: 3, status: 'Draft', revision: 2 })] }))
+      .mockResolvedValueOnce(createJsonResponse({ proposal: null }))
+      .mockResolvedValueOnce(createJsonResponse({ workItem: createWorkItem({ id: 3, status: 'Draft', revision: 2 }) }));
+
+    render(
+      <StoryDetailPageContent
+        repository={createRepository({ id: 1, name: 'demo-repo' })}
+        actor={{ actorType: 'human', actorLabel: 'octocat' }}
+        storyId={3}
+        initialLatestEventId={0}
+        initialProposal={null}
+        initialWorkItems={[createWorkItem({ id: 3, type: 'story', title: 'Story title', status: 'Draft', revision: 1 })]}
+      />,
+    );
+
+    await user.click(screen.getByRole('button', { name: 'Request breakdown' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Revision conflict: Revision conflict');
+    expect(fetchMock).toHaveBeenCalledWith('/api/dashboard/repositories/1/work-items', { method: 'GET' });
+  });
 });
