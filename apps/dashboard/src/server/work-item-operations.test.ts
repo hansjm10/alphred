@@ -1298,7 +1298,7 @@ describe('work-item-operations', () => {
     });
   });
 
-  it('skips linked run touchedFiles in list and bootstrap responses', async () => {
+  it('skips linked run touchedFiles in list responses but includes them in bootstrap responses', async () => {
     const { db, service } = createHarness();
     const tempRoot = await mkdtemp(join(tmpdir(), 'alphred-work-item-list-touched-files-'));
     const worktreePath = join(tempRoot, 'repo');
@@ -1400,8 +1400,8 @@ describe('work-item-operations', () => {
       expect(bootstrapTask?.linkedWorkflowRun).toMatchObject({
         workflowRunId,
         runStatus: 'running',
+        touchedFiles: ['src/a.ts', 'src/c.ts'],
       });
-      expect(bootstrapTask?.linkedWorkflowRun).not.toHaveProperty('touchedFiles');
     } finally {
       await rm(tempRoot, { recursive: true, force: true });
     }
