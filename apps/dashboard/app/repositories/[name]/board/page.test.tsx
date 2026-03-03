@@ -585,14 +585,13 @@ describe('RepositoryBoardPage (server wrapper)', () => {
     notFoundMock.mockReset();
   });
 
-  it('loads repositories, work items, and board snapshot for the async page export', async () => {
+  it('loads repositories, work items, and the latest board event id for the async page export', async () => {
     const repository = createRepository({ id: 1, name: 'demo-repo' });
     const workItems = [createWorkItem({ id: 10, status: 'Draft', title: 'Write tests' })];
 
     const service = {
       listRepositories: vi.fn().mockResolvedValue([repository]),
-      listWorkItems: vi.fn().mockResolvedValue({ workItems }),
-      getRepositoryBoardEventsSnapshot: vi.fn().mockResolvedValue({ latestEventId: 5, events: [] }),
+      getRepositoryBoardBootstrap: vi.fn().mockResolvedValue({ repositoryId: 1, latestEventId: 5, workItems }),
     };
 
     createDashboardServiceMock.mockReturnValue(service);
@@ -608,8 +607,7 @@ describe('RepositoryBoardPage (server wrapper)', () => {
     }>;
 
     expect(service.listRepositories).toHaveBeenCalledTimes(1);
-    expect(service.listWorkItems).toHaveBeenCalledWith(1);
-    expect(service.getRepositoryBoardEventsSnapshot).toHaveBeenCalledWith({ repositoryId: 1, lastEventId: 0, limit: 1 });
+    expect(service.getRepositoryBoardBootstrap).toHaveBeenCalledWith({ repositoryId: 1 });
     expect(loadGitHubAuthGateMock).toHaveBeenCalledTimes(1);
 
     expect(root.type).toBe(RepositoryBoardPageContent);
@@ -622,8 +620,7 @@ describe('RepositoryBoardPage (server wrapper)', () => {
   it('calls notFound when repository does not exist', async () => {
     const service = {
       listRepositories: vi.fn().mockResolvedValue([]),
-      listWorkItems: vi.fn(),
-      getRepositoryBoardEventsSnapshot: vi.fn(),
+      getRepositoryBoardBootstrap: vi.fn(),
     };
 
     createDashboardServiceMock.mockReturnValue(service);
@@ -638,8 +635,7 @@ describe('RepositoryBoardPage (server wrapper)', () => {
     const repository = createRepository({ id: 1, name: 'demo-repo' });
     const service = {
       listRepositories: vi.fn().mockResolvedValue([repository]),
-      listWorkItems: vi.fn().mockResolvedValue({ workItems: [] }),
-      getRepositoryBoardEventsSnapshot: vi.fn().mockResolvedValue({ latestEventId: 0, events: [] }),
+      getRepositoryBoardBootstrap: vi.fn().mockResolvedValue({ repositoryId: 1, latestEventId: 0, workItems: [] }),
     };
 
     createDashboardServiceMock.mockReturnValue(service);

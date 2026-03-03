@@ -27,6 +27,7 @@ import type {
   DashboardMoveWorkItemStatusResult,
   DashboardProposeStoryBreakdownRequest,
   DashboardProposeStoryBreakdownResult,
+  DashboardRepositoryBoardBootstrapResult,
   DashboardSetWorkItemParentRequest,
   DashboardSetWorkItemParentResult,
   DashboardUpdateWorkItemFieldsRequest,
@@ -243,6 +244,7 @@ function toHierarchyConflictError(error: unknown): DashboardIntegrationError {
 
 export type WorkItemOperations = {
   listWorkItems: (repositoryId: number) => Promise<DashboardListWorkItemsResult>;
+  getRepositoryBoardBootstrap: (params: { repositoryId: number }) => Promise<DashboardRepositoryBoardBootstrapResult>;
   getRepositoryBoardEventsSnapshot: (params: {
     repositoryId: number;
     lastEventId?: number;
@@ -278,6 +280,40 @@ export function createWorkItemOperations(params: { withDatabase: WithDatabase })
         const rows = db.select().from(workItems).where(eq(workItems.repositoryId, repositoryId)).all();
         return { workItems: rows.map(toWorkItemSnapshot) };
       });
+    },
+
+    getRepositoryBoardBootstrap(paramsRaw): Promise<DashboardRepositoryBoardBootstrapResult> {
+      const repositoryId = requireRepositoryId(paramsRaw.repositoryId);
+
+      return withDatabase(db =>
+        db.transaction(tx => {
+          const repository = tx
+            .select({ id: repositories.id })
+            .from(repositories)
+            .where(eq(repositories.id, repositoryId))
+            .get();
+          if (!repository) {
+            throw new DashboardIntegrationError('not_found', `Repository id=${repositoryId} was not found.`, {
+              status: 404,
+            });
+          }
+
+          const rows = tx.select().from(workItems).where(eq(workItems.repositoryId, repositoryId)).all();
+          const latestEvent = tx
+            .select({ id: workItemEvents.id })
+            .from(workItemEvents)
+            .where(eq(workItemEvents.repositoryId, repositoryId))
+            .orderBy(desc(workItemEvents.id))
+            .limit(1)
+            .get();
+
+          return {
+            repositoryId,
+            latestEventId: latestEvent?.id ?? 0,
+            workItems: rows.map(toWorkItemSnapshot),
+          };
+        }),
+      );
     },
 
     getRepositoryBoardEventsSnapshot(paramsRaw): Promise<DashboardBoardEventsSnapshot> {
