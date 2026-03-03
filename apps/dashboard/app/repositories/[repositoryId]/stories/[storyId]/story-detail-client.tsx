@@ -475,7 +475,7 @@ export function StoryDetailPageContent(props: Readonly<{
 
   const latestEventIdRef = useRef(initialLatestEventId);
   const eventSourceRef = useRef<EventSource | null>(null);
-  const reconnectTimeoutRef = useRef<number | null>(null);
+  const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const connectionSessionRef = useRef(0);
 
   const story = workItemsById[storyId] ?? null;
@@ -514,7 +514,7 @@ export function StoryDetailPageContent(props: Readonly<{
       if (connectionSessionRef.current !== sessionId) {
         return;
       }
-      const parsed = parseJsonSafely((event as MessageEvent).data);
+      const parsed = parseJsonSafely(event.data);
       if (isRecord(parsed) && typeof parsed.latestEventId === 'number') {
         // board_state indicates a high watermark, but we still resume from last delivered event id.
         setConnectionState('live');
@@ -532,7 +532,7 @@ export function StoryDetailPageContent(props: Readonly<{
       if (connectionSessionRef.current !== sessionId) {
         return;
       }
-      const parsed = parseJsonSafely((event as MessageEvent).data);
+      const parsed = parseJsonSafely(event.data);
       if (isRecord(parsed) && typeof parsed.message === 'string') {
         setConnectionError(parsed.message);
       } else {
@@ -544,7 +544,7 @@ export function StoryDetailPageContent(props: Readonly<{
       if (connectionSessionRef.current !== sessionId) {
         return;
       }
-      const parsed = parseJsonSafely((event as MessageEvent).data);
+      const parsed = parseJsonSafely(event.data);
       const snapshot = parseBoardEventSnapshot(parsed);
       if (!snapshot) {
         return;
@@ -592,9 +592,9 @@ export function StoryDetailPageContent(props: Readonly<{
         eventSourceRef.current = null;
       }
       if (reconnectTimeoutRef.current !== null) {
-        window.clearTimeout(reconnectTimeoutRef.current);
+        globalThis.clearTimeout(reconnectTimeoutRef.current);
       }
-      reconnectTimeoutRef.current = window.setTimeout(() => {
+      reconnectTimeoutRef.current = globalThis.setTimeout(() => {
         connect(sessionId);
       }, 1000);
     };
@@ -609,7 +609,7 @@ export function StoryDetailPageContent(props: Readonly<{
         connectionSessionRef.current = sessionId + 1;
       }
       if (reconnectTimeoutRef.current !== null) {
-        window.clearTimeout(reconnectTimeoutRef.current);
+        globalThis.clearTimeout(reconnectTimeoutRef.current);
       }
       if (eventSourceRef.current) {
         eventSourceRef.current.close();
@@ -620,11 +620,7 @@ export function StoryDetailPageContent(props: Readonly<{
 
   const refreshAll = async (options?: { bannerMessage?: string | null }) => {
     setBusy(true);
-    if (options?.bannerMessage !== undefined) {
-      setActionError(options.bannerMessage);
-    } else {
-      setActionError(null);
-    }
+    setActionError(options?.bannerMessage ?? null);
     try {
       const [workItems, latestProposal, latestStory] = await Promise.all([
         fetchRepositoryWorkItems({ repositoryId: repository.id }),
@@ -654,12 +650,10 @@ export function StoryDetailPageContent(props: Readonly<{
     });
     if (moveResult.ok) {
       setWorkItemsById(previous => ({ ...previous, [moveResult.workItem.id]: moveResult.workItem }));
+    } else if (moveResult.status === 409) {
+      await refreshAll({ bannerMessage: `Revision conflict: ${moveResult.message}` });
     } else {
-      if (moveResult.status === 409) {
-        await refreshAll({ bannerMessage: `Revision conflict: ${moveResult.message}` });
-      } else {
-        setActionError(moveResult.message);
-      }
+      setActionError(moveResult.message);
     }
     setBusy(false);
   };
@@ -678,12 +672,10 @@ export function StoryDetailPageContent(props: Readonly<{
     if (moveResult.ok) {
       setProposal(null);
       setWorkItemsById(previous => ({ ...previous, [moveResult.workItem.id]: moveResult.workItem }));
+    } else if (moveResult.status === 409) {
+      await refreshAll({ bannerMessage: `Revision conflict: ${moveResult.message}` });
     } else {
-      if (moveResult.status === 409) {
-        await refreshAll({ bannerMessage: `Revision conflict: ${moveResult.message}` });
-      } else {
-        setActionError(moveResult.message);
-      }
+      setActionError(moveResult.message);
     }
     setBusy(false);
   };
@@ -709,18 +701,16 @@ export function StoryDetailPageContent(props: Readonly<{
         }
         return next;
       });
+    } else if (approveResult.status === 409) {
+      await refreshAll({ bannerMessage: `Revision conflict: ${approveResult.message}` });
     } else {
-      if (approveResult.status === 409) {
-        await refreshAll({ bannerMessage: `Revision conflict: ${approveResult.message}` });
-      } else {
-        setActionError(approveResult.message);
-      }
+      setActionError(approveResult.message);
     }
 
     setBusy(false);
   };
 
-  if (!story || story.type !== 'story') {
+  if (story?.type !== 'story') {
     return (
       <div className="page-stack">
         <p className="repo-banner repo-banner--error" role="alert">
