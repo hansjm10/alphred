@@ -3722,9 +3722,9 @@ describe('createDashboardService', () => {
         },
       });
       seedRunData(db);
-      const service = createDashboardService({ dependencies });
+      const launchService = createDashboardService({ dependencies });
 
-      const launchResult = await service.launchWorkflowRun({
+      const launchResult = await launchService.launchWorkflowRun({
         treeKey: 'demo-tree',
         executionMode: 'async',
         policyConstraints: {
@@ -3734,10 +3734,11 @@ describe('createDashboardService', () => {
           allowedMcpServerIdentifiers: null,
         },
       });
-      await waitForBackgroundExecution(service, launchResult.workflowRunId);
+      await waitForBackgroundExecution(launchService, launchResult.workflowRunId);
 
-      await service.controlWorkflowRun(launchResult.workflowRunId, controlAction);
-      await waitForBackgroundExecution(service, launchResult.workflowRunId);
+      const controlService = createDashboardService({ dependencies });
+      await controlService.controlWorkflowRun(launchResult.workflowRunId, controlAction);
+      await waitForBackgroundExecution(controlService, launchResult.workflowRunId);
 
       expect(assertAvailabilityByExecution).toEqual([true, true]);
     });

@@ -719,6 +719,36 @@ function requireExpectedRevision(expectedRevision: number): number {
   return expectedRevision;
 }
 
+type ParsedMoveWorkItemStatusRequest = {
+  repositoryId: number;
+  workItemId: number;
+  expectedRevision: number;
+  toStatus: DashboardMoveWorkItemStatusRequest['toStatus'];
+  linkedWorkflowRunId: number | null;
+  actor: {
+    actorType: WorkItemActorType;
+    actorLabel: string;
+  };
+};
+
+function parseMoveWorkItemStatusRequest(
+  requestRaw: DashboardMoveWorkItemStatusRequest,
+): ParsedMoveWorkItemStatusRequest {
+  return {
+    repositoryId: requireRepositoryId(requestRaw.repositoryId),
+    workItemId: requireWorkItemId(requestRaw.workItemId),
+    expectedRevision: requireExpectedRevision(requestRaw.expectedRevision),
+    toStatus: requestRaw.toStatus,
+    linkedWorkflowRunId:
+      requestRaw.linkedWorkflowRunId === undefined ? null : requireWorkflowRunId(requestRaw.linkedWorkflowRunId),
+    actor: requireActor(requestRaw),
+  };
+}
+
+export function validateMoveWorkItemStatusRequest(requestRaw: DashboardMoveWorkItemStatusRequest): void {
+  parseMoveWorkItemStatusRequest(requestRaw);
+}
+
 function requireLastEventId(lastEventId: number): number {
   if (!Number.isInteger(lastEventId) || lastEventId < 0) {
     throw new DashboardIntegrationError('invalid_request', 'lastEventId must be a non-negative integer.', {
@@ -1428,13 +1458,8 @@ export function createWorkItemOperations(params: { withDatabase: WithDatabase })
     },
 
     moveWorkItemStatus(requestRaw): Promise<DashboardMoveWorkItemStatusResult> {
-      const repositoryId = requireRepositoryId(requestRaw.repositoryId);
-      const workItemId = requireWorkItemId(requestRaw.workItemId);
-      const expectedRevision = requireExpectedRevision(requestRaw.expectedRevision);
-      const toStatus = requestRaw.toStatus;
-      const linkedWorkflowRunId =
-        requestRaw.linkedWorkflowRunId === undefined ? null : requireWorkflowRunId(requestRaw.linkedWorkflowRunId);
-      const actor = requireActor(requestRaw);
+      const { repositoryId, workItemId, expectedRevision, toStatus, linkedWorkflowRunId, actor } =
+        parseMoveWorkItemStatusRequest(requestRaw);
 
       const occurredAt = new Date().toISOString();
 

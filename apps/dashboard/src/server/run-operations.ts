@@ -60,6 +60,7 @@ const BACKGROUND_RUN_STATUS: RunStatus = 'running';
 const RECENT_SNAPSHOT_LIMIT = 30;
 const MAX_STREAM_SNAPSHOT_EVENTS = 500;
 const FAILED_COMMAND_OUTPUT_ARTIFACT_KIND = 'failed_command_output_v1';
+const runPolicyConstraintsByRunId = new Map<number, DashboardRunLaunchPolicyConstraints>();
 
 type WithDatabase = <T>(operation: (db: AlphredDatabase) => Promise<T> | T) => Promise<T>;
 type RunExecutionPolicyAssertion = (db: AlphredDatabase, runId: number) => Promise<void> | void;
@@ -533,7 +534,6 @@ export function createRunOperations(params: {
     repositoryAuthDependencies,
     backgroundExecution,
   } = params;
-  const runPolicyConstraintsByRunId = new Map<number, DashboardRunLaunchPolicyConstraints>();
 
   return {
     listWorkflowRuns(limit = 20): Promise<DashboardRunSummary[]> {
@@ -1143,6 +1143,10 @@ export function createRunOperations(params: {
               assertRunExecutionAllowed,
             );
 
+            if (execution.runStatus === 'completed' || execution.runStatus === 'failed' || execution.runStatus === 'cancelled') {
+              runPolicyConstraintsByRunId.delete(runId);
+            }
+
             return {
               workflowRunId,
               mode: 'sync',
@@ -1239,6 +1243,14 @@ export function createRunOperations(params: {
           }
 
           throw error;
+        }
+
+        if (
+          controlResult.runStatus === 'completed'
+          || controlResult.runStatus === 'failed'
+          || controlResult.runStatus === 'cancelled'
+        ) {
+          runPolicyConstraintsByRunId.delete(runId);
         }
 
         if ((action === 'resume' || action === 'retry') && controlResult.runStatus === 'running') {

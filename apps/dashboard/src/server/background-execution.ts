@@ -148,6 +148,10 @@ export function createBackgroundExecutionManager(params: {
     let execution: Awaited<ReturnType<typeof executor.executeRun>> | undefined;
     let executionError: unknown = null;
     try {
+      if (executionScope === 'single_node' && assertRunExecutionAllowed !== undefined) {
+        await assertRunExecutionAllowed(db, runId);
+      }
+
       execution =
         executionScope === 'single_node'
           ? await executor.executeSingleNode({
@@ -163,10 +167,6 @@ export function createBackgroundExecutionManager(params: {
                 workingDirectory,
               },
             });
-
-      if (assertRunExecutionAllowed !== undefined && executionScope === 'single_node') {
-        await assertRunExecutionAllowed(db, runId);
-      }
     } catch (error) {
       executionError = error;
     }

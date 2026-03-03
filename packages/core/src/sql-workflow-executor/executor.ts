@@ -200,6 +200,10 @@ export function createSqlWorkflowExecutor(
         };
       }
 
+      await dependencies.assertRunExecutionAllowed?.({
+        workflowRunId: initialRun.id,
+      });
+
       const runNodeRows = loadRunNodeExecutionRows(db, initialRun.id);
       const edgeRows = loadEdgeRows(db, initialRun.id);
       const routingDecisionSelection = loadLatestRoutingDecisionsByRunNodeId(db, initialRun.id);
@@ -333,10 +337,14 @@ export function createSqlWorkflowExecutor(
         };
       }
 
+      await dependencies.assertRunExecutionAllowed?.({
+        workflowRunId: currentRun.id,
+      });
+
       const terminalStatus = transitionRunToCurrentForExecutor(
         db,
         currentRun.id,
-        stepResult.runNodeStatus === 'failed' ? 'failed' : 'completed',
+        stepResult.runStatus === 'failed' || stepResult.runNodeStatus === 'failed' ? 'failed' : 'completed',
       );
       const finalStep: ExecuteWorkflowRunResult['finalStep'] = {
         outcome: 'run_terminal',

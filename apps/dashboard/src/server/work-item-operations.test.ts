@@ -444,6 +444,75 @@ describe('work-item-operations', () => {
     expect(eventPayload.linkedWorkflowRun?.workflowRunId).toBe(moved.workItem.linkedWorkflowRun?.workflowRunId);
   });
 
+  it('rejects invalid autolaunch move requests before creating workflow runs', async () => {
+    const { db, service } = createHarness({
+      environment: {
+        ...process.env,
+        ALPHRED_DASHBOARD_TASK_RUN_AUTOLAUNCH: '1',
+        ALPHRED_DASHBOARD_TASK_RUN_TREE_KEY: 'design-implement-review',
+      },
+    });
+
+    const repository = insertRepository(db, {
+      name: 'repo',
+      provider: 'github',
+      remoteUrl: 'https://example.com/repo.git',
+      remoteRef: 'acme/repo',
+    });
+
+    seedPublishedWorkflowTree(db, { treeKey: 'design-implement-review', provider: 'codex' });
+
+    const taskId = Number(
+      db.insert(workItems)
+        .values({
+          repositoryId: repository.id,
+          type: 'task',
+          status: 'Ready',
+          title: 'Invalid autolaunch request',
+          revision: 0,
+        })
+        .run().lastInsertRowid,
+    );
+
+    await expect(
+      service.moveWorkItemStatus({
+        repositoryId: repository.id,
+        workItemId: taskId,
+        expectedRevision: 0,
+        toStatus: 'InProgress',
+        actorType: 'human',
+        actorLabel: '   ',
+      }),
+    ).rejects.toMatchObject({
+      code: 'invalid_request',
+      status: 400,
+      message: 'actorLabel cannot be empty.',
+    });
+
+    const persistedTask = db
+      .select({
+        status: workItems.status,
+        revision: workItems.revision,
+      })
+      .from(workItems)
+      .where(and(eq(workItems.repositoryId, repository.id), eq(workItems.id, taskId)))
+      .get();
+    expect(persistedTask).toEqual({
+      status: 'Ready',
+      revision: 0,
+    });
+
+    const linkedRows = db
+      .select()
+      .from(workItemWorkflowRuns)
+      .where(and(eq(workItemWorkflowRuns.repositoryId, repository.id), eq(workItemWorkflowRuns.workItemId, taskId)))
+      .all();
+    expect(linkedRows).toHaveLength(0);
+
+    const runRows = db.select().from(workflowRuns).orderBy(desc(workflowRuns.id)).all();
+    expect(runRows).toHaveLength(0);
+  });
+
   it('blocks autolaunch when policy provider allowlist rejects workflow node providers', async () => {
     const { db, service } = createHarness({
       environment: {

@@ -27,7 +27,7 @@ import { DashboardIntegrationError, toDashboardIntegrationError } from './dashbo
 import { createRepositoryOperations } from './repository-operations';
 import { createRunOperations } from './run-operations';
 import { resolveDatabasePath } from './dashboard-utils';
-import { createWorkItemOperations } from './work-item-operations';
+import { createWorkItemOperations, validateMoveWorkItemStatusRequest } from './work-item-operations';
 import { createWorkflowDraftOperations } from './workflow-draft-operations';
 import { createWorkflowOperations } from './workflow-operations';
 
@@ -170,6 +170,8 @@ export function createDashboardService(options: {
     if (!shouldAttemptTaskRunAutolaunch) {
       return workItemOperations.moveWorkItemStatus(request);
     }
+
+    validateMoveWorkItemStatusRequest(request);
 
     const existing = await workItemOperations.getWorkItem({
       repositoryId: request.repositoryId,
