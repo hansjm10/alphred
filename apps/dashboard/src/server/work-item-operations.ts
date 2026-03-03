@@ -88,13 +88,9 @@ function toUniqueSortedStrings(values: readonly string[]): string[] {
 function parseStatusPaths(statusOutput: string): string[] {
   const entries = statusOutput.split('\u0000');
   const paths = new Set<string>();
-  let skipNextEntry = false;
 
-  for (const entry of entries) {
-    if (skipNextEntry) {
-      skipNextEntry = false;
-      continue;
-    }
+  for (let index = 0; index < entries.length; index += 1) {
+    const entry = entries[index];
 
     if (entry.length < 4) {
       continue;
@@ -102,16 +98,23 @@ function parseStatusPaths(statusOutput: string): string[] {
 
     const status = entry.slice(0, 2);
     const path = entry.slice(3);
-    const statusCodes = new Set(status);
-
-    const renamedOrCopied = statusCodes.has('R') || statusCodes.has('C');
-    if (renamedOrCopied) {
-      skipNextEntry = true;
-    }
+    const renamedOrCopied = status.includes('R') || status.includes('C');
 
     if (path.length > 0) {
       paths.add(path);
     }
+
+    if (!renamedOrCopied) {
+      continue;
+    }
+
+    const sourcePath = entries[index + 1];
+    if (sourcePath && sourcePath.length > 0) {
+      paths.add(sourcePath);
+    }
+
+    // Rename/copy entries in porcelain -z carry a second NUL-delimited pathname.
+    index += 1;
   }
 
   return toUniqueSortedStrings([...paths]);

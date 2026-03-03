@@ -795,6 +795,95 @@ describe('work-item-operations', () => {
     }
   });
 
+  it('treats renamed planned files as touched in replan deltas', async () => {
+    const { db, service } = createHarness();
+    const tempRoot = await mkdtemp(join(tmpdir(), 'alphred-work-item-replan-rename-'));
+    const worktreePath = join(tempRoot, 'repo');
+
+    try {
+      await mkdir(worktreePath);
+      await runGit(worktreePath, ['init']);
+      await runGit(worktreePath, ['config', 'user.name', 'Test Runner']);
+      await runGit(worktreePath, ['config', 'user.email', 'test@example.com']);
+      await mkdir(join(worktreePath, 'src'));
+      await writeFile(join(worktreePath, 'src', 'old.ts'), 'export const value = 1;\n');
+      await runGit(worktreePath, ['add', '.']);
+      await runGit(worktreePath, ['commit', '-m', 'seed']);
+      await runGit(worktreePath, ['mv', 'src/old.ts', 'src/new.ts']);
+
+      const repository = insertRepository(db, {
+        name: 'repo',
+        provider: 'github',
+        remoteUrl: 'https://example.com/repo.git',
+        remoteRef: 'acme/repo',
+      });
+
+      const treeId = seedPublishedWorkflowTree(db);
+      const workflowRunId = Number(
+        db.insert(workflowRuns)
+          .values({
+            workflowTreeId: treeId,
+            status: 'running',
+            startedAt: '2026-03-03T00:01:00.000Z',
+            completedAt: null,
+            createdAt: '2026-03-03T00:01:00.000Z',
+            updatedAt: '2026-03-03T00:01:00.000Z',
+          })
+          .run().lastInsertRowid,
+      );
+
+      const taskId = Number(
+        db.insert(workItems)
+          .values({
+            repositoryId: repository.id,
+            type: 'task',
+            status: 'InProgress',
+            title: 'Implement issue',
+            revision: 1,
+            plannedFiles: ['src/old.ts'],
+          })
+          .run().lastInsertRowid,
+      );
+
+      db.insert(workItemWorkflowRuns)
+        .values({
+          repositoryId: repository.id,
+          workItemId: taskId,
+          workflowRunId,
+          linkedAt: '2026-03-03T00:02:00.000Z',
+        })
+        .run();
+
+      db.insert(runWorktrees)
+        .values({
+          repositoryId: repository.id,
+          workflowRunId,
+          worktreePath,
+          branch: 'main',
+          status: 'active',
+          commitHash: null,
+          createdAt: '2026-03-03T00:02:00.000Z',
+          removedAt: null,
+        })
+        .run();
+
+      const result = await service.requestWorkItemReplan({
+        repositoryId: repository.id,
+        workItemId: taskId,
+        actorType: 'human',
+        actorLabel: 'alice',
+      });
+
+      expect(result.repositoryId).toBe(repository.id);
+      expect(result.workItemId).toBe(taskId);
+      expect(result.workflowRunId).toBe(workflowRunId);
+      expect(result.plannedButUntouched).toEqual([]);
+      expect(result.touchedButUnplanned).toEqual(['src/new.ts']);
+    } finally {
+      await rm(tempRoot, { recursive: true, force: true });
+    }
+  });
+
   it('returns not_found for requestWorkItemReplan when the work item does not exist', async () => {
     const { db, service } = createHarness();
 
