@@ -2006,6 +2006,13 @@ export function createWorkItemOperations(params: { withDatabase: WithDatabase })
       const occurredAt = new Date().toISOString();
 
       return withDatabase(async db => {
+        const targetWorkItem = readWorkItemOrThrow(db, { repositoryId, workItemId });
+        if (targetWorkItem.type !== 'task') {
+          throw new DashboardIntegrationError('invalid_request', `Work item id=${workItemId} is not a task.`, {
+            status: 400,
+          });
+        }
+
         const latestLinkedRuns = loadLatestLinkedWorkflowRunsForTasks(db, {
           repositoryId,
           taskWorkItemIds: [workItemId],

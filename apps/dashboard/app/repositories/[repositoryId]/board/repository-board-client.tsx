@@ -601,7 +601,7 @@ export function RepositoryBoardPageContent({
     const touchedFiles = linkedWorkflowRun?.touchedFiles;
     const planVsActual = resolvePlanVsActualDelta(selectedWorkItem.plannedFiles, touchedFiles);
     const hasMismatch = planVsActual.plannedButUntouched.length > 0 || planVsActual.touchedButUnplanned.length > 0;
-    const canComparePlanVsActual = linkedWorkflowRun !== null && touchedFiles !== undefined;
+    const canComparePlanVsActual = linkedWorkflowRun !== null;
     const requestingReplan = replanningWorkItemIds.has(selectedWorkItem.id);
 
     return (
@@ -713,10 +713,10 @@ export function RepositoryBoardPageContent({
             <h5>Touched files</h5>
             {linkedWorkflowRun === null ? (
               <p className="meta-text">Link a run to compare actual file touches.</p>
-            ) : touchedFiles === undefined ? (
+            ) : touchedFiles === null ? (
               <p className="meta-text">Touched files are unavailable because the linked run worktree is unavailable.</p>
             ) : (
-              renderStringList(touchedFiles)
+              renderStringList(touchedFiles ?? null)
             )}
           </div>
 

@@ -292,6 +292,72 @@ describe('RepositoryBoardPageContent', () => {
     expect(await screen.findByText(/Replanning requested for "Plan mismatch task"/)).toBeInTheDocument();
   });
 
+  it('keeps plan-vs-actual and replanning visible when linked-run updates omit touchedFiles', async () => {
+    const user = userEvent.setup();
+
+    render(
+      <RepositoryBoardPageContent
+        repository={createRepository({ id: 1, name: 'demo-repo' })}
+        actor={{ actorType: 'human', actorLabel: 'octocat' }}
+        initialLatestEventId={0}
+        initialWorkItems={[
+          createWorkItem({
+            id: 10,
+            type: 'task',
+            status: 'Ready',
+            title: 'Linked run partial update',
+            plannedFiles: ['src/a.ts'],
+            linkedWorkflowRun: {
+              workflowRunId: 42,
+              runStatus: 'running',
+              linkedAt: '2026-03-03T00:00:00.000Z',
+              touchedFiles: ['src/a.ts'],
+            },
+          }),
+        ]}
+      />,
+    );
+
+    expect(MockEventSource.instances).toHaveLength(1);
+    MockEventSource.instances[0]?.emitOpen();
+
+    await user.click(screen.getByRole('button', { name: /Linked run partial update/ }));
+    expect(screen.getByRole('button', { name: 'Request replanning' })).toBeInTheDocument();
+
+    act(() => {
+      MockEventSource.instances[0]?.emit('board_event', {
+        id: 9,
+        repositoryId: 1,
+        workItemId: 10,
+        eventType: 'status_changed',
+        payload: {
+          type: 'task',
+          fromStatus: 'Ready',
+          toStatus: 'InProgress',
+          revision: 1,
+          linkedWorkflowRun: {
+            workflowRunId: 42,
+            runStatus: 'running',
+            linkedAt: '2026-03-03T00:05:00.000Z',
+          },
+        },
+        createdAt: new Date('2026-03-03T00:05:00.000Z').toISOString(),
+      });
+    });
+
+    expect(screen.queryByText('No plan-vs-actual diff available yet.')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Request replanning for mismatch' })).toBeInTheDocument();
+
+    const touchedFilesSection = screen.getByText('Touched files').closest('div');
+    expect(touchedFilesSection).not.toBeNull();
+    expect(within(touchedFilesSection ?? document.body).getByText('None')).toBeInTheDocument();
+    expect(
+      within(touchedFilesSection ?? document.body).queryByText(
+        'Touched files are unavailable because the linked run worktree is unavailable.',
+      ),
+    ).not.toBeInTheDocument();
+  });
+
   it('shows effective policy details for tasks and supports inspecting epic policy from parent chain', async () => {
     const user = userEvent.setup();
 

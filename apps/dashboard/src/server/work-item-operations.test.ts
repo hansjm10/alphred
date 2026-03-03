@@ -712,6 +712,66 @@ describe('work-item-operations', () => {
     }
   });
 
+  it('returns not_found for requestWorkItemReplan when the work item does not exist', async () => {
+    const { db, service } = createHarness();
+
+    const repository = insertRepository(db, {
+      name: 'repo',
+      provider: 'github',
+      remoteUrl: 'https://example.com/repo.git',
+      remoteRef: 'acme/repo',
+    });
+
+    await expect(
+      service.requestWorkItemReplan({
+        repositoryId: repository.id,
+        workItemId: 999,
+        actorType: 'human',
+        actorLabel: 'alice',
+      }),
+    ).rejects.toMatchObject({
+      code: 'not_found',
+      status: 404,
+      message: 'Work item id=999 was not found.',
+    });
+  });
+
+  it('returns invalid_request for requestWorkItemReplan when the target is not a task', async () => {
+    const { db, service } = createHarness();
+
+    const repository = insertRepository(db, {
+      name: 'repo',
+      provider: 'github',
+      remoteUrl: 'https://example.com/repo.git',
+      remoteRef: 'acme/repo',
+    });
+
+    const storyId = Number(
+      db.insert(workItems)
+        .values({
+          repositoryId: repository.id,
+          type: 'story',
+          status: 'Draft',
+          title: 'Story item',
+          revision: 0,
+        })
+        .run().lastInsertRowid,
+    );
+
+    await expect(
+      service.requestWorkItemReplan({
+        repositoryId: repository.id,
+        workItemId: storyId,
+        actorType: 'human',
+        actorLabel: 'alice',
+      }),
+    ).rejects.toMatchObject({
+      code: 'invalid_request',
+      status: 400,
+      message: `Work item id=${storyId} is not a task.`,
+    });
+  });
+
   it('auto-launches and links a run when task transitions Ready -> InProgress and autolaunch is enabled', async () => {
     const { db, service } = createHarness({
       environment: {
