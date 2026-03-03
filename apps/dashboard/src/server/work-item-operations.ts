@@ -282,7 +282,7 @@ function resolveEpicWorkItemId(
   return null;
 }
 
-function loadPolicyResolutionContext(db: DbOrTx, repositoryId: number): PolicyResolutionContext {
+function loadWorkItemIdentityMap(db: DbOrTx, repositoryId: number): ReadonlyMap<number, WorkItemIdentity> {
   const identityRows = db
     .select({
       id: workItems.id,
@@ -301,6 +301,44 @@ function loadPolicyResolutionContext(db: DbOrTx, repositoryId: number): PolicyRe
       parentId: identityRow.parentId,
     });
   }
+
+  return workItemIdentityById;
+}
+
+function didAncestorReparentChangeDescendantPolicyContext(params: {
+  existing: WorkItemRow;
+  reloaded: WorkItemRow;
+  workItemIdentityById: ReadonlyMap<number, WorkItemIdentity>;
+}): boolean {
+  if (params.reloaded.type === 'task') {
+    return false;
+  }
+
+  if (params.existing.parentId === params.reloaded.parentId) {
+    return false;
+  }
+
+  const currentIdentityById = new Map(params.workItemIdentityById);
+  currentIdentityById.set(params.reloaded.id, {
+    id: params.reloaded.id,
+    type: params.reloaded.type as WorkItemType,
+    parentId: params.reloaded.parentId,
+  });
+
+  const previousIdentityById = new Map(currentIdentityById);
+  previousIdentityById.set(params.reloaded.id, {
+    id: params.reloaded.id,
+    type: params.reloaded.type as WorkItemType,
+    parentId: params.existing.parentId,
+  });
+
+  const previousEpicWorkItemId = resolveEpicWorkItemId(params.reloaded.id, previousIdentityById);
+  const nextEpicWorkItemId = resolveEpicWorkItemId(params.reloaded.id, currentIdentityById);
+  return previousEpicWorkItemId !== nextEpicWorkItemId;
+}
+
+function loadPolicyResolutionContext(db: DbOrTx, repositoryId: number): PolicyResolutionContext {
+  const workItemIdentityById = loadWorkItemIdentityMap(db, repositoryId);
 
   const policyRows = db
     .select()
@@ -1441,46 +1479,54 @@ export function createWorkItemOperations(params: { withDatabase: WithDatabase })
           });
 
           if (reloaded.type !== 'task') {
-            const descendantTasks = readDescendantTasks(tx, {
-              repositoryId,
-              ancestorWorkItemId: reloaded.id,
+            const workItemIdentityById = loadWorkItemIdentityMap(tx, repositoryId);
+            const shouldEmitDescendantReparentEvents = didAncestorReparentChangeDescendantPolicyContext({
+              existing,
+              reloaded,
+              workItemIdentityById,
             });
-            if (descendantTasks.length > 0) {
-              const descendantSnapshots = toWorkItemSnapshotsWithPolicies(tx, {
+            if (shouldEmitDescendantReparentEvents) {
+              const descendantTasks = readDescendantTasks(tx, {
                 repositoryId,
-                rows: descendantTasks,
+                ancestorWorkItemId: reloaded.id,
               });
-              const descendantSnapshotById = new Map(descendantSnapshots.map(snapshot => [snapshot.id, snapshot]));
-
-              for (const descendantTask of descendantTasks) {
-                const descendantSnapshot = descendantSnapshotById.get(descendantTask.id);
-                if (!descendantSnapshot) {
-                  throw new DashboardIntegrationError(
-                    'internal_error',
-                    `Task id=${descendantTask.id} could not be reloaded after ancestor reparent.`,
-                    { status: 500 },
-                  );
-                }
-
-                insertEvent(tx, {
+              if (descendantTasks.length > 0) {
+                const descendantSnapshots = toWorkItemSnapshotsWithPolicies(tx, {
                   repositoryId,
-                  workItemId: descendantTask.id,
-                  eventType: 'reparented',
-                  actorType: actor.actorType,
-                  actorLabel: actor.actorLabel,
-                  occurredAt,
-                  payload: {
-                    fromParentId: descendantTask.parentId,
-                    toParentId: descendantTask.parentId,
-                    parentType: null,
-                    childType: descendantTask.type,
-                    expectedRevision: descendantTask.revision,
-                    revision: descendantTask.revision,
-                    effectivePolicy: descendantSnapshot.effectivePolicy ?? null,
-                    reason: 'ancestor_reparent',
-                    ancestorWorkItemId: reloaded.id,
-                  },
+                  rows: descendantTasks,
                 });
+                const descendantSnapshotById = new Map(descendantSnapshots.map(snapshot => [snapshot.id, snapshot]));
+
+                for (const descendantTask of descendantTasks) {
+                  const descendantSnapshot = descendantSnapshotById.get(descendantTask.id);
+                  if (!descendantSnapshot) {
+                    throw new DashboardIntegrationError(
+                      'internal_error',
+                      `Task id=${descendantTask.id} could not be reloaded after ancestor reparent.`,
+                      { status: 500 },
+                    );
+                  }
+
+                  insertEvent(tx, {
+                    repositoryId,
+                    workItemId: descendantTask.id,
+                    eventType: 'reparented',
+                    actorType: actor.actorType,
+                    actorLabel: actor.actorLabel,
+                    occurredAt,
+                    payload: {
+                      fromParentId: descendantTask.parentId,
+                      toParentId: descendantTask.parentId,
+                      parentType: null,
+                      childType: descendantTask.type,
+                      expectedRevision: descendantTask.revision,
+                      revision: descendantTask.revision,
+                      effectivePolicy: descendantSnapshot.effectivePolicy ?? null,
+                      reason: 'ancestor_reparent',
+                      ancestorWorkItemId: reloaded.id,
+                    },
+                  });
+                }
               }
             }
           }

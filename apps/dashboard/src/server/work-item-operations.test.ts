@@ -807,6 +807,148 @@ describe('work-item-operations', () => {
     expect(epicAPolicyId).not.toBe(epicBPolicyId);
   });
 
+  it('does not emit descendant task reparented events when ancestor move keeps epic context', async () => {
+    const { db, service } = createHarness();
+
+    const repository = insertRepository(db, {
+      name: 'repo',
+      provider: 'github',
+      remoteUrl: 'https://example.com/repo.git',
+      remoteRef: 'acme/repo',
+    });
+
+    const epicA = Number(
+      db.insert(workItems)
+        .values({
+          repositoryId: repository.id,
+          type: 'epic',
+          status: 'Draft',
+          title: 'Epic A',
+          revision: 0,
+        })
+        .run().lastInsertRowid,
+    );
+    const featureA = Number(
+      db.insert(workItems)
+        .values({
+          repositoryId: repository.id,
+          type: 'feature',
+          status: 'Draft',
+          title: 'Feature A',
+          parentId: epicA,
+          revision: 0,
+        })
+        .run().lastInsertRowid,
+    );
+    const featureB = Number(
+      db.insert(workItems)
+        .values({
+          repositoryId: repository.id,
+          type: 'feature',
+          status: 'Draft',
+          title: 'Feature B',
+          parentId: epicA,
+          revision: 0,
+        })
+        .run().lastInsertRowid,
+    );
+    const story = Number(
+      db.insert(workItems)
+        .values({
+          repositoryId: repository.id,
+          type: 'story',
+          status: 'Draft',
+          title: 'Story',
+          parentId: featureA,
+          revision: 0,
+        })
+        .run().lastInsertRowid,
+    );
+    const task = Number(
+      db.insert(workItems)
+        .values({
+          repositoryId: repository.id,
+          type: 'task',
+          status: 'Draft',
+          title: 'Task',
+          parentId: story,
+          revision: 0,
+        })
+        .run().lastInsertRowid,
+    );
+
+    const repositoryPolicyId = Number(
+      db.insert(workItemPolicies)
+        .values({
+          repositoryId: repository.id,
+          epicWorkItemId: null,
+          payload: {
+            allowedProviders: ['codex'],
+          },
+        })
+        .run().lastInsertRowid,
+    );
+
+    const epicAPolicyId = Number(
+      db.insert(workItemPolicies)
+        .values({
+          repositoryId: repository.id,
+          epicWorkItemId: epicA,
+          payload: {
+            budgets: {
+              maxConcurrentTasks: 2,
+            },
+          },
+        })
+        .run().lastInsertRowid,
+    );
+
+    const firstReparentedStory = await service.setWorkItemParent({
+      repositoryId: repository.id,
+      workItemId: story,
+      parentId: featureB,
+      expectedRevision: 0,
+      actorType: 'human',
+      actorLabel: 'alice',
+    });
+    expect(firstReparentedStory.workItem.parentId).toBe(featureB);
+
+    const secondReparentedStory = await service.setWorkItemParent({
+      repositoryId: repository.id,
+      workItemId: story,
+      parentId: featureB,
+      expectedRevision: 1,
+      actorType: 'human',
+      actorLabel: 'alice',
+    });
+    expect(secondReparentedStory.workItem.parentId).toBe(featureB);
+
+    const taskSnapshot = await service.getWorkItem({
+      repositoryId: repository.id,
+      workItemId: task,
+    });
+    expect(taskSnapshot.workItem.effectivePolicy).toMatchObject({
+      appliesToType: 'task',
+      epicWorkItemId: epicA,
+      repositoryPolicyId,
+      epicPolicyId: epicAPolicyId,
+    });
+
+    const taskReparentedEvents = db
+      .select()
+      .from(workItemEvents)
+      .where(
+        and(
+          eq(workItemEvents.repositoryId, repository.id),
+          eq(workItemEvents.workItemId, task),
+          eq(workItemEvents.eventType, 'reparented'),
+        ),
+      )
+      .all();
+
+    expect(taskReparentedEvents).toHaveLength(0);
+  });
+
   it('proposes and approves a story breakdown (Draft -> Ready for child tasks)', async () => {
     const { db, service } = createHarness();
 
