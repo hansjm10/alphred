@@ -636,6 +636,177 @@ describe('work-item-operations', () => {
     });
   });
 
+  it('emits descendant task reparented events with refreshed effectivePolicy when moving an ancestor', async () => {
+    const { db, service } = createHarness();
+
+    const repository = insertRepository(db, {
+      name: 'repo',
+      provider: 'github',
+      remoteUrl: 'https://example.com/repo.git',
+      remoteRef: 'acme/repo',
+    });
+
+    const epicA = Number(
+      db.insert(workItems)
+        .values({
+          repositoryId: repository.id,
+          type: 'epic',
+          status: 'Draft',
+          title: 'Epic A',
+          revision: 0,
+        })
+        .run().lastInsertRowid,
+    );
+    const feature = Number(
+      db.insert(workItems)
+        .values({
+          repositoryId: repository.id,
+          type: 'feature',
+          status: 'Draft',
+          title: 'Feature',
+          parentId: epicA,
+          revision: 0,
+        })
+        .run().lastInsertRowid,
+    );
+    const story = Number(
+      db.insert(workItems)
+        .values({
+          repositoryId: repository.id,
+          type: 'story',
+          status: 'Draft',
+          title: 'Story',
+          parentId: feature,
+          revision: 0,
+        })
+        .run().lastInsertRowid,
+    );
+    const task = Number(
+      db.insert(workItems)
+        .values({
+          repositoryId: repository.id,
+          type: 'task',
+          status: 'Draft',
+          title: 'Task',
+          parentId: story,
+          revision: 0,
+        })
+        .run().lastInsertRowid,
+    );
+
+    const epicB = Number(
+      db.insert(workItems)
+        .values({
+          repositoryId: repository.id,
+          type: 'epic',
+          status: 'Draft',
+          title: 'Epic B',
+          revision: 0,
+        })
+        .run().lastInsertRowid,
+    );
+
+    const repositoryPolicyId = Number(
+      db.insert(workItemPolicies)
+        .values({
+          repositoryId: repository.id,
+          epicWorkItemId: null,
+          payload: {
+            allowedProviders: ['codex'],
+          },
+        })
+        .run().lastInsertRowid,
+    );
+
+    const epicAPolicyId = Number(
+      db.insert(workItemPolicies)
+        .values({
+          repositoryId: repository.id,
+          epicWorkItemId: epicA,
+          payload: {
+            budgets: {
+              maxConcurrentTasks: 2,
+            },
+          },
+        })
+        .run().lastInsertRowid,
+    );
+
+    const epicBPolicyId = Number(
+      db.insert(workItemPolicies)
+        .values({
+          repositoryId: repository.id,
+          epicWorkItemId: epicB,
+          payload: {
+            budgets: {
+              maxConcurrentTasks: 5,
+            },
+          },
+        })
+        .run().lastInsertRowid,
+    );
+
+    const reparentedFeature = await service.setWorkItemParent({
+      repositoryId: repository.id,
+      workItemId: feature,
+      parentId: epicB,
+      expectedRevision: 0,
+      actorType: 'human',
+      actorLabel: 'alice',
+    });
+
+    expect(reparentedFeature.workItem.parentId).toBe(epicB);
+    expect(reparentedFeature.workItem.effectivePolicy).toBeNull();
+
+    const taskSnapshot = await service.getWorkItem({
+      repositoryId: repository.id,
+      workItemId: task,
+    });
+    expect(taskSnapshot.workItem.effectivePolicy).toMatchObject({
+      appliesToType: 'task',
+      epicWorkItemId: epicB,
+      repositoryPolicyId,
+      epicPolicyId: epicBPolicyId,
+    });
+
+    const taskReparentedEvents = db
+      .select()
+      .from(workItemEvents)
+      .where(
+        and(
+          eq(workItemEvents.repositoryId, repository.id),
+          eq(workItemEvents.workItemId, task),
+          eq(workItemEvents.eventType, 'reparented'),
+        ),
+      )
+      .all();
+
+    expect(taskReparentedEvents).toHaveLength(1);
+
+    const taskReparentedPayload = taskReparentedEvents[0]!.payload as {
+      toParentId?: unknown;
+      revision?: unknown;
+      expectedRevision?: unknown;
+      effectivePolicy?: unknown;
+      reason?: unknown;
+      ancestorWorkItemId?: unknown;
+    };
+
+    expect(taskReparentedPayload.toParentId).toBe(story);
+    expect(taskReparentedPayload.revision).toBe(0);
+    expect(taskReparentedPayload.expectedRevision).toBe(0);
+    expect(taskReparentedPayload.reason).toBe('ancestor_reparent');
+    expect(taskReparentedPayload.ancestorWorkItemId).toBe(feature);
+    expect(taskReparentedPayload.effectivePolicy).toMatchObject({
+      appliesToType: 'task',
+      epicWorkItemId: epicB,
+      repositoryPolicyId,
+      epicPolicyId: epicBPolicyId,
+    });
+
+    expect(epicAPolicyId).not.toBe(epicBPolicyId);
+  });
+
   it('proposes and approves a story breakdown (Draft -> Ready for child tasks)', async () => {
     const { db, service } = createHarness();
 

@@ -655,6 +655,58 @@ function readWorkItemOrThrow(
   return row;
 }
 
+function readDescendantTasks(
+  db: DbOrTx,
+  params: {
+    repositoryId: number;
+    ancestorWorkItemId: number;
+  },
+): WorkItemRow[] {
+  const rows = db.select().from(workItems).where(eq(workItems.repositoryId, params.repositoryId)).all();
+
+  const childrenByParentId = new Map<number, WorkItemRow[]>();
+  for (const row of rows) {
+    if (row.parentId === null) {
+      continue;
+    }
+
+    const children = childrenByParentId.get(row.parentId);
+    if (children) {
+      children.push(row);
+      continue;
+    }
+
+    childrenByParentId.set(row.parentId, [row]);
+  }
+
+  const descendantTasks: WorkItemRow[] = [];
+  const queue: number[] = [params.ancestorWorkItemId];
+  const visited = new Set(queue);
+
+  while (queue.length > 0) {
+    const currentId = queue.shift();
+    if (currentId === undefined) {
+      continue;
+    }
+
+    const children = childrenByParentId.get(currentId) ?? [];
+    for (const child of children) {
+      if (visited.has(child.id)) {
+        continue;
+      }
+      visited.add(child.id);
+      queue.push(child.id);
+
+      if (child.type === 'task') {
+        descendantTasks.push(child);
+      }
+    }
+  }
+
+  descendantTasks.sort((left, right) => left.id - right.id);
+  return descendantTasks;
+}
+
 function insertEvent(
   db: DbOrTx,
   params: {
@@ -1387,6 +1439,51 @@ export function createWorkItemOperations(params: { withDatabase: WithDatabase })
               effectivePolicy: reloadedSnapshot.effectivePolicy ?? null,
             },
           });
+
+          if (reloaded.type !== 'task') {
+            const descendantTasks = readDescendantTasks(tx, {
+              repositoryId,
+              ancestorWorkItemId: reloaded.id,
+            });
+            if (descendantTasks.length > 0) {
+              const descendantSnapshots = toWorkItemSnapshotsWithPolicies(tx, {
+                repositoryId,
+                rows: descendantTasks,
+              });
+              const descendantSnapshotById = new Map(descendantSnapshots.map(snapshot => [snapshot.id, snapshot]));
+
+              for (const descendantTask of descendantTasks) {
+                const descendantSnapshot = descendantSnapshotById.get(descendantTask.id);
+                if (!descendantSnapshot) {
+                  throw new DashboardIntegrationError(
+                    'internal_error',
+                    `Task id=${descendantTask.id} could not be reloaded after ancestor reparent.`,
+                    { status: 500 },
+                  );
+                }
+
+                insertEvent(tx, {
+                  repositoryId,
+                  workItemId: descendantTask.id,
+                  eventType: 'reparented',
+                  actorType: actor.actorType,
+                  actorLabel: actor.actorLabel,
+                  occurredAt,
+                  payload: {
+                    fromParentId: descendantTask.parentId,
+                    toParentId: descendantTask.parentId,
+                    parentType: null,
+                    childType: descendantTask.type,
+                    expectedRevision: descendantTask.revision,
+                    revision: descendantTask.revision,
+                    effectivePolicy: descendantSnapshot.effectivePolicy ?? null,
+                    reason: 'ancestor_reparent',
+                    ancestorWorkItemId: reloaded.id,
+                  },
+                });
+              }
+            }
+          }
 
           return {
             workItem: reloadedSnapshot,
