@@ -5,7 +5,7 @@ import type {
   DashboardRunControlAction,
   DashboardRunDetail,
   DashboardRunNodeStreamEvent,
-} from '../../../../src/server/dashboard-contracts';
+} from '@dashboard/server/dashboard-contracts';
 import { Panel } from '../../../ui/primitives';
 import { isActiveRunStatus } from '../../run-summary-utils';
 import {

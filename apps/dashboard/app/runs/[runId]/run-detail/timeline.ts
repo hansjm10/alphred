@@ -1,4 +1,4 @@
-import type { DashboardRunDetail, DashboardRepositoryState } from '../../../../src/server/dashboard-contracts';
+import type { DashboardRunDetail, DashboardRepositoryState } from '@dashboard/server/dashboard-contracts';
 import { parseDateValue, toNodeTerminalSummary } from './formatting';
 import type { RecentPartition, RecentPartitionOrder, TimelineCategory, TimelineItem } from './types';
 

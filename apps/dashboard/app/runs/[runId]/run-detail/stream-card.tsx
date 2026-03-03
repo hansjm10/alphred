@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
 import { ActionButton, Card } from '../../../ui/primitives';
-import type { DashboardRunDetail, DashboardRunNodeStreamEvent } from '../../../../src/server/dashboard-contracts';
+import type { DashboardRunDetail, DashboardRunNodeStreamEvent } from '@dashboard/server/dashboard-contracts';
 import { formatLastUpdated, formatStreamTimestamp } from './formatting';
 import { mergeAgentStreamEvents } from './realtime';
 import {

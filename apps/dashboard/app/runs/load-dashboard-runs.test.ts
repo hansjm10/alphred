@@ -3,7 +3,7 @@ import type {
   DashboardRunDetail,
   DashboardRunSummary,
   DashboardWorkflowTreeSummary,
-} from '../../src/server/dashboard-contracts';
+} from '@dashboard/server/dashboard-contracts';
 
 const {
   createDashboardServiceMock,
@@ -17,7 +17,7 @@ const {
   getWorkflowRunDetailMock: vi.fn(),
 }));
 
-vi.mock('../../src/server/dashboard-service', () => ({
+vi.mock('@dashboard/server/dashboard-service', () => ({
   createDashboardService: createDashboardServiceMock,
 }));
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { DashboardRunDetail } from '../../../../src/server/dashboard-contracts';
+import type { DashboardRunDetail } from '@dashboard/server/dashboard-contracts';
 import { hasFanOutGroupShape, hasRunNodeShape } from './validation';
 
 function createRunNode(

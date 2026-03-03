@@ -1,6 +1,6 @@
 import { notFound } from 'next/navigation';
-import type { DashboardRepositoryState, DashboardRunDetail } from '../../../src/server/dashboard-contracts';
-import { DashboardIntegrationError } from '../../../src/server/dashboard-errors';
+import type { DashboardRepositoryState, DashboardRunDetail } from '@dashboard/server/dashboard-contracts';
+import { DashboardIntegrationError } from '@dashboard/server/dashboard-errors';
 import { loadDashboardRepositories } from '../../repositories/load-dashboard-repositories';
 import { loadDashboardRunDetail } from '../load-dashboard-runs';
 import { RunDetailContent } from './run-detail';

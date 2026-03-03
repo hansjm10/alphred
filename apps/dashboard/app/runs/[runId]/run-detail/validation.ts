@@ -1,4 +1,4 @@
-import type { DashboardRunDetail, DashboardRunNodeStreamEvent, DashboardRunNodeStreamSnapshot, DashboardRunSummary } from '../../../../src/server/dashboard-contracts';
+import type { DashboardRunDetail, DashboardRunNodeStreamEvent, DashboardRunNodeStreamSnapshot, DashboardRunSummary } from '@dashboard/server/dashboard-contracts';
 import {
   ARTIFACT_CONTENT_TYPES,
   ARTIFACT_TYPES,

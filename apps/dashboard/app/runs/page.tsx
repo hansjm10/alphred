@@ -2,7 +2,7 @@ import type {
   DashboardRepositoryState,
   DashboardRunSummary,
   DashboardWorkflowTreeSummary,
-} from '../../src/server/dashboard-contracts';
+} from '@dashboard/server/dashboard-contracts';
 import type { GitHubAuthGate } from '../ui/github-auth';
 import { loadGitHubAuthGate } from '../ui/load-github-auth-gate';
 import { loadDashboardRepositories } from '../repositories/load-dashboard-repositories';

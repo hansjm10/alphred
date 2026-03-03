@@ -10,7 +10,7 @@ import type {
   DashboardWorkflowDraftEdge,
   DashboardWorkflowDraftNode,
   DashboardWorkflowValidationResult,
-} from '../../../../src/server/dashboard-contracts';
+} from '@dashboard/server/dashboard-contracts';
 import { EdgeInspector, NodeInspector, WorkflowInspector } from './workflow-editor-inspectors';
 
 function createDraftNode(overrides: Partial<DashboardWorkflowDraftNode> = {}): DashboardWorkflowDraftNode {

@@ -1,4 +1,4 @@
-import type { DashboardRunSummary } from '../../src/server/dashboard-contracts';
+import type { DashboardRunSummary } from '@dashboard/server/dashboard-contracts';
 
 function statusTier(status: DashboardRunSummary['status']): number {
   if (status === 'running' || status === 'pending' || status === 'paused') {

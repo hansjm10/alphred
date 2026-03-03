@@ -1,9 +1,9 @@
 import { NextResponse } from 'next/server';
 import {
   toDashboardIntegrationError,
-} from '../../../../../../../src/server/dashboard-errors';
-import { toErrorResponse } from '../../../../../../../src/server/dashboard-http';
-import { createDashboardService, type DashboardService } from '../../../../../../../src/server/dashboard-service';
+} from '@dashboard/server/dashboard-errors';
+import { toErrorResponse } from '@dashboard/server/dashboard-http';
+import { createDashboardService, type DashboardService } from '@dashboard/server/dashboard-service';
 import { parseRepositoryIdFromPathSegment } from '../../../../work-items/_shared/work-item-route-validation';
 import {
   createSseResponse,

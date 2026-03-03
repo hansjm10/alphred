@@ -2,8 +2,8 @@
 
 import { render, screen, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { DashboardRepositoryState, DashboardRunDetail } from '../../../src/server/dashboard-contracts';
-import { DashboardIntegrationError } from '../../../src/server/dashboard-errors';
+import type { DashboardRepositoryState, DashboardRunDetail } from '@dashboard/server/dashboard-contracts';
+import { DashboardIntegrationError } from '@dashboard/server/dashboard-errors';
 
 const { NOT_FOUND_ERROR, notFoundMock, loadDashboardRunDetailMock, loadDashboardRepositoriesMock } = vi.hoisted(() => {
   const error = new Error('NEXT_NOT_FOUND');

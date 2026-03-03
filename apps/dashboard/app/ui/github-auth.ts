@@ -1,4 +1,4 @@
-import type { DashboardGitHubAuthStatus } from '../../src/server/dashboard-contracts';
+import type { DashboardGitHubAuthStatus } from '@dashboard/server/dashboard-contracts';
 import type { StatusVariant } from './primitives';
 
 export type GitHubAuthState = 'checking' | 'authenticated' | 'unauthenticated' | 'auth_error';

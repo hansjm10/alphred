@@ -3,9 +3,9 @@ import type {
   DashboardAgentModelOption,
   DashboardAgentProviderOption,
   DashboardWorkflowDraftTopology,
-} from '../../../../src/server/dashboard-contracts';
-import { DashboardIntegrationError } from '../../../../src/server/dashboard-errors';
-import { createDashboardService } from '../../../../src/server/dashboard-service';
+} from '@dashboard/server/dashboard-contracts';
+import { DashboardIntegrationError } from '@dashboard/server/dashboard-errors';
+import { createDashboardService } from '@dashboard/server/dashboard-service';
 import { WorkflowEditorPageContent } from './workflow-editor-client';
 
 type WorkflowEditorPageProps = Readonly<{

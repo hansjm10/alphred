@@ -25,6 +25,22 @@ export default tseslint.config(
     },
   },
   {
+    files: ['apps/dashboard/app/**/*.{js,jsx,ts,tsx}'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          patterns: [
+            {
+              group: ['../**/src/**', './src/**'],
+              message: 'Use `@dashboard/*` (for example, `@dashboard/server/...`) instead of relative imports into `src/*`.',
+            },
+          ],
+        },
+      ],
+    },
+  },
+  {
     files: ['**/*.{ts,tsx}'],
     languageOptions: {
       parserOptions: {

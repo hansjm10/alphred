@@ -4,7 +4,7 @@ import type {
   DashboardWorkflowDraftNode,
   DashboardWorkflowDraftTopology,
   DashboardWorkflowValidationIssue,
-} from '../../../../src/server/dashboard-contracts';
+} from '@dashboard/server/dashboard-contracts';
 import { slugifyKey } from '../../workflows-shared';
 
 type FlowPoint = Readonly<{ x: number; y: number }>;

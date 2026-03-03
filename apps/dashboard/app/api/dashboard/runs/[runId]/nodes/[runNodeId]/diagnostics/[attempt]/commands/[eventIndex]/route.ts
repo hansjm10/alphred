@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
-import { DashboardIntegrationError } from '../../../../../../../../../../../src/server/dashboard-errors';
-import { toErrorResponse } from '../../../../../../../../../../../src/server/dashboard-http';
-import { createDashboardService } from '../../../../../../../../../../../src/server/dashboard-service';
+import { DashboardIntegrationError } from '@dashboard/server/dashboard-errors';
+import { toErrorResponse } from '@dashboard/server/dashboard-http';
+import { createDashboardService } from '@dashboard/server/dashboard-service';
 
 type RunNodeDiagnosticCommandRouteContext = {
   params: Promise<{

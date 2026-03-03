@@ -5,7 +5,7 @@ import userEvent from '@testing-library/user-event';
 import type { ReactElement } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import RepositoriesPage, { RepositoriesPageContent } from './page';
-import type { DashboardRepositoryState, DashboardRepositorySyncResult } from '../../src/server/dashboard-contracts';
+import type { DashboardRepositoryState, DashboardRepositorySyncResult } from '@dashboard/server/dashboard-contracts';
 import type { GitHubAuthGate } from '../ui/github-auth';
 import { createGitHubAuthGate } from '../ui/github-auth';
 

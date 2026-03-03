@@ -43,7 +43,7 @@ import type {
   DashboardWorkflowDraftNode,
   DashboardWorkflowDraftTopology,
   DashboardWorkflowValidationResult,
-} from '../../../../src/server/dashboard-contracts';
+} from '@dashboard/server/dashboard-contracts';
 import { ActionButton, ButtonLink, Panel, StatusBadge } from '../../../ui/primitives';
 import { resolveApiError } from '../../workflows-shared';
 import { WorkflowEditorAddNodeDialog } from './workflow-editor-add-node-dialog';

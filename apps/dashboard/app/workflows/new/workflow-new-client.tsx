@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import type { DashboardCreateWorkflowRequest, DashboardWorkflowTemplateKey } from '../../../src/server/dashboard-contracts';
+import type { DashboardCreateWorkflowRequest, DashboardWorkflowTemplateKey } from '@dashboard/server/dashboard-contracts';
 import { ActionButton, ButtonLink, Card, Panel } from '../../ui/primitives';
 import { resolveApiError, slugifyKey } from '../workflows-shared';
 

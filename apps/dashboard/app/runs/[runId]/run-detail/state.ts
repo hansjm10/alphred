@@ -4,7 +4,7 @@ import type {
   DashboardRunDetail,
   DashboardRunNodeStreamEvent,
   DashboardRunSummary,
-} from '../../../../src/server/dashboard-contracts';
+} from '@dashboard/server/dashboard-contracts';
 import type {
   ActionFeedbackState,
   AgentStreamConnectionState,

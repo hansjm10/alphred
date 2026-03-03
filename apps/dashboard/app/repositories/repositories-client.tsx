@@ -5,7 +5,7 @@ import type {
   DashboardCreateRepositoryResult,
   DashboardRepositoryState,
   DashboardRepositorySyncResult,
-} from '../../src/server/dashboard-contracts';
+} from '@dashboard/server/dashboard-contracts';
 import { AuthRemediation } from '../ui/auth-remediation';
 import type { GitHubAuthGate } from '../ui/github-auth';
 import {

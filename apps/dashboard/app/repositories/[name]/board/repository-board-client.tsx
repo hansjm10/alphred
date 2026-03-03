@@ -15,7 +15,7 @@ import {
 } from '@dnd-kit/core';
 import { CSS } from '@dnd-kit/utilities';
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
-import type { DashboardRepositoryState, DashboardWorkItemSnapshot } from '../../../../src/server/dashboard-contracts';
+import type { DashboardRepositoryState, DashboardWorkItemSnapshot } from '@dashboard/server/dashboard-contracts';
 import { ActionButton } from '../../../ui/primitives';
 
 type WorkItemActor = Readonly<{

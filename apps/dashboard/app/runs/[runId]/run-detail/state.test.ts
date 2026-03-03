@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { DashboardRunDetail, DashboardRunNodeStreamEvent } from '../../../../src/server/dashboard-contracts';
+import type { DashboardRunDetail, DashboardRunNodeStreamEvent } from '@dashboard/server/dashboard-contracts';
 import type { StateSetter } from './types';
 import { flushBufferedAgentStreamEvents, toggleNodeFilterState } from './state';
 

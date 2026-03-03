@@ -1,12 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { DashboardGitHubAuthStatus } from '../../../../../../src/server/dashboard-contracts';
+import type { DashboardGitHubAuthStatus } from '@dashboard/server/dashboard-contracts';
 
 const { createDashboardServiceMock, checkGitHubAuthMock } = vi.hoisted(() => ({
   createDashboardServiceMock: vi.fn(),
   checkGitHubAuthMock: vi.fn(),
 }));
 
-vi.mock('../../../../../../src/server/dashboard-service', () => ({
+vi.mock('@dashboard/server/dashboard-service', () => ({
   createDashboardService: createDashboardServiceMock,
 }));
 

@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
-import { toErrorResponse } from '../../../../../../src/server/dashboard-http';
-import type { DashboardDuplicateWorkflowRequest } from '../../../../../../src/server/dashboard-contracts';
-import { createDashboardService } from '../../../../../../src/server/dashboard-service';
+import { toErrorResponse } from '@dashboard/server/dashboard-http';
+import type { DashboardDuplicateWorkflowRequest } from '@dashboard/server/dashboard-contracts';
+import { createDashboardService } from '@dashboard/server/dashboard-service';
 import { optionalStringField, requireRecord, requireStringField } from '../../_shared/validation';
 
 type RouteContext = {

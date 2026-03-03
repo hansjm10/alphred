@@ -4,7 +4,7 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { WorkflowsPageContent } from './workflows-client';
-import type { DashboardWorkflowCatalogItem } from '../../src/server/dashboard-contracts';
+import type { DashboardWorkflowCatalogItem } from '@dashboard/server/dashboard-contracts';
 
 const { pushMock } = vi.hoisted(() => ({
   pushMock: vi.fn(),

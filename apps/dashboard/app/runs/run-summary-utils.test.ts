@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { DashboardRunSummary } from '../../src/server/dashboard-contracts';
+import type { DashboardRunSummary } from '@dashboard/server/dashboard-contracts';
 import { sortRunsForDashboard } from './run-summary-utils';
 
 function createRunSummary(overrides: Partial<DashboardRunSummary>): DashboardRunSummary {

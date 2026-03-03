@@ -9,7 +9,7 @@ import type {
   DashboardRepositoryState,
   DashboardRunSummary,
   DashboardWorkflowTreeSummary,
-} from '../../src/server/dashboard-contracts';
+} from '@dashboard/server/dashboard-contracts';
 import type { GitHubAuthGate } from '../ui/github-auth';
 import { createGitHubAuthGate } from '../ui/github-auth';
 

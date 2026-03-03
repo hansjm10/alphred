@@ -1,12 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { DashboardIntegrationError } from '../../../../../../../src/server/dashboard-errors';
+import { DashboardIntegrationError } from '@dashboard/server/dashboard-errors';
 
 const { createDashboardServiceMock, moveWorkItemStatusMock } = vi.hoisted(() => ({
   createDashboardServiceMock: vi.fn(),
   moveWorkItemStatusMock: vi.fn(),
 }));
 
-vi.mock('../../../../../../../src/server/dashboard-service', () => ({
+vi.mock('@dashboard/server/dashboard-service', () => ({
   createDashboardService: createDashboardServiceMock,
 }));
 

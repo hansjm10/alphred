@@ -1,4 +1,4 @@
-import type { DashboardRepositoryState } from '../../src/server/dashboard-contracts';
+import type { DashboardRepositoryState } from '@dashboard/server/dashboard-contracts';
 import type { GitHubAuthGate } from '../ui/github-auth';
 import { loadGitHubAuthGate } from '../ui/load-github-auth-gate';
 import { loadDashboardRepositories } from './load-dashboard-repositories';
