@@ -3,6 +3,7 @@ import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+const isWindows = process.platform === 'win32';
 const rawArgs = process.argv.slice(2);
 const args = rawArgs[0] === '--' ? rawArgs.slice(1) : rawArgs;
 
@@ -11,13 +12,13 @@ const localVitest = resolve(
   repoRoot,
   'node_modules',
   '.bin',
-  process.platform === 'win32' ? 'vitest.cmd' : 'vitest',
+  isWindows ? 'vitest.cmd' : 'vitest',
 );
-const vitestCommand = existsSync(localVitest) ? localVitest : process.platform === 'win32' ? 'vitest.cmd' : 'vitest';
+const vitestCommand = existsSync(localVitest) ? localVitest : isWindows ? 'vitest.cmd' : 'vitest';
 const child = spawn(vitestCommand, ['run', ...args], {
   stdio: 'inherit',
-  shell: process.platform === 'win32',
-  detached: process.platform !== 'win32',
+  shell: isWindows,
+  detached: !isWindows,
 });
 
 let shutdownSignal;
@@ -46,14 +47,36 @@ function killChild(signal) {
   }
 }
 
+function forceKillChild() {
+  if (isWindows) {
+    if (child.pid) {
+      try {
+        spawn('taskkill', ['/PID', String(child.pid), '/T', '/F'], { stdio: 'ignore' }).unref();
+        return;
+      } catch {
+        // ignore and fall back
+      }
+    }
+
+    try {
+      child.kill();
+    } catch {
+      // ignore
+    }
+    return;
+  }
+
+  killChild('SIGKILL');
+}
+
 function forwardAndExit(signal) {
-  if (shutdownSignal) return void killChild('SIGKILL');
+  if (shutdownSignal) return void forceKillChild();
   shutdownSignal = signal;
 
   killChild(signal);
 
   forceKillTimer = setTimeout(() => {
-    killChild('SIGKILL');
+    forceKillChild();
     postKillExitTimer = setTimeout(() => terminateWithSignal(signal), 1000);
     postKillExitTimer.unref?.();
   }, 5000);
@@ -61,7 +84,7 @@ function forwardAndExit(signal) {
 }
 
 const signalsToForward =
-  process.platform === 'win32' ? ['SIGINT', 'SIGTERM', 'SIGBREAK'] : ['SIGINT', 'SIGTERM', 'SIGHUP', 'SIGQUIT'];
+  isWindows ? ['SIGINT', 'SIGTERM', 'SIGBREAK'] : ['SIGINT', 'SIGTERM', 'SIGHUP', 'SIGQUIT'];
 
 for (const signal of signalsToForward) {
   process.on(signal, () => forwardAndExit(signal));
