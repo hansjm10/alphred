@@ -33,6 +33,7 @@ const expectedTransitionEdgesByType: Record<WorkItemType, ReadonlySet<string>> =
   story: new Set([
     edge('Draft', 'NeedsBreakdown'),
     edge('NeedsBreakdown', 'BreakdownProposed'),
+    edge('BreakdownProposed', 'NeedsBreakdown'),
     edge('BreakdownProposed', 'Approved'),
     edge('Approved', 'InProgress'),
     edge('InProgress', 'InReview'),
@@ -112,4 +113,3 @@ describe('workItemLifecycle', () => {
     });
   });
 });
-

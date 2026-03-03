@@ -591,6 +591,22 @@ export type DashboardWorkItemProposedBreakdownTask = {
   links?: string[] | null;
 };
 
+export type DashboardStoryBreakdownProposalSnapshot = {
+  eventId: number;
+  createdAt: string;
+  createdTaskIds: number[];
+  proposed: {
+    tags: string[] | null;
+    plannedFiles: string[] | null;
+    links: string[] | null;
+    tasks: DashboardWorkItemProposedBreakdownTask[];
+  };
+};
+
+export type DashboardGetStoryBreakdownProposalResult = {
+  proposal: DashboardStoryBreakdownProposalSnapshot | null;
+};
+
 export type DashboardProposeStoryBreakdownRequest = {
   repositoryId: number;
   storyId: number;

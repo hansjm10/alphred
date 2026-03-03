@@ -174,7 +174,7 @@ describe('RepositoryBoardPageContent', () => {
             status: 'Ready',
             title: 'Write tests',
             parentId: 3,
-            plannedFiles: ['apps/dashboard/app/repositories/[name]/board/page.tsx'],
+            plannedFiles: ['apps/dashboard/app/repositories/[repositoryId]/board/page.tsx'],
             assignees: ['octocat'],
           }),
         ]}
@@ -193,7 +193,7 @@ describe('RepositoryBoardPageContent', () => {
     expect(screen.getByText('Repo board page')).toBeInTheDocument();
 
     expect(screen.getByText('Planned files')).toBeInTheDocument();
-    expect(screen.getByText('apps/dashboard/app/repositories/[name]/board/page.tsx')).toBeInTheDocument();
+    expect(screen.getByText('apps/dashboard/app/repositories/[repositoryId]/board/page.tsx')).toBeInTheDocument();
     expect(screen.getByText('Assignees')).toBeInTheDocument();
     expect(screen.getByText('octocat')).toBeInTheDocument();
   });
@@ -330,7 +330,7 @@ describe('RepositoryBoardPageContent', () => {
           type: 'task',
           status: 'Ready',
           title: 'New task',
-          plannedFiles: ['apps/dashboard/app/repositories/[name]/board/page.tsx'],
+          plannedFiles: ['apps/dashboard/app/repositories/[repositoryId]/board/page.tsx'],
           assignees: ['octocat'],
           revision: 1,
         },
@@ -342,7 +342,7 @@ describe('RepositoryBoardPageContent', () => {
 
     await user.click(screen.getByRole('button', { name: /New task/ }));
     expect(screen.getByRole('dialog', { name: 'New task' })).toBeInTheDocument();
-    expect(screen.getByText('apps/dashboard/app/repositories/[name]/board/page.tsx')).toBeInTheDocument();
+    expect(screen.getByText('apps/dashboard/app/repositories/[repositoryId]/board/page.tsx')).toBeInTheDocument();
     expect(screen.getByText('octocat')).toBeInTheDocument();
   });
 
@@ -379,7 +379,7 @@ describe('RepositoryBoardPageContent', () => {
         payload: {
           changes: {
             title: 'New title',
-            plannedFiles: ['apps/dashboard/app/repositories/[name]/board/repository-board-client.tsx'],
+            plannedFiles: ['apps/dashboard/app/repositories/[repositoryId]/board/repository-board-client.tsx'],
             assignees: null,
             priority: 2,
             estimate: null,
@@ -394,7 +394,7 @@ describe('RepositoryBoardPageContent', () => {
 
     await user.click(screen.getByRole('button', { name: /New title/ }));
     expect(screen.getByRole('dialog', { name: 'New title' })).toBeInTheDocument();
-    expect(screen.getByText('apps/dashboard/app/repositories/[name]/board/repository-board-client.tsx')).toBeInTheDocument();
+    expect(screen.getByText('apps/dashboard/app/repositories/[repositoryId]/board/repository-board-client.tsx')).toBeInTheDocument();
     expect(within(screen.getByText('Assignees').closest('div') ?? document.body).getByText('None')).toBeInTheDocument();
 
     act(() => {
@@ -414,7 +414,7 @@ describe('RepositoryBoardPageContent', () => {
       });
     });
 
-    expect(screen.getByText('apps/dashboard/app/repositories/[name]/board/repository-board-client.tsx')).toBeInTheDocument();
+    expect(screen.getByText('apps/dashboard/app/repositories/[repositoryId]/board/repository-board-client.tsx')).toBeInTheDocument();
     expect(screen.getByText('octocat')).toBeInTheDocument();
   });
 
@@ -598,7 +598,7 @@ describe('RepositoryBoardPage (server wrapper)', () => {
     loadGitHubAuthGateMock.mockResolvedValue({ state: 'authenticated', user: 'octocat' });
 
     const root = (await RepositoryBoardPage({
-      params: Promise.resolve({ name: 'demo-repo' }),
+      params: Promise.resolve({ repositoryId: '1' }),
     })) as ReactElement<{
       repository: DashboardRepositoryState;
       actor: { actorType: 'human' | 'agent' | 'system'; actorLabel: string };
@@ -626,7 +626,7 @@ describe('RepositoryBoardPage (server wrapper)', () => {
     createDashboardServiceMock.mockReturnValue(service);
     loadGitHubAuthGateMock.mockResolvedValue({ state: 'authenticated', user: 'octocat' });
 
-    await expect(RepositoryBoardPage({ params: Promise.resolve({ name: 'missing' }) })).rejects.toBe(NOT_FOUND_ERROR);
+    await expect(RepositoryBoardPage({ params: Promise.resolve({ repositoryId: '999' }) })).rejects.toBe(NOT_FOUND_ERROR);
 
     expect(notFoundMock).toHaveBeenCalledTimes(1);
   });
@@ -642,7 +642,7 @@ describe('RepositoryBoardPage (server wrapper)', () => {
     loadGitHubAuthGateMock.mockResolvedValue({ state: 'unauthenticated', user: null });
 
     const root = (await RepositoryBoardPage({
-      params: Promise.resolve({ name: 'demo-repo' }),
+      params: Promise.resolve({ repositoryId: '1' }),
     })) as ReactElement<{ actor: { actorType: string; actorLabel: string } }>;
 
     expect(root.props.actor).toEqual({ actorType: 'human', actorLabel: 'dashboard' });

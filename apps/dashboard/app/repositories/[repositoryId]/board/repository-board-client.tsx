@@ -14,6 +14,7 @@ import {
   useSensors,
 } from '@dnd-kit/core';
 import { CSS } from '@dnd-kit/utilities';
+import Link from 'next/link';
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import type { DashboardRepositoryState, DashboardWorkItemSnapshot } from '@dashboard/server/dashboard-contracts';
 import { ActionButton } from '../../../ui/primitives';
@@ -297,6 +298,10 @@ function applyBoardEventToWorkItems(
   }
 
   if (event.eventType === 'status_changed') {
+    return applyStatusChangedBoardEvent(previous, event, existing);
+  }
+
+  if (event.eventType === 'breakdown_proposed' || event.eventType === 'breakdown_approved') {
     return applyStatusChangedBoardEvent(previous, event, existing);
   }
 
@@ -926,7 +931,12 @@ export function RepositoryBoardPageContent({
                   <li key={parent.id}>
                     <span className="board-pill">{parent.type}</span>
                     <span>
-                      {parent.title} <span className="meta-text">#{parent.id}</span>
+                      {parent.type === 'story' ? (
+                        <Link href={`/repositories/${repository.id}/stories/${parent.id}`}>{parent.title}</Link>
+                      ) : (
+                        parent.title
+                      )}{' '}
+                      <span className="meta-text">#{parent.id}</span>
                     </span>
                   </li>
                 ))}
