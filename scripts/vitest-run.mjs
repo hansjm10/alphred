@@ -4,10 +4,13 @@ const rawArgs = process.argv.slice(2);
 const args = rawArgs[0] === '--' ? rawArgs.slice(1) : rawArgs;
 
 const vitestCommand = process.platform === 'win32' ? 'vitest.cmd' : 'vitest';
-const child = spawn(vitestCommand, ['run', ...args], { stdio: 'inherit' });
+const child = spawn(vitestCommand, ['run', ...args], {
+  stdio: 'inherit',
+  shell: process.platform === 'win32',
+});
 
 child.on('exit', (code, signal) => {
-  if (signal) process.kill(process.pid, signal);
+  if (signal) return void process.kill(process.pid, signal);
   process.exit(code ?? 1);
 });
 
