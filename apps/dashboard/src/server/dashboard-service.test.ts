@@ -5,7 +5,7 @@ import {
   createSqlWorkflowExecutor,
   createSqlWorkflowPlanner,
 } from '@alphred/core';
-import { and, eq } from 'drizzle-orm';
+import { and, asc, desc, eq } from 'drizzle-orm';
 import {
   createDatabase,
   migrateDatabase,
@@ -739,6 +739,108 @@ describe('createDashboardService', () => {
     } finally {
       consoleErrorSpy.mockRestore();
     }
+  });
+
+  it('cancels sync launches when runtime-spawned nodes violate policy allowlists', async () => {
+    const { db, dependencies } = createHarness({
+      createSqlWorkflowExecutor: (inputDb, options) => {
+        const baseExecutor = createSqlWorkflowExecutor(inputDb, options);
+        return {
+          ...baseExecutor,
+          executeRun: async (params: { workflowRunId: number }) => {
+            transitionWorkflowRunStatus(inputDb, {
+              workflowRunId: params.workflowRunId,
+              expectedFrom: 'pending',
+              to: 'running',
+            });
+
+            const materializedNode = inputDb
+              .select({
+                id: runNodes.id,
+                treeNodeId: runNodes.treeNodeId,
+                sequenceIndex: runNodes.sequenceIndex,
+              })
+              .from(runNodes)
+              .where(eq(runNodes.workflowRunId, params.workflowRunId))
+              .orderBy(asc(runNodes.sequenceIndex))
+              .get();
+            if (!materializedNode) {
+              throw new Error('Expected a materialized run node.');
+            }
+
+            inputDb.insert(runNodes)
+              .values({
+                workflowRunId: params.workflowRunId,
+                treeNodeId: materializedNode.treeNodeId,
+                nodeKey: 'dynamic-disallowed-provider',
+                nodeRole: 'standard',
+                nodeType: 'agent',
+                provider: 'claude',
+                model: 'claude-3-7-sonnet',
+                prompt: 'Dynamic child prompt',
+                promptContentType: 'markdown',
+                maxChildren: 0,
+                maxRetries: 0,
+                spawnerNodeId: materializedNode.id,
+                lineageDepth: 1,
+                sequencePath: '0.1',
+                status: 'pending',
+                sequenceIndex: materializedNode.sequenceIndex + 100,
+                attempt: 1,
+              })
+              .run();
+
+            await options.assertRunExecutionAllowed?.({
+              workflowRunId: params.workflowRunId,
+            });
+
+            return {
+              workflowRunId: params.workflowRunId,
+              finalStep: {
+                outcome: 'run_terminal',
+                workflowRunId: params.workflowRunId,
+                runStatus: 'completed',
+              },
+              executedNodes: 1,
+            };
+          },
+        };
+      },
+    });
+    seedRunData(db);
+    const service = createDashboardService({ dependencies });
+
+    await expect(
+      service.launchWorkflowRun({
+        treeKey: 'demo-tree',
+        executionMode: 'sync',
+        policyConstraints: {
+          allowedProviders: ['codex'],
+          allowedModels: null,
+          allowedSkillIdentifiers: null,
+          allowedMcpServerIdentifiers: null,
+        },
+      }),
+    ).rejects.toMatchObject({
+      name: 'DashboardIntegrationError',
+      code: 'conflict',
+      status: 409,
+      message: 'Run launch blocked by policy: provider "claude" is not allowed for node "dynamic-disallowed-provider".',
+      details: expect.objectContaining({
+        kind: 'work_item_policy_launch',
+      }),
+    });
+
+    const launchedRun = db
+      .select({
+        id: workflowRuns.id,
+        status: workflowRuns.status,
+      })
+      .from(workflowRuns)
+      .orderBy(desc(workflowRuns.id))
+      .get();
+
+    expect(launchedRun?.status).toBe('cancelled');
   });
 
   it('marks resumed runs as cancelled when detached execution fails after pausing mid-flight', async () => {

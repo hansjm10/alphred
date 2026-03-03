@@ -75,6 +75,7 @@ type RunOperationsDependencies = {
     db: AlphredDatabase,
     dependencies: {
       resolveProvider: PhaseProviderResolver;
+      assertRunExecutionAllowed?: (params: { workflowRunId: number }) => Promise<void> | void;
     },
   ) => {
     cancelRun: (params: { workflowRunId: number }) => Promise<{
@@ -320,6 +321,13 @@ function assertLaunchPolicyAllowlists(
       }
     }
   }
+}
+
+function isRunPolicyConflict(error: unknown): error is DashboardIntegrationError {
+  if (!(error instanceof DashboardIntegrationError)) {
+    return false;
+  }
+  return error.code === 'conflict' && error.details?.kind === 'work_item_policy_launch';
 }
 
 function toOptionalNonNegativeInteger(value: unknown): number | null {
@@ -1049,13 +1057,19 @@ export function createRunOperations(params: {
         const runId = workflowRunId;
         let workingDirectory = cwd;
         let worktreeManager: Pick<WorktreeManager, 'createRunWorktree' | 'cleanupRun'> | null = null;
+        const policyConstraints = request.policyConstraints;
+        const assertRunExecutionAllowed =
+          policyConstraints === undefined
+            ? undefined
+            : (executionDb: AlphredDatabase, executionRunId: number) =>
+                assertLaunchPolicyAllowlists(executionDb, {
+                  runId: executionRunId,
+                  policyConstraints,
+                });
 
         try {
-          if (request.policyConstraints !== undefined) {
-            assertLaunchPolicyAllowlists(db, {
-              runId,
-              policyConstraints: request.policyConstraints,
-            });
+          if (assertRunExecutionAllowed !== undefined) {
+            assertRunExecutionAllowed(db, runId);
           }
 
           if (repositoryName !== undefined) {
@@ -1089,6 +1103,7 @@ export function createRunOperations(params: {
               request.cleanupWorktree ?? false,
               executionScope,
               nodeSelector,
+              assertRunExecutionAllowed,
             );
 
             return {
@@ -1112,6 +1127,7 @@ export function createRunOperations(params: {
             cleanupWorktree: request.cleanupWorktree ?? false,
             executionScope,
             nodeSelector,
+            assertRunExecutionAllowed,
           });
 
           return {
@@ -1124,6 +1140,18 @@ export function createRunOperations(params: {
           };
         } catch (error) {
           await backgroundExecution.markPendingRunCancelled(db, workflowRunId);
+          if (isRunPolicyConflict(error)) {
+            const executor = dependencies.createSqlWorkflowExecutor(db, {
+              resolveProvider: dependencies.resolveProvider,
+            });
+            try {
+              await executor.cancelRun({ workflowRunId });
+            } catch (cancelError) {
+              if (!(cancelError instanceof WorkflowRunControlError)) {
+                throw cancelError;
+              }
+            }
+          }
           if (error instanceof WorkflowRunExecutionValidationError) {
             throw new DashboardIntegrationError('invalid_request', error.message, {
               status: 400,

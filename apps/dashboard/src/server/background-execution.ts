@@ -20,12 +20,14 @@ import {
 } from './dashboard-utils';
 
 type WithDatabase = <T>(operation: (db: AlphredDatabase) => Promise<T> | T) => Promise<T>;
+type RunExecutionPolicyAssertion = (db: AlphredDatabase, runId: number) => Promise<void> | void;
 
 type BackgroundExecutionDependencies = {
   createSqlWorkflowExecutor: (
     db: AlphredDatabase,
     dependencies: {
       resolveProvider: PhaseProviderResolver;
+      assertRunExecutionAllowed?: (params: { workflowRunId: number }) => Promise<void> | void;
     },
   ) => {
     validateSingleNodeSelection: (params: { workflowRunId: number; nodeSelector?: WorkflowRunNodeSelector }) => void;
@@ -75,6 +77,7 @@ export type BackgroundExecutionManager = {
     cleanupWorktree: boolean,
     executionScope?: 'full' | 'single_node',
     nodeSelector?: WorkflowRunNodeSelector,
+    assertRunExecutionAllowed?: RunExecutionPolicyAssertion,
   ) => Promise<{
     runStatus: RunStatus;
     executionOutcome: string;
@@ -94,6 +97,7 @@ export type BackgroundExecutionManager = {
     cleanupWorktree: boolean;
     executionScope?: 'full' | 'single_node';
     nodeSelector?: WorkflowRunNodeSelector;
+    assertRunExecutionAllowed?: RunExecutionPolicyAssertion;
   }) => boolean;
   ensureBackgroundRunExecution: (params: {
     runId: number;
@@ -102,6 +106,7 @@ export type BackgroundExecutionManager = {
     cleanupWorktree: boolean;
     executionScope?: 'full' | 'single_node';
     nodeSelector?: WorkflowRunNodeSelector;
+    assertRunExecutionAllowed?: RunExecutionPolicyAssertion;
   }) => void;
   getBackgroundExecutionCount: () => number;
   hasBackgroundExecution: (runId: number) => boolean;
@@ -124,6 +129,7 @@ export function createBackgroundExecutionManager(params: {
     cleanupWorktree: boolean,
     executionScope: 'full' | 'single_node' = 'full',
     nodeSelector?: WorkflowRunNodeSelector,
+    assertRunExecutionAllowed?: RunExecutionPolicyAssertion,
   ): Promise<{
     runStatus: RunStatus;
     executionOutcome: string;
@@ -131,6 +137,12 @@ export function createBackgroundExecutionManager(params: {
   }> {
     const executor = dependencies.createSqlWorkflowExecutor(db, {
       resolveProvider: dependencies.resolveProvider,
+      ...(assertRunExecutionAllowed === undefined
+        ? {}
+        : {
+            assertRunExecutionAllowed: ({ workflowRunId }: { workflowRunId: number }) =>
+              assertRunExecutionAllowed(db, workflowRunId),
+          }),
     });
 
     let execution: Awaited<ReturnType<typeof executor.executeRun>> | undefined;
@@ -151,6 +163,10 @@ export function createBackgroundExecutionManager(params: {
                 workingDirectory,
               },
             });
+
+      if (assertRunExecutionAllowed !== undefined && executionScope === 'single_node') {
+        await assertRunExecutionAllowed(db, runId);
+      }
     } catch (error) {
       executionError = error;
     }
@@ -283,6 +299,7 @@ export function createBackgroundExecutionManager(params: {
     cleanupWorktree: boolean;
     executionScope?: 'full' | 'single_node';
     nodeSelector?: WorkflowRunNodeSelector;
+    assertRunExecutionAllowed?: RunExecutionPolicyAssertion;
   }): boolean {
     if (backgroundRunExecutions.has(params.runId)) {
       return false;
@@ -300,6 +317,7 @@ export function createBackgroundExecutionManager(params: {
         params.cleanupWorktree,
         params.executionScope ?? 'full',
         params.nodeSelector,
+        params.assertRunExecutionAllowed,
       );
     })
       .then(() => undefined)
@@ -368,6 +386,7 @@ export function createBackgroundExecutionManager(params: {
     cleanupWorktree: boolean;
     executionScope?: 'full' | 'single_node';
     nodeSelector?: WorkflowRunNodeSelector;
+    assertRunExecutionAllowed?: RunExecutionPolicyAssertion;
   }): void {
     const didEnqueue = enqueueBackgroundRunExecution(params);
     if (didEnqueue) {

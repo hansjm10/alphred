@@ -9105,6 +9105,34 @@ describe('createSqlWorkflowExecutor', () => {
     ).rejects.toThrow('Workflow run id=999 was not found.');
   });
 
+  it('invokes assertRunExecutionAllowed before and after each executed step', async () => {
+    const { db, runId } = seedSingleAgentRun();
+    const assertRunExecutionAllowed = vi.fn(async () => undefined);
+    const executor = createSqlWorkflowExecutor(db, {
+      resolveProvider: () =>
+        createProvider([
+          { type: 'result', content: 'Design report body', timestamp: 102 },
+        ]),
+      assertRunExecutionAllowed,
+    });
+
+    const result = await executor.executeRun({
+      workflowRunId: runId,
+      options: {
+        workingDirectory: '/tmp/alphred-worktree',
+      },
+    });
+
+    expect(result.finalStep.runStatus).toBe('completed');
+    expect(assertRunExecutionAllowed).toHaveBeenCalledTimes(2);
+    expect(assertRunExecutionAllowed).toHaveBeenNthCalledWith(1, {
+      workflowRunId: runId,
+    });
+    expect(assertRunExecutionAllowed).toHaveBeenNthCalledWith(2, {
+      workflowRunId: runId,
+    });
+  });
+
   it('invokes onRunTerminal when execution transitions a run into a terminal status', async () => {
     const { db, runId } = seedSingleAgentRun();
     const onRunTerminal = vi.fn(async () => undefined);

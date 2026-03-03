@@ -367,6 +367,10 @@ export function createSqlWorkflowExecutor(
         };
       }
 
+      await dependencies.assertRunExecutionAllowed?.({
+        workflowRunId: initialRun.id,
+      });
+
       const runNodeRows = loadRunNodeExecutionRows(db, initialRun.id);
       const edgeRows = loadEdgeRows(db, initialRun.id);
       const routingDecisionSelection = loadLatestRoutingDecisionsByRunNodeId(db, initialRun.id);
@@ -475,6 +479,11 @@ export function createSqlWorkflowExecutor(
         options: params.options,
         runStatus,
       });
+      if (result.outcome === 'executed') {
+        await dependencies.assertRunExecutionAllowed?.({
+          workflowRunId: currentRun.id,
+        });
+      }
       await notifyRunTerminalTransition(dependencies, {
         workflowRunId: currentRun.id,
         previousRunStatus: resolveExecutionTerminalNotificationPreviousStatus(currentRun.status, result.runStatus),
