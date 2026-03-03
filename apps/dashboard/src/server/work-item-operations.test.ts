@@ -433,7 +433,7 @@ describe('work-item-operations', () => {
     expect(statusPayload.linkedWorkflowRun?.workflowRunId).toBe(workflowRunId);
   });
 
-  it('returns linked run touchedFiles in move status responses', async () => {
+  it('omits linked run touchedFiles in move status responses', async () => {
     const { db, service } = createHarness();
     const tempRoot = await mkdtemp(join(tmpdir(), 'alphred-work-item-move-touched-files-'));
     const worktreePath = join(tempRoot, 'repo');
@@ -509,8 +509,8 @@ describe('work-item-operations', () => {
       expect(moved.workItem.linkedWorkflowRun).toMatchObject({
         workflowRunId,
         runStatus: 'running',
-        touchedFiles: ['src/a.ts', 'src/c.ts'],
       });
+      expect(moved.workItem.linkedWorkflowRun).not.toHaveProperty('touchedFiles');
     } finally {
       await rm(tempRoot, { recursive: true, force: true });
     }
@@ -1298,7 +1298,7 @@ describe('work-item-operations', () => {
     });
   });
 
-  it('skips linked run touchedFiles in list responses', async () => {
+  it('skips linked run touchedFiles in list and bootstrap responses', async () => {
     const { db, service } = createHarness();
     const tempRoot = await mkdtemp(join(tmpdir(), 'alphred-work-item-list-touched-files-'));
     const worktreePath = join(tempRoot, 'repo');
@@ -1392,6 +1392,16 @@ describe('work-item-operations', () => {
         runStatus: 'running',
       });
       expect(listedTask?.linkedWorkflowRun).not.toHaveProperty('touchedFiles');
+
+      const bootstrapResult = await service.getRepositoryBoardBootstrap({
+        repositoryId: repository.id,
+      });
+      const bootstrapTask = bootstrapResult.workItems.find(item => item.id === taskId);
+      expect(bootstrapTask?.linkedWorkflowRun).toMatchObject({
+        workflowRunId,
+        runStatus: 'running',
+      });
+      expect(bootstrapTask?.linkedWorkflowRun).not.toHaveProperty('touchedFiles');
     } finally {
       await rm(tempRoot, { recursive: true, force: true });
     }

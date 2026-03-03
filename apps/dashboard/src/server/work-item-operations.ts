@@ -1314,7 +1314,7 @@ function toWorkItemSnapshotWithPolicy(
       ? loadLatestLinkedWorkflowRunsForTasks(db, {
           repositoryId: params.repositoryId,
           taskWorkItemIds: [params.row.id],
-          includeTouchedFiles: params.includeTouchedFiles ?? true,
+          includeTouchedFiles: params.includeTouchedFiles ?? false,
         })
       : new Map<number, DashboardWorkItemLinkedRunSnapshot>();
   return toWorkItemSnapshot(
@@ -1450,6 +1450,7 @@ export function createWorkItemOperations(params: { withDatabase: WithDatabase })
           workItems: await toWorkItemSnapshotsWithPoliciesAsync(db, {
             repositoryId,
             rows,
+            includeTouchedFiles: false,
           }),
         };
       });
