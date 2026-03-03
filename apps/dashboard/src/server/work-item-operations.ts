@@ -61,6 +61,7 @@ type DbOrTx = AlphredDatabase | AlphredTransaction;
 
 const MAX_BOARD_EVENT_SNAPSHOT_EVENTS = 200;
 const GIT_MAX_BUFFER_BYTES = 16 * 1024 * 1024;
+const TOUCHED_FILES_READ_BATCH_SIZE = 8;
 const execFileAsync = promisify(execFile);
 
 function toOptionalNonEmptyTrimmedString(value: string | null): string | null {
@@ -826,16 +827,21 @@ async function loadTouchedFilesByWorkflowRunIdAsync(
     }
   }
 
-  const entries = await Promise.all(
-    params.workflowRunIds.map(async workflowRunId => {
-      const best = bestWorktreeByRunId.get(workflowRunId);
-      const touchedFiles =
-        best && isReadableRunWorktreeStatus(best.status)
-          ? await readTouchedFilesFromWorktreeAsync(best.worktreePath)
-          : null;
-      return [workflowRunId, touchedFiles] as const;
-    }),
-  );
+  const entries: (readonly [number, string[] | null])[] = [];
+  for (let offset = 0; offset < params.workflowRunIds.length; offset += TOUCHED_FILES_READ_BATCH_SIZE) {
+    const batch = params.workflowRunIds.slice(offset, offset + TOUCHED_FILES_READ_BATCH_SIZE);
+    const batchEntries = await Promise.all(
+      batch.map(async workflowRunId => {
+        const best = bestWorktreeByRunId.get(workflowRunId);
+        const touchedFiles =
+          best && isReadableRunWorktreeStatus(best.status)
+            ? await readTouchedFilesFromWorktreeAsync(best.worktreePath)
+            : null;
+        return [workflowRunId, touchedFiles] as const;
+      }),
+    );
+    entries.push(...batchEntries);
+  }
   return new Map(entries);
 }
 
@@ -844,6 +850,7 @@ function loadLatestLinkedWorkflowRunsForTasks(
   params: {
     repositoryId: number;
     taskWorkItemIds: readonly number[];
+    includeTouchedFiles?: boolean;
   },
 ): ReadonlyMap<number, DashboardWorkItemLinkedRunSnapshot> {
   if (params.taskWorkItemIds.length === 0) {
@@ -880,10 +887,13 @@ function loadLatestLinkedWorkflowRunsForTasks(
   const workflowRunIds = [...new Set([...latestRowsByTaskId.values()].map(row => row.workflowRunId))].sort(
     (left, right) => left - right,
   );
-  const touchedFilesByRunId = loadTouchedFilesByWorkflowRunId(db, {
-    repositoryId: params.repositoryId,
-    workflowRunIds,
-  });
+  const touchedFilesByRunId =
+    params.includeTouchedFiles === false
+      ? new Map<number, string[] | null>()
+      : loadTouchedFilesByWorkflowRunId(db, {
+          repositoryId: params.repositoryId,
+          workflowRunIds,
+        });
 
   const latestByTaskId = new Map<number, DashboardWorkItemLinkedRunSnapshot>();
   for (const [workItemId, row] of latestRowsByTaskId.entries()) {
@@ -891,7 +901,7 @@ function loadLatestLinkedWorkflowRunsForTasks(
       workItemId,
       toLinkedRunSnapshot(
         row,
-        touchedFilesByRunId.get(row.workflowRunId) ?? null,
+        params.includeTouchedFiles === false ? null : (touchedFilesByRunId.get(row.workflowRunId) ?? null),
       ),
     );
   }
@@ -904,6 +914,7 @@ async function loadLatestLinkedWorkflowRunsForTasksAsync(
   params: {
     repositoryId: number;
     taskWorkItemIds: readonly number[];
+    includeTouchedFiles?: boolean;
   },
 ): Promise<ReadonlyMap<number, DashboardWorkItemLinkedRunSnapshot>> {
   if (params.taskWorkItemIds.length === 0) {
@@ -940,10 +951,13 @@ async function loadLatestLinkedWorkflowRunsForTasksAsync(
   const workflowRunIds = [...new Set([...latestRowsByTaskId.values()].map(row => row.workflowRunId))].sort(
     (left, right) => left - right,
   );
-  const touchedFilesByRunId = await loadTouchedFilesByWorkflowRunIdAsync(db, {
-    repositoryId: params.repositoryId,
-    workflowRunIds,
-  });
+  const touchedFilesByRunId =
+    params.includeTouchedFiles === false
+      ? new Map<number, string[] | null>()
+      : await loadTouchedFilesByWorkflowRunIdAsync(db, {
+          repositoryId: params.repositoryId,
+          workflowRunIds,
+        });
 
   const latestByTaskId = new Map<number, DashboardWorkItemLinkedRunSnapshot>();
   for (const [workItemId, row] of latestRowsByTaskId.entries()) {
@@ -951,7 +965,7 @@ async function loadLatestLinkedWorkflowRunsForTasksAsync(
       workItemId,
       toLinkedRunSnapshot(
         row,
-        touchedFilesByRunId.get(row.workflowRunId) ?? null,
+        params.includeTouchedFiles === false ? null : (touchedFilesByRunId.get(row.workflowRunId) ?? null),
       ),
     );
   }
@@ -1243,6 +1257,7 @@ function toWorkItemSnapshotsWithPolicies(
   params: {
     repositoryId: number;
     rows: readonly WorkItemRow[];
+    includeTouchedFiles?: boolean;
   },
 ): DashboardWorkItemSnapshot[] {
   const context = loadPolicyResolutionContext(db, params.repositoryId);
@@ -1250,6 +1265,7 @@ function toWorkItemSnapshotsWithPolicies(
   const latestLinkedRuns = loadLatestLinkedWorkflowRunsForTasks(db, {
     repositoryId: params.repositoryId,
     taskWorkItemIds,
+    includeTouchedFiles: params.includeTouchedFiles ?? false,
   });
   return params.rows.map(row =>
     toWorkItemSnapshot(
@@ -1265,6 +1281,7 @@ async function toWorkItemSnapshotsWithPoliciesAsync(
   params: {
     repositoryId: number;
     rows: readonly WorkItemRow[];
+    includeTouchedFiles?: boolean;
   },
 ): Promise<DashboardWorkItemSnapshot[]> {
   const context = loadPolicyResolutionContext(db, params.repositoryId);
@@ -1272,6 +1289,7 @@ async function toWorkItemSnapshotsWithPoliciesAsync(
   const latestLinkedRuns = await loadLatestLinkedWorkflowRunsForTasksAsync(db, {
     repositoryId: params.repositoryId,
     taskWorkItemIds,
+    includeTouchedFiles: params.includeTouchedFiles ?? true,
   });
   return params.rows.map(row =>
     toWorkItemSnapshot(
@@ -1287,6 +1305,7 @@ function toWorkItemSnapshotWithPolicy(
   params: {
     repositoryId: number;
     row: WorkItemRow;
+    includeTouchedFiles?: boolean;
   },
 ): DashboardWorkItemSnapshot {
   const context = loadPolicyResolutionContextForWorkItem(db, params);
@@ -1295,6 +1314,7 @@ function toWorkItemSnapshotWithPolicy(
       ? loadLatestLinkedWorkflowRunsForTasks(db, {
           repositoryId: params.repositoryId,
           taskWorkItemIds: [params.row.id],
+          includeTouchedFiles: params.includeTouchedFiles ?? false,
         })
       : new Map<number, DashboardWorkItemLinkedRunSnapshot>();
   return toWorkItemSnapshot(
@@ -1309,6 +1329,7 @@ async function toWorkItemSnapshotWithPolicyAsync(
   params: {
     repositoryId: number;
     row: WorkItemRow;
+    includeTouchedFiles?: boolean;
   },
 ): Promise<DashboardWorkItemSnapshot> {
   const context = loadPolicyResolutionContextForWorkItem(db, params);
@@ -1317,6 +1338,7 @@ async function toWorkItemSnapshotWithPolicyAsync(
       ? await loadLatestLinkedWorkflowRunsForTasksAsync(db, {
           repositoryId: params.repositoryId,
           taskWorkItemIds: [params.row.id],
+          includeTouchedFiles: params.includeTouchedFiles ?? true,
         })
       : new Map<number, DashboardWorkItemLinkedRunSnapshot>();
   return toWorkItemSnapshot(
@@ -1983,8 +2005,50 @@ export function createWorkItemOperations(params: { withDatabase: WithDatabase })
       const actor = requireActor(requestRaw);
       const occurredAt = new Date().toISOString();
 
-      return withDatabase(db =>
-        db.transaction(tx => {
+      return withDatabase(async db => {
+        const latestLinkedRuns = loadLatestLinkedWorkflowRunsForTasks(db, {
+          repositoryId,
+          taskWorkItemIds: [workItemId],
+          includeTouchedFiles: false,
+        });
+        const initialLinkedRun = latestLinkedRuns.get(workItemId) ?? null;
+        if (initialLinkedRun === null) {
+          throw new DashboardIntegrationError(
+            'conflict',
+            `Task id=${workItemId} is not linked to a workflow run. Replanning requires linked run context.`,
+            {
+              status: 409,
+              details: {
+                kind: 'work_item_replan',
+                reason: 'missing_linked_run',
+                workItemId,
+              },
+            },
+          );
+        }
+
+        const touchedFilesByRunId = await loadTouchedFilesByWorkflowRunIdAsync(db, {
+          repositoryId,
+          workflowRunIds: [initialLinkedRun.workflowRunId],
+        });
+        const touchedFiles = touchedFilesByRunId.get(initialLinkedRun.workflowRunId) ?? null;
+        if (touchedFiles === null) {
+          throw new DashboardIntegrationError(
+            'conflict',
+            `Task id=${workItemId} touched files are unavailable because the linked run worktree is unavailable.`,
+            {
+              status: 409,
+              details: {
+                kind: 'work_item_replan',
+                reason: 'missing_touched_files',
+                workItemId,
+                workflowRunId: initialLinkedRun.workflowRunId,
+              },
+            },
+          );
+        }
+
+        return db.transaction(tx => {
           const existing = readWorkItemOrThrow(tx, { repositoryId, workItemId });
           if (existing.type !== 'task') {
             throw new DashboardIntegrationError('invalid_request', `Work item id=${workItemId} is not a task.`, {
@@ -1992,12 +2056,13 @@ export function createWorkItemOperations(params: { withDatabase: WithDatabase })
             });
           }
 
-          const latestLinkedRuns = loadLatestLinkedWorkflowRunsForTasks(tx, {
+          const latestLinkedRun = loadLatestLinkedWorkflowRunsForTasks(tx, {
             repositoryId,
             taskWorkItemIds: [workItemId],
-          });
-          const linkedRun = latestLinkedRuns.get(workItemId) ?? null;
-          if (linkedRun === null) {
+            includeTouchedFiles: false,
+          }).get(workItemId);
+
+          if (!latestLinkedRun) {
             throw new DashboardIntegrationError(
               'conflict',
               `Task id=${workItemId} is not linked to a workflow run. Replanning requires linked run context.`,
@@ -2012,24 +2077,25 @@ export function createWorkItemOperations(params: { withDatabase: WithDatabase })
             );
           }
 
-          if (linkedRun.touchedFiles === undefined) {
+          if (latestLinkedRun.workflowRunId !== initialLinkedRun.workflowRunId) {
             throw new DashboardIntegrationError(
               'conflict',
-              `Task id=${workItemId} touched files are unavailable because the linked run worktree is unavailable.`,
+              `Task id=${workItemId} linked workflow run changed while preparing replan. Please retry.`,
               {
                 status: 409,
                 details: {
                   kind: 'work_item_replan',
-                  reason: 'missing_touched_files',
+                  reason: 'linked_run_changed',
                   workItemId,
-                  workflowRunId: linkedRun.workflowRunId,
+                  expectedWorkflowRunId: initialLinkedRun.workflowRunId,
+                  actualWorkflowRunId: latestLinkedRun.workflowRunId,
                 },
               },
             );
           }
 
-          const plannedFiles = toRepoRelativePathArrayOrNull(existing.plannedFiles) ?? toStringArrayOrNull(existing.plannedFiles) ?? [];
-          const touchedFiles = linkedRun.touchedFiles;
+          const plannedFiles =
+            toRepoRelativePathArrayOrNull(existing.plannedFiles) ?? toStringArrayOrNull(existing.plannedFiles) ?? [];
           const delta = resolvePlanVsActualDelta(plannedFiles, touchedFiles);
 
           const eventResult = tx
@@ -2046,7 +2112,7 @@ export function createWorkItemOperations(params: { withDatabase: WithDatabase })
                 changes: {},
                 replanRequest: {
                   requestedAt: occurredAt,
-                  workflowRunId: linkedRun.workflowRunId,
+                  workflowRunId: latestLinkedRun.workflowRunId,
                   plannedFiles,
                   touchedFiles,
                   plannedButUntouched: delta.plannedButUntouched,
@@ -2061,14 +2127,14 @@ export function createWorkItemOperations(params: { withDatabase: WithDatabase })
           return {
             repositoryId,
             workItemId,
-            workflowRunId: linkedRun.workflowRunId,
+            workflowRunId: latestLinkedRun.workflowRunId,
             eventId,
             requestedAt: occurredAt,
             plannedButUntouched: delta.plannedButUntouched,
             touchedButUnplanned: delta.touchedButUnplanned,
           };
-        }),
-      );
+        });
+      });
     },
 
     setWorkItemParent(requestRaw): Promise<DashboardSetWorkItemParentResult> {
