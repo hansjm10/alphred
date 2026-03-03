@@ -1,5 +1,6 @@
-import { execFileSync } from 'node:child_process';
+import { execFile, execFileSync } from 'node:child_process';
 import { posix } from 'node:path';
+import { promisify } from 'node:util';
 import { validateParentChildWorkItemTypes, validateTransition } from '@alphred/core';
 import {
   and,
@@ -60,6 +61,7 @@ type DbOrTx = AlphredDatabase | AlphredTransaction;
 
 const MAX_BOARD_EVENT_SNAPSHOT_EVENTS = 200;
 const GIT_MAX_BUFFER_BYTES = 16 * 1024 * 1024;
+const execFileAsync = promisify(execFile);
 
 function toOptionalNonEmptyTrimmedString(value: string | null): string | null {
   if (value === null) return null;
@@ -125,6 +127,22 @@ function readTouchedFilesFromWorktree(worktreePath: string): string[] | null {
       },
     );
     return parseStatusPaths(output);
+  } catch {
+    return null;
+  }
+}
+
+async function readTouchedFilesFromWorktreeAsync(worktreePath: string): Promise<string[] | null> {
+  try {
+    const { stdout } = await execFileAsync(
+      'git',
+      ['-C', worktreePath, 'status', '--porcelain=v1', '--untracked-files=all', '-z'],
+      {
+        encoding: 'utf8',
+        maxBuffer: GIT_MAX_BUFFER_BYTES,
+      },
+    );
+    return parseStatusPaths(stdout);
   } catch {
     return null;
   }
@@ -751,6 +769,66 @@ function loadTouchedFilesByWorkflowRunId(
   return touchedFilesByRunId;
 }
 
+async function loadTouchedFilesByWorkflowRunIdAsync(
+  db: DbOrTx,
+  params: {
+    repositoryId: number;
+    workflowRunIds: readonly number[];
+  },
+): Promise<ReadonlyMap<number, string[] | null>> {
+  if (params.workflowRunIds.length === 0) {
+    return new Map();
+  }
+
+  const rows = db
+    .select({
+      workflowRunId: runWorktrees.workflowRunId,
+      worktreePath: runWorktrees.worktreePath,
+      status: runWorktrees.status,
+      id: runWorktrees.id,
+    })
+    .from(runWorktrees)
+    .where(
+      and(
+        eq(runWorktrees.repositoryId, params.repositoryId),
+        inArray(runWorktrees.workflowRunId, [...params.workflowRunIds]),
+      ),
+    )
+    .all();
+
+  const bestWorktreeByRunId = new Map<number, { worktreePath: string; status: string; id: number }>();
+  for (const row of rows) {
+    const existing = bestWorktreeByRunId.get(row.workflowRunId);
+    if (!existing) {
+      bestWorktreeByRunId.set(row.workflowRunId, {
+        worktreePath: row.worktreePath,
+        status: row.status,
+        id: row.id,
+      });
+      continue;
+    }
+
+    const rowPriority = row.status === 'active' ? 2 : 1;
+    const existingPriority = existing.status === 'active' ? 2 : 1;
+    if (rowPriority > existingPriority || (rowPriority === existingPriority && row.id > existing.id)) {
+      bestWorktreeByRunId.set(row.workflowRunId, {
+        worktreePath: row.worktreePath,
+        status: row.status,
+        id: row.id,
+      });
+    }
+  }
+
+  const entries = await Promise.all(
+    params.workflowRunIds.map(async workflowRunId => {
+      const best = bestWorktreeByRunId.get(workflowRunId);
+      const touchedFiles = best ? await readTouchedFilesFromWorktreeAsync(best.worktreePath) : null;
+      return [workflowRunId, touchedFiles] as const;
+    }),
+  );
+  return new Map(entries);
+}
+
 function loadLatestLinkedWorkflowRunsForTasks(
   db: DbOrTx,
   params: {
@@ -793,6 +871,66 @@ function loadLatestLinkedWorkflowRunsForTasks(
     (left, right) => left - right,
   );
   const touchedFilesByRunId = loadTouchedFilesByWorkflowRunId(db, {
+    repositoryId: params.repositoryId,
+    workflowRunIds,
+  });
+
+  const latestByTaskId = new Map<number, DashboardWorkItemLinkedRunSnapshot>();
+  for (const [workItemId, row] of latestRowsByTaskId.entries()) {
+    latestByTaskId.set(
+      workItemId,
+      toLinkedRunSnapshot(
+        row,
+        touchedFilesByRunId.get(row.workflowRunId) ?? null,
+      ),
+    );
+  }
+
+  return latestByTaskId;
+}
+
+async function loadLatestLinkedWorkflowRunsForTasksAsync(
+  db: DbOrTx,
+  params: {
+    repositoryId: number;
+    taskWorkItemIds: readonly number[];
+  },
+): Promise<ReadonlyMap<number, DashboardWorkItemLinkedRunSnapshot>> {
+  if (params.taskWorkItemIds.length === 0) {
+    return new Map();
+  }
+
+  const rows = db
+    .select({
+      id: workItemWorkflowRuns.id,
+      workItemId: workItemWorkflowRuns.workItemId,
+      workflowRunId: workItemWorkflowRuns.workflowRunId,
+      linkedAt: workItemWorkflowRuns.linkedAt,
+      runStatus: workflowRuns.status,
+    })
+    .from(workItemWorkflowRuns)
+    .innerJoin(workflowRuns, eq(workItemWorkflowRuns.workflowRunId, workflowRuns.id))
+    .where(
+      and(
+        eq(workItemWorkflowRuns.repositoryId, params.repositoryId),
+        inArray(workItemWorkflowRuns.workItemId, [...params.taskWorkItemIds]),
+      ),
+    )
+    .orderBy(asc(workItemWorkflowRuns.workItemId), desc(workItemWorkflowRuns.linkedAt), desc(workItemWorkflowRuns.id))
+    .all();
+
+  const latestRowsByTaskId = new Map<number, typeof rows[number]>();
+  for (const row of rows) {
+    if (latestRowsByTaskId.has(row.workItemId)) {
+      continue;
+    }
+    latestRowsByTaskId.set(row.workItemId, row);
+  }
+
+  const workflowRunIds = [...new Set([...latestRowsByTaskId.values()].map(row => row.workflowRunId))].sort(
+    (left, right) => left - right,
+  );
+  const touchedFilesByRunId = await loadTouchedFilesByWorkflowRunIdAsync(db, {
     repositoryId: params.repositoryId,
     workflowRunIds,
   });
@@ -1112,6 +1250,28 @@ function toWorkItemSnapshotsWithPolicies(
   );
 }
 
+async function toWorkItemSnapshotsWithPoliciesAsync(
+  db: DbOrTx,
+  params: {
+    repositoryId: number;
+    rows: readonly WorkItemRow[];
+  },
+): Promise<DashboardWorkItemSnapshot[]> {
+  const context = loadPolicyResolutionContext(db, params.repositoryId);
+  const taskWorkItemIds = params.rows.filter(row => row.type === 'task').map(row => row.id);
+  const latestLinkedRuns = await loadLatestLinkedWorkflowRunsForTasksAsync(db, {
+    repositoryId: params.repositoryId,
+    taskWorkItemIds,
+  });
+  return params.rows.map(row =>
+    toWorkItemSnapshot(
+      row,
+      resolveEffectivePolicyForWorkItem(row, context),
+      row.type === 'task' ? (latestLinkedRuns.get(row.id) ?? null) : null,
+    ),
+  );
+}
+
 function toWorkItemSnapshotWithPolicy(
   db: DbOrTx,
   params: {
@@ -1123,6 +1283,28 @@ function toWorkItemSnapshotWithPolicy(
   const latestLinkedRuns =
     params.row.type === 'task'
       ? loadLatestLinkedWorkflowRunsForTasks(db, {
+          repositoryId: params.repositoryId,
+          taskWorkItemIds: [params.row.id],
+        })
+      : new Map<number, DashboardWorkItemLinkedRunSnapshot>();
+  return toWorkItemSnapshot(
+    params.row,
+    resolveEffectivePolicyForWorkItem(params.row, context),
+    params.row.type === 'task' ? (latestLinkedRuns.get(params.row.id) ?? null) : null,
+  );
+}
+
+async function toWorkItemSnapshotWithPolicyAsync(
+  db: DbOrTx,
+  params: {
+    repositoryId: number;
+    row: WorkItemRow;
+  },
+): Promise<DashboardWorkItemSnapshot> {
+  const context = loadPolicyResolutionContextForWorkItem(db, params);
+  const latestLinkedRuns =
+    params.row.type === 'task'
+      ? await loadLatestLinkedWorkflowRunsForTasksAsync(db, {
           repositoryId: params.repositoryId,
           taskWorkItemIds: [params.row.id],
         })
@@ -1177,7 +1359,7 @@ export function createWorkItemOperations(params: { withDatabase: WithDatabase })
   return {
     listWorkItems(repositoryIdRaw): Promise<DashboardListWorkItemsResult> {
       const repositoryId = requireRepositoryId(repositoryIdRaw);
-      return withDatabase(db => {
+      return withDatabase(async db => {
         const repository = db
           .select({ id: repositories.id })
           .from(repositories)
@@ -1191,7 +1373,7 @@ export function createWorkItemOperations(params: { withDatabase: WithDatabase })
 
         const rows = db.select().from(workItems).where(eq(workItems.repositoryId, repositoryId)).all();
         return {
-          workItems: toWorkItemSnapshotsWithPolicies(db, {
+          workItems: await toWorkItemSnapshotsWithPoliciesAsync(db, {
             repositoryId,
             rows,
           }),
@@ -1202,38 +1384,36 @@ export function createWorkItemOperations(params: { withDatabase: WithDatabase })
     getRepositoryBoardBootstrap(paramsRaw): Promise<DashboardRepositoryBoardBootstrapResult> {
       const repositoryId = requireRepositoryId(paramsRaw.repositoryId);
 
-      return withDatabase(db =>
-        db.transaction(tx => {
-          const repository = tx
-            .select({ id: repositories.id })
-            .from(repositories)
-            .where(eq(repositories.id, repositoryId))
-            .get();
-          if (!repository) {
-            throw new DashboardIntegrationError('not_found', `Repository id=${repositoryId} was not found.`, {
-              status: 404,
-            });
-          }
+      return withDatabase(async db => {
+        const repository = db
+          .select({ id: repositories.id })
+          .from(repositories)
+          .where(eq(repositories.id, repositoryId))
+          .get();
+        if (!repository) {
+          throw new DashboardIntegrationError('not_found', `Repository id=${repositoryId} was not found.`, {
+            status: 404,
+          });
+        }
 
-          const rows = tx.select().from(workItems).where(eq(workItems.repositoryId, repositoryId)).all();
-          const latestEvent = tx
-            .select({ id: workItemEvents.id })
-            .from(workItemEvents)
-            .where(eq(workItemEvents.repositoryId, repositoryId))
-            .orderBy(desc(workItemEvents.id))
-            .limit(1)
-            .get();
+        const rows = db.select().from(workItems).where(eq(workItems.repositoryId, repositoryId)).all();
+        const latestEvent = db
+          .select({ id: workItemEvents.id })
+          .from(workItemEvents)
+          .where(eq(workItemEvents.repositoryId, repositoryId))
+          .orderBy(desc(workItemEvents.id))
+          .limit(1)
+          .get();
 
-          return {
+        return {
+          repositoryId,
+          latestEventId: latestEvent?.id ?? 0,
+          workItems: await toWorkItemSnapshotsWithPoliciesAsync(db, {
             repositoryId,
-            latestEventId: latestEvent?.id ?? 0,
-            workItems: toWorkItemSnapshotsWithPolicies(tx, {
-              repositoryId,
-              rows,
-            }),
-          };
-        }),
-      );
+            rows,
+          }),
+        };
+      });
     },
 
     getRepositoryBoardEventsSnapshot(paramsRaw): Promise<DashboardBoardEventsSnapshot> {
@@ -1285,10 +1465,10 @@ export function createWorkItemOperations(params: { withDatabase: WithDatabase })
     getWorkItem(paramsRaw): Promise<DashboardGetWorkItemResult> {
       const repositoryId = requireRepositoryId(paramsRaw.repositoryId);
       const workItemId = requireWorkItemId(paramsRaw.workItemId);
-      return withDatabase(db => {
+      return withDatabase(async db => {
         const row = readWorkItemOrThrow(db, { repositoryId, workItemId });
         return {
-          workItem: toWorkItemSnapshotWithPolicy(db, {
+          workItem: await toWorkItemSnapshotWithPolicyAsync(db, {
             repositoryId,
             row,
           }),
