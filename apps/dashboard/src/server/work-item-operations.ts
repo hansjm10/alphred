@@ -1429,7 +1429,7 @@ export function createWorkItemOperations(params: { withDatabase: WithDatabase })
           });
         }
 
-        const { rows, latestEventId } = db.transaction(tx => {
+        return db.transaction(tx => {
           const latestEvent = tx
             .select({ id: workItemEvents.id })
             .from(workItemEvents)
@@ -1439,20 +1439,15 @@ export function createWorkItemOperations(params: { withDatabase: WithDatabase })
             .get();
           const rows = tx.select().from(workItems).where(eq(workItems.repositoryId, repositoryId)).all();
           return {
-            rows,
+            repositoryId,
             latestEventId: latestEvent?.id ?? 0,
+            workItems: toWorkItemSnapshotsWithPolicies(tx, {
+              repositoryId,
+              rows,
+              includeTouchedFiles: true,
+            }),
           };
         });
-
-        return {
-          repositoryId,
-          latestEventId,
-          workItems: await toWorkItemSnapshotsWithPoliciesAsync(db, {
-            repositoryId,
-            rows,
-            includeTouchedFiles: true,
-          }),
-        };
       });
     },
 
