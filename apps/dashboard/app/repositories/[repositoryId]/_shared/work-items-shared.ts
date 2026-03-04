@@ -483,6 +483,46 @@ export async function moveWorkItemStatus<TStatus extends string>(params: {
   return { ok: true, workItem: payload.workItem as DashboardWorkItemSnapshot };
 }
 
+export async function updateWorkItemFields(params: {
+  repositoryId: number;
+  workItemId: number;
+  expectedRevision: number;
+  actor: WorkItemActor;
+  plannedFiles?: string[] | null;
+  assignees?: string[] | null;
+  errorPrefix?: string;
+}): Promise<{ ok: true; workItem: DashboardWorkItemSnapshot } | { ok: false; status: number; message: string }> {
+  const errorPrefix = params.errorPrefix ?? 'Unable to save work item';
+  const response = await fetch(`/api/dashboard/work-items/${params.workItemId}`, {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      repositoryId: params.repositoryId,
+      expectedRevision: params.expectedRevision,
+      actorType: params.actor.actorType,
+      actorLabel: params.actor.actorLabel,
+      ...(params.plannedFiles !== undefined ? { plannedFiles: params.plannedFiles } : {}),
+      ...(params.assignees !== undefined ? { assignees: params.assignees } : {}),
+    }),
+  });
+
+  const payload = parseJsonSafely(await response.text());
+
+  if (!response.ok) {
+    return {
+      ok: false,
+      status: response.status,
+      message: resolveApiErrorMessage(response.status, payload, errorPrefix),
+    };
+  }
+
+  if (!isRecord(payload) || !isRecord(payload.workItem)) {
+    return { ok: false, status: 500, message: `${errorPrefix} (malformed response).` };
+  }
+
+  return { ok: true, workItem: payload.workItem as DashboardWorkItemSnapshot };
+}
+
 export async function requestWorkItemReplan(params: {
   repositoryId: number;
   workItemId: number;

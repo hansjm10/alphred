@@ -160,7 +160,7 @@ describe('RepositoryBoardPageContent', () => {
     expect(within(screen.getByRole('region', { name: 'Tasks Done' })).getByRole('button', { name: /Ship it/ })).toBeInTheDocument();
   });
 
-  it('shows a detail panel including parent chain, planned files, and assignees', async () => {
+  it('shows a detail panel including parent hierarchy, files, and assignees', async () => {
     const user = userEvent.setup();
 
     render(
@@ -188,16 +188,18 @@ describe('RepositoryBoardPageContent', () => {
     await user.click(screen.getByRole('button', { name: /Write tests/ }));
 
     expect(screen.getByRole('dialog', { name: 'Write tests' })).toBeInTheDocument();
-    expect(screen.getByText('Parent chain')).toBeInTheDocument();
+    expect(screen.getByText('Parent')).toBeInTheDocument();
     expect(screen.getByText('epic')).toBeInTheDocument();
     expect(screen.getByText('feature')).toBeInTheDocument();
     expect(screen.getByText('story')).toBeInTheDocument();
     expect(screen.getByText('Work items v1')).toBeInTheDocument();
     expect(screen.getByText('Board UI')).toBeInTheDocument();
     expect(screen.getByText('Repo board page')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Open full page' })).toHaveAttribute('href', '/repositories/1/stories/3');
 
-    expect(screen.getByText('Planned files')).toBeInTheDocument();
-    expect(screen.getByText('apps/dashboard/app/repositories/[repositoryId]/board/page.tsx')).toBeInTheDocument();
+    expect(screen.getByText('Files (1)')).toBeInTheDocument();
+    expect(screen.getByText('page.tsx')).toBeInTheDocument();
+    expect(screen.getByText('apps/dashboard/app/repositories/[repositoryId]/board/')).toBeInTheDocument();
     expect(screen.getByText('Assignees')).toBeInTheDocument();
     expect(screen.getByText('octocat')).toBeInTheDocument();
     expect(screen.getByText('Linked run')).toBeInTheDocument();
@@ -520,7 +522,7 @@ describe('RepositoryBoardPageContent', () => {
     expect(screen.getByText('Breakdown approval required: Yes')).toBeInTheDocument();
   });
 
-  it('moves a task via the move API and updates the UI', async () => {
+  it('saves staged status changes via the move API and updates the UI', async () => {
     const user = userEvent.setup();
     const fetchMock = vi.mocked(global.fetch);
 
@@ -540,7 +542,9 @@ describe('RepositoryBoardPageContent', () => {
     );
 
     await user.click(screen.getByRole('button', { name: /Write tests/ }));
+    expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled();
     await user.selectOptions(screen.getByRole('combobox', { name: 'Status' }), 'Done');
+    await user.click(screen.getByRole('button', { name: 'Save' }));
 
     expect(fetchMock).toHaveBeenCalledWith('/api/dashboard/work-items/10/actions/move', {
       method: 'POST',
@@ -555,6 +559,57 @@ describe('RepositoryBoardPageContent', () => {
     });
 
     expect(within(screen.getByRole('region', { name: 'Tasks Done' })).getByRole('button', { name: /Write tests/ })).toBeInTheDocument();
+  });
+
+  it('saves drafted files and assignees via the patch API', async () => {
+    const user = userEvent.setup();
+    const fetchMock = vi.mocked(global.fetch);
+
+    fetchMock.mockResolvedValueOnce(
+      createJsonResponse({
+        workItem: createWorkItem({
+          id: 10,
+          status: 'Draft',
+          revision: 1,
+          title: 'Write tests',
+          plannedFiles: ['src/new-file.ts'],
+          assignees: ['alice', 'octocat'],
+        }),
+      }),
+    );
+
+    render(
+      <RepositoryBoardPageContent
+        repository={createRepository({ id: 1, name: 'demo-repo' })}
+        actor={{ actorType: 'human', actorLabel: 'octocat' }}
+        initialLatestEventId={0}
+        initialWorkItems={[
+          createWorkItem({ id: 10, status: 'Draft', revision: 0, title: 'Write tests', plannedFiles: null, assignees: ['octocat'] }),
+        ]}
+      />,
+    );
+
+    await user.click(screen.getByRole('button', { name: /Write tests/ }));
+    await user.type(screen.getByRole('textbox', { name: 'Add planned file path' }), 'src/new-file.ts');
+    await user.click(screen.getByRole('button', { name: 'Add file' }));
+    await user.type(screen.getByRole('combobox', { name: 'Add assignee' }), 'alice');
+    await user.click(screen.getByRole('button', { name: 'Add assignee' }));
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/dashboard/work-items/10', {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        repositoryId: 1,
+        expectedRevision: 0,
+        actorType: 'human',
+        actorLabel: 'octocat',
+        plannedFiles: ['src/new-file.ts'],
+        assignees: ['alice', 'octocat'],
+      }),
+    });
+
+    expect(await screen.findByText('Saved updates for "Write tests".')).toBeInTheDocument();
   });
 
   it('handles 409 conflicts by refreshing the task from the server', async () => {
@@ -585,6 +640,7 @@ describe('RepositoryBoardPageContent', () => {
 
     await user.click(screen.getByRole('button', { name: /Write tests/ }));
     await user.selectOptions(screen.getByRole('combobox', { name: 'Status' }), 'InProgress');
+    await user.click(screen.getByRole('button', { name: 'Save' }));
 
     expect(await screen.findByRole('alert')).toHaveTextContent('Refreshed from server.');
     expect(within(screen.getByRole('region', { name: 'Tasks InProgress' })).getByRole('button', { name: /Write tests/ })).toBeInTheDocument();
@@ -683,7 +739,8 @@ describe('RepositoryBoardPageContent', () => {
 
     await user.click(screen.getByRole('button', { name: /New task/ }));
     expect(screen.getByRole('dialog', { name: 'New task' })).toBeInTheDocument();
-    expect(screen.getByText('apps/dashboard/app/repositories/[repositoryId]/board/page.tsx')).toBeInTheDocument();
+    expect(screen.getByText('page.tsx')).toBeInTheDocument();
+    expect(screen.getByText('apps/dashboard/app/repositories/[repositoryId]/board/')).toBeInTheDocument();
     expect(screen.getByText('octocat')).toBeInTheDocument();
     expect(screen.getByText('Repo policy #11 · Epic policy #21')).toBeInTheDocument();
   });
@@ -736,8 +793,9 @@ describe('RepositoryBoardPageContent', () => {
 
     await user.click(screen.getByRole('button', { name: /New title/ }));
     expect(screen.getByRole('dialog', { name: 'New title' })).toBeInTheDocument();
-    expect(screen.getByText('apps/dashboard/app/repositories/[repositoryId]/board/repository-board-client.tsx')).toBeInTheDocument();
-    expect(within(screen.getByText('Assignees').closest('div') ?? document.body).getByText('None')).toBeInTheDocument();
+    expect(screen.getByText('repository-board-client.tsx')).toBeInTheDocument();
+    expect(screen.getByText('apps/dashboard/app/repositories/[repositoryId]/board/')).toBeInTheDocument();
+    expect(screen.getByText('No assignees yet.')).toBeInTheDocument();
 
     act(() => {
       MockEventSource.instances[0]?.emit('board_event', {
@@ -756,7 +814,7 @@ describe('RepositoryBoardPageContent', () => {
       });
     });
 
-    expect(screen.getByText('apps/dashboard/app/repositories/[repositoryId]/board/repository-board-client.tsx')).toBeInTheDocument();
+    expect(screen.getByText('repository-board-client.tsx')).toBeInTheDocument();
     expect(screen.getByText('octocat')).toBeInTheDocument();
   });
 
