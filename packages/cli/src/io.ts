@@ -38,7 +38,7 @@ export function printGeneralUsage(io: Pick<CliIo, 'stdout'>): void {
   io.stdout('');
   io.stdout('Commands:');
   io.stdout(
-    '  run --tree <tree_key> [--repo <name|github:owner/repo|azure:org/project/repo>] [--branch <name>] [--execution-scope <full|single_node>] [--node-selector <next_runnable|node_key>] [--node-key <node_key>]',
+    '  run --tree <tree_key> [--repo <name|github:owner/repo|azure:org/project/repo>] [--branch <name>] [--work-item-id <work_item_id>] [--issue-id <issue_id>] [--execution-scope <full|single_node>] [--node-selector <next_runnable|node_key>] [--node-key <node_key>]',
   );
   io.stdout('                             Start and execute a workflow run');
   io.stdout('  run <cancel|pause|resume|retry> --run <run_id>');

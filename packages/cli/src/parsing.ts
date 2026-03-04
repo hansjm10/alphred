@@ -408,6 +408,47 @@ function parseExecutionScopeOption(
   };
 }
 
+function parseRunAssociationOptions(
+  options: ReadonlyMap<string, string>,
+  repoInput: string | null,
+  io: Pick<CliIo, 'stderr'>,
+):
+  | {
+      ok: true;
+      workItemId: number | undefined;
+      issueId: string | undefined;
+    }
+  | ParsedRunCommandInput {
+  const workItemIdOption = options.get('work-item-id');
+  let workItemId: number | undefined;
+  if (workItemIdOption !== undefined) {
+    const parsedWorkItemId = parseStrictPositiveInteger(workItemIdOption.trim());
+    if (parsedWorkItemId === null) {
+      return runUsageFailure(io, 'Option "--work-item-id" must be a positive integer.');
+    }
+    if (!repoInput) {
+      return runUsageFailure(io, 'Option "--work-item-id" requires "--repo".');
+    }
+    workItemId = parsedWorkItemId;
+  }
+
+  const issueIdOption = options.get('issue-id');
+  let issueId: string | undefined;
+  if (issueIdOption !== undefined) {
+    const trimmedIssueId = issueIdOption.trim();
+    if (trimmedIssueId.length === 0) {
+      return runUsageFailure(io, 'Option "--issue-id" requires a value.');
+    }
+    issueId = trimmedIssueId;
+  }
+
+  return {
+    ok: true,
+    workItemId,
+    issueId,
+  };
+}
+
 function parseNodeSelectorOption(
   options: ReadonlyMap<string, string>,
   executionScope: 'full' | 'single_node',
@@ -484,7 +525,16 @@ export function parseRunCommandInput(rawArgs: readonly string[], io: CliIo): Par
     {
       commandName: 'run',
       usage: RUN_USAGE,
-      allowedOptions: ['tree', 'repo', 'branch', 'execution-scope', 'node-selector', 'node-key'],
+      allowedOptions: [
+        'tree',
+        'repo',
+        'branch',
+        'work-item-id',
+        'issue-id',
+        'execution-scope',
+        'node-selector',
+        'node-key',
+      ],
     },
     io,
   );
@@ -522,6 +572,12 @@ export function parseRunCommandInput(rawArgs: readonly string[], io: CliIo): Par
     return runUsageFailure(io, 'Option "--branch" requires "--repo".');
   }
 
+  const runAssociationResult = parseRunAssociationOptions(parsedOptions.options, repoInput ?? null, io);
+  if (!runAssociationResult.ok) {
+    return runAssociationResult;
+  }
+  const { workItemId, issueId } = runAssociationResult;
+
   const executionScopeResult = parseExecutionScopeOption(parsedOptions.options, io);
   if (!executionScopeResult.ok) {
     return executionScopeResult;
@@ -539,6 +595,8 @@ export function parseRunCommandInput(rawArgs: readonly string[], io: CliIo): Par
     treeKey,
     repoInput: repoInput ?? null,
     branchOverride,
+    workItemId,
+    issueId,
     executionScope,
     nodeSelector,
   };

@@ -1,5 +1,6 @@
 'use client';
 
+import Link from 'next/link';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type {
   DashboardRunControlAction,
@@ -352,6 +353,19 @@ export function RunDetailContent({
   const pageSubtitle = detail.run.repository
     ? `${detail.run.tree.name} · ${detail.run.repository.name}`
     : detail.run.tree.name;
+  const runAssociation = detail.run.association ?? null;
+  const linkedWorkItem = runAssociation?.workItem ?? null;
+  const linkedWorkItemLabel = linkedWorkItem
+    ? `${linkedWorkItem.type} #${linkedWorkItem.id} · ${linkedWorkItem.title}`
+    : 'Not linked';
+  const linkedStory =
+    linkedWorkItem?.type === 'story' && runAssociation !== null && runAssociation.repositoryId !== null
+      ? {
+          href: `/repositories/${runAssociation.repositoryId}/stories/${linkedWorkItem.id}`,
+          id: linkedWorkItem.id,
+          title: linkedWorkItem.title,
+        }
+      : null;
   const operatorActions = useMemo(
     () => resolveOperatorActions(detail.run, detail.worktrees.length > 0),
     [detail.run, detail.worktrees.length],
@@ -463,6 +477,25 @@ export function RunDetailContent({
             <li>
               <span>Repository context</span>
               <span className="meta-text">{repositoryContext}</span>
+            </li>
+            <li>
+              <span>Linked work item</span>
+              <span className="meta-text">
+                {linkedStory
+                  ? (
+                      <>
+                        <Link className="run-inline-link" href={linkedStory.href}>
+                          Story #{linkedStory.id}
+                        </Link>
+                        {` · ${linkedStory.title}`}
+                      </>
+                    )
+                  : linkedWorkItemLabel}
+              </span>
+            </li>
+            <li>
+              <span>Issue id</span>
+              <span className="meta-text">{runAssociation?.issueId ?? 'Not linked'}</span>
             </li>
             <li>
               <span>Worktrees</span>

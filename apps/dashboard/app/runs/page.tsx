@@ -9,6 +9,8 @@ import { loadDashboardRepositories } from '../repositories/load-dashboard-reposi
 import { loadDashboardRunSummaries, loadDashboardWorkflowTrees } from './load-dashboard-runs';
 import {
   normalizeRunFilter,
+  normalizeRunLaunchIssueIdParam,
+  normalizeRunLaunchWorkItemIdParam,
   normalizeRunRepositoryParam,
   normalizeRunTimeWindowParam,
   normalizeRunWorkflowParam,
@@ -25,11 +27,15 @@ type RunsPageProps = Readonly<{
     workflow?: string | string[];
     repository?: string | string[];
     window?: string | string[];
+    launchWorkItemId?: string | string[];
+    launchIssueId?: string | string[];
   }> | {
     status?: string | string[];
     workflow?: string | string[];
     repository?: string | string[];
     window?: string | string[];
+    launchWorkItemId?: string | string[];
+    launchIssueId?: string | string[];
   };
 }>;
 
@@ -47,6 +53,8 @@ export default async function RunsPage({
   const requestedRepository = normalizeRunRepositoryParam(resolvedSearchParams?.repository);
   const requestedWorkflow = normalizeRunWorkflowParam(resolvedSearchParams?.workflow);
   const activeWindow = normalizeRunTimeWindowParam(resolvedSearchParams?.window);
+  const requestedLaunchWorkItemId = normalizeRunLaunchWorkItemIdParam(resolvedSearchParams?.launchWorkItemId);
+  const requestedLaunchIssueId = normalizeRunLaunchIssueIdParam(resolvedSearchParams?.launchIssueId);
   const [resolvedRuns, resolvedWorkflows, resolvedRepositories, resolvedAuthGate] = await Promise.all([
     runs ?? loadDashboardRunSummaries(),
     workflows ?? loadDashboardWorkflowTrees(),
@@ -66,6 +74,9 @@ export default async function RunsPage({
     resolvedWorkflows.some((workflow) => workflow.treeKey === requestedWorkflow)
       ? requestedWorkflow
       : null;
+  const initialLaunchWorkItemId = requestedLaunchWorkItemId !== null && initialRepositoryName !== null
+    ? requestedLaunchWorkItemId
+    : null;
 
   return (
     <RunsPageContent
@@ -77,6 +88,8 @@ export default async function RunsPage({
       activeRepositoryName={initialRepositoryName}
       activeWorkflowKey={activeWorkflowKey}
       activeWindow={activeWindow}
+      initialLaunchWorkItemId={initialLaunchWorkItemId}
+      initialLaunchIssueId={requestedLaunchIssueId}
     />
   );
 }

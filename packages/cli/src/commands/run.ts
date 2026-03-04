@@ -7,6 +7,7 @@ import {
   mapRunExecutionError,
   materializeRun,
   openInitializedDatabase,
+  persistRunLaunchAssociation,
   prepareRunRepository,
   setupRunExecution,
   summarizeRunExecution,
@@ -37,7 +38,7 @@ export async function handleRunCommand(
   if (!parsedInput.ok) {
     return parsedInput.exitCode;
   }
-  const { treeKey, repoInput, branchOverride, executionScope, nodeSelector } = parsedInput;
+  const { treeKey, repoInput, branchOverride, workItemId, issueId, executionScope, nodeSelector } = parsedInput;
 
   let db: AlphredDatabase | null = null;
   let runId: number | null = null;
@@ -54,7 +55,13 @@ export async function handleRunCommand(
     worktreeManager = runRepository.worktreeManager;
 
     runId = materializeRun(treeKey, db, io);
-    const runSetup = await setupRunExecution(runId, treeKey, resolvedRepo, branchOverride, worktreeManager, io);
+    persistRunLaunchAssociation(db, {
+      runId,
+      resolvedRepo,
+      workItemId,
+      issueId,
+    });
+    const runSetup = await setupRunExecution(runId, treeKey, resolvedRepo, branchOverride, issueId, worktreeManager, io);
     worktreeManager = runSetup.worktreeManager;
 
     const executor = createSqlWorkflowExecutor(db, {

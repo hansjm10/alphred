@@ -5,6 +5,8 @@ import {
   buildRunWorktreeHref,
   findRunByParam,
   normalizeRunFilter,
+  normalizeRunLaunchIssueIdParam,
+  normalizeRunLaunchWorkItemIdParam,
   normalizeRunRepositoryParam,
   normalizeRunTimeWindowParam,
   normalizeRunWorkflowParam,
@@ -23,6 +25,22 @@ describe('run-route-fixtures helpers', () => {
     expect(normalizeRunRepositoryParam('  demo-repo  ')).toBe('demo-repo');
     expect(normalizeRunRepositoryParam('   ')).toBeNull();
     expect(normalizeRunRepositoryParam(undefined)).toBeNull();
+  });
+
+  it('normalizes launch work item query values as positive integers', () => {
+    expect(normalizeRunLaunchWorkItemIdParam(['12', '99'])).toBe(12);
+    expect(normalizeRunLaunchWorkItemIdParam(' 15 ')).toBe(15);
+    expect(normalizeRunLaunchWorkItemIdParam('0')).toBeNull();
+    expect(normalizeRunLaunchWorkItemIdParam('-1')).toBeNull();
+    expect(normalizeRunLaunchWorkItemIdParam('abc')).toBeNull();
+    expect(normalizeRunLaunchWorkItemIdParam(undefined)).toBeNull();
+  });
+
+  it('normalizes launch issue id query values with first-value and trim semantics', () => {
+    expect(normalizeRunLaunchIssueIdParam(['273', '300'])).toBe('273');
+    expect(normalizeRunLaunchIssueIdParam('  273  ')).toBe('273');
+    expect(normalizeRunLaunchIssueIdParam('   ')).toBeNull();
+    expect(normalizeRunLaunchIssueIdParam(undefined)).toBeNull();
   });
 
   it('normalizes workflow query values with first-value and trim semantics', () => {

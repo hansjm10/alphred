@@ -138,6 +138,8 @@ export type ParsedRunCommandInput =
       treeKey: string;
       repoInput: string | null;
       branchOverride: string | undefined;
+      workItemId: number | undefined;
+      issueId: string | undefined;
       executionScope: WorkflowExecutionScope;
       nodeSelector: WorkflowRunNodeSelector | undefined;
     }

@@ -189,6 +189,68 @@ describe('RunsPage', () => {
     expect(screen.getByLabelText('Repository context')).toHaveValue('sample-repo');
   });
 
+  it('includes prefilled launch association fields in launch payloads', async () => {
+    const fetchMock = vi.mocked(global.fetch);
+    fetchMock.mockImplementation((url: string | URL | globalThis.Request) => {
+      const urlString = typeof url === 'string' ? url : url instanceof URL ? url.toString() : url.url;
+      if (urlString.includes('/nodes')) {
+        return Promise.resolve(createJsonResponse({ nodes: [] }));
+      }
+      if (urlString === '/api/dashboard/runs') {
+        return Promise.resolve(createJsonResponse({
+          workflowRunId: 620,
+          mode: 'async',
+          status: 'accepted',
+          runStatus: 'running',
+          executionOutcome: null,
+          executedNodes: null,
+        }, { status: 202 }));
+      }
+      if (urlString.startsWith('/api/dashboard/runs?limit=')) {
+        return Promise.resolve(createJsonResponse({
+          runs: [createRunSummary({ id: 620, status: 'running' })],
+        }));
+      }
+      return Promise.resolve(createJsonResponse({}));
+    });
+
+    const user = userEvent.setup();
+    render(
+      <RunsPageContent
+        runs={[createRunSummary({ id: 412, status: 'running' })]}
+        workflows={[createWorkflow()]}
+        repositories={[createRepository({ name: 'sample-repo', cloneStatus: 'cloned' })]}
+        authGate={createAuthenticatedAuthGate()}
+        activeFilter="all"
+        activeRepositoryName="sample-repo"
+        activeWorkflowKey={null}
+        activeWindow="all"
+        initialLaunchWorkItemId={42}
+        initialLaunchIssueId="273"
+      />,
+    );
+
+    expect(screen.getByLabelText('Work item context')).toHaveValue('#42');
+    expect(screen.getByLabelText('Issue id (optional)')).toHaveValue('273');
+
+    await user.click(screen.getByRole('button', { name: 'Launch Run' }));
+
+    await waitFor(() => {
+      const postCall = fetchMock.mock.calls.find(
+        (call) => call[0] === '/api/dashboard/runs' && call[1] && typeof call[1] === 'object' && 'method' in call[1] && call[1].method === 'POST',
+      );
+      expect(postCall).toBeDefined();
+      expect(JSON.parse(postCall![1]!.body as string)).toEqual({
+        treeKey: 'demo-tree',
+        repositoryName: 'sample-repo',
+        workItemId: 42,
+        issueId: '273',
+        executionMode: 'async',
+        executionScope: 'full',
+      });
+    });
+  });
+
   it('treats running filter as active lifecycle states', () => {
     render(
       <RunsPageContent
@@ -885,6 +947,8 @@ describe('RunsPage', () => {
       activeRepositoryName: string | null;
       activeWorkflowKey: string | null;
       activeWindow: 'all' | '24h' | '7d' | '30d';
+      initialLaunchWorkItemId: number | null;
+      initialLaunchIssueId: string | null;
     }>;
 
     expect(loadDashboardRunSummariesMock).toHaveBeenCalledTimes(1);
@@ -900,6 +964,8 @@ describe('RunsPage', () => {
     expect(root.props.activeRepositoryName).toBeNull();
     expect(root.props.activeWorkflowKey).toBeNull();
     expect(root.props.activeWindow).toBe('all');
+    expect(root.props.initialLaunchWorkItemId).toBeNull();
+    expect(root.props.initialLaunchIssueId).toBeNull();
   });
 
   it('uses provided props without invoking loaders and resolves query-driven prefill', async () => {
@@ -918,6 +984,8 @@ describe('RunsPage', () => {
         workflow: ['other-tree', 'demo-tree'],
         repository: ['sample-repo', 'demo-repo'],
         window: ['7d', '24h'],
+        launchWorkItemId: ['42', '99'],
+        launchIssueId: ['273', '300'],
       }),
     })) as ReactElement<{
       runs: readonly DashboardRunSummary[];
@@ -928,6 +996,8 @@ describe('RunsPage', () => {
       activeRepositoryName: string | null;
       activeWorkflowKey: string | null;
       activeWindow: 'all' | '24h' | '7d' | '30d';
+      initialLaunchWorkItemId: number | null;
+      initialLaunchIssueId: string | null;
     }>;
 
     expect(loadDashboardRunSummariesMock).not.toHaveBeenCalled();
@@ -943,6 +1013,8 @@ describe('RunsPage', () => {
     expect(root.props.activeRepositoryName).toBe('sample-repo');
     expect(root.props.activeWorkflowKey).toBe('other-tree');
     expect(root.props.activeWindow).toBe('7d');
+    expect(root.props.initialLaunchWorkItemId).toBe(42);
+    expect(root.props.initialLaunchIssueId).toBe('273');
   });
 
   it('drops repository prefill when query repository is not cloned', async () => {
@@ -956,7 +1028,7 @@ describe('RunsPage', () => {
       workflows,
       repositories,
       authGate,
-      searchParams: Promise.resolve({ repository: 'pending-repo' }),
+      searchParams: Promise.resolve({ repository: 'pending-repo', launchWorkItemId: '77', launchIssueId: '88' }),
     })) as ReactElement<{
       runs: readonly DashboardRunSummary[];
       workflows: readonly DashboardWorkflowTreeSummary[];
@@ -966,11 +1038,15 @@ describe('RunsPage', () => {
       activeRepositoryName: string | null;
       activeWorkflowKey: string | null;
       activeWindow: 'all' | '24h' | '7d' | '30d';
+      initialLaunchWorkItemId: number | null;
+      initialLaunchIssueId: string | null;
     }>;
 
     expect(root.type).toBe(RunsPageContent);
     expect(root.props.activeRepositoryName).toBeNull();
     expect(root.props.activeWorkflowKey).toBeNull();
     expect(root.props.activeWindow).toBe('all');
+    expect(root.props.initialLaunchWorkItemId).toBeNull();
+    expect(root.props.initialLaunchIssueId).toBe('88');
   });
 });

@@ -482,6 +482,32 @@ describe('RunDetailContent realtime updates', () => {
     expect(screen.getByText(/Live updates every 1s/)).toBeInTheDocument();
   });
 
+  it('shows linked work-item association context in the run summary', () => {
+    render(
+      <RunDetailContent
+        initialDetail={createRunDetail({
+          run: {
+            association: {
+              repositoryId: 1,
+              issueId: '273',
+              workItem: {
+                id: 9,
+                type: 'story',
+                title: 'Story launch context',
+              },
+            },
+          },
+        })}
+        repositories={[createRepository()]}
+        enableRealtime={false}
+      />,
+    );
+
+    expect(screen.getByRole('link', { name: 'Story #9' })).toHaveAttribute('href', '/repositories/1/stories/9');
+    expect(screen.getByText(/Story launch context/)).toBeInTheDocument();
+    expect(screen.getByText('273')).toBeInTheDocument();
+  });
+
   it('keeps pending start disabled while exposing cancel for pending runs', () => {
     render(
       <RunDetailContent
