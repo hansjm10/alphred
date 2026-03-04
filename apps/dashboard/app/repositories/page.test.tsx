@@ -290,7 +290,7 @@ describe('RepositoriesPage', () => {
     expect(screen.queryByRole('button', { name: 'Sync demo-repo' })).toBeNull();
   });
 
-  it('refreshes archived data using the latest filter when archive completes after a toggle', async () => {
+  it('drops stale refresh results when archive-triggered refresh resolves before toggle refresh', async () => {
     const active = createRepository({
       id: 1,
       name: 'demo-repo',
@@ -305,20 +305,20 @@ describe('RepositoriesPage', () => {
     const archiveRequest = new Promise<Response>((resolve) => {
       resolveArchiveRequest = resolve;
     });
+    let resolveToggleRefreshRequest!: (value: Response) => void;
+    const toggleRefreshRequest = new Promise<Response>((resolve) => {
+      resolveToggleRefreshRequest = resolve;
+    });
+    let resolveArchiveRefreshRequest!: (value: Response) => void;
+    const archiveRefreshRequest = new Promise<Response>((resolve) => {
+      resolveArchiveRefreshRequest = resolve;
+    });
 
     const fetchMock = vi.mocked(global.fetch);
     fetchMock
       .mockReturnValueOnce(archiveRequest)
-      .mockResolvedValueOnce(
-        createJsonResponse({
-          repositories: [archived],
-        }),
-      )
-      .mockResolvedValueOnce(
-        createJsonResponse({
-          repositories: [archived],
-        }),
-      );
+      .mockReturnValueOnce(toggleRefreshRequest)
+      .mockReturnValueOnce(archiveRefreshRequest);
 
     const user = userEvent.setup();
     render(<RepositoriesPageContent repositories={[active]} authGate={createAuthenticatedAuthGate()} />);
@@ -331,13 +331,13 @@ describe('RepositoriesPage', () => {
       });
     });
 
-    await user.click(screen.getByRole('checkbox', { name: 'Show archived' }));
+    const showArchivedToggle = screen.getByRole('checkbox', { name: 'Show archived' });
+    await user.click(showArchivedToggle);
 
     await waitFor(() => {
       expect(fetchMock).toHaveBeenNthCalledWith(2, '/api/dashboard/repositories?includeArchived=1', {
         method: 'GET',
       });
-      expect(screen.getByRole('checkbox', { name: 'Show archived' })).toBeChecked();
     });
 
     resolveArchiveRequest(
@@ -350,6 +350,29 @@ describe('RepositoriesPage', () => {
       expect(fetchMock).toHaveBeenNthCalledWith(3, '/api/dashboard/repositories?includeArchived=1', {
         method: 'GET',
       });
+    });
+
+    resolveArchiveRefreshRequest(
+      createJsonResponse({
+        repositories: [archived],
+      }),
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText('demo-repo archived.')).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Restore demo-repo' })).toBeInTheDocument();
+      expect(screen.getByRole('checkbox', { name: 'Show archived' })).toBeChecked();
+    });
+
+    resolveToggleRefreshRequest(
+      createJsonResponse({
+        repositories: [active],
+      }),
+    );
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Restore demo-repo' })).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Archive demo-repo' })).toBeNull();
     });
   });
 

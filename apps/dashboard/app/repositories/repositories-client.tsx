@@ -716,6 +716,7 @@ export function RepositoriesPageContent({
   const [showArchived, setShowArchived] = useState(false);
   const showArchivedRef = useRef(showArchived);
   const repositoryStateRef = useRef(repositoryState);
+  const refreshRequestSequenceRef = useRef(0);
   repositoryStateRef.current = repositoryState;
   const [isRefreshingRepositoryList, setIsRefreshingRepositoryList] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
@@ -822,15 +823,27 @@ export function RepositoriesPageContent({
   }
 
   async function refreshRepositories(includeArchived: boolean): Promise<void> {
+    const requestSequence = refreshRequestSequenceRef.current + 1;
+    refreshRequestSequenceRef.current = requestSequence;
     setIsRefreshingRepositoryList(true);
 
     try {
       const nextRepositories = await fetchRepositories(includeArchived);
+      if (refreshRequestSequenceRef.current !== requestSequence) {
+        return;
+      }
       applyRepositoriesSnapshot(nextRepositories);
       showArchivedRef.current = includeArchived;
       setShowArchived(includeArchived);
+    } catch (error) {
+      if (refreshRequestSequenceRef.current !== requestSequence) {
+        return;
+      }
+      throw error;
     } finally {
-      setIsRefreshingRepositoryList(false);
+      if (refreshRequestSequenceRef.current === requestSequence) {
+        setIsRefreshingRepositoryList(false);
+      }
     }
   }
 
