@@ -3357,6 +3357,45 @@ describe('createDashboardService', () => {
     expect(ensureRepositoryCloneMock).not.toHaveBeenCalled();
   });
 
+  it('blocks run launches for archived repositories until restored', async () => {
+    const createRunWorktreeMock = vi.fn(async () => ({
+      id: 1,
+      runId: 1,
+      repositoryId: 1,
+      path: '/tmp/worktree',
+      branch: 'main',
+      commitHash: null,
+      createdAt: '2026-02-17T20:00:00.000Z',
+    }));
+    const { db, dependencies } = createHarness({
+      createWorktreeManager: () => ({
+        createRunWorktree: createRunWorktreeMock,
+        cleanupRun: async () => undefined,
+      }),
+    });
+    seedRunData(db);
+    const service = createDashboardService({ dependencies });
+
+    await service.archiveRepository('demo-repo');
+
+    await expect(
+      service.launchWorkflowRun({
+        treeKey: 'demo-tree',
+        repositoryName: 'demo-repo',
+        executionMode: 'sync',
+      }),
+    ).rejects.toMatchObject({
+      name: 'DashboardIntegrationError',
+      code: 'conflict',
+      status: 409,
+      message: 'Repository "demo-repo" is archived. Restore it before launching runs.',
+      details: {
+        archivedAt: expect.any(String),
+      },
+    });
+    expect(createRunWorktreeMock).not.toHaveBeenCalled();
+  });
+
   it('translates planner missing-tree failures to not_found errors', async () => {
     const { db, dependencies } = createHarness({
       createSqlWorkflowPlanner: () => ({

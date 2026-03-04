@@ -1120,12 +1120,24 @@ export function createRunOperations(params: {
           }
 
           if (repositoryName !== undefined) {
-            const repository = getRepositoryByName(db, repositoryName);
+            const repository = getRepositoryByName(db, repositoryName, { includeArchived: true });
             if (!repository) {
               throw new DashboardIntegrationError(
                 'not_found',
                 `Repository "${repositoryName}" was not found.`,
                 { status: 404 },
+              );
+            }
+            if (repository.archivedAt !== null) {
+              throw new DashboardIntegrationError(
+                'conflict',
+                `Repository "${repositoryName}" is archived. Restore it before launching runs.`,
+                {
+                  status: 409,
+                  details: {
+                    archivedAt: repository.archivedAt,
+                  },
+                },
               );
             }
 
