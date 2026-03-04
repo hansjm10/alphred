@@ -6,6 +6,7 @@
     "lint": "eslint \"{apps,packages}/**/*.{ts,tsx,js,jsx}\" --max-warnings=0",
     "typecheck": "pnpm typecheck:packages && pnpm --filter @alphred/dashboard typecheck && pnpm typecheck:test",
     "typecheck:packages": "node scripts/typecheck-packages.mjs",
+    "typecheck:artifacts:check": "node scripts/typecheck-packages.mjs --check-only",
     "typecheck:packages:force": "tsc -b --pretty false --force",
     "typecheck:clean": "node scripts/typecheck-clean.mjs",
     "typecheck:test": "pnpm --filter @alphred/dashboard typecheck:test",

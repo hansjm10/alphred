@@ -45,6 +45,7 @@ pnpm test
 # Type checking
 pnpm typecheck
 pnpm typecheck:clean
+pnpm typecheck:artifacts:check
 pnpm typecheck:test
 
 # Linting
@@ -68,6 +69,12 @@ If local typecheck starts failing with missing package modules (for example `TS2
 ```bash
 pnpm typecheck:clean
 pnpm typecheck
+```
+
+To run a lightweight stale-artifact diagnostic without rebuilding, run:
+
+```bash
+pnpm typecheck:artifacts:check
 ```
 
 ## CLI Commands

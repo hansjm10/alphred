@@ -36,6 +36,7 @@ jobs:
           cache: 'pnpm'
       - run: pnpm install --frozen-lockfile
       - run: pnpm typecheck
+      - run: pnpm typecheck:artifacts:check
 
   build:
     name: Build

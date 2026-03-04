@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 
 const isWindows = process.platform === 'win32';
 const repoRoot = resolve(fileURLToPath(new URL('..', import.meta.url)));
+const checkOnly = process.argv.includes('--check-only');
 
 function readJsonFile(path) {
   return JSON.parse(readFileSync(path, 'utf8'));
@@ -73,6 +74,22 @@ function packageHasStaleBuildArtifacts(packageReferencePath) {
   return !hasTypesEntry || !hasDeclarations;
 }
 
+function getStalePackageReferences() {
+  return getPackageReferencePaths().filter((referencePath) =>
+    packageHasStaleBuildArtifacts(referencePath),
+  );
+}
+
+function reportStaleArtifacts(stalePackageReferences, logger) {
+  logger(
+    [
+      'Detected stale TypeScript incremental artifacts (`tsbuildinfo` present but declaration outputs are missing):',
+      ...stalePackageReferences.map((path) => `- ${path}`),
+      'Run `pnpm typecheck:clean && pnpm typecheck` to recover.',
+    ].join('\n'),
+  );
+}
+
 function runTypecheck(forceRebuild) {
   const localTsc = resolve(repoRoot, 'node_modules', '.bin', isWindows ? 'tsc.cmd' : 'tsc');
   const tscCommand = existsSync(localTsc) ? localTsc : isWindows ? 'tsc.cmd' : 'tsc';
@@ -91,24 +108,38 @@ function runTypecheck(forceRebuild) {
   if (result.error) {
     // eslint-disable-next-line no-console
     console.error(result.error);
+    return 1;
+  }
+
+  return result.status ?? 1;
+}
+
+const stalePackageReferencesBeforeTypecheck = getStalePackageReferences();
+
+if (checkOnly) {
+  if (stalePackageReferencesBeforeTypecheck.length > 0) {
+    reportStaleArtifacts(stalePackageReferencesBeforeTypecheck, console.error);
     process.exit(1);
   }
 
-  process.exit(result.status ?? 1);
+  process.exit(0);
 }
 
-const stalePackageReferences = getPackageReferencePaths().filter((referencePath) =>
-  packageHasStaleBuildArtifacts(referencePath),
-);
-
-if (stalePackageReferences.length > 0) {
+if (stalePackageReferencesBeforeTypecheck.length > 0) {
   // eslint-disable-next-line no-console
-  console.warn(
-    [
-      'Detected stale TypeScript incremental artifacts; forcing package rebuild for:',
-      ...stalePackageReferences.map((path) => `- ${path}`),
-    ].join('\n'),
-  );
+  console.warn('Detected stale TypeScript incremental artifacts before package typecheck; forcing rebuild.');
+  reportStaleArtifacts(stalePackageReferencesBeforeTypecheck, console.warn);
 }
 
-runTypecheck(stalePackageReferences.length > 0);
+const typecheckStatus = runTypecheck(stalePackageReferencesBeforeTypecheck.length > 0);
+if (typecheckStatus !== 0) {
+  process.exit(typecheckStatus);
+}
+
+const stalePackageReferencesAfterTypecheck = getStalePackageReferences();
+if (stalePackageReferencesAfterTypecheck.length > 0) {
+  // eslint-disable-next-line no-console
+  console.error('Package typecheck finished, but stale artifacts still remain.');
+  reportStaleArtifacts(stalePackageReferencesAfterTypecheck, console.error);
+  process.exit(1);
+}
