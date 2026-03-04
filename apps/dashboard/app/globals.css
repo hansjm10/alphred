@@ -1221,6 +1221,29 @@ output {
   padding: 8px 10px;
 }
 
+.run-launch-form__field--checkbox {
+  align-items: flex-start;
+}
+
+.run-launch-checkbox {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+}
+
+.run-launch-form__field--checkbox input[type='checkbox'] {
+  accent-color: var(--accent-active);
+  appearance: auto;
+  background: transparent;
+  block-size: 16px;
+  border: 0;
+  border-radius: 0;
+  inline-size: 16px;
+  margin: 0;
+  min-block-size: 16px;
+  padding: 0;
+}
+
 .run-filter-bar {
   display: grid;
   gap: var(--space-2);

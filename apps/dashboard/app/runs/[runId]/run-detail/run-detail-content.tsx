@@ -3,13 +3,13 @@
 import Link from 'next/link';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type {
-  DashboardRunControlAction,
   DashboardRunDetail,
   DashboardRunNodeStreamEvent,
 } from '@dashboard/server/dashboard-contracts';
 import { Panel } from '../../../ui/primitives';
 import { isActiveRunStatus } from '../../run-summary-utils';
 import {
+  executeRunWorktreeCleanupAction,
   executeRunControlAction,
   resolveOperatorActions,
   toActionVerb,
@@ -45,6 +45,7 @@ import {
   type ActionFeedbackState,
   type AgentStreamConnectionState,
   type AgentStreamTarget,
+  type DashboardRunOperatorAction,
   type RealtimeChannelState,
   type RunDetailContentProps,
 } from './types';
@@ -121,7 +122,7 @@ export function RunDetailContent({
   );
   const [streamSelectedEventSequence, setStreamSelectedEventSequence] = useState<number | null>(null);
   const [streamInspectorUrlStateReadyRunId, setStreamInspectorUrlStateReadyRunId] = useState<number | null>(null);
-  const [pendingControlAction, setPendingControlAction] = useState<DashboardRunControlAction | null>(null);
+  const [pendingControlAction, setPendingControlAction] = useState<DashboardRunOperatorAction | null>(null);
   const [actionFeedback, setActionFeedback] = useState<ActionFeedbackState>(null);
 
   const lastUpdatedAtRef = useRef<number>(lastUpdatedAtMs);
@@ -367,8 +368,13 @@ export function RunDetailContent({
         }
       : null;
   const operatorActions = useMemo(
-    () => resolveOperatorActions(detail.run, detail.worktrees.length > 0),
-    [detail.run, detail.worktrees.length],
+    () =>
+      resolveOperatorActions(
+        detail.run,
+        detail.worktrees.length > 0,
+        detail.worktrees.some((worktree) => worktree.status === 'active'),
+      ),
+    [detail.run, detail.worktrees],
   );
   const selectedNode = useMemo(
     () => detail.nodes.find((node) => node.id === filteredNodeId) ?? null,
@@ -411,7 +417,7 @@ export function RunDetailContent({
     });
   };
 
-  const handleRunControlAction = async (action: DashboardRunControlAction): Promise<void> => {
+  const handleRunControlAction = async (action: DashboardRunOperatorAction): Promise<void> => {
     if (pendingControlAction !== null) {
       return;
     }
@@ -422,19 +428,34 @@ export function RunDetailContent({
       message: `Applying ${toActionVerb(action)} action...`,
       runStatus: null,
     });
-    await executeRunControlAction({
-      action,
-      runId: detail.run.id,
-      runStatus: detail.run.status,
-      enableRealtime,
-      setDetail,
-      setUpdateError,
-      setIsRefreshing,
-      setLastUpdatedAtMs,
-      setNextRetryAtMs,
-      setChannelState,
-      setActionFeedback,
-    });
+    if (action === 'cleanup-worktree') {
+      await executeRunWorktreeCleanupAction({
+        runId: detail.run.id,
+        runStatus: detail.run.status,
+        enableRealtime,
+        setDetail,
+        setUpdateError,
+        setIsRefreshing,
+        setLastUpdatedAtMs,
+        setNextRetryAtMs,
+        setChannelState,
+        setActionFeedback,
+      });
+    } else {
+      await executeRunControlAction({
+        action,
+        runId: detail.run.id,
+        runStatus: detail.run.status,
+        enableRealtime,
+        setDetail,
+        setUpdateError,
+        setIsRefreshing,
+        setLastUpdatedAtMs,
+        setNextRetryAtMs,
+        setChannelState,
+        setActionFeedback,
+      });
+    }
     setPendingControlAction(null);
   };
 

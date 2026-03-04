@@ -4,6 +4,7 @@ import type {
   DashboardRunDetail,
   DashboardRunNodeStreamSnapshot,
   DashboardRunSummary,
+  DashboardRunWorktreeCleanupResult,
 } from '@dashboard/server/dashboard-contracts';
 import { RUN_CONTROL_ACTIONS, RUN_CONTROL_OUTCOMES, RUN_STATUSES, type ErrorEnvelope } from './types';
 import {
@@ -96,6 +97,21 @@ export function parseRunControlPayload(payload: unknown, expectedRunId: number):
   }
 
   return payload as DashboardRunControlResult;
+}
+
+export function parseRunWorktreeCleanupPayload(
+  payload: unknown,
+  expectedRunId: number,
+): DashboardRunWorktreeCleanupResult | null {
+  if (!isRecord(payload)) {
+    return null;
+  }
+
+  if (!Array.isArray(payload.worktrees) || !payload.worktrees.every((worktree) => hasWorktreeShape(worktree, expectedRunId))) {
+    return null;
+  }
+
+  return payload as DashboardRunWorktreeCleanupResult;
 }
 
 export async function fetchRunDetailSnapshot(

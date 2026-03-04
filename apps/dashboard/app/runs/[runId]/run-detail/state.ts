@@ -1,6 +1,5 @@
 import { isActiveRunStatus } from '../../run-summary-utils';
 import type {
-  DashboardRunControlAction,
   DashboardRunDetail,
   DashboardRunNodeStreamEvent,
   DashboardRunSummary,
@@ -9,6 +8,7 @@ import type {
   ActionFeedbackState,
   AgentStreamConnectionState,
   AgentStreamTarget,
+  DashboardRunOperatorAction,
   RealtimeChannelState,
   StateSetter,
 } from './types';
@@ -165,7 +165,7 @@ export function resetRunDetailStateFromInitialDetail(params: {
   setStreamAutoScroll: StateSetter<boolean>;
   setStreamLastUpdatedAtMs: StateSetter<number>;
   setStreamSelectedEventSequence: StateSetter<number | null>;
-  setPendingControlAction: StateSetter<DashboardRunControlAction | null>;
+  setPendingControlAction: StateSetter<DashboardRunOperatorAction | null>;
   setActionFeedback: StateSetter<ActionFeedbackState>;
 }): void {
   const {

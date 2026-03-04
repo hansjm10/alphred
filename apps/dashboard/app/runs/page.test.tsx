@@ -159,6 +159,7 @@ describe('RunsPage', () => {
 
     expect(screen.getByRole('heading', { name: 'Run lifecycle' })).toBeInTheDocument();
     expect(screen.getByLabelText('Workflow')).toBeInTheDocument();
+    expect(screen.getByRole('checkbox', { name: 'Auto-clean worktree on completion' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Launch Run' })).toBeEnabled();
     expect(screen.getByRole('columnheader', { name: 'Repository' })).toBeInTheDocument();
     expect(screen.getByRole('columnheader', { name: 'Node lifecycle' })).toBeInTheDocument();
@@ -187,6 +188,36 @@ describe('RunsPage', () => {
     );
 
     expect(screen.getByLabelText('Repository context')).toHaveValue('sample-repo');
+  });
+
+  it('resets auto-clean worktree when repository context is cleared', async () => {
+    const user = userEvent.setup();
+    render(
+      <RunsPageContent
+        runs={[createRunSummary({ id: 412, status: 'running' })]}
+        workflows={[createWorkflow()]}
+        repositories={[createRepository({ name: 'sample-repo', cloneStatus: 'cloned' })]}
+        authGate={createAuthenticatedAuthGate()}
+        activeFilter="all"
+        activeRepositoryName={null}
+        activeWorkflowKey={null}
+        activeWindow="all"
+      />,
+    );
+
+    const cleanupToggle = screen.getByRole('checkbox', { name: 'Auto-clean worktree on completion' });
+    expect(cleanupToggle).toBeDisabled();
+    expect(cleanupToggle).not.toBeChecked();
+
+    await user.selectOptions(screen.getByLabelText('Repository context'), 'sample-repo');
+    expect(cleanupToggle).toBeEnabled();
+
+    await user.click(cleanupToggle);
+    expect(cleanupToggle).toBeChecked();
+
+    await user.selectOptions(screen.getByLabelText('Repository context'), '');
+    expect(cleanupToggle).toBeDisabled();
+    expect(cleanupToggle).not.toBeChecked();
   });
 
   it('includes prefilled launch association fields in launch payloads', async () => {
@@ -247,6 +278,64 @@ describe('RunsPage', () => {
         issueId: '273',
         executionMode: 'async',
         executionScope: 'full',
+      });
+    });
+  });
+
+  it('includes cleanupWorktree in launch payloads when auto-clean is enabled', async () => {
+    const fetchMock = vi.mocked(global.fetch);
+    fetchMock.mockImplementation((url: string | URL | globalThis.Request) => {
+      const urlString = typeof url === 'string' ? url : url instanceof URL ? url.toString() : url.url;
+      if (urlString.includes('/nodes')) {
+        return Promise.resolve(createJsonResponse({ nodes: [] }));
+      }
+      if (urlString === '/api/dashboard/runs') {
+        return Promise.resolve(createJsonResponse({
+          workflowRunId: 621,
+          mode: 'async',
+          status: 'accepted',
+          runStatus: 'running',
+          executionOutcome: null,
+          executedNodes: null,
+        }, { status: 202 }));
+      }
+      if (urlString.startsWith('/api/dashboard/runs?limit=')) {
+        return Promise.resolve(createJsonResponse({
+          runs: [createRunSummary({ id: 621, status: 'running' })],
+        }));
+      }
+      return Promise.resolve(createJsonResponse({}));
+    });
+
+    const user = userEvent.setup();
+    render(
+      <RunsPageContent
+        runs={[createRunSummary({ id: 412, status: 'running' })]}
+        workflows={[createWorkflow()]}
+        repositories={[createRepository({ name: 'sample-repo', cloneStatus: 'cloned' })]}
+        authGate={createAuthenticatedAuthGate()}
+        activeFilter="all"
+        activeRepositoryName={null}
+        activeWorkflowKey={null}
+        activeWindow="all"
+      />,
+    );
+
+    await user.selectOptions(screen.getByLabelText('Repository context'), 'sample-repo');
+    await user.click(screen.getByRole('checkbox', { name: 'Auto-clean worktree on completion' }));
+    await user.click(screen.getByRole('button', { name: 'Launch Run' }));
+
+    await waitFor(() => {
+      const postCall = fetchMock.mock.calls.find(
+        (call) => call[0] === '/api/dashboard/runs' && call[1] && typeof call[1] === 'object' && 'method' in call[1] && call[1].method === 'POST',
+      );
+      expect(postCall).toBeDefined();
+      expect(JSON.parse(postCall![1]!.body as string)).toEqual({
+        treeKey: 'demo-tree',
+        repositoryName: 'sample-repo',
+        executionMode: 'async',
+        executionScope: 'full',
+        cleanupWorktree: true,
       });
     });
   });
