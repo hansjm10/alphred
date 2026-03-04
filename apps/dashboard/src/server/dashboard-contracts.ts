@@ -496,6 +496,10 @@ export type DashboardRunControlResult = {
   retriedRunNodeIds: number[];
 };
 
+export type DashboardRunWorktreeCleanupResult = {
+  worktrees: DashboardRunWorktreeMetadata[];
+};
+
 export type DashboardBoardEventSnapshot = {
   id: number;
   repositoryId: number;
