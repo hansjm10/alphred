@@ -262,6 +262,137 @@ function renderBoardAction(
   );
 }
 
+function resolveSelectedArchiveActionLabel(
+  selectedRepository: DashboardRepositoryState | null,
+  isArchivingSelected: boolean,
+  isRestoringSelected: boolean,
+): string {
+  if (selectedRepository?.archivedAt === null) {
+    if (isArchivingSelected) {
+      return 'Archiving...';
+    }
+    return 'Archive Selected';
+  }
+
+  if (isRestoringSelected) {
+    return 'Restoring...';
+  }
+  return 'Restore Selected';
+}
+
+function onSyncSelectedRepository(
+  selectedRepository: DashboardRepositoryState | null,
+  onSyncRepository: (repository: DashboardRepositoryState) => Promise<void> | void,
+): void {
+  if (selectedRepository === null) {
+    return;
+  }
+
+  onSyncRepository(selectedRepository);
+}
+
+function onArchiveActionForSelectedRepository(
+  selectedRepository: DashboardRepositoryState | null,
+  onArchiveRepository: (repository: DashboardRepositoryState) => Promise<void> | void,
+  onRestoreRepository: (repository: DashboardRepositoryState) => Promise<void> | void,
+): void {
+  if (selectedRepository === null) {
+    return;
+  }
+
+  if (selectedRepository.archivedAt === null) {
+    onArchiveRepository(selectedRepository);
+    return;
+  }
+
+  onRestoreRepository(selectedRepository);
+}
+
+type RepositoriesSelectedActionRowProps = Readonly<{
+  syncSelectedTone: 'primary' | undefined;
+  syncSelectedDisabled: boolean;
+  selectedRepository: DashboardRepositoryState | null;
+  syncingRepositoryName: string | null;
+  shouldRenderAddRepositoryButton: boolean;
+  actionBlocked: boolean;
+  onOpenAddForm: () => void;
+  shouldRenderLaunchAction: boolean;
+  canLaunchWithSelectedRepository: boolean;
+  shouldRenderBoardAction: boolean;
+  canOpenBoardWithSelectedRepository: boolean;
+  shouldRenderArchiveAction: boolean;
+  selectedArchiveActionLabel: string;
+  onSyncRepository: (repository: DashboardRepositoryState) => Promise<void> | void;
+  onArchiveRepository: (repository: DashboardRepositoryState) => Promise<void> | void;
+  onRestoreRepository: (repository: DashboardRepositoryState) => Promise<void> | void;
+}>;
+
+function RepositoriesSelectedActionRow({
+  syncSelectedTone,
+  syncSelectedDisabled,
+  selectedRepository,
+  syncingRepositoryName,
+  shouldRenderAddRepositoryButton,
+  actionBlocked,
+  onOpenAddForm,
+  shouldRenderLaunchAction,
+  canLaunchWithSelectedRepository,
+  shouldRenderBoardAction,
+  canOpenBoardWithSelectedRepository,
+  shouldRenderArchiveAction,
+  selectedArchiveActionLabel,
+  onSyncRepository,
+  onArchiveRepository,
+  onRestoreRepository,
+}: RepositoriesSelectedActionRowProps): ReactNode {
+  return (
+    <div className="action-row">
+      <ActionButton
+        tone={syncSelectedTone}
+        disabled={syncSelectedDisabled}
+        aria-disabled={syncSelectedDisabled}
+        onClick={() => {
+          onSyncSelectedRepository(selectedRepository, onSyncRepository);
+        }}
+      >
+        {syncingRepositoryName === selectedRepository?.name ? 'Syncing...' : 'Sync Selected'}
+      </ActionButton>
+
+      {shouldRenderAddRepositoryButton ? (
+        <ActionButton
+          disabled={actionBlocked}
+          aria-disabled={actionBlocked}
+          onClick={() => {
+            onOpenAddForm();
+          }}
+        >
+          Add Repository
+        </ActionButton>
+      ) : null}
+
+      {shouldRenderLaunchAction ? renderLaunchAction(canLaunchWithSelectedRepository, selectedRepository) : null}
+
+      {shouldRenderBoardAction ? renderBoardAction(canOpenBoardWithSelectedRepository, selectedRepository) : null}
+
+      {shouldRenderArchiveAction ? (
+        <ActionButton
+          disabled={actionBlocked}
+          aria-disabled={actionBlocked}
+          onClick={() => {
+            onArchiveActionForSelectedRepository(
+              selectedRepository,
+              onArchiveRepository,
+              onRestoreRepository,
+            );
+          }}
+        >
+          {selectedArchiveActionLabel}
+        </ActionButton>
+      ) : null}
+    </div>
+  );
+}
+
 type RepositoriesListCardProps = Readonly<{
   syncBanner: SyncBanner | null;
   searchQuery: string;
@@ -602,7 +733,7 @@ function RepositoriesActionsPanel({
   onCancelAddForm,
 }: RepositoriesActionsPanelProps): ReactNode {
   const syncSelectedDisabled =
-    selectedRepository === null || selectedRepository.archivedAt !== null || actionBlocked;
+    selectedRepository?.archivedAt !== null || actionBlocked;
   const syncSelectedTone = isAddFormOpen ? undefined : 'primary';
   const shouldRenderAddRepositoryButton = hasRepositories && !isAddFormOpen;
   const shouldRenderLaunchAction = hasRepositories && !isAddFormOpen;
@@ -610,10 +741,11 @@ function RepositoriesActionsPanel({
   const shouldRenderArchiveAction = selectedRepository !== null && !isAddFormOpen;
   const isArchivingSelected = selectedRepository !== null && archivingRepositoryName === selectedRepository.name;
   const isRestoringSelected = selectedRepository !== null && restoringRepositoryName === selectedRepository.name;
-  const selectedArchiveActionLabel =
-    selectedRepository?.archivedAt === null
-      ? (isArchivingSelected ? 'Archiving...' : 'Archive Selected')
-      : (isRestoringSelected ? 'Restoring...' : 'Restore Selected');
+  const selectedArchiveActionLabel = resolveSelectedArchiveActionLabel(
+    selectedRepository,
+    isArchivingSelected,
+    isRestoringSelected,
+  );
 
   return (
     <Panel title="Repository actions" description="Select a row to inspect details and run sync.">
@@ -623,54 +755,24 @@ function RepositoriesActionsPanel({
 
       {selectedRepositorySyncError ? <p className="repo-cell-error">{selectedRepositorySyncError}</p> : null}
 
-      <div className="action-row">
-        <ActionButton
-          tone={syncSelectedTone}
-          disabled={syncSelectedDisabled}
-	          aria-disabled={syncSelectedDisabled}
-	          onClick={() => {
-	            if (selectedRepository) {
-	              onSyncRepository(selectedRepository);
-	            }
-	          }}
-	        >
-	          {syncingRepositoryName === selectedRepository?.name ? 'Syncing...' : 'Sync Selected'}
-	        </ActionButton>
-
-        {shouldRenderAddRepositoryButton ? (
-          <ActionButton
-            disabled={actionBlocked}
-            aria-disabled={actionBlocked}
-            onClick={() => {
-              onOpenAddForm();
-            }}
-          >
-            Add Repository
-          </ActionButton>
-        ) : null}
-
-        {shouldRenderLaunchAction ? renderLaunchAction(canLaunchWithSelectedRepository, selectedRepository) : null}
-
-        {shouldRenderBoardAction ? renderBoardAction(canOpenBoardWithSelectedRepository, selectedRepository) : null}
-
-        {shouldRenderArchiveAction ? (
-          <ActionButton
-            disabled={actionBlocked}
-            aria-disabled={actionBlocked}
-            onClick={() => {
-              if (selectedRepository) {
-                if (selectedRepository.archivedAt === null) {
-                  onArchiveRepository(selectedRepository);
-                } else {
-                  onRestoreRepository(selectedRepository);
-                }
-              }
-            }}
-          >
-            {selectedArchiveActionLabel}
-          </ActionButton>
-        ) : null}
-      </div>
+      <RepositoriesSelectedActionRow
+        syncSelectedTone={syncSelectedTone}
+        syncSelectedDisabled={syncSelectedDisabled}
+        selectedRepository={selectedRepository}
+        syncingRepositoryName={syncingRepositoryName}
+        shouldRenderAddRepositoryButton={shouldRenderAddRepositoryButton}
+        actionBlocked={actionBlocked}
+        onOpenAddForm={onOpenAddForm}
+        shouldRenderLaunchAction={shouldRenderLaunchAction}
+        canLaunchWithSelectedRepository={canLaunchWithSelectedRepository}
+        shouldRenderBoardAction={shouldRenderBoardAction}
+        canOpenBoardWithSelectedRepository={canOpenBoardWithSelectedRepository}
+        shouldRenderArchiveAction={shouldRenderArchiveAction}
+        selectedArchiveActionLabel={selectedArchiveActionLabel}
+        onSyncRepository={onSyncRepository}
+        onArchiveRepository={onArchiveRepository}
+        onRestoreRepository={onRestoreRepository}
+      />
       <p className="meta-text repo-add-hint">{addFormHint}</p>
 
       {isAddFormOpen ? (
@@ -792,11 +894,16 @@ export function RepositoriesPageContent({
   ): void {
     const currentRepositories = repositoryStateRef.current;
     const shouldIncludeRepository = includeArchived || nextRepository.archivedAt === null;
-    const nextRepositories = shouldIncludeRepository
-      ? currentRepositories.some(repository => repository.name === nextRepository.name)
-        ? currentRepositories.map(repository => (repository.name === nextRepository.name ? nextRepository : repository))
-        : [...currentRepositories, nextRepository]
-      : currentRepositories.filter(repository => repository.name !== nextRepository.name);
+    let nextRepositories = currentRepositories.filter(repository => repository.name !== nextRepository.name);
+    if (shouldIncludeRepository) {
+      if (currentRepositories.some(repository => repository.name === nextRepository.name)) {
+        nextRepositories = currentRepositories.map(repository =>
+          repository.name === nextRepository.name ? nextRepository : repository,
+        );
+      } else {
+        nextRepositories = [...currentRepositories, nextRepository];
+      }
+    }
 
     applyRepositoriesSnapshot(nextRepositories);
   }
