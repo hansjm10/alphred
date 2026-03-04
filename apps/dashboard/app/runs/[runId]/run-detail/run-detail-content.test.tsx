@@ -612,6 +612,24 @@ describe('RunDetailContent realtime updates', () => {
     expect(screen.getByRole('button', { name: 'Clean up worktree' })).toBeEnabled();
   });
 
+  it('shows cleanup-worktree action for cancelled runs with active worktrees', () => {
+    render(
+      <RunDetailContent
+        initialDetail={createRunDetail({
+          run: {
+            status: 'cancelled',
+            completedAt: '2026-02-18T00:10:00.000Z',
+          },
+        })}
+        repositories={[createRepository()]}
+        enableRealtime={false}
+      />,
+    );
+
+    expect(screen.getByRole('button', { name: 'Run Cancelled' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Clean up worktree' })).toBeEnabled();
+  });
+
   it('hides cleanup-worktree action when no active worktrees remain', () => {
     render(
       <RunDetailContent

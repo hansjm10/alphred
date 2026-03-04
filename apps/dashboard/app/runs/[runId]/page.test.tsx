@@ -377,6 +377,7 @@ describe('RunDetailPage', () => {
     render(await RunDetailPage({ params: Promise.resolve({ runId: '414' }) }));
 
     expect(screen.getByRole('button', { name: 'Run Cancelled' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Clean up worktree' })).toBeEnabled();
     expect(screen.getByText('Cancelled runs cannot be resumed from this view.')).toBeInTheDocument();
     expect(screen.getByText(expectedPreview)).toBeInTheDocument();
     expect(screen.queryByText(longPreview)).toBeNull();

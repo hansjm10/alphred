@@ -105,6 +105,18 @@ export function resolveOperatorActions(
     };
   }
 
+  if (run.status === 'cancelled') {
+    return {
+      primary: {
+        label: 'Run Cancelled',
+        href: null,
+        controlAction: null,
+        disabledReason: 'Cancelled runs cannot be resumed from this view.',
+      },
+      secondary: cleanupWorktreeAction,
+    };
+  }
+
   if (run.status === 'pending') {
     return {
       primary: {
