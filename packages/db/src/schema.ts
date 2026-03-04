@@ -271,6 +271,44 @@ export const workflowRuns = sqliteTable(
   }),
 );
 
+export const workflowRunAssociations = sqliteTable(
+  'workflow_run_associations',
+  {
+    workflowRunId: integer('workflow_run_id')
+      .primaryKey()
+      .references(() => workflowRuns.id, { onDelete: 'cascade' }),
+    repositoryId: integer('repository_id').references(() => repositories.id, { onDelete: 'restrict' }),
+    workItemId: integer('work_item_id').references(() => workItems.id, { onDelete: 'cascade' }),
+    issueId: text('issue_id'),
+    createdAt: text('created_at').notNull().default(utcNow),
+  },
+  table => ({
+    workItemRepoFk: foreignKey({
+      columns: [table.repositoryId, table.workItemId],
+      foreignColumns: [workItems.repositoryId, workItems.id],
+      name: 'workflow_run_associations_repository_id_work_item_id_fk',
+    }).onDelete('cascade'),
+    workItemRequiresRepositoryCheck: check(
+      'workflow_run_associations_work_item_requires_repository_ck',
+      sql`${table.workItemId} is null or ${table.repositoryId} is not null`,
+    ),
+    issueIdNotEmptyCheck: check(
+      'workflow_run_associations_issue_id_not_empty_ck',
+      sql`${table.issueId} is null or ${table.issueId} <> ''`,
+    ),
+    atLeastOneAssociationCheck: check(
+      'workflow_run_associations_payload_not_empty_ck',
+      sql`${table.workItemId} is not null or ${table.issueId} is not null`,
+    ),
+    repositoryWorkItemIdx: index('workflow_run_associations_repository_id_work_item_id_idx').on(
+      table.repositoryId,
+      table.workItemId,
+    ),
+    issueIdIdx: index('workflow_run_associations_issue_id_idx').on(table.issueId),
+    createdAtIdx: index('workflow_run_associations_created_at_idx').on(table.createdAt),
+  }),
+);
+
 export const workItemWorkflowRuns = sqliteTable(
   'work_item_workflow_runs',
   {

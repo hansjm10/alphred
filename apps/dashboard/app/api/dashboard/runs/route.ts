@@ -57,6 +57,41 @@ function parseBranch(candidate: Record<string, unknown>): string | undefined {
   return branchValue;
 }
 
+function parseWorkItemId(candidate: Record<string, unknown>): number | undefined {
+  const workItemIdValue = candidate.workItemId;
+  if (workItemIdValue === undefined) {
+    return undefined;
+  }
+
+  if (!Number.isInteger(workItemIdValue)) {
+    throwInvalidRequest('Field "workItemId" must be a positive integer when provided.');
+  }
+
+  const parsedWorkItemId = workItemIdValue as number;
+  if (parsedWorkItemId < 1) {
+    throwInvalidRequest('Field "workItemId" must be a positive integer when provided.');
+  }
+
+  return parsedWorkItemId;
+}
+
+function parseIssueId(candidate: Record<string, unknown>): string | undefined {
+  const issueIdValue = candidate.issueId;
+  if (issueIdValue === undefined) {
+    return undefined;
+  }
+
+  if (typeof issueIdValue !== 'string') {
+    throwInvalidRequest('Field "issueId" must be a string when provided.');
+  }
+
+  if (issueIdValue.trim().length === 0) {
+    throwInvalidRequest('Field "issueId" cannot be empty when provided.');
+  }
+
+  return issueIdValue;
+}
+
 function parseExecutionMode(
   candidate: Record<string, unknown>,
 ): DashboardRunLaunchRequest['executionMode'] {
@@ -134,6 +169,8 @@ function parseLaunchRequest(payload: unknown): DashboardRunLaunchRequest {
   const treeKey = parseTreeKey(candidate);
   const repositoryName = parseRepositoryName(candidate);
   const branch = parseBranch(candidate);
+  const workItemId = parseWorkItemId(candidate);
+  const issueId = parseIssueId(candidate);
   const executionMode = parseExecutionMode(candidate);
   const executionScope = parseExecutionScope(candidate);
   const nodeSelector = parseNodeSelector(candidate, executionScope);
@@ -143,6 +180,8 @@ function parseLaunchRequest(payload: unknown): DashboardRunLaunchRequest {
     treeKey,
     repositoryName,
     branch,
+    workItemId,
+    issueId,
     executionMode,
     executionScope,
     nodeSelector,

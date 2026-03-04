@@ -15,6 +15,8 @@ import {
   runNodes,
   runWorktrees,
   sql,
+  workflowRunAssociations,
+  workItems,
   workflowRuns,
   workflowTrees,
   type AlphredDatabase,
@@ -31,6 +33,7 @@ import type {
   DashboardFanOutGroupSnapshot,
   DashboardRunNodeDiagnosticsSnapshot,
   DashboardRunNodeSnapshot,
+  DashboardRunAssociationSnapshot,
   DashboardRunSummary,
   DashboardRunNodeStreamSnapshot,
   DashboardRunNodeDiagnosticCommandOutput,
@@ -428,6 +431,46 @@ function parseFailedCommandOutputContent(
   };
 }
 
+function loadRunAssociationSnapshot(
+  db: AlphredDatabase,
+  runId: number,
+): DashboardRunAssociationSnapshot | null {
+  const association = db
+    .select({
+      repositoryId: workflowRunAssociations.repositoryId,
+      issueId: workflowRunAssociations.issueId,
+      workItemId: workflowRunAssociations.workItemId,
+      workItemType: workItems.type,
+      workItemTitle: workItems.title,
+    })
+    .from(workflowRunAssociations)
+    .leftJoin(workItems, eq(workflowRunAssociations.workItemId, workItems.id))
+    .where(eq(workflowRunAssociations.workflowRunId, runId))
+    .get();
+
+  if (!association) {
+    return null;
+  }
+
+  if (association.workItemId === null || association.workItemType === null || association.workItemTitle === null) {
+    return {
+      repositoryId: association.repositoryId,
+      issueId: association.issueId,
+      workItem: null,
+    };
+  }
+
+  return {
+    repositoryId: association.repositoryId,
+    issueId: association.issueId,
+    workItem: {
+      id: association.workItemId,
+      type: association.workItemType as NonNullable<DashboardRunAssociationSnapshot['workItem']>['type'],
+      title: association.workItemTitle,
+    },
+  };
+}
+
 async function loadRunSummary(db: AlphredDatabase, runId: number): Promise<DashboardRunSummary> {
   const run = db
     .select({
@@ -504,6 +547,7 @@ async function loadRunSummary(db: AlphredDatabase, runId: number): Promise<Dashb
   const repositoryContext =
     repositoryContextRows.find(row => row.worktreeStatus === 'active') ??
     repositoryContextRows[repositoryContextRows.length - 1];
+  const association = loadRunAssociationSnapshot(db, run.id);
 
   return {
     id: run.id,
@@ -519,6 +563,7 @@ async function loadRunSummary(db: AlphredDatabase, runId: number): Promise<Dashb
     completedAt: run.completedAt,
     createdAt: run.createdAt,
     nodeSummary: summarizeNodeStatuses(latestNodes),
+    association,
   };
 }
 
@@ -1081,6 +1126,27 @@ export function createRunOperations(params: {
           status: 400,
         });
       }
+      const issueId = request.issueId?.trim();
+      if (request.issueId !== undefined && issueId?.length === 0) {
+        throw new DashboardIntegrationError('invalid_request', 'issueId cannot be empty when provided.', {
+          status: 400,
+        });
+      }
+      const workItemId = request.workItemId;
+      if (workItemId !== undefined && (!Number.isInteger(workItemId) || workItemId < 1)) {
+        throw new DashboardIntegrationError('invalid_request', 'workItemId must be a positive integer when provided.', {
+          status: 400,
+        });
+      }
+      if (workItemId !== undefined && repositoryName === undefined) {
+        throw new DashboardIntegrationError(
+          'invalid_request',
+          'workItemId requires repositoryName so run association can be validated.',
+          {
+            status: 400,
+          },
+        );
+      }
 
       const executionMode = request.executionMode ?? 'async';
       if (executionMode !== 'async' && executionMode !== 'sync') {
@@ -1105,6 +1171,7 @@ export function createRunOperations(params: {
         const runId = workflowRunId;
         let workingDirectory = cwd;
         let worktreeManager: Pick<WorktreeManager, 'createRunWorktree' | 'cleanupRun'> | null = null;
+        let launchRepositoryId: number | null = null;
         const policyConstraints =
           request.policyConstraints === undefined
             ? undefined
@@ -1140,6 +1207,48 @@ export function createRunOperations(params: {
                 },
               );
             }
+            launchRepositoryId = repository.id;
+
+            if (workItemId !== undefined) {
+              const linkedWorkItem = db
+                .select({
+                  id: workItems.id,
+                  repositoryId: workItems.repositoryId,
+                })
+                .from(workItems)
+                .where(eq(workItems.id, workItemId))
+                .get();
+              if (!linkedWorkItem) {
+                throw new DashboardIntegrationError('not_found', `Work item id=${workItemId} was not found.`, {
+                  status: 404,
+                });
+              }
+              if (linkedWorkItem.repositoryId !== repository.id) {
+                throw new DashboardIntegrationError(
+                  'conflict',
+                  `Work item id=${workItemId} does not belong to repository "${repository.name}".`,
+                  {
+                    status: 409,
+                    details: {
+                      workItemId,
+                      workItemRepositoryId: linkedWorkItem.repositoryId,
+                      repositoryId: repository.id,
+                    },
+                  },
+                );
+              }
+            }
+
+            if (workItemId !== undefined || issueId !== undefined) {
+              db.insert(workflowRunAssociations)
+                .values({
+                  workflowRunId: runId,
+                  repositoryId: launchRepositoryId,
+                  workItemId: workItemId ?? null,
+                  issueId: issueId ?? null,
+                })
+                .run();
+            }
 
             await ensureRepositoryAuth(repository, repositoryAuthDependencies, environment);
 
@@ -1149,8 +1258,18 @@ export function createRunOperations(params: {
               treeKey,
               runId,
               branch: request.branch?.trim() || undefined,
+              issueId: issueId ?? undefined,
             });
             workingDirectory = createdWorktree.path;
+          } else if (issueId !== undefined) {
+            db.insert(workflowRunAssociations)
+              .values({
+                workflowRunId: runId,
+                repositoryId: null,
+                workItemId: null,
+                issueId,
+              })
+              .run();
           }
 
           if (executionMode === 'sync') {

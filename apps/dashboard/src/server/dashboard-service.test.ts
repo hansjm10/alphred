@@ -21,8 +21,10 @@ import {
   treeNodes,
   transitionWorkflowRunStatus,
   transitionRunNodeStatus,
+  workflowRunAssociations,
   workflowRuns,
   workflowTrees,
+  workItems,
   type AlphredDatabase,
 } from '@alphred/db';
 import type { AuthStatus, ProviderExecutionPermissions, RepositoryConfig } from '@alphred/shared';
@@ -3457,6 +3459,262 @@ describe('createDashboardService', () => {
         message: 'repositoryName cannot be empty when provided.',
       });
     }
+  });
+
+  it('persists run launch associations and threads issueId into worktree creation context', async () => {
+    const executeRun = vi.fn(async () => ({
+      finalStep: {
+        runStatus: 'completed',
+        outcome: 'completed',
+      },
+      executedNodes: 1,
+    }));
+    const createRunWorktree = vi.fn(async (params: { runId: number }) => ({
+      id: 1,
+      runId: params.runId,
+      repositoryId: 1,
+      path: '/tmp/worktree-associated',
+      branch: 'alphred/demo-tree/2-273',
+      commitHash: null,
+      createdAt: '2026-02-17T20:00:00.000Z',
+    }));
+
+    const { db, dependencies } = createHarness({
+      createSqlWorkflowExecutor: () =>
+        ({ executeRun }) as unknown as ReturnType<DashboardServiceDependencies['createSqlWorkflowExecutor']>,
+      createWorktreeManager: () => ({
+        createRunWorktree,
+        cleanupRun: async () => undefined,
+      }),
+    });
+    seedRunData(db);
+    const workItemId = Number(
+      db.insert(workItems)
+        .values({
+          repositoryId: 1,
+          type: 'story',
+          status: 'Draft',
+          title: 'Linked Story',
+        })
+        .run().lastInsertRowid,
+    );
+    const service = createDashboardService({ dependencies });
+
+    const launch = await service.launchWorkflowRun({
+      treeKey: 'demo-tree',
+      repositoryName: 'demo-repo',
+      workItemId,
+      issueId: '273',
+      executionMode: 'sync',
+    });
+
+    expect(createRunWorktree).toHaveBeenCalledWith({
+      repoName: 'demo-repo',
+      treeKey: 'demo-tree',
+      runId: launch.workflowRunId,
+      branch: undefined,
+      issueId: '273',
+    });
+
+    const persistedAssociation = db
+      .select({
+        workflowRunId: workflowRunAssociations.workflowRunId,
+        repositoryId: workflowRunAssociations.repositoryId,
+        workItemId: workflowRunAssociations.workItemId,
+        issueId: workflowRunAssociations.issueId,
+      })
+      .from(workflowRunAssociations)
+      .where(eq(workflowRunAssociations.workflowRunId, launch.workflowRunId))
+      .get();
+
+    expect(persistedAssociation).toEqual({
+      workflowRunId: launch.workflowRunId,
+      repositoryId: 1,
+      workItemId,
+      issueId: '273',
+    });
+
+    const detail = await service.getWorkflowRunDetail(launch.workflowRunId);
+    expect(detail.run.association).toEqual({
+      repositoryId: 1,
+      issueId: '273',
+      workItem: {
+        id: workItemId,
+        type: 'story',
+        title: 'Linked Story',
+      },
+    });
+  });
+
+  it('persists issue-only launch associations without repository context', async () => {
+    const executeRun = vi.fn(async () => ({
+      finalStep: {
+        runStatus: 'completed',
+        outcome: 'completed',
+      },
+      executedNodes: 1,
+    }));
+    const createRunWorktree = vi.fn(async () => ({
+      id: 1,
+      runId: 1,
+      repositoryId: 1,
+      path: '/tmp/worktree-associated',
+      branch: 'alphred/demo-tree/2-273',
+      commitHash: null,
+      createdAt: '2026-02-17T20:00:00.000Z',
+    }));
+
+    const { db, dependencies } = createHarness({
+      createSqlWorkflowExecutor: () =>
+        ({ executeRun }) as unknown as ReturnType<DashboardServiceDependencies['createSqlWorkflowExecutor']>,
+      createWorktreeManager: () => ({
+        createRunWorktree,
+        cleanupRun: async () => undefined,
+      }),
+    });
+    seedRunData(db);
+    const service = createDashboardService({ dependencies });
+
+    const launch = await service.launchWorkflowRun({
+      treeKey: 'demo-tree',
+      issueId: '273',
+      executionMode: 'sync',
+    });
+
+    expect(createRunWorktree).not.toHaveBeenCalled();
+
+    const persistedAssociation = db
+      .select({
+        workflowRunId: workflowRunAssociations.workflowRunId,
+        repositoryId: workflowRunAssociations.repositoryId,
+        workItemId: workflowRunAssociations.workItemId,
+        issueId: workflowRunAssociations.issueId,
+      })
+      .from(workflowRunAssociations)
+      .where(eq(workflowRunAssociations.workflowRunId, launch.workflowRunId))
+      .get();
+
+    expect(persistedAssociation).toEqual({
+      workflowRunId: launch.workflowRunId,
+      repositoryId: null,
+      workItemId: null,
+      issueId: '273',
+    });
+  });
+
+  it('rejects workItemId launches without repositoryName', async () => {
+    const { dependencies } = createHarness();
+    const service = createDashboardService({ dependencies });
+
+    try {
+      service.launchWorkflowRun({ treeKey: 'demo-tree', workItemId: 1 });
+      throw new Error('Expected launchWorkflowRun to reject when workItemId is used without repositoryName.');
+    } catch (error) {
+      expect(error).toMatchObject({
+        name: 'DashboardIntegrationError',
+        code: 'invalid_request',
+        status: 400,
+        message: 'workItemId requires repositoryName so run association can be validated.',
+      });
+    }
+  });
+
+  it('returns not_found when launch association references a missing work item', async () => {
+    const createRunWorktreeMock = vi.fn(async () => ({
+      id: 1,
+      runId: 1,
+      repositoryId: 1,
+      path: '/tmp/worktree',
+      branch: 'main',
+      commitHash: null,
+      createdAt: '2026-02-17T20:00:00.000Z',
+    }));
+    const { db, dependencies } = createHarness({
+      createWorktreeManager: () => ({
+        createRunWorktree: createRunWorktreeMock,
+        cleanupRun: async () => undefined,
+      }),
+    });
+    seedRunData(db);
+    const service = createDashboardService({ dependencies });
+
+    await expect(
+      service.launchWorkflowRun({
+        treeKey: 'demo-tree',
+        repositoryName: 'demo-repo',
+        workItemId: 999,
+        executionMode: 'sync',
+      }),
+    ).rejects.toMatchObject({
+      name: 'DashboardIntegrationError',
+      code: 'not_found',
+      status: 404,
+      message: 'Work item id=999 was not found.',
+    });
+    expect(createRunWorktreeMock).not.toHaveBeenCalled();
+  });
+
+  it('rejects launch association workItemIds that belong to a different repository', async () => {
+    const createRunWorktreeMock = vi.fn(async () => ({
+      id: 1,
+      runId: 1,
+      repositoryId: 1,
+      path: '/tmp/worktree',
+      branch: 'main',
+      commitHash: null,
+      createdAt: '2026-02-17T20:00:00.000Z',
+    }));
+    const { db, dependencies } = createHarness({
+      createWorktreeManager: () => ({
+        createRunWorktree: createRunWorktreeMock,
+        cleanupRun: async () => undefined,
+      }),
+    });
+    seedRunData(db);
+    const otherRepositoryId = Number(
+      db.insert(repositories)
+        .values({
+          name: 'other-repo',
+          provider: 'github',
+          remoteUrl: 'https://github.com/octocat/other-repo.git',
+          remoteRef: 'octocat/other-repo',
+          defaultBranch: 'main',
+          cloneStatus: 'cloned',
+          localPath: '/tmp/repos/other-repo',
+        })
+        .run().lastInsertRowid,
+    );
+    const otherWorkItemId = Number(
+      db.insert(workItems)
+        .values({
+          repositoryId: otherRepositoryId,
+          type: 'story',
+          status: 'Draft',
+          title: 'Other repository story',
+        })
+        .run().lastInsertRowid,
+    );
+    const service = createDashboardService({ dependencies });
+
+    await expect(
+      service.launchWorkflowRun({
+        treeKey: 'demo-tree',
+        repositoryName: 'demo-repo',
+        workItemId: otherWorkItemId,
+        executionMode: 'sync',
+      }),
+    ).rejects.toMatchObject({
+      name: 'DashboardIntegrationError',
+      code: 'conflict',
+      status: 409,
+      message: `Work item id=${otherWorkItemId} does not belong to repository "demo-repo".`,
+      details: {
+        workItemId: otherWorkItemId,
+        workItemRepositoryId: otherRepositoryId,
+        repositoryId: 1,
+      },
+    });
+    expect(createRunWorktreeMock).not.toHaveBeenCalled();
   });
 
   it('rejects invalid executionMode input when launching runs', () => {

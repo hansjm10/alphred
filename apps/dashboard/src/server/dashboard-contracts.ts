@@ -176,6 +176,7 @@ export type DashboardRunSummary = {
   completedAt: string | null;
   createdAt: string;
   nodeSummary: DashboardNodeStatusSummary;
+  association?: DashboardRunAssociationSnapshot | null;
 };
 
 export type DashboardArtifactSnapshot = {
@@ -387,6 +388,16 @@ export type DashboardRunDetail = {
   worktrees: DashboardRunWorktreeMetadata[];
 };
 
+export type DashboardRunAssociationSnapshot = {
+  repositoryId: number | null;
+  issueId: string | null;
+  workItem: {
+    id: number;
+    type: WorkItemType;
+    title: string;
+  } | null;
+};
+
 export type DashboardGitHubAuthStatus = {
   authenticated: boolean;
   user: string | null;
@@ -456,6 +467,8 @@ export type DashboardRunLaunchRequest = {
   treeKey: string;
   repositoryName?: string;
   branch?: string;
+  workItemId?: number;
+  issueId?: string;
   executionMode?: 'async' | 'sync';
   executionScope?: DashboardRunExecutionScope;
   nodeSelector?: DashboardRunNodeSelector;
