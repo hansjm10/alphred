@@ -32,6 +32,8 @@ type RunsPageContentProps = Readonly<{
   activeRepositoryName: string | null;
   activeWorkflowKey: string | null;
   activeWindow: RunRouteTimeWindow;
+  initialLaunchWorkItemId?: number | null;
+  initialLaunchIssueId?: string | null;
 }>;
 
 type LaunchBannerState = {
@@ -291,11 +293,14 @@ async function postLaunchRequest(params: {
   selectedTreeKey: string;
   selectedRepositoryName: string;
   branch: string;
+  launchWorkItemId: number | null;
+  issueId: string;
   executionScope: DashboardRunExecutionScope;
   nodeSelectorType: DashboardRunNodeSelector['type'];
   nodeKey: string;
 }): Promise<DashboardRunLaunchResult> {
   const selectorPayload = buildNodeSelectorPayload(params.executionScope, params.nodeSelectorType, params.nodeKey);
+  const trimmedIssueId = params.issueId.trim();
   const response = await fetch('/api/dashboard/runs', {
     method: 'POST',
     headers: {
@@ -305,6 +310,8 @@ async function postLaunchRequest(params: {
       treeKey: params.selectedTreeKey,
       repositoryName: params.selectedRepositoryName || undefined,
       branch: params.branch.trim() || undefined,
+      workItemId: params.launchWorkItemId ?? undefined,
+      issueId: trimmedIssueId.length > 0 ? trimmedIssueId : undefined,
       executionMode: 'async',
       executionScope: params.executionScope,
       nodeSelector: selectorPayload,
@@ -511,6 +518,8 @@ type RunLaunchControlsProps = Readonly<{
   launchBlockedReason: string | null;
   selectedTreeKey: string;
   selectedRepositoryName: string;
+  launchWorkItemId: number | null;
+  issueId: string;
   branch: string;
   executionScope: DashboardRunExecutionScope;
   nodeSelectorType: DashboardRunNodeSelector['type'];
@@ -524,6 +533,7 @@ type RunLaunchControlsProps = Readonly<{
   launchResult: LaunchBannerState | null;
   onSelectTreeKey: (treeKey: string) => void;
   onSelectRepositoryName: (repositoryName: string) => void;
+  onIssueIdChange: (issueId: string) => void;
   onBranchChange: (branch: string) => void;
   onExecutionScopeChange: (scope: string) => void;
   onNodeSelectorTypeChange: (selectorType: string) => void;
@@ -538,6 +548,8 @@ function RunLaunchControls({
   launchBlockedReason,
   selectedTreeKey,
   selectedRepositoryName,
+  launchWorkItemId,
+  issueId,
   branch,
   executionScope,
   nodeSelectorType,
@@ -551,6 +563,7 @@ function RunLaunchControls({
   launchResult,
   onSelectTreeKey,
   onSelectRepositoryName,
+  onIssueIdChange,
   onBranchChange,
   onExecutionScopeChange,
   onNodeSelectorTypeChange,
@@ -615,6 +628,31 @@ function RunLaunchControls({
                 onBranchChange(event.currentTarget.value);
               }}
               placeholder="feature/dashboard-run-control"
+            />
+          </label>
+
+          {launchWorkItemId !== null ? (
+            <label className="run-launch-form__field" htmlFor="run-launch-work-item-id">
+              <span className="meta-text">Work item context</span>
+              <input
+                id="run-launch-work-item-id"
+                value={`#${launchWorkItemId}`}
+                readOnly
+                disabled={launchBlockedReason !== null}
+              />
+            </label>
+          ) : null}
+
+          <label className="run-launch-form__field" htmlFor="run-launch-issue-id">
+            <span className="meta-text">Issue id (optional)</span>
+            <input
+              id="run-launch-issue-id"
+              value={issueId}
+              disabled={launchBlockedReason !== null}
+              onChange={(event) => {
+                onIssueIdChange(event.currentTarget.value);
+              }}
+              placeholder="273"
             />
           </label>
 
@@ -924,11 +962,15 @@ export function RunsPageContent({
   activeRepositoryName,
   activeWorkflowKey,
   activeWindow,
+  initialLaunchWorkItemId = null,
+  initialLaunchIssueId = null,
 }: RunsPageContentProps) {
   const router = useRouter();
   const [runState, setRunState] = useState<readonly DashboardRunSummary[]>(sortRunsForDashboard(runs));
   const [selectedTreeKey, setSelectedTreeKey] = useState<string>(workflows[0]?.treeKey ?? '');
   const [selectedRepositoryName, setSelectedRepositoryName] = useState<string>(activeRepositoryName ?? '');
+  const [launchWorkItemId, setLaunchWorkItemId] = useState<number | null>(initialLaunchWorkItemId);
+  const [issueId, setIssueId] = useState<string>(initialLaunchIssueId ?? '');
   const [branch, setBranch] = useState<string>('');
   const [executionScope, setExecutionScope] = useState<DashboardRunExecutionScope>('full');
   const [nodeSelectorType, setNodeSelectorType] = useState<DashboardRunNodeSelector['type']>('next_runnable');
@@ -954,6 +996,7 @@ export function RunsPageContent({
     isLaunching ||
     launchBlockedReason !== null ||
     selectedTreeKey.trim().length === 0 ||
+    (launchWorkItemId !== null && selectedRepositoryName.trim().length === 0) ||
     (nodeSelectorRequiresNodeKey && nodeKey.trim().length === 0);
   const launchButtonLabel = isLaunching ? 'Launching...' : 'Launch Run';
 
@@ -1023,6 +1066,14 @@ export function RunsPageContent({
   }, [activeRepositoryName]);
 
   useEffect(() => {
+    setLaunchWorkItemId(initialLaunchWorkItemId);
+  }, [initialLaunchWorkItemId]);
+
+  useEffect(() => {
+    setIssueId(initialLaunchIssueId ?? '');
+  }, [initialLaunchIssueId]);
+
+  useEffect(() => {
     if (selectedTreeKey.length === 0) {
       setAvailableNodes([]);
       setNodeKey('');
@@ -1069,6 +1120,8 @@ export function RunsPageContent({
         selectedTreeKey,
         selectedRepositoryName,
         branch,
+        launchWorkItemId,
+        issueId,
         executionScope,
         nodeSelectorType,
         nodeKey,
@@ -1102,6 +1155,8 @@ export function RunsPageContent({
           launchBlockedReason={launchBlockedReason}
           selectedTreeKey={selectedTreeKey}
           selectedRepositoryName={selectedRepositoryName}
+          launchWorkItemId={launchWorkItemId}
+          issueId={issueId}
           branch={branch}
           executionScope={executionScope}
           nodeSelectorType={nodeSelectorType}
@@ -1114,7 +1169,13 @@ export function RunsPageContent({
           launchRefreshWarning={launchRefreshWarning}
           launchResult={launchResult}
           onSelectTreeKey={setSelectedTreeKey}
-          onSelectRepositoryName={setSelectedRepositoryName}
+          onSelectRepositoryName={(repositoryName) => {
+            setSelectedRepositoryName(repositoryName);
+            if (launchWorkItemId !== null && repositoryName !== (activeRepositoryName ?? '')) {
+              setLaunchWorkItemId(null);
+            }
+          }}
+          onIssueIdChange={setIssueId}
           onBranchChange={setBranch}
           onExecutionScopeChange={(scope) => {
             selectExecutionScope(scope, setExecutionScope);

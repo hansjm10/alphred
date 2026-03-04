@@ -9,6 +9,8 @@ import {
   runNodes,
   treeNodes,
   transitionWorkflowRunStatus,
+  workItems,
+  workflowRunAssociations,
   workflowRuns,
 } from '@alphred/db';
 import type { ScmProviderConfig } from '@alphred/git';
@@ -228,6 +230,7 @@ describe('CLI run/status commands', () => {
       treeKey: 'design_tree',
       runId: expect.any(Number),
       branch: 'fix/auth-bug',
+      issueId: undefined,
     });
     expect(createScmProviderMock).toHaveBeenCalledWith({
       kind: 'github',
@@ -235,6 +238,113 @@ describe('CLI run/status commands', () => {
     });
     expect(cleanupRun).toHaveBeenCalledWith(expect.any(Number));
     expect(observedWorkingDirectory).toBe('/tmp/alphred/worktrees/fix-auth-bug');
+  });
+
+  it('persists run associations and passes issue-id into repository worktree context', async () => {
+    const db = createDatabase(':memory:');
+    migrateDatabase(db);
+    seedSingleNodeTree(db, 'design_tree');
+    const repository = insertRepository(db, {
+      name: 'frontend',
+      provider: 'github',
+      remoteUrl: 'https://github.com/acme/frontend.git',
+      remoteRef: 'acme/frontend',
+      defaultBranch: 'main',
+      cloneStatus: 'cloned',
+      localPath: '/tmp/alphred/repos/github/acme/frontend',
+    });
+    const insertedWorkItem = db.insert(workItems)
+      .values({
+        repositoryId: repository.id,
+        type: 'story',
+        status: 'Draft',
+        title: 'Run-associated story',
+      })
+      .run();
+    const workItemId = Number(insertedWorkItem.lastInsertRowid);
+    const captured = createCapturedIo();
+
+    const createRunWorktree = vi.fn(async () => ({
+      id: 104,
+      runId: 1,
+      repositoryId: repository.id,
+      path: '/tmp/alphred/worktrees/frontend',
+      branch: 'alphred/design-tree/273/1',
+      commitHash: null,
+      createdAt: '2026-01-01T00:00:00.000Z',
+    }));
+    const cleanupRun = vi.fn(async () => undefined);
+
+    const exitCode = await main(
+      ['run', '--tree', 'design_tree', '--repo', 'frontend', '--work-item-id', String(workItemId), '--issue-id', '273'],
+      {
+        dependencies: createDependencies(db, createSuccessfulProviderResolver(), {
+          createWorktreeManager: () => ({
+            createRunWorktree,
+            cleanupRun,
+          }),
+        }),
+        io: captured.io,
+      },
+    );
+
+    expect(exitCode).toBe(0);
+    expect(createRunWorktree).toHaveBeenCalledWith({
+      repoName: 'frontend',
+      treeKey: 'design_tree',
+      runId: expect.any(Number),
+      branch: undefined,
+      issueId: '273',
+    });
+    expect(cleanupRun).toHaveBeenCalledWith(expect.any(Number));
+    expect(
+      db.select({
+        workflowRunId: workflowRunAssociations.workflowRunId,
+        repositoryId: workflowRunAssociations.repositoryId,
+        workItemId: workflowRunAssociations.workItemId,
+        issueId: workflowRunAssociations.issueId,
+      })
+        .from(workflowRunAssociations)
+        .all(),
+    ).toEqual([
+      {
+        workflowRunId: 1,
+        repositoryId: repository.id,
+        workItemId,
+        issueId: '273',
+      },
+    ]);
+  });
+
+  it('persists issue-only run associations when launching without repository context', async () => {
+    const db = createDatabase(':memory:');
+    migrateDatabase(db);
+    seedSingleNodeTree(db, 'design_tree');
+    const captured = createCapturedIo();
+
+    const exitCode = await main(['run', '--tree', 'design_tree', '--issue-id', '273'], {
+      dependencies: createDependencies(db, createSuccessfulProviderResolver()),
+      io: captured.io,
+    });
+
+    expect(exitCode).toBe(0);
+    expect(
+      db.select({
+        workflowRunId: workflowRunAssociations.workflowRunId,
+        repositoryId: workflowRunAssociations.repositoryId,
+        workItemId: workflowRunAssociations.workItemId,
+        issueId: workflowRunAssociations.issueId,
+      })
+        .from(workflowRunAssociations)
+        .all(),
+    ).toEqual([
+      {
+        workflowRunId: 1,
+        repositoryId: null,
+        workItemId: null,
+        issueId: '273',
+      },
+    ]);
   });
 
   it('returns runtime failure without materializing a run when --repo names an unknown repository', async () => {
@@ -255,6 +365,40 @@ describe('CLI run/status commands', () => {
         .from(workflowRuns)
         .all(),
     ).toEqual([]);
+  });
+
+  it('returns runtime failure when --work-item-id does not exist', async () => {
+    const db = createDatabase(':memory:');
+    migrateDatabase(db);
+    seedSingleNodeTree(db, 'design_tree');
+    insertRepository(db, {
+      name: 'frontend',
+      provider: 'github',
+      remoteUrl: 'https://github.com/acme/frontend.git',
+      remoteRef: 'acme/frontend',
+      defaultBranch: 'main',
+      cloneStatus: 'cloned',
+      localPath: '/tmp/alphred/repos/github/acme/frontend',
+    });
+    const captured = createCapturedIo();
+
+    const exitCode = await main(
+      ['run', '--tree', 'design_tree', '--repo', 'frontend', '--work-item-id', '999'],
+      {
+        dependencies: createDependencies(db, createUnusedProviderResolver()),
+        io: captured.io,
+      },
+    );
+
+    expect(exitCode).toBe(4);
+    expect(captured.stderr).toEqual(['Failed to execute run: Work item id=999 was not found.']);
+    expect(
+      db.select({
+        status: workflowRuns.status,
+      })
+        .from(workflowRuns)
+        .all()[0]?.status,
+    ).toBe('cancelled');
   });
 
   it('fails run --repo pre-flight when scm auth is missing', async () => {
@@ -383,6 +527,7 @@ describe('CLI run/status commands', () => {
       treeKey: 'design_tree',
       runId: expect.any(Number),
       branch: undefined,
+      issueId: undefined,
     });
     const repository = getRepositoryByName(db, 'frontend');
     expect(repository).toBeDefined();
@@ -832,7 +977,7 @@ describe('CLI run/status commands', () => {
 
   it('returns usage exit code for invalid run command inputs', async () => {
     const runUsage =
-      'Usage: alphred run --tree <tree_key> [--repo <name|github:owner/repo|azure:org/project/repo>] [--branch <branch_name>] [--execution-scope <full|single_node>] [--node-selector <next_runnable|node_key>] [--node-key <node_key>]';
+      'Usage: alphred run --tree <tree_key> [--repo <name|github:owner/repo|azure:org/project/repo>] [--branch <branch_name>] [--work-item-id <work_item_id>] [--issue-id <issue_id>] [--execution-scope <full|single_node>] [--node-selector <next_runnable|node_key>] [--node-key <node_key>]';
     const runPauseUsage = 'Usage: alphred run pause --run <run_id>';
     const cases: readonly {
       args: string[];
@@ -873,6 +1018,22 @@ describe('CLI run/status commands', () => {
       {
         args: ['run', '--tree', 'design_tree', '--branch', 'fix/auth-bug'],
         stderr: ['Option "--branch" requires "--repo".', runUsage],
+      },
+      {
+        args: ['run', '--tree', 'design_tree', '--work-item-id'],
+        stderr: ['Option "--work-item-id" requires a value.', runUsage],
+      },
+      {
+        args: ['run', '--tree', 'design_tree', '--work-item-id', 'abc'],
+        stderr: ['Option "--work-item-id" must be a positive integer.', runUsage],
+      },
+      {
+        args: ['run', '--tree', 'design_tree', '--work-item-id', '42'],
+        stderr: ['Option "--work-item-id" requires "--repo".', runUsage],
+      },
+      {
+        args: ['run', '--tree', 'design_tree', '--issue-id', '   '],
+        stderr: ['Option "--issue-id" requires a value.', runUsage],
       },
       {
         args: ['run', '--tree', 'design_tree', '--execution-scope', 'partial'],

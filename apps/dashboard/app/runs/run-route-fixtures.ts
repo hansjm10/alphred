@@ -194,6 +194,37 @@ export function normalizeRunRepositoryParam(
   return trimmed;
 }
 
+export function normalizeRunLaunchWorkItemIdParam(
+  workItemId: RunRouteQueryParam,
+): number | null {
+  const normalized = Array.isArray(workItemId) ? workItemId[0] : workItemId;
+  if (typeof normalized !== 'string') {
+    return null;
+  }
+
+  const trimmed = normalized.trim();
+  if (!/^[1-9]\d*$/.test(trimmed)) {
+    return null;
+  }
+
+  const parsed = Number(trimmed);
+  return Number.isSafeInteger(parsed) ? parsed : null;
+}
+
+export function normalizeRunLaunchIssueIdParam(issueId: RunRouteQueryParam): string | null {
+  const normalized = Array.isArray(issueId) ? issueId[0] : issueId;
+  if (typeof normalized !== 'string') {
+    return null;
+  }
+
+  const trimmed = normalized.trim();
+  if (trimmed.length === 0) {
+    return null;
+  }
+
+  return trimmed;
+}
+
 export function normalizeRunWorkflowParam(workflow: RunRouteQueryParam): string | null {
   const normalized = Array.isArray(workflow) ? workflow[0] : workflow;
   if (typeof normalized !== 'string') {

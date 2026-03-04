@@ -3,6 +3,8 @@ import { eq } from 'drizzle-orm';
 import {
   getRepositoryByName,
   transitionWorkflowRunStatus,
+  workItems,
+  workflowRunAssociations,
   workflowRuns,
   type AlphredDatabase,
   type RunNodeStatus,
@@ -152,6 +154,7 @@ export async function setupRunExecution(
   treeKey: string,
   resolvedRepo: ResolvedRunRepository | null,
   branchOverride: string | undefined,
+  issueId: string | undefined,
   worktreeManager: RunWorktreeManager | null,
   io: CliIo,
 ): Promise<RunExecutionSetup> {
@@ -170,12 +173,64 @@ export async function setupRunExecution(
     treeKey,
     runId,
     branch: branchOverride,
+    issueId,
   });
   io.stdout(`Created worktree "${worktree.path}" on branch "${worktree.branch}" for repo "${resolvedRepo.repoName}".`);
   return {
     workingDirectory: worktree.path,
     worktreeManager,
   };
+}
+
+export function persistRunLaunchAssociation(
+  db: AlphredDatabase,
+  params: Readonly<{
+    runId: number;
+    resolvedRepo: ResolvedRunRepository | null;
+    workItemId: number | undefined;
+    issueId: string | undefined;
+  }>,
+): void {
+  if (params.workItemId === undefined && params.issueId === undefined) {
+    return;
+  }
+
+  const repository = params.resolvedRepo ? getRepositoryByName(db, params.resolvedRepo.repoName) : null;
+  const repositoryId = repository?.id ?? null;
+
+  if (params.workItemId !== undefined) {
+    if (!repository) {
+      throw new Error('Option "--work-item-id" requires "--repo".');
+    }
+
+    const linkedWorkItem = db
+      .select({
+        id: workItems.id,
+        repositoryId: workItems.repositoryId,
+      })
+      .from(workItems)
+      .where(eq(workItems.id, params.workItemId))
+      .get();
+
+    if (!linkedWorkItem) {
+      throw new Error(`Work item id=${params.workItemId} was not found.`);
+    }
+
+    if (linkedWorkItem.repositoryId !== repository.id) {
+      throw new Error(
+        `Work item id=${params.workItemId} does not belong to repository "${repository.name}".`,
+      );
+    }
+  }
+
+  db.insert(workflowRunAssociations)
+    .values({
+      workflowRunId: params.runId,
+      repositoryId,
+      workItemId: params.workItemId ?? null,
+      issueId: params.issueId ?? null,
+    })
+    .run();
 }
 
 export function summarizeRunExecution(execution: RunExecutionSummary, io: CliIo): ExitCode {

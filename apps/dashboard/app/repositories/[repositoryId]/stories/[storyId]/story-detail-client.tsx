@@ -392,6 +392,8 @@ export function StoryDetailPageContent(props: Readonly<{
     );
   }
 
+  const launchRunHref = `/runs?repository=${encodeURIComponent(repository.name)}&launchWorkItemId=${story.id}`;
+
   return (
     <div className="page-stack">
       <header className="board-page-header">
@@ -405,6 +407,9 @@ export function StoryDetailPageContent(props: Readonly<{
           <div className="board-page-header__actions">
             <ButtonLink href={`/repositories/${repository.id}/stories`} tone="secondary">
               Stories
+            </ButtonLink>
+            <ButtonLink href={launchRunHref} tone="secondary">
+              Launch run for this story
             </ButtonLink>
             <span className="meta-text">Board stream: {connectionState}</span>
           </div>
