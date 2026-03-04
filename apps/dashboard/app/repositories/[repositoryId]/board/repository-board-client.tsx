@@ -151,6 +151,36 @@ function createTaskFlyoutDraft(workItem: DashboardWorkItemSnapshot, status: Task
   };
 }
 
+function hasTaskFlyoutTrackedFieldChanges(
+  draft: Pick<TaskFlyoutDraft, 'status' | 'plannedFiles' | 'assignees'>,
+  baseline: Pick<TaskFlyoutDraft, 'status' | 'plannedFiles' | 'assignees'>,
+): boolean {
+  return (
+    draft.status !== baseline.status ||
+    !areSortedStringArraysEqual(draft.plannedFiles, baseline.plannedFiles) ||
+    !areSortedStringArraysEqual(draft.assignees, baseline.assignees)
+  );
+}
+
+function rebaseTaskFlyoutDraft(
+  previousDraft: TaskFlyoutDraft,
+  baselineDraft: TaskFlyoutDraft,
+  nextSnapshotDraft: TaskFlyoutDraft,
+): TaskFlyoutDraft {
+  const statusWasEdited = previousDraft.status !== baselineDraft.status;
+  const plannedFilesWereEdited = !areSortedStringArraysEqual(previousDraft.plannedFiles, baselineDraft.plannedFiles);
+  const assigneesWereEdited = !areSortedStringArraysEqual(previousDraft.assignees, baselineDraft.assignees);
+
+  return {
+    ...nextSnapshotDraft,
+    status: statusWasEdited ? previousDraft.status : nextSnapshotDraft.status,
+    plannedFiles: plannedFilesWereEdited ? [...previousDraft.plannedFiles] : nextSnapshotDraft.plannedFiles,
+    plannedFileInput: previousDraft.plannedFileInput,
+    assignees: assigneesWereEdited ? [...previousDraft.assignees] : nextSnapshotDraft.assignees,
+    assigneeInput: previousDraft.assigneeInput,
+  };
+}
+
 function areSortedStringArraysEqual(left: readonly string[], right: readonly string[]): boolean {
   if (left.length !== right.length) {
     return false;
@@ -594,6 +624,7 @@ export function RepositoryBoardPageContent({
 
   const lastEventIdRef = useRef<number>(initialLatestEventId);
   const taskDraftDirtyRef = useRef<boolean>(false);
+  const taskDraftBaselineRef = useRef<TaskFlyoutDraft | null>(null);
 
   const tasksByStatus = useMemo(() => {
     const grouped: Record<TaskWorkItemStatus, DashboardWorkItemSnapshot[]> = {
@@ -641,15 +672,35 @@ export function RepositoryBoardPageContent({
     if (!selectedWorkItem || selectedWorkItem.type !== 'task' || !isTaskStatus(selectedWorkItem.status)) {
       setTaskDraft(null);
       taskDraftDirtyRef.current = false;
+      taskDraftBaselineRef.current = null;
       return;
     }
 
+    const nextSnapshotDraft = createTaskFlyoutDraft(selectedWorkItem, selectedWorkItem.status as TaskWorkItemStatus);
     setTaskDraft(previous => {
       if (previous && previous.workItemId === selectedWorkItem.id && taskDraftDirtyRef.current) {
-        return previous;
+        const baseline = taskDraftBaselineRef.current;
+        const rebasedDraft =
+          baseline && baseline.workItemId === selectedWorkItem.id
+            ? rebaseTaskFlyoutDraft(previous, baseline, nextSnapshotDraft)
+            : {
+                ...nextSnapshotDraft,
+                status: previous.status,
+                plannedFiles: [...previous.plannedFiles],
+                plannedFileInput: previous.plannedFileInput,
+                assignees: [...previous.assignees],
+                assigneeInput: previous.assigneeInput,
+              };
+        taskDraftBaselineRef.current = nextSnapshotDraft;
+        taskDraftDirtyRef.current =
+          hasTaskFlyoutTrackedFieldChanges(rebasedDraft, nextSnapshotDraft) ||
+          rebasedDraft.plannedFileInput.length > 0 ||
+          rebasedDraft.assigneeInput.length > 0;
+        return rebasedDraft;
       }
       taskDraftDirtyRef.current = false;
-      return createTaskFlyoutDraft(selectedWorkItem, selectedWorkItem.status as TaskWorkItemStatus);
+      taskDraftBaselineRef.current = nextSnapshotDraft;
+      return nextSnapshotDraft;
     });
   }, [selectedWorkItem]);
 
@@ -843,8 +894,10 @@ export function RepositoryBoardPageContent({
     if (workItem.type !== 'task' || !isTaskStatus(workItem.status)) {
       return;
     }
+    const nextDraft = createTaskFlyoutDraft(workItem, workItem.status);
+    taskDraftBaselineRef.current = nextDraft;
     taskDraftDirtyRef.current = false;
-    setTaskDraft(createTaskFlyoutDraft(workItem, workItem.status));
+    setTaskDraft(nextDraft);
   };
 
   const refreshWorkItemFromServer = async (workItemId: number, conflictMessage: string): Promise<DashboardWorkItemSnapshot | null> => {

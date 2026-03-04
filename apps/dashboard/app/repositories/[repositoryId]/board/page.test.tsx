@@ -612,6 +612,74 @@ describe('RepositoryBoardPageContent', () => {
     expect(await screen.findByText('Saved updates for "Write tests".')).toBeInTheDocument();
   });
 
+  it('rebases dirty draft fields when board events update the selected task', async () => {
+    const user = userEvent.setup();
+    const fetchMock = vi.mocked(global.fetch);
+
+    fetchMock.mockResolvedValueOnce(
+      createJsonResponse({
+        workItem: createWorkItem({
+          id: 10,
+          status: 'InProgress',
+          revision: 2,
+          title: 'Write tests',
+          plannedFiles: ['src/new-file.ts'],
+          assignees: ['octocat'],
+        }),
+      }),
+    );
+
+    render(
+      <RepositoryBoardPageContent
+        repository={createRepository({ id: 1, name: 'demo-repo' })}
+        actor={{ actorType: 'human', actorLabel: 'octocat' }}
+        initialLatestEventId={0}
+        initialWorkItems={[
+          createWorkItem({ id: 10, status: 'Draft', revision: 0, title: 'Write tests', plannedFiles: null, assignees: ['octocat'] }),
+        ]}
+      />,
+    );
+
+    expect(MockEventSource.instances).toHaveLength(1);
+    MockEventSource.instances[0]?.emitOpen();
+
+    await user.click(screen.getByRole('button', { name: /Write tests/ }));
+    await user.type(screen.getByRole('textbox', { name: 'Add planned file path' }), 'src/new-file.ts');
+    await user.click(screen.getByRole('button', { name: 'Add file' }));
+
+    act(() => {
+      MockEventSource.instances[0]?.emit('board_event', {
+        id: 5,
+        repositoryId: 1,
+        workItemId: 10,
+        eventType: 'status_changed',
+        payload: { type: 'task', fromStatus: 'Draft', toStatus: 'InProgress', expectedRevision: 0, revision: 1 },
+        createdAt: new Date('2026-03-02T01:00:00.000Z').toISOString(),
+      });
+    });
+
+    expect(screen.getByRole('combobox', { name: 'Status' })).toHaveValue('InProgress');
+
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+
+    const [url, init] = fetchMock.mock.calls[0] ?? [];
+    expect(url).toBe('/api/dashboard/work-items/10');
+    expect(init).toMatchObject({
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        repositoryId: 1,
+        expectedRevision: 1,
+        actorType: 'human',
+        actorLabel: 'octocat',
+        plannedFiles: ['src/new-file.ts'],
+      }),
+    });
+    expect(fetchMock.mock.calls.some(([requestUrl]) => requestUrl === '/api/dashboard/work-items/10/actions/move')).toBe(false);
+
+    expect(await screen.findByText('Saved updates for "Write tests".')).toBeInTheDocument();
+  });
+
   it('handles 409 conflicts by refreshing the task from the server', async () => {
     const user = userEvent.setup();
     const fetchMock = vi.mocked(global.fetch);
