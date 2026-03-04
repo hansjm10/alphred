@@ -1092,6 +1092,9 @@ export function RunsPageContent({
 
   useEffect(() => {
     setSelectedRepositoryName(activeRepositoryName ?? '');
+    if (activeRepositoryName === null) {
+      setCleanupWorktree(false);
+    }
   }, [activeRepositoryName]);
 
   useEffect(() => {

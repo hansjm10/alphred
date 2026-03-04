@@ -220,6 +220,82 @@ describe('RunsPage', () => {
     expect(cleanupToggle).not.toBeChecked();
   });
 
+  it('resets auto-clean worktree when repository context is externally cleared', async () => {
+    const fetchMock = vi.mocked(global.fetch);
+    fetchMock.mockImplementation((url: string | URL | globalThis.Request) => {
+      const urlString = typeof url === 'string' ? url : url instanceof URL ? url.toString() : url.url;
+      if (urlString.includes('/nodes')) {
+        return Promise.resolve(createJsonResponse({ nodes: [] }));
+      }
+      if (urlString === '/api/dashboard/runs') {
+        return Promise.resolve(createJsonResponse({
+          workflowRunId: 622,
+          mode: 'async',
+          status: 'accepted',
+          runStatus: 'running',
+          executionOutcome: null,
+          executedNodes: null,
+        }, { status: 202 }));
+      }
+      if (urlString.startsWith('/api/dashboard/runs?limit=')) {
+        return Promise.resolve(createJsonResponse({
+          runs: [createRunSummary({ id: 622, status: 'running' })],
+        }));
+      }
+      return Promise.resolve(createJsonResponse({}));
+    });
+
+    const user = userEvent.setup();
+    const { rerender } = render(
+      <RunsPageContent
+        runs={[createRunSummary({ id: 412, status: 'running' })]}
+        workflows={[createWorkflow()]}
+        repositories={[createRepository({ name: 'sample-repo', cloneStatus: 'cloned' })]}
+        authGate={createAuthenticatedAuthGate()}
+        activeFilter="all"
+        activeRepositoryName="sample-repo"
+        activeWorkflowKey={null}
+        activeWindow="all"
+      />,
+    );
+
+    const cleanupToggle = screen.getByRole('checkbox', { name: 'Auto-clean worktree on completion' });
+    expect(cleanupToggle).toBeEnabled();
+    await user.click(cleanupToggle);
+    expect(cleanupToggle).toBeChecked();
+
+    rerender(
+      <RunsPageContent
+        runs={[createRunSummary({ id: 412, status: 'running' })]}
+        workflows={[createWorkflow()]}
+        repositories={[createRepository({ name: 'sample-repo', cloneStatus: 'cloned' })]}
+        authGate={createAuthenticatedAuthGate()}
+        activeFilter="all"
+        activeRepositoryName={null}
+        activeWorkflowKey={null}
+        activeWindow="all"
+      />,
+    );
+
+    const updatedCleanupToggle = screen.getByRole('checkbox', { name: 'Auto-clean worktree on completion' });
+    expect(updatedCleanupToggle).toBeDisabled();
+    expect(updatedCleanupToggle).not.toBeChecked();
+
+    await user.click(screen.getByRole('button', { name: 'Launch Run' }));
+
+    await waitFor(() => {
+      const postCall = fetchMock.mock.calls.find(
+        (call) => call[0] === '/api/dashboard/runs' && call[1] && typeof call[1] === 'object' && 'method' in call[1] && call[1].method === 'POST',
+      );
+      expect(postCall).toBeDefined();
+      expect(JSON.parse(postCall![1]!.body as string)).toEqual({
+        treeKey: 'demo-tree',
+        executionMode: 'async',
+        executionScope: 'full',
+      });
+    });
+  });
+
   it('includes prefilled launch association fields in launch payloads', async () => {
     const fetchMock = vi.mocked(global.fetch);
     fetchMock.mockImplementation((url: string | URL | globalThis.Request) => {
