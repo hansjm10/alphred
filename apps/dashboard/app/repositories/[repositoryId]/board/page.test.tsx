@@ -232,6 +232,172 @@ describe('RepositoryBoardPageContent', () => {
     expect(screen.getByText('running')).toBeInTheDocument();
   });
 
+  it('highlights planned-vs-actual mismatches and requests replanning', async () => {
+    const user = userEvent.setup();
+    const fetchMock = vi.mocked(global.fetch);
+    fetchMock.mockResolvedValueOnce(
+      createJsonResponse({
+        repositoryId: 1,
+        workItemId: 10,
+        workflowRunId: 42,
+        eventId: 77,
+        requestedAt: '2026-03-03T00:10:00.000Z',
+        plannedButUntouched: ['src/b.ts'],
+        touchedButUnplanned: ['src/c.ts'],
+      }),
+    );
+
+    render(
+      <RepositoryBoardPageContent
+        repository={createRepository({ id: 1, name: 'demo-repo' })}
+        actor={{ actorType: 'human', actorLabel: 'octocat' }}
+        initialLatestEventId={0}
+        initialWorkItems={[
+          createWorkItem({
+            id: 10,
+            type: 'task',
+            status: 'InProgress',
+            title: 'Plan mismatch task',
+            plannedFiles: ['src/a.ts', 'src/b.ts'],
+            linkedWorkflowRun: {
+              workflowRunId: 42,
+              runStatus: 'running',
+              linkedAt: '2026-03-03T00:00:00.000Z',
+              touchedFiles: ['src/a.ts', 'src/c.ts'],
+            },
+          }),
+        ]}
+      />,
+    );
+
+    await user.click(screen.getByRole('button', { name: /Plan mismatch task/ }));
+    expect(screen.getByText('Plan vs actual')).toBeInTheDocument();
+    const planVsActualSection = screen.getByText('Plan vs actual').closest('div');
+    expect(planVsActualSection).not.toBeNull();
+    expect(within(planVsActualSection ?? document.body).getByText('Planned but not touched')).toBeInTheDocument();
+    expect(within(planVsActualSection ?? document.body).getByText('Touched but not planned')).toBeInTheDocument();
+    expect(within(planVsActualSection ?? document.body).getByText('src/b.ts')).toBeInTheDocument();
+    expect(within(planVsActualSection ?? document.body).getByText('src/c.ts')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Request replanning for mismatch' }));
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/dashboard/repositories/1/work-items/10/actions/request-replan', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        actorType: 'human',
+        actorLabel: 'octocat',
+      }),
+    });
+    expect(await screen.findByText(/Replanning requested for "Plan mismatch task"/)).toBeInTheDocument();
+  });
+
+  it('marks touched files unavailable when linked-run updates omit touchedFiles', async () => {
+    const user = userEvent.setup();
+
+    render(
+      <RepositoryBoardPageContent
+        repository={createRepository({ id: 1, name: 'demo-repo' })}
+        actor={{ actorType: 'human', actorLabel: 'octocat' }}
+        initialLatestEventId={0}
+        initialWorkItems={[
+          createWorkItem({
+            id: 10,
+            type: 'task',
+            status: 'Ready',
+            title: 'Linked run partial update',
+            plannedFiles: ['src/a.ts'],
+            linkedWorkflowRun: {
+              workflowRunId: 42,
+              runStatus: 'running',
+              linkedAt: '2026-03-03T00:00:00.000Z',
+              touchedFiles: ['src/a.ts'],
+            },
+          }),
+        ]}
+      />,
+    );
+
+    expect(MockEventSource.instances).toHaveLength(1);
+    MockEventSource.instances[0]?.emitOpen();
+
+    await user.click(screen.getByRole('button', { name: /Linked run partial update/ }));
+    expect(screen.getByRole('button', { name: 'Request replanning' })).toBeInTheDocument();
+
+    act(() => {
+      MockEventSource.instances[0]?.emit('board_event', {
+        id: 9,
+        repositoryId: 1,
+        workItemId: 10,
+        eventType: 'status_changed',
+        payload: {
+          type: 'task',
+          fromStatus: 'Ready',
+          toStatus: 'InProgress',
+          revision: 1,
+          linkedWorkflowRun: {
+            workflowRunId: 42,
+            runStatus: 'running',
+            linkedAt: '2026-03-03T00:05:00.000Z',
+          },
+        },
+        createdAt: new Date('2026-03-03T00:05:00.000Z').toISOString(),
+      });
+    });
+
+    expect(screen.getByText('No plan-vs-actual diff available yet.')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Request replanning' })).not.toBeInTheDocument();
+
+    const touchedFilesSection = screen.getByText('Touched files').closest('div');
+    expect(touchedFilesSection).not.toBeNull();
+    expect(
+      within(touchedFilesSection ?? document.body).getByText(
+        'Touched files are unavailable because the linked run worktree is unavailable.',
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it('hides plan-vs-actual comparison and replanning when touched files are unavailable', async () => {
+    const user = userEvent.setup();
+
+    render(
+      <RepositoryBoardPageContent
+        repository={createRepository({ id: 1, name: 'demo-repo' })}
+        actor={{ actorType: 'human', actorLabel: 'octocat' }}
+        initialLatestEventId={0}
+        initialWorkItems={[
+          createWorkItem({
+            id: 10,
+            type: 'task',
+            status: 'InProgress',
+            title: 'Unavailable touched files',
+            plannedFiles: ['src/a.ts'],
+            linkedWorkflowRun: {
+              workflowRunId: 42,
+              runStatus: 'running',
+              linkedAt: '2026-03-03T00:00:00.000Z',
+            },
+          }),
+        ]}
+      />,
+    );
+
+    await user.click(screen.getByRole('button', { name: /Unavailable touched files/ }));
+
+    const touchedFilesSection = screen.getByText('Touched files').closest('div');
+    expect(touchedFilesSection).not.toBeNull();
+    expect(
+      within(touchedFilesSection ?? document.body).getByText(
+        'Touched files are unavailable because the linked run worktree is unavailable.',
+      ),
+    ).toBeInTheDocument();
+
+    const planVsActualSection = screen.getByText('Plan vs actual').closest('div');
+    expect(planVsActualSection).not.toBeNull();
+    expect(within(planVsActualSection ?? document.body).getByText('No plan-vs-actual diff available yet.')).toBeInTheDocument();
+    expect(within(planVsActualSection ?? document.body).queryByRole('button', { name: /Request replanning/ })).not.toBeInTheDocument();
+  });
+
   it('shows effective policy details for tasks and supports inspecting epic policy from parent chain', async () => {
     const user = userEvent.setup();
 

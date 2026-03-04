@@ -1,3 +1,8 @@
+import { execFile } from 'node:child_process';
+import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { promisify } from 'node:util';
 import { describe, expect, it } from 'vitest';
 import {
   and,
@@ -10,6 +15,7 @@ import {
   workItemPolicies,
   workItemWorkflowRuns,
   workItems,
+  runWorktrees,
   workflowRuns,
   workflowTrees,
   treeNodes,
@@ -19,6 +25,14 @@ import type { AuthStatus, RepositoryConfig } from '@alphred/shared';
 import { createSqlWorkflowExecutor, createSqlWorkflowPlanner } from '@alphred/core';
 import { createDashboardService, type DashboardServiceDependencies } from './dashboard-service';
 import { DashboardIntegrationError } from './dashboard-errors';
+
+const execFileAsync = promisify(execFile);
+
+async function runGit(worktreePath: string, args: readonly string[]): Promise<void> {
+  await execFileAsync('git', ['-C', worktreePath, ...args], {
+    env: process.env,
+  });
+}
 
 function createHarness(options: {
   dependencies?: Partial<DashboardServiceDependencies>;
@@ -300,6 +314,47 @@ describe('work-item-operations', () => {
     });
   });
 
+  it('normalizes plannedFiles to repo-relative paths and rejects invalid paths', async () => {
+    const { db, service } = createHarness();
+
+    const repository = insertRepository(db, {
+      name: 'repo',
+      provider: 'github',
+      remoteUrl: 'https://example.com/repo.git',
+      remoteRef: 'acme/repo',
+    });
+
+    const created = await service.createWorkItem({
+      repositoryId: repository.id,
+      type: 'task',
+      status: 'Draft',
+      title: 'Normalize files',
+      plannedFiles: ['./src/a.ts', 'src\\\\b.ts', 'src/a.ts'],
+      actorType: 'human',
+      actorLabel: 'alice',
+    });
+
+    expect(created.workItem.plannedFiles).toEqual(['src/a.ts', 'src/b.ts']);
+
+    expect(() =>
+      service.createWorkItem({
+        repositoryId: repository.id,
+        type: 'task',
+        status: 'Draft',
+        title: 'Invalid files',
+        plannedFiles: ['/etc/passwd'],
+        actorType: 'human',
+        actorLabel: 'alice',
+      }),
+    ).toThrowError(
+      expect.objectContaining({
+        code: 'invalid_request',
+        status: 400,
+        message: 'plannedFiles must be an array of repo-relative file paths when provided.',
+      }),
+    );
+  });
+
   it('links a workflow run when moving a task from Ready to InProgress with linkedWorkflowRunId', async () => {
     const { db, service } = createHarness();
 
@@ -376,6 +431,517 @@ describe('work-item-operations', () => {
     expect(statusEvent).not.toBeUndefined();
     const statusPayload = statusEvent?.payload as { linkedWorkflowRun?: { workflowRunId?: number } | null };
     expect(statusPayload.linkedWorkflowRun?.workflowRunId).toBe(workflowRunId);
+  });
+
+  it('omits linked run touchedFiles in move status responses', async () => {
+    const { db, service } = createHarness();
+    const tempRoot = await mkdtemp(join(tmpdir(), 'alphred-work-item-move-touched-files-'));
+    const worktreePath = join(tempRoot, 'repo');
+
+    try {
+      await mkdir(worktreePath);
+      await runGit(worktreePath, ['init']);
+      await runGit(worktreePath, ['config', 'user.name', 'Test Runner']);
+      await runGit(worktreePath, ['config', 'user.email', 'test@example.com']);
+      await mkdir(join(worktreePath, 'src'));
+      await writeFile(join(worktreePath, 'src', 'a.ts'), 'export const value = 1;\n');
+      await runGit(worktreePath, ['add', '.']);
+      await runGit(worktreePath, ['commit', '-m', 'seed']);
+      await writeFile(join(worktreePath, 'src', 'a.ts'), 'export const value = 2;\n');
+      await writeFile(join(worktreePath, 'src', 'c.ts'), 'export const c = true;\n');
+
+      const repository = insertRepository(db, {
+        name: 'repo',
+        provider: 'github',
+        remoteUrl: 'https://example.com/repo.git',
+        remoteRef: 'acme/repo',
+      });
+
+      const treeId = seedPublishedWorkflowTree(db);
+      const workflowRunId = Number(
+        db.insert(workflowRuns)
+          .values({
+            workflowTreeId: treeId,
+            status: 'running',
+            startedAt: '2026-03-03T00:01:00.000Z',
+            completedAt: null,
+            createdAt: '2026-03-03T00:01:00.000Z',
+            updatedAt: '2026-03-03T00:01:00.000Z',
+          })
+          .run().lastInsertRowid,
+      );
+
+      db.insert(runWorktrees)
+        .values({
+          repositoryId: repository.id,
+          workflowRunId,
+          worktreePath,
+          branch: 'main',
+          status: 'active',
+          commitHash: null,
+          createdAt: '2026-03-03T00:02:00.000Z',
+          removedAt: null,
+        })
+        .run();
+
+      const taskId = Number(
+        db.insert(workItems)
+          .values({
+            repositoryId: repository.id,
+            type: 'task',
+            status: 'Ready',
+            title: 'Implement issue',
+            revision: 0,
+          })
+          .run().lastInsertRowid,
+      );
+
+      const moved = await service.moveWorkItemStatus({
+        repositoryId: repository.id,
+        workItemId: taskId,
+        expectedRevision: 0,
+        toStatus: 'InProgress',
+        actorType: 'human',
+        actorLabel: 'alice',
+        linkedWorkflowRunId: workflowRunId,
+      });
+
+      expect(moved.workItem.linkedWorkflowRun).toMatchObject({
+        workflowRunId,
+        runStatus: 'running',
+      });
+      expect(moved.workItem.linkedWorkflowRun).not.toHaveProperty('touchedFiles');
+    } finally {
+      await rm(tempRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('derives linked run touchedFiles from run worktree git status output', async () => {
+    const { db, service } = createHarness();
+    const tempRoot = await mkdtemp(join(tmpdir(), 'alphred-work-item-touched-files-'));
+    const worktreePath = join(tempRoot, 'repo');
+
+    try {
+      await mkdir(worktreePath);
+      await runGit(worktreePath, ['init']);
+      await runGit(worktreePath, ['config', 'user.name', 'Test Runner']);
+      await runGit(worktreePath, ['config', 'user.email', 'test@example.com']);
+      await mkdir(join(worktreePath, 'src'));
+      await writeFile(join(worktreePath, 'src', 'a.ts'), 'export const value = 1;\n');
+      await runGit(worktreePath, ['add', '.']);
+      await runGit(worktreePath, ['commit', '-m', 'seed']);
+      await writeFile(join(worktreePath, 'src', 'a.ts'), 'export const value = 2;\n');
+      await writeFile(join(worktreePath, 'src', 'c.ts'), 'export const c = true;\n');
+
+      const repository = insertRepository(db, {
+        name: 'repo',
+        provider: 'github',
+        remoteUrl: 'https://example.com/repo.git',
+        remoteRef: 'acme/repo',
+      });
+
+      const treeId = seedPublishedWorkflowTree(db);
+      const workflowRunId = Number(
+        db.insert(workflowRuns)
+          .values({
+            workflowTreeId: treeId,
+            status: 'running',
+            startedAt: '2026-03-03T00:01:00.000Z',
+            completedAt: null,
+            createdAt: '2026-03-03T00:01:00.000Z',
+            updatedAt: '2026-03-03T00:01:00.000Z',
+          })
+          .run().lastInsertRowid,
+      );
+
+      const taskId = Number(
+        db.insert(workItems)
+          .values({
+            repositoryId: repository.id,
+            type: 'task',
+            status: 'InProgress',
+            title: 'Implement issue',
+            revision: 0,
+            plannedFiles: ['src/a.ts', 'src/b.ts'],
+          })
+          .run().lastInsertRowid,
+      );
+
+      db.insert(workItemWorkflowRuns)
+        .values({
+          repositoryId: repository.id,
+          workItemId: taskId,
+          workflowRunId,
+          linkedAt: '2026-03-03T00:02:00.000Z',
+        })
+        .run();
+
+      db.insert(runWorktrees)
+        .values({
+          repositoryId: repository.id,
+          workflowRunId,
+          worktreePath,
+          branch: 'main',
+          status: 'active',
+          commitHash: null,
+          createdAt: '2026-03-03T00:02:00.000Z',
+          removedAt: null,
+        })
+        .run();
+
+      const workItemResult = await service.getWorkItem({
+        repositoryId: repository.id,
+        workItemId: taskId,
+      });
+
+      expect(workItemResult.workItem.linkedWorkflowRun).toMatchObject({
+        workflowRunId,
+        runStatus: 'running',
+        touchedFiles: ['src/a.ts', 'src/c.ts'],
+      });
+    } finally {
+      await rm(tempRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('skips touched-file git status reads for removed run worktrees', async () => {
+    const { db, service } = createHarness();
+    const tempRoot = await mkdtemp(join(tmpdir(), 'alphred-work-item-removed-worktree-'));
+    const worktreePath = join(tempRoot, 'repo');
+    try {
+      await mkdir(worktreePath);
+      await runGit(worktreePath, ['init']);
+      await runGit(worktreePath, ['config', 'user.name', 'Test Runner']);
+      await runGit(worktreePath, ['config', 'user.email', 'test@example.com']);
+      await mkdir(join(worktreePath, 'src'));
+      await writeFile(join(worktreePath, 'src', 'a.ts'), 'export const value = 1;\n');
+      await runGit(worktreePath, ['add', '.']);
+      await runGit(worktreePath, ['commit', '-m', 'seed']);
+      await writeFile(join(worktreePath, 'src', 'a.ts'), 'export const value = 2;\n');
+
+      const repository = insertRepository(db, {
+        name: 'repo',
+        provider: 'github',
+        remoteUrl: 'https://example.com/repo.git',
+        remoteRef: 'acme/repo',
+      });
+
+      const treeId = seedPublishedWorkflowTree(db);
+      const workflowRunId = Number(
+        db.insert(workflowRuns)
+          .values({
+            workflowTreeId: treeId,
+            status: 'running',
+            startedAt: '2026-03-03T00:01:00.000Z',
+            completedAt: null,
+            createdAt: '2026-03-03T00:01:00.000Z',
+            updatedAt: '2026-03-03T00:01:00.000Z',
+          })
+          .run().lastInsertRowid,
+      );
+
+      const taskId = Number(
+        db.insert(workItems)
+          .values({
+            repositoryId: repository.id,
+            type: 'task',
+            status: 'InProgress',
+            title: 'Implement issue',
+            revision: 0,
+          })
+          .run().lastInsertRowid,
+      );
+
+      db.insert(workItemWorkflowRuns)
+        .values({
+          repositoryId: repository.id,
+          workItemId: taskId,
+          workflowRunId,
+          linkedAt: '2026-03-03T00:02:00.000Z',
+        })
+        .run();
+
+      db.insert(runWorktrees)
+        .values({
+          repositoryId: repository.id,
+          workflowRunId,
+          worktreePath,
+          branch: 'main',
+          status: 'removed',
+          commitHash: null,
+          createdAt: '2026-03-03T00:02:00.000Z',
+          removedAt: '2026-03-03T00:03:00.000Z',
+        })
+        .run();
+
+      const workItemResult = await service.getWorkItem({
+        repositoryId: repository.id,
+        workItemId: taskId,
+      });
+
+      expect(workItemResult.workItem.linkedWorkflowRun).toMatchObject({
+        workflowRunId,
+        runStatus: 'running',
+      });
+      expect(workItemResult.workItem.linkedWorkflowRun).not.toHaveProperty('touchedFiles');
+    } finally {
+      await rm(tempRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('requests replanning by appending an audit event with plan-vs-actual deltas', async () => {
+    const { db, service } = createHarness();
+    const tempRoot = await mkdtemp(join(tmpdir(), 'alphred-work-item-replan-'));
+    const worktreePath = join(tempRoot, 'repo');
+
+    try {
+      await mkdir(worktreePath);
+      await runGit(worktreePath, ['init']);
+      await runGit(worktreePath, ['config', 'user.name', 'Test Runner']);
+      await runGit(worktreePath, ['config', 'user.email', 'test@example.com']);
+      await mkdir(join(worktreePath, 'src'));
+      await writeFile(join(worktreePath, 'src', 'a.ts'), 'export const value = 1;\n');
+      await runGit(worktreePath, ['add', '.']);
+      await runGit(worktreePath, ['commit', '-m', 'seed']);
+      await writeFile(join(worktreePath, 'src', 'a.ts'), 'export const value = 2;\n');
+      await writeFile(join(worktreePath, 'src', 'c.ts'), 'export const c = true;\n');
+
+      const repository = insertRepository(db, {
+        name: 'repo',
+        provider: 'github',
+        remoteUrl: 'https://example.com/repo.git',
+        remoteRef: 'acme/repo',
+      });
+
+      const treeId = seedPublishedWorkflowTree(db);
+      const workflowRunId = Number(
+        db.insert(workflowRuns)
+          .values({
+            workflowTreeId: treeId,
+            status: 'running',
+            startedAt: '2026-03-03T00:01:00.000Z',
+            completedAt: null,
+            createdAt: '2026-03-03T00:01:00.000Z',
+            updatedAt: '2026-03-03T00:01:00.000Z',
+          })
+          .run().lastInsertRowid,
+      );
+
+      const taskId = Number(
+        db.insert(workItems)
+          .values({
+            repositoryId: repository.id,
+            type: 'task',
+            status: 'InProgress',
+            title: 'Implement issue',
+            revision: 2,
+            plannedFiles: ['src/a.ts', 'src/b.ts'],
+          })
+          .run().lastInsertRowid,
+      );
+
+      db.insert(workItemWorkflowRuns)
+        .values({
+          repositoryId: repository.id,
+          workItemId: taskId,
+          workflowRunId,
+          linkedAt: '2026-03-03T00:02:00.000Z',
+        })
+        .run();
+
+      db.insert(runWorktrees)
+        .values({
+          repositoryId: repository.id,
+          workflowRunId,
+          worktreePath,
+          branch: 'main',
+          status: 'active',
+          commitHash: null,
+          createdAt: '2026-03-03T00:02:00.000Z',
+          removedAt: null,
+        })
+        .run();
+
+      const result = await service.requestWorkItemReplan({
+        repositoryId: repository.id,
+        workItemId: taskId,
+        actorType: 'human',
+        actorLabel: 'alice',
+      });
+
+      expect(result.repositoryId).toBe(repository.id);
+      expect(result.workItemId).toBe(taskId);
+      expect(result.workflowRunId).toBe(workflowRunId);
+      expect(result.plannedButUntouched).toEqual(['src/b.ts']);
+      expect(result.touchedButUnplanned).toEqual(['src/c.ts']);
+
+      const event = db
+        .select()
+        .from(workItemEvents)
+        .where(and(eq(workItemEvents.repositoryId, repository.id), eq(workItemEvents.id, result.eventId)))
+        .get();
+      expect(event?.eventType).toBe('updated');
+      expect(event?.payload).toMatchObject({
+        expectedRevision: 2,
+        revision: 2,
+        replanRequest: {
+          workflowRunId,
+          plannedButUntouched: ['src/b.ts'],
+          touchedButUnplanned: ['src/c.ts'],
+        },
+      });
+    } finally {
+      await rm(tempRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('treats renamed planned files as touched in replan deltas', async () => {
+    const { db, service } = createHarness();
+    const tempRoot = await mkdtemp(join(tmpdir(), 'alphred-work-item-replan-rename-'));
+    const worktreePath = join(tempRoot, 'repo');
+
+    try {
+      await mkdir(worktreePath);
+      await runGit(worktreePath, ['init']);
+      await runGit(worktreePath, ['config', 'user.name', 'Test Runner']);
+      await runGit(worktreePath, ['config', 'user.email', 'test@example.com']);
+      await mkdir(join(worktreePath, 'src'));
+      await writeFile(join(worktreePath, 'src', 'old.ts'), 'export const value = 1;\n');
+      await runGit(worktreePath, ['add', '.']);
+      await runGit(worktreePath, ['commit', '-m', 'seed']);
+      await runGit(worktreePath, ['mv', 'src/old.ts', 'src/new.ts']);
+
+      const repository = insertRepository(db, {
+        name: 'repo',
+        provider: 'github',
+        remoteUrl: 'https://example.com/repo.git',
+        remoteRef: 'acme/repo',
+      });
+
+      const treeId = seedPublishedWorkflowTree(db);
+      const workflowRunId = Number(
+        db.insert(workflowRuns)
+          .values({
+            workflowTreeId: treeId,
+            status: 'running',
+            startedAt: '2026-03-03T00:01:00.000Z',
+            completedAt: null,
+            createdAt: '2026-03-03T00:01:00.000Z',
+            updatedAt: '2026-03-03T00:01:00.000Z',
+          })
+          .run().lastInsertRowid,
+      );
+
+      const taskId = Number(
+        db.insert(workItems)
+          .values({
+            repositoryId: repository.id,
+            type: 'task',
+            status: 'InProgress',
+            title: 'Implement issue',
+            revision: 1,
+            plannedFiles: ['src/old.ts'],
+          })
+          .run().lastInsertRowid,
+      );
+
+      db.insert(workItemWorkflowRuns)
+        .values({
+          repositoryId: repository.id,
+          workItemId: taskId,
+          workflowRunId,
+          linkedAt: '2026-03-03T00:02:00.000Z',
+        })
+        .run();
+
+      db.insert(runWorktrees)
+        .values({
+          repositoryId: repository.id,
+          workflowRunId,
+          worktreePath,
+          branch: 'main',
+          status: 'active',
+          commitHash: null,
+          createdAt: '2026-03-03T00:02:00.000Z',
+          removedAt: null,
+        })
+        .run();
+
+      const result = await service.requestWorkItemReplan({
+        repositoryId: repository.id,
+        workItemId: taskId,
+        actorType: 'human',
+        actorLabel: 'alice',
+      });
+
+      expect(result.repositoryId).toBe(repository.id);
+      expect(result.workItemId).toBe(taskId);
+      expect(result.workflowRunId).toBe(workflowRunId);
+      expect(result.plannedButUntouched).toEqual([]);
+      expect(result.touchedButUnplanned).toEqual(['src/new.ts']);
+    } finally {
+      await rm(tempRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('returns not_found for requestWorkItemReplan when the work item does not exist', async () => {
+    const { db, service } = createHarness();
+
+    const repository = insertRepository(db, {
+      name: 'repo',
+      provider: 'github',
+      remoteUrl: 'https://example.com/repo.git',
+      remoteRef: 'acme/repo',
+    });
+
+    await expect(
+      service.requestWorkItemReplan({
+        repositoryId: repository.id,
+        workItemId: 999,
+        actorType: 'human',
+        actorLabel: 'alice',
+      }),
+    ).rejects.toMatchObject({
+      code: 'not_found',
+      status: 404,
+      message: 'Work item id=999 was not found.',
+    });
+  });
+
+  it('returns invalid_request for requestWorkItemReplan when the target is not a task', async () => {
+    const { db, service } = createHarness();
+
+    const repository = insertRepository(db, {
+      name: 'repo',
+      provider: 'github',
+      remoteUrl: 'https://example.com/repo.git',
+      remoteRef: 'acme/repo',
+    });
+
+    const storyId = Number(
+      db.insert(workItems)
+        .values({
+          repositoryId: repository.id,
+          type: 'story',
+          status: 'Draft',
+          title: 'Story item',
+          revision: 0,
+        })
+        .run().lastInsertRowid,
+    );
+
+    await expect(
+      service.requestWorkItemReplan({
+        repositoryId: repository.id,
+        workItemId: storyId,
+        actorType: 'human',
+        actorLabel: 'alice',
+      }),
+    ).rejects.toMatchObject({
+      code: 'invalid_request',
+      status: 400,
+      message: `Work item id=${storyId} is not a task.`,
+    });
   });
 
   it('auto-launches and links a run when task transitions Ready -> InProgress and autolaunch is enabled', async () => {
@@ -819,6 +1385,115 @@ describe('work-item-operations', () => {
       status: 409,
       message: expect.stringContaining('not an epic'),
     });
+  });
+
+  it('skips linked run touchedFiles in list responses but includes them in bootstrap responses', async () => {
+    const { db, service } = createHarness();
+    const tempRoot = await mkdtemp(join(tmpdir(), 'alphred-work-item-list-touched-files-'));
+    const worktreePath = join(tempRoot, 'repo');
+
+    try {
+      await mkdir(worktreePath);
+      await runGit(worktreePath, ['init']);
+      await runGit(worktreePath, ['config', 'user.name', 'Test Runner']);
+      await runGit(worktreePath, ['config', 'user.email', 'test@example.com']);
+      await mkdir(join(worktreePath, 'src'));
+      await writeFile(join(worktreePath, 'src', 'a.ts'), 'export const value = 1;\n');
+      await runGit(worktreePath, ['add', '.']);
+      await runGit(worktreePath, ['commit', '-m', 'seed']);
+      await writeFile(join(worktreePath, 'src', 'a.ts'), 'export const value = 2;\n');
+      await writeFile(join(worktreePath, 'src', 'c.ts'), 'export const c = true;\n');
+
+      const repository = insertRepository(db, {
+        name: 'repo',
+        provider: 'github',
+        remoteUrl: 'https://example.com/repo.git',
+        remoteRef: 'acme/repo',
+      });
+
+      const treeId = seedPublishedWorkflowTree(db);
+      const workflowRunId = Number(
+        db.insert(workflowRuns)
+          .values({
+            workflowTreeId: treeId,
+            status: 'running',
+            startedAt: '2026-03-03T00:01:00.000Z',
+            completedAt: null,
+            createdAt: '2026-03-03T00:01:00.000Z',
+            updatedAt: '2026-03-03T00:01:00.000Z',
+          })
+          .run().lastInsertRowid,
+      );
+
+      const taskId = Number(
+        db.insert(workItems)
+          .values({
+            repositoryId: repository.id,
+            type: 'task',
+            status: 'InProgress',
+            title: 'Implement issue',
+            revision: 0,
+          })
+          .run().lastInsertRowid,
+      );
+
+      db.insert(workItemWorkflowRuns)
+        .values({
+          repositoryId: repository.id,
+          workItemId: taskId,
+          workflowRunId,
+          linkedAt: '2026-03-03T00:02:00.000Z',
+        })
+        .run();
+
+      db.insert(runWorktrees)
+        .values({
+          repositoryId: repository.id,
+          workflowRunId,
+          worktreePath,
+          branch: 'main',
+          status: 'active',
+          commitHash: null,
+          createdAt: '2026-03-03T00:02:00.000Z',
+          removedAt: null,
+        })
+        .run();
+
+      await expect(
+        service.getWorkItem({
+          repositoryId: repository.id,
+          workItemId: taskId,
+        }),
+      ).resolves.toMatchObject({
+        workItem: {
+          id: taskId,
+          linkedWorkflowRun: {
+            workflowRunId,
+            touchedFiles: ['src/a.ts', 'src/c.ts'],
+          },
+        },
+      });
+
+      const listResult = await service.listWorkItems(repository.id);
+      const listedTask = listResult.workItems.find(item => item.id === taskId);
+      expect(listedTask?.linkedWorkflowRun).toMatchObject({
+        workflowRunId,
+        runStatus: 'running',
+      });
+      expect(listedTask?.linkedWorkflowRun).not.toHaveProperty('touchedFiles');
+
+      const bootstrapResult = await service.getRepositoryBoardBootstrap({
+        repositoryId: repository.id,
+      });
+      const bootstrapTask = bootstrapResult.workItems.find(item => item.id === taskId);
+      expect(bootstrapTask?.linkedWorkflowRun).toMatchObject({
+        workflowRunId,
+        runStatus: 'running',
+        touchedFiles: ['src/a.ts', 'src/c.ts'],
+      });
+    } finally {
+      await rm(tempRoot, { recursive: true, force: true });
+    }
   });
 
   it('emits created and reparented events with effectivePolicy snapshots', async () => {

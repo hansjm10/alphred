@@ -6,6 +6,7 @@ import {
   parseJsonObjectBody,
   parseMoveWorkItemStatusRequest,
   parseProposeStoryBreakdownRequest,
+  parseRequestWorkItemReplanRequest,
   parseRepositoryIdFromPathSegment,
   parseRepositoryIdFromQuery,
   parseUpdateWorkItemFieldsRequest,
@@ -357,6 +358,50 @@ describe('work item route validation', () => {
       } catch (error) {
         expectInvalidRequest(error, 'Field "toStatus" must be a valid work-item status string.');
       }
+    });
+  });
+
+  describe('parseRequestWorkItemReplanRequest', () => {
+    it('parses valid replan action payloads', () => {
+      expect(
+        parseRequestWorkItemReplanRequest(
+          {
+            actorType: 'human',
+            actorLabel: 'alice',
+          },
+          4,
+          81,
+        ),
+      ).toEqual({
+        repositoryId: 4,
+        workItemId: 81,
+        actorType: 'human',
+        actorLabel: 'alice',
+      });
+    });
+
+    it('rejects invalid replan action payloads', () => {
+      expect(() =>
+        parseRequestWorkItemReplanRequest(
+          {
+            actorType: 'bot',
+            actorLabel: 'alice',
+          },
+          4,
+          81,
+        ),
+      ).toThrowError(DashboardIntegrationError);
+
+      expect(() =>
+        parseRequestWorkItemReplanRequest(
+          {
+            actorType: 'human',
+            actorLabel: 123,
+          },
+          4,
+          81,
+        ),
+      ).toThrowError(DashboardIntegrationError);
     });
   });
 

@@ -5,6 +5,7 @@ import {
   fetchWorkItem,
   moveWorkItemStatus,
   parseBoardEventSnapshot,
+  requestWorkItemReplan,
   toWorkItemsById,
   type BoardEventSnapshot,
   type WorkItemActor,
@@ -139,6 +140,7 @@ describe('applyBoardEventToWorkItems', () => {
             workflowRunId: 88,
             runStatus: 'running',
             linkedAt: '2026-03-03T00:00:00.000Z',
+            touchedFiles: ['src/a.ts'],
           },
         },
       }),
@@ -149,19 +151,43 @@ describe('applyBoardEventToWorkItems', () => {
       workflowRunId: 88,
       runStatus: 'running',
       linkedAt: '2026-03-03T00:00:00.000Z',
+      touchedFiles: ['src/a.ts'],
     });
 
-    const breakdownProposed = applyBoardEventToWorkItems(
+    const statusChangedWithoutTouchedFiles = applyBoardEventToWorkItems(
       statusChanged,
       1,
       createEvent({
         workItemId: 10,
+        eventType: 'status_changed',
+        payload: {
+          toStatus: 'InReview',
+          revision: 4,
+          linkedWorkflowRun: {
+            workflowRunId: 88,
+            runStatus: 'running',
+            linkedAt: '2026-03-03T00:01:00.000Z',
+          },
+        },
+      }),
+    );
+    expect(statusChangedWithoutTouchedFiles[10]?.linkedWorkflowRun).toEqual({
+      workflowRunId: 88,
+      runStatus: 'running',
+      linkedAt: '2026-03-03T00:01:00.000Z',
+    });
+
+    const breakdownProposed = applyBoardEventToWorkItems(
+      statusChangedWithoutTouchedFiles,
+      1,
+      createEvent({
+        workItemId: 10,
         eventType: 'breakdown_proposed',
-        payload: { toStatus: 'BreakdownProposed', revision: 4 },
+        payload: { toStatus: 'BreakdownProposed', revision: 5 },
       }),
     );
     expect(breakdownProposed[10]?.status).toBe('BreakdownProposed');
-    expect(breakdownProposed[10]?.revision).toBe(4);
+    expect(breakdownProposed[10]?.revision).toBe(5);
 
     const reparented = applyBoardEventToWorkItems(
       breakdownProposed,
@@ -169,11 +195,11 @@ describe('applyBoardEventToWorkItems', () => {
       createEvent({
         workItemId: 10,
         eventType: 'reparented',
-        payload: { toParentId: 200, revision: 5, effectivePolicy: reparentedPolicy },
+        payload: { toParentId: 200, revision: 6, effectivePolicy: reparentedPolicy },
       }),
     );
     expect(reparented[10]?.parentId).toBe(200);
-    expect(reparented[10]?.revision).toBe(5);
+    expect(reparented[10]?.revision).toBe(6);
     expect(reparented[10]?.effectivePolicy).toEqual(reparentedPolicy);
 
     const ignored = applyBoardEventToWorkItems(
@@ -183,7 +209,7 @@ describe('applyBoardEventToWorkItems', () => {
         repositoryId: 1,
         workItemId: 10,
         eventType: 'status_changed',
-        payload: { toStatus: 'Cancelled', revision: 4 },
+        payload: { toStatus: 'Cancelled', revision: 5 },
       }),
     );
     expect(ignored[10]?.status).toBe('BreakdownProposed');
@@ -331,5 +357,90 @@ describe('moveWorkItemStatus', () => {
     if (!result.ok) {
       expect(result.message).toBe('Unable to move work item (malformed response).');
     }
+  });
+});
+
+describe('requestWorkItemReplan', () => {
+  it('returns ok=true for successful responses', async () => {
+    const fetchMock = vi.fn(async () =>
+      new Response(
+        JSON.stringify({
+          repositoryId: 1,
+          workItemId: 3,
+          workflowRunId: 12,
+          eventId: 40,
+          requestedAt: '2026-03-03T00:00:00.000Z',
+          plannedButUntouched: ['src/planned.ts'],
+          touchedButUnplanned: ['src/actual.ts'],
+        }),
+        { status: 200 },
+      ),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await requestWorkItemReplan({
+      repositoryId: 1,
+      workItemId: 3,
+      actor,
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/dashboard/repositories/1/work-items/3/actions/request-replan', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        actorType: 'human',
+        actorLabel: 'octocat',
+      }),
+    });
+    expect(result).toEqual({
+      ok: true,
+      result: {
+        repositoryId: 1,
+        workItemId: 3,
+        workflowRunId: 12,
+        eventId: 40,
+        requestedAt: '2026-03-03T00:00:00.000Z',
+        plannedButUntouched: ['src/planned.ts'],
+        touchedButUnplanned: ['src/actual.ts'],
+      },
+    });
+  });
+
+  it('returns ok=false with API error responses', async () => {
+    const fetchMock = vi.fn(async () =>
+      new Response(JSON.stringify({ error: { message: 'Conflict' } }), { status: 409 }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await requestWorkItemReplan({
+      repositoryId: 1,
+      workItemId: 3,
+      actor,
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      status: 409,
+      message: 'Conflict',
+    });
+  });
+
+  it('returns ok=false for malformed success payloads', async () => {
+    const fetchMock = vi.fn(async () =>
+      new Response(JSON.stringify({ repositoryId: 1 }), { status: 200 }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await requestWorkItemReplan({
+      repositoryId: 1,
+      workItemId: 3,
+      actor,
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      status: 500,
+      message: 'Unable to request replanning (malformed response).',
+    });
   });
 });

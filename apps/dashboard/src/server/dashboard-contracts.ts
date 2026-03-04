@@ -523,6 +523,7 @@ export type DashboardWorkItemLinkedRunSnapshot = {
   workflowRunId: number;
   runStatus: DashboardRunSummary['status'];
   linkedAt: string;
+  touchedFiles?: string[] | null;
 };
 
 export type DashboardWorkItemSnapshot = {
@@ -604,6 +605,23 @@ export type DashboardMoveWorkItemStatusRequest = {
 
 export type DashboardMoveWorkItemStatusResult = {
   workItem: DashboardWorkItemSnapshot;
+};
+
+export type DashboardRequestWorkItemReplanRequest = {
+  repositoryId: number;
+  workItemId: number;
+  actorType: WorkItemActorType;
+  actorLabel: string;
+};
+
+export type DashboardRequestWorkItemReplanResult = {
+  repositoryId: number;
+  workItemId: number;
+  workflowRunId: number;
+  eventId: number;
+  requestedAt: string;
+  plannedButUntouched: string[];
+  touchedButUnplanned: string[];
 };
 
 export type DashboardSetWorkItemParentRequest = {

@@ -27,6 +27,7 @@ import {
   moveWorkItemStatus,
   parseBoardEventSnapshot,
   parseJsonSafely,
+  requestWorkItemReplan,
   toWorkItemsById,
 } from '../_shared/work-items-shared';
 
@@ -92,8 +93,229 @@ function renderStringList(items: string[] | null): ReactNode {
   );
 }
 
+function toUniqueSortedStrings(items: string[] | null | undefined): string[] {
+  if (!items || items.length === 0) {
+    return [];
+  }
+  return [...new Set(items)].sort((left, right) => left.localeCompare(right));
+}
+
+function resolvePlanVsActualDelta(
+  plannedFiles: string[] | null,
+  touchedFiles: string[] | null | undefined,
+): {
+  plannedButUntouched: string[];
+  touchedButUnplanned: string[];
+} {
+  const planned = toUniqueSortedStrings(plannedFiles);
+  const touched = toUniqueSortedStrings(touchedFiles);
+  const plannedSet = new Set(planned);
+  const touchedSet = new Set(touched);
+
+  return {
+    plannedButUntouched: planned.filter((path) => !touchedSet.has(path)),
+    touchedButUnplanned: touched.filter((path) => !plannedSet.has(path)),
+  };
+}
+
 function renderConcurrencyBudget(value: number | null): string {
   return value === null ? 'Unlimited' : String(value);
+}
+
+type PlanVsActualDelta = ReturnType<typeof resolvePlanVsActualDelta>;
+
+type ParentChainEntry = Readonly<{
+  id: number;
+  title: string;
+  type: DashboardWorkItemSnapshot['type'];
+}>;
+
+function getReplanActionLabel(requestingReplan: boolean, hasMismatch: boolean): string {
+  if (requestingReplan) {
+    return 'Requesting replanning…';
+  }
+  if (hasMismatch) {
+    return 'Request replanning for mismatch';
+  }
+  return 'Request replanning';
+}
+
+function renderStatusControl({
+  status,
+  statusSelectId,
+  moving,
+  workItemId,
+  onMove,
+}: Readonly<{
+  status: TaskWorkItemStatus | null;
+  statusSelectId: string;
+  moving: boolean;
+  workItemId: number;
+  onMove: (workItemId: number, nextStatusRaw: string) => Promise<void>;
+}>): ReactNode {
+  if (status === null) {
+    return null;
+  }
+
+  return (
+    <div className="board-drawer__control">
+      <label htmlFor={statusSelectId} className="meta-text">
+        Status
+      </label>
+      <select
+        id={statusSelectId}
+        value={status}
+        onChange={(event) => {
+          void onMove(workItemId, event.target.value);
+        }}
+        disabled={moving}
+        aria-disabled={moving}
+        className="board-drawer__select"
+      >
+        {taskWorkItemStatuses.map(entry => (
+          <option key={entry} value={entry}>
+            {formatTaskStatusLabel(entry)}
+          </option>
+        ))}
+      </select>
+      {moving ? (
+        <output className="meta-text board-drawer__moving" aria-live="polite">
+          Moving…
+        </output>
+      ) : null}
+    </div>
+  );
+}
+
+function renderParentChainSection({
+  parentChain,
+  repositoryId,
+  onSelectWorkItem,
+}: Readonly<{
+  parentChain: readonly ParentChainEntry[];
+  repositoryId: number;
+  onSelectWorkItem: (workItemId: number) => void;
+}>): ReactNode {
+  return (
+    <div className="board-detail__section board-detail__section--divider">
+      <h5>Parent chain</h5>
+      {parentChain.length === 0 ? (
+        <p className="meta-text">None</p>
+      ) : (
+        <ol className="board-parent-chain">
+          {parentChain.map(parent => (
+            <li key={parent.id}>
+              <span className="board-pill">{parent.type}</span>
+              <span>
+                {parent.type === 'story' ? (
+                  <Link href={`/repositories/${repositoryId}/stories/${parent.id}`}>{parent.title}</Link>
+                ) : (
+                  <button type="button" onClick={() => onSelectWorkItem(parent.id)}>
+                    {parent.title}
+                  </button>
+                )}{' '}
+                <span className="meta-text">#{parent.id}</span>
+              </span>
+            </li>
+          ))}
+        </ol>
+      )}
+    </div>
+  );
+}
+
+function renderLinkedRun(linkedWorkflowRun: DashboardWorkItemSnapshot['linkedWorkflowRun'] | null): ReactNode {
+  if (linkedWorkflowRun == null) {
+    return <p className="meta-text">None</p>;
+  }
+
+  return (
+    <p>
+      <Link href={`/runs/${linkedWorkflowRun.workflowRunId}`}>Run #{linkedWorkflowRun.workflowRunId}</Link>{' '}
+      <span className="meta-text">{linkedWorkflowRun.runStatus}</span>
+    </p>
+  );
+}
+
+function renderTouchedFiles({
+  linkedWorkflowRun,
+  hasTouchedFiles,
+  touchedFiles,
+}: Readonly<{
+  linkedWorkflowRun: DashboardWorkItemSnapshot['linkedWorkflowRun'] | null;
+  hasTouchedFiles: boolean;
+  touchedFiles: string[] | null | undefined;
+}>): ReactNode {
+  if (linkedWorkflowRun == null) {
+    return <p className="meta-text">Link a run to compare actual file touches.</p>;
+  }
+  if (hasTouchedFiles === false) {
+    return <p className="meta-text">Touched files are unavailable because the linked run worktree is unavailable.</p>;
+  }
+  return renderStringList(touchedFiles ?? null);
+}
+
+function renderPlanVsActual({
+  canComparePlanVsActual,
+  planVsActual,
+  requestingReplan,
+  onRequestReplan,
+}: Readonly<{
+  canComparePlanVsActual: boolean;
+  planVsActual: PlanVsActualDelta;
+  requestingReplan: boolean;
+  onRequestReplan: () => void;
+}>): ReactNode {
+  if (canComparePlanVsActual) {
+    const hasMismatch = planVsActual.plannedButUntouched.length > 0 || planVsActual.touchedButUnplanned.length > 0;
+    return (
+      <>
+        <h6 className="meta-text">Planned but not touched</h6>
+        {renderStringList(planVsActual.plannedButUntouched)}
+        <h6 className="meta-text">Touched but not planned</h6>
+        {renderStringList(planVsActual.touchedButUnplanned)}
+        <ActionButton tone="secondary" onClick={onRequestReplan} disabled={requestingReplan} aria-disabled={requestingReplan}>
+          {getReplanActionLabel(requestingReplan, hasMismatch)}
+        </ActionButton>
+      </>
+    );
+  }
+
+  return <p className="meta-text">No plan-vs-actual diff available yet.</p>;
+}
+
+function renderEffectivePolicy(effectivePolicy: DashboardWorkItemSnapshot['effectivePolicy'] | null): ReactNode {
+  if (effectivePolicy == null) {
+    return null;
+  }
+
+  return (
+    <div className="board-detail__section board-detail__section--divider">
+      <h5>Effective policy</h5>
+      <p className="meta-text">
+        Repo policy #{effectivePolicy.repositoryPolicyId ?? 'none'} · Epic policy #{effectivePolicy.epicPolicyId ?? 'none'}
+      </p>
+      <h6 className="meta-text">Allowed providers</h6>
+      {renderStringList(effectivePolicy.policy.allowedProviders)}
+      <h6 className="meta-text">Allowed models</h6>
+      {renderStringList(effectivePolicy.policy.allowedModels)}
+      <h6 className="meta-text">Allowed skill identifiers</h6>
+      {renderStringList(effectivePolicy.policy.allowedSkillIdentifiers)}
+      <h6 className="meta-text">Allowed MCP server identifiers</h6>
+      {renderStringList(effectivePolicy.policy.allowedMcpServerIdentifiers)}
+      <h6 className="meta-text">Budgets</h6>
+      <ul className="board-detail__list">
+        <li>Max concurrent tasks: {renderConcurrencyBudget(effectivePolicy.policy.budgets.maxConcurrentTasks)}</li>
+        <li>Max concurrent runs: {renderConcurrencyBudget(effectivePolicy.policy.budgets.maxConcurrentRuns)}</li>
+      </ul>
+      <h6 className="meta-text">Required gates</h6>
+      <ul className="board-detail__list">
+        <li>
+          Breakdown approval required: {effectivePolicy.policy.requiredGates.breakdownApprovalRequired ? 'Yes' : 'No'}
+        </li>
+      </ul>
+    </div>
+  );
 }
 
 type BoardTaskCardProps = Readonly<{
@@ -216,6 +438,7 @@ export function RepositoryBoardPageContent({
   const [connectionError, setConnectionError] = useState<string | null>(null);
   const [actionMessage, setActionMessage] = useState<{ tone: 'success' | 'error'; message: string } | null>(null);
   const [movingWorkItemIds, setMovingWorkItemIds] = useState<ReadonlySet<number>>(() => new Set());
+  const [replanningWorkItemIds, setReplanningWorkItemIds] = useState<ReadonlySet<number>>(() => new Set());
   const [activeDragWorkItemId, setActiveDragWorkItemId] = useState<number | null>(null);
 
   const lastEventIdRef = useRef<number>(initialLatestEventId);
@@ -441,6 +664,45 @@ export function RepositoryBoardPageContent({
     }
   };
 
+  const handleRequestReplan = async (workItem: DashboardWorkItemSnapshot) => {
+    setActionMessage(null);
+    setReplanningWorkItemIds((previous) => new Set([...previous, workItem.id]));
+
+    try {
+      const result = await requestWorkItemReplan({
+        repositoryId: repository.id,
+        workItemId: workItem.id,
+        actor,
+      });
+
+      if (!result.ok) {
+        setActionMessage({ tone: 'error', message: result.message });
+        return;
+      }
+
+      const plannedGapCount = result.result.plannedButUntouched.length;
+      const touchedGapCount = result.result.touchedButUnplanned.length;
+      setActionMessage({
+        tone: 'success',
+        message:
+          plannedGapCount + touchedGapCount > 0
+            ? `Replanning requested for "${workItem.title}" (${plannedGapCount} planned-only, ${touchedGapCount} touched-only).`
+            : `Replanning requested for "${workItem.title}".`,
+      });
+    } catch (error) {
+      setActionMessage({
+        tone: 'error',
+        message: error instanceof Error ? error.message : 'Unable to request replanning.',
+      });
+    } finally {
+      setReplanningWorkItemIds((previous) => {
+        const next = new Set(previous);
+        next.delete(workItem.id);
+        return next;
+      });
+    }
+  };
+
   const sensors = useSensors(
     useSensor(MouseSensor, {
       activationConstraint: { distance: 8 },
@@ -522,16 +784,23 @@ export function RepositoryBoardPageContent({
       return null;
     }
 
-    const status =
-      selectedWorkItem.type === 'task' && isTaskStatus(selectedWorkItem.status)
-        ? selectedWorkItem.status
-        : null;
+    let status: TaskWorkItemStatus | null = null;
+    if (selectedWorkItem.type === 'task' && isTaskStatus(selectedWorkItem.status)) {
+      status = selectedWorkItem.status;
+    }
     const linkedWorkflowRun = selectedWorkItem.linkedWorkflowRun ?? null;
     const moving = movingWorkItemIds.has(selectedWorkItem.id);
     const dialogTitleId = `board-detail-dialog-title-${selectedWorkItem.id}`;
     const statusSelectId = `board-detail-status-${selectedWorkItem.id}`;
     const detailTypeLabel = selectedWorkItem.type.charAt(0).toUpperCase() + selectedWorkItem.type.slice(1);
     const effectivePolicy = selectedWorkItem.effectivePolicy ?? null;
+    const touchedFiles = linkedWorkflowRun?.touchedFiles;
+    const hasTouchedFiles = touchedFiles !== null && touchedFiles !== undefined;
+    const canComparePlanVsActual = linkedWorkflowRun !== null && hasTouchedFiles;
+    const planVsActual = canComparePlanVsActual
+      ? resolvePlanVsActualDelta(selectedWorkItem.plannedFiles, touchedFiles)
+      : { plannedButUntouched: [], touchedButUnplanned: [] };
+    const requestingReplan = replanningWorkItemIds.has(selectedWorkItem.id);
 
     return (
       <div className="board-drawer-scrim">
@@ -567,70 +836,23 @@ export function RepositoryBoardPageContent({
             </div>
           </div>
 
-          {status ? (
-            <div className="board-drawer__control">
-              <label htmlFor={statusSelectId} className="meta-text">
-                Status
-              </label>
-              <select
-                id={statusSelectId}
-                value={status}
-                onChange={(event) => {
-                  void handleMove(selectedWorkItem.id, event.target.value);
-                }}
-                disabled={moving}
-                aria-disabled={moving}
-                className="board-drawer__select"
-              >
-                {taskWorkItemStatuses.map(entry => (
-                  <option key={entry} value={entry}>
-                    {formatTaskStatusLabel(entry)}
-                  </option>
-                ))}
-              </select>
-              {moving ? (
-                <output className="meta-text board-drawer__moving" aria-live="polite">
-                  Moving…
-                </output>
-              ) : null}
-            </div>
-          ) : null}
+          {renderStatusControl({
+            status,
+            statusSelectId,
+            moving,
+            workItemId: selectedWorkItem.id,
+            onMove: handleMove,
+          })}
 
-          <div className="board-detail__section board-detail__section--divider">
-            <h5>Parent chain</h5>
-            {selectedParentChain.length === 0 ? (
-              <p className="meta-text">None</p>
-            ) : (
-              <ol className="board-parent-chain">
-                {selectedParentChain.map(parent => (
-                  <li key={parent.id}>
-                    <span className="board-pill">{parent.type}</span>
-                    <span>
-                      {parent.type === 'story' ? (
-                        <Link href={`/repositories/${repository.id}/stories/${parent.id}`}>{parent.title}</Link>
-                      ) : (
-                        <button type="button" onClick={() => setSelectedWorkItemId(parent.id)}>
-                          {parent.title}
-                        </button>
-                      )}{' '}
-                      <span className="meta-text">#{parent.id}</span>
-                    </span>
-                  </li>
-                ))}
-              </ol>
-            )}
-          </div>
+          {renderParentChainSection({
+            parentChain: selectedParentChain,
+            repositoryId: repository.id,
+            onSelectWorkItem: setSelectedWorkItemId,
+          })}
 
           <div className="board-detail__section board-detail__section--divider">
             <h5>Linked run</h5>
-            {linkedWorkflowRun ? (
-              <p>
-                <Link href={`/runs/${linkedWorkflowRun.workflowRunId}`}>Run #{linkedWorkflowRun.workflowRunId}</Link>{' '}
-                <span className="meta-text">{linkedWorkflowRun.runStatus}</span>
-              </p>
-            ) : (
-              <p className="meta-text">None</p>
-            )}
+            {renderLinkedRun(linkedWorkflowRun)}
           </div>
 
           <div className="board-detail__section board-detail__section--divider">
@@ -639,38 +861,32 @@ export function RepositoryBoardPageContent({
           </div>
 
           <div className="board-detail__section board-detail__section--divider">
+            <h5>Touched files</h5>
+            {renderTouchedFiles({
+              linkedWorkflowRun,
+              hasTouchedFiles,
+              touchedFiles,
+            })}
+          </div>
+
+          <div className="board-detail__section board-detail__section--divider">
+            <h5>Plan vs actual</h5>
+            {renderPlanVsActual({
+              canComparePlanVsActual,
+              planVsActual,
+              requestingReplan,
+              onRequestReplan: () => {
+                void handleRequestReplan(selectedWorkItem);
+              },
+            })}
+          </div>
+
+          <div className="board-detail__section board-detail__section--divider">
             <h5>Assignees</h5>
             {renderStringList(selectedWorkItem.assignees)}
           </div>
 
-          {effectivePolicy ? (
-            <div className="board-detail__section board-detail__section--divider">
-              <h5>Effective policy</h5>
-              <p className="meta-text">
-                Repo policy #{effectivePolicy.repositoryPolicyId ?? 'none'} · Epic policy #{effectivePolicy.epicPolicyId ?? 'none'}
-              </p>
-              <h6 className="meta-text">Allowed providers</h6>
-              {renderStringList(effectivePolicy.policy.allowedProviders)}
-              <h6 className="meta-text">Allowed models</h6>
-              {renderStringList(effectivePolicy.policy.allowedModels)}
-              <h6 className="meta-text">Allowed skill identifiers</h6>
-              {renderStringList(effectivePolicy.policy.allowedSkillIdentifiers)}
-              <h6 className="meta-text">Allowed MCP server identifiers</h6>
-              {renderStringList(effectivePolicy.policy.allowedMcpServerIdentifiers)}
-              <h6 className="meta-text">Budgets</h6>
-              <ul className="board-detail__list">
-                <li>Max concurrent tasks: {renderConcurrencyBudget(effectivePolicy.policy.budgets.maxConcurrentTasks)}</li>
-                <li>Max concurrent runs: {renderConcurrencyBudget(effectivePolicy.policy.budgets.maxConcurrentRuns)}</li>
-              </ul>
-              <h6 className="meta-text">Required gates</h6>
-              <ul className="board-detail__list">
-                <li>
-                  Breakdown approval required:{' '}
-                  {effectivePolicy.policy.requiredGates.breakdownApprovalRequired ? 'Yes' : 'No'}
-                </li>
-              </ul>
-            </div>
-          ) : null}
+          {renderEffectivePolicy(effectivePolicy)}
         </dialog>
       </div>
     );
