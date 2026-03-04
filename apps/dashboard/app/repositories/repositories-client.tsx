@@ -268,6 +268,7 @@ type RepositoriesListCardProps = Readonly<{
   onSearchQueryChange: (next: string) => void;
   showArchived: boolean;
   isRefreshingRepositoryList: boolean;
+  isRepositoryMutationInFlight: boolean;
   onToggleShowArchived: (next: boolean) => Promise<void> | void;
   hasRepositories: boolean;
   isAddFormOpen: boolean;
@@ -293,6 +294,7 @@ function RepositoriesListCard({
   onSearchQueryChange,
   showArchived,
   isRefreshingRepositoryList,
+  isRepositoryMutationInFlight,
   onToggleShowArchived,
   hasRepositories,
   isAddFormOpen,
@@ -453,7 +455,7 @@ function RepositoriesListCard({
           <input
             type="checkbox"
             checked={showArchived}
-            disabled={isRefreshingRepositoryList}
+            disabled={isRefreshingRepositoryList || isRepositoryMutationInFlight}
             onChange={(event) => {
               onToggleShowArchived(event.currentTarget.checked);
             }}
@@ -730,12 +732,14 @@ export function RepositoriesPageContent({
   const [addRepositoryError, setAddRepositoryError] = useState<string | null>(null);
 
   const syncBlocked = !authGate.canMutate;
-  const actionBlocked =
-    syncBlocked
-    || syncingRepositoryName !== null
+  const isRepositoryMutationInFlight =
+    syncingRepositoryName !== null
     || archivingRepositoryName !== null
     || restoringRepositoryName !== null
-    || isAddingRepository
+    || isAddingRepository;
+  const actionBlocked =
+    syncBlocked
+    || isRepositoryMutationInFlight
     || isRefreshingRepositoryList;
   const normalizedQuery = searchQuery.trim().toLowerCase();
   const hasRepositories = repositoryState.length > 0;
@@ -912,7 +916,7 @@ export function RepositoriesPageContent({
   }
 
   async function handleToggleShowArchived(next: boolean): Promise<void> {
-    if (isRefreshingRepositoryList) {
+    if (isRefreshingRepositoryList || isRepositoryMutationInFlight) {
       return;
     }
 
@@ -1125,6 +1129,7 @@ export function RepositoriesPageContent({
           onSearchQueryChange={setSearchQuery}
           showArchived={showArchived}
           isRefreshingRepositoryList={isRefreshingRepositoryList}
+          isRepositoryMutationInFlight={isRepositoryMutationInFlight}
           onToggleShowArchived={handleToggleShowArchived}
           hasRepositories={hasRepositories}
           isAddFormOpen={isAddFormOpen}

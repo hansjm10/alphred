@@ -290,7 +290,7 @@ describe('RepositoriesPage', () => {
     expect(screen.queryByRole('button', { name: 'Sync demo-repo' })).toBeNull();
   });
 
-  it('drops stale refresh results when archive-triggered refresh resolves before toggle refresh', async () => {
+  it('blocks show archived toggles while archive mutation is in progress', async () => {
     const active = createRepository({
       id: 1,
       name: 'demo-repo',
@@ -305,10 +305,6 @@ describe('RepositoriesPage', () => {
     const archiveRequest = new Promise<Response>((resolve) => {
       resolveArchiveRequest = resolve;
     });
-    let resolveToggleRefreshRequest!: (value: Response) => void;
-    const toggleRefreshRequest = new Promise<Response>((resolve) => {
-      resolveToggleRefreshRequest = resolve;
-    });
     let resolveArchiveRefreshRequest!: (value: Response) => void;
     const archiveRefreshRequest = new Promise<Response>((resolve) => {
       resolveArchiveRefreshRequest = resolve;
@@ -317,7 +313,6 @@ describe('RepositoriesPage', () => {
     const fetchMock = vi.mocked(global.fetch);
     fetchMock
       .mockReturnValueOnce(archiveRequest)
-      .mockReturnValueOnce(toggleRefreshRequest)
       .mockReturnValueOnce(archiveRefreshRequest);
 
     const user = userEvent.setup();
@@ -332,13 +327,9 @@ describe('RepositoriesPage', () => {
     });
 
     const showArchivedToggle = screen.getByRole('checkbox', { name: 'Show archived' });
+    expect(showArchivedToggle).toBeDisabled();
     await user.click(showArchivedToggle);
-
-    await waitFor(() => {
-      expect(fetchMock).toHaveBeenNthCalledWith(2, '/api/dashboard/repositories?includeArchived=1', {
-        method: 'GET',
-      });
-    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
 
     resolveArchiveRequest(
       createJsonResponse({
@@ -347,36 +338,28 @@ describe('RepositoriesPage', () => {
     );
 
     await waitFor(() => {
-      expect(fetchMock).toHaveBeenNthCalledWith(3, '/api/dashboard/repositories?includeArchived=1', {
+      expect(fetchMock).toHaveBeenNthCalledWith(2, '/api/dashboard/repositories', {
         method: 'GET',
       });
     });
 
     resolveArchiveRefreshRequest(
       createJsonResponse({
-        repositories: [archived],
+        repositories: [],
       }),
     );
 
     await waitFor(() => {
       expect(screen.getByText('demo-repo archived.')).toBeInTheDocument();
-      expect(screen.getByRole('button', { name: 'Restore demo-repo' })).toBeInTheDocument();
-      expect(screen.getByRole('checkbox', { name: 'Show archived' })).toBeChecked();
+      expect(screen.getByRole('checkbox', { name: 'Show archived' })).not.toBeChecked();
+      expect(screen.getByRole('checkbox', { name: 'Show archived' })).toBeEnabled();
     });
-
-    resolveToggleRefreshRequest(
-      createJsonResponse({
-        repositories: [active],
-      }),
-    );
-
-    await waitFor(() => {
-      expect(screen.getByRole('button', { name: 'Restore demo-repo' })).toBeInTheDocument();
-      expect(screen.queryByRole('button', { name: 'Archive demo-repo' })).toBeNull();
+    expect(fetchMock).not.toHaveBeenCalledWith('/api/dashboard/repositories?includeArchived=1', {
+      method: 'GET',
     });
   });
 
-  it('keeps show archived toggle aligned when stale toggle refresh is superseded by a failed archive refresh', async () => {
+  it('keeps show archived unchecked when archive refresh fails after a blocked toggle attempt', async () => {
     const active = createRepository({
       id: 1,
       name: 'demo-repo',
@@ -391,10 +374,6 @@ describe('RepositoriesPage', () => {
     const archiveRequest = new Promise<Response>((resolve) => {
       resolveArchiveRequest = resolve;
     });
-    let resolveToggleRefreshRequest!: (value: Response) => void;
-    const toggleRefreshRequest = new Promise<Response>((resolve) => {
-      resolveToggleRefreshRequest = resolve;
-    });
     let resolveArchiveRefreshRequest!: (value: Response) => void;
     const archiveRefreshRequest = new Promise<Response>((resolve) => {
       resolveArchiveRefreshRequest = resolve;
@@ -403,7 +382,6 @@ describe('RepositoriesPage', () => {
     const fetchMock = vi.mocked(global.fetch);
     fetchMock
       .mockReturnValueOnce(archiveRequest)
-      .mockReturnValueOnce(toggleRefreshRequest)
       .mockReturnValueOnce(archiveRefreshRequest);
 
     const user = userEvent.setup();
@@ -417,13 +395,10 @@ describe('RepositoriesPage', () => {
       });
     });
 
-    await user.click(screen.getByRole('checkbox', { name: 'Show archived' }));
-
-    await waitFor(() => {
-      expect(fetchMock).toHaveBeenNthCalledWith(2, '/api/dashboard/repositories?includeArchived=1', {
-        method: 'GET',
-      });
-    });
+    const showArchivedToggle = screen.getByRole('checkbox', { name: 'Show archived' });
+    expect(showArchivedToggle).toBeDisabled();
+    await user.click(showArchivedToggle);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
 
     resolveArchiveRequest(
       createJsonResponse({
@@ -432,7 +407,7 @@ describe('RepositoriesPage', () => {
     );
 
     await waitFor(() => {
-      expect(fetchMock).toHaveBeenNthCalledWith(3, '/api/dashboard/repositories?includeArchived=1', {
+      expect(fetchMock).toHaveBeenNthCalledWith(2, '/api/dashboard/repositories', {
         method: 'GET',
       });
     });
@@ -448,19 +423,15 @@ describe('RepositoriesPage', () => {
       ),
     );
 
-    resolveToggleRefreshRequest(
-      createJsonResponse({
-        repositories: [active],
-      }),
-    );
-
     await waitFor(() => {
       expect(
         screen.getByText('demo-repo archived, but Repository list refresh failed (temporary outage).'),
       ).toBeInTheDocument();
-      expect(screen.getByRole('checkbox', { name: 'Show archived' })).toBeChecked();
-      expect(screen.getByRole('button', { name: 'Restore demo-repo' })).toBeInTheDocument();
-      expect(screen.queryByRole('button', { name: 'Archive demo-repo' })).toBeNull();
+      expect(screen.getByRole('checkbox', { name: 'Show archived' })).not.toBeChecked();
+      expect(screen.getByRole('checkbox', { name: 'Show archived' })).toBeEnabled();
+    });
+    expect(fetchMock).not.toHaveBeenCalledWith('/api/dashboard/repositories?includeArchived=1', {
+      method: 'GET',
     });
   });
 
