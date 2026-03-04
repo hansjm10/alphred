@@ -822,7 +822,9 @@ export function RepositoriesPageContent({
     return (payload as { repositories: readonly DashboardRepositoryState[] }).repositories;
   }
 
-  async function refreshRepositories(includeArchived: boolean): Promise<void> {
+  type RefreshRepositoriesResult = 'applied' | 'stale';
+
+  async function refreshRepositories(includeArchived: boolean): Promise<RefreshRepositoriesResult> {
     const requestSequence = refreshRequestSequenceRef.current + 1;
     refreshRequestSequenceRef.current = requestSequence;
     setIsRefreshingRepositoryList(true);
@@ -830,14 +832,15 @@ export function RepositoriesPageContent({
     try {
       const nextRepositories = await fetchRepositories(includeArchived);
       if (refreshRequestSequenceRef.current !== requestSequence) {
-        return;
+        return 'stale';
       }
       applyRepositoriesSnapshot(nextRepositories);
       showArchivedRef.current = includeArchived;
       setShowArchived(includeArchived);
+      return 'applied';
     } catch (error) {
       if (refreshRequestSequenceRef.current !== requestSequence) {
-        return;
+        return 'stale';
       }
       throw error;
     } finally {
@@ -918,7 +921,10 @@ export function RepositoriesPageContent({
     showArchivedRef.current = next;
 
     try {
-      await refreshRepositories(next);
+      const refreshResult = await refreshRepositories(next);
+      if (refreshResult === 'stale') {
+        setShowArchived(showArchivedRef.current);
+      }
     } catch (error) {
       showArchivedRef.current = previousIncludeArchived;
       const message = error instanceof Error ? error.message : 'Repository list refresh failed.';

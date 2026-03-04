@@ -376,6 +376,94 @@ describe('RepositoriesPage', () => {
     });
   });
 
+  it('keeps show archived toggle aligned when stale toggle refresh is superseded by a failed archive refresh', async () => {
+    const active = createRepository({
+      id: 1,
+      name: 'demo-repo',
+      cloneStatus: 'cloned',
+    });
+    const archived = createRepository({
+      ...active,
+      archivedAt: '2026-03-03T10:20:30.000Z',
+    });
+
+    let resolveArchiveRequest!: (value: Response) => void;
+    const archiveRequest = new Promise<Response>((resolve) => {
+      resolveArchiveRequest = resolve;
+    });
+    let resolveToggleRefreshRequest!: (value: Response) => void;
+    const toggleRefreshRequest = new Promise<Response>((resolve) => {
+      resolveToggleRefreshRequest = resolve;
+    });
+    let resolveArchiveRefreshRequest!: (value: Response) => void;
+    const archiveRefreshRequest = new Promise<Response>((resolve) => {
+      resolveArchiveRefreshRequest = resolve;
+    });
+
+    const fetchMock = vi.mocked(global.fetch);
+    fetchMock
+      .mockReturnValueOnce(archiveRequest)
+      .mockReturnValueOnce(toggleRefreshRequest)
+      .mockReturnValueOnce(archiveRefreshRequest);
+
+    const user = userEvent.setup();
+    render(<RepositoriesPageContent repositories={[active]} authGate={createAuthenticatedAuthGate()} />);
+
+    await user.click(screen.getByRole('button', { name: 'Archive demo-repo' }));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenNthCalledWith(1, '/api/dashboard/repositories/demo-repo/actions/archive', {
+        method: 'POST',
+      });
+    });
+
+    await user.click(screen.getByRole('checkbox', { name: 'Show archived' }));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenNthCalledWith(2, '/api/dashboard/repositories?includeArchived=1', {
+        method: 'GET',
+      });
+    });
+
+    resolveArchiveRequest(
+      createJsonResponse({
+        repository: archived,
+      }),
+    );
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenNthCalledWith(3, '/api/dashboard/repositories?includeArchived=1', {
+        method: 'GET',
+      });
+    });
+
+    resolveArchiveRefreshRequest(
+      createJsonResponse(
+        {
+          error: {
+            message: 'Repository list refresh failed (temporary outage).',
+          },
+        },
+        { status: 503 },
+      ),
+    );
+
+    resolveToggleRefreshRequest(
+      createJsonResponse({
+        repositories: [active],
+      }),
+    );
+
+    await waitFor(() => {
+      expect(
+        screen.getByText('demo-repo archived, but Repository list refresh failed (temporary outage).'),
+      ).toBeInTheDocument();
+      expect(screen.getByRole('checkbox', { name: 'Show archived' })).toBeChecked();
+      expect(screen.getByRole('button', { name: 'Restore demo-repo' })).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Archive demo-repo' })).toBeNull();
+    });
+  });
+
   it('shows archived repositories on demand and restores from row actions', async () => {
     const active = createRepository({
       id: 1,
