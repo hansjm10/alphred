@@ -38,6 +38,7 @@ import type {
   DashboardRunNodeStreamSnapshot,
   DashboardRunNodeDiagnosticCommandOutput,
   DashboardRunWorktreeMetadata,
+  DashboardRunWorktreeCleanupResult,
   DashboardArtifactSnapshot,
   DashboardRoutingDecisionSnapshot,
   DashboardNodeStatus,
@@ -140,6 +141,7 @@ export type RunOperations = {
     eventIndex: number;
   }) => Promise<DashboardRunNodeDiagnosticCommandOutput>;
   getRunWorktrees: (runId: number) => Promise<DashboardRunWorktreeMetadata[]>;
+  cleanupRunWorktree: (runId: number) => Promise<DashboardRunWorktreeCleanupResult>;
   launchWorkflowRun: (request: DashboardRunLaunchRequest) => Promise<DashboardRunLaunchResult>;
   controlWorkflowRun: (runId: number, action: DashboardRunControlAction) => Promise<DashboardRunControlResult>;
   getBackgroundExecutionCount: () => number;
@@ -1110,6 +1112,53 @@ export function createRunOperations(params: {
       }
 
       return withDatabase(async db => listRunWorktreesForRun(db, runId).map(toWorktreeMetadata));
+    },
+
+    cleanupRunWorktree(runId: number): Promise<DashboardRunWorktreeCleanupResult> {
+      if (!Number.isInteger(runId) || runId < 1) {
+        throw new DashboardIntegrationError('invalid_request', 'Run id must be a positive integer.', {
+          status: 400,
+        });
+      }
+
+      return withDatabase(async db => {
+        const run = db
+          .select({
+            status: workflowRuns.status,
+          })
+          .from(workflowRuns)
+          .where(eq(workflowRuns.id, runId))
+          .get();
+
+        if (!run) {
+          throw new DashboardIntegrationError('not_found', `Workflow run id=${runId} was not found.`, {
+            status: 404,
+          });
+        }
+
+        const runStatus = run.status as RunStatus;
+        if (!isTerminalRunStatus(runStatus)) {
+          throw new DashboardIntegrationError(
+            'conflict',
+            `Workflow run id=${runId} must be terminal before worktree cleanup; current status is "${run.status}".`,
+            {
+              status: 409,
+              details: {
+                workflowRunId: runId,
+                runStatus: run.status,
+                allowedRunStatuses: ['completed', 'failed', 'cancelled'],
+              },
+            },
+          );
+        }
+
+        const worktreeManager = dependencies.createWorktreeManager(db, environment);
+        await worktreeManager.cleanupRun(runId);
+
+        return {
+          worktrees: listRunWorktreesForRun(db, runId).map(toWorktreeMetadata),
+        };
+      });
     },
 
     launchWorkflowRun(request: DashboardRunLaunchRequest): Promise<DashboardRunLaunchResult> {

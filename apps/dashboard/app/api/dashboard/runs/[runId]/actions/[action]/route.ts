@@ -11,23 +11,49 @@ type RunActionRouteContext = RunIdRouteContext & {
 };
 
 const RUN_CONTROL_ACTIONS = new Set<DashboardRunControlAction>(['cancel', 'pause', 'resume', 'retry']);
+const RUN_WORKTREE_CLEANUP_ACTION = 'cleanup-worktree';
 
-function parseRunControlAction(value: string): DashboardRunControlAction {
+type ParsedRunAction =
+  | {
+      kind: 'control';
+      action: DashboardRunControlAction;
+    }
+  | {
+      kind: 'cleanup_worktree';
+    };
+
+function parseRunAction(value: string): ParsedRunAction {
   const normalized = value.trim().toLowerCase();
   if (RUN_CONTROL_ACTIONS.has(normalized as DashboardRunControlAction)) {
-    return normalized as DashboardRunControlAction;
+    return {
+      kind: 'control',
+      action: normalized as DashboardRunControlAction,
+    };
   }
 
-  throw new DashboardIntegrationError('invalid_request', 'action must be one of: cancel, pause, resume, retry.', {
-    status: 400,
-  });
+  if (normalized === RUN_WORKTREE_CLEANUP_ACTION) {
+    return {
+      kind: 'cleanup_worktree',
+    };
+  }
+
+  throw new DashboardIntegrationError(
+    'invalid_request',
+    'action must be one of: cancel, pause, resume, retry, cleanup-worktree.',
+    {
+      status: 400,
+    },
+  );
 }
 
 export async function POST(_request: Request, context: RunActionRouteContext): Promise<Response> {
   return withRunIdRoute(context, async (service, runId) => {
     const params = await context.params;
-    const action = parseRunControlAction(params.action);
-    const result = await service.controlWorkflowRun(runId, action);
+    const action = parseRunAction(params.action);
+    const result =
+      action.kind === 'cleanup_worktree'
+        ? await service.cleanupRunWorktree(runId)
+        : await service.controlWorkflowRun(runId, action.action);
     return NextResponse.json(result);
   });
 }

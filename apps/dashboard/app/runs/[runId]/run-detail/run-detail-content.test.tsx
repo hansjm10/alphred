@@ -2804,19 +2804,27 @@ describe('RunDetailContent realtime updates', () => {
 
     const secondEventButton = within(streamEventList).getByText('second event').closest('button');
     expect(secondEventButton).not.toBeNull();
-    expect(secondEventButton).toHaveAttribute('aria-pressed', 'false');
+    await waitFor(() => {
+      expect(secondEventButton).toHaveAttribute('aria-pressed', 'false');
+    });
 
     const thirdEventButton = within(streamEventList).getByText('third event').closest('button');
     expect(thirdEventButton).not.toBeNull();
-    expect(thirdEventButton).toHaveAttribute('aria-pressed', 'true');
+    await waitFor(() => {
+      expect(thirdEventButton).toHaveAttribute('aria-pressed', 'true');
+    });
 
     thirdEventButton?.focus();
     fireEvent.keyDown(thirdEventButton!, { key: 'ArrowUp' });
-    expect(secondEventButton).toHaveAttribute('aria-pressed', 'true');
+    await waitFor(() => {
+      expect(secondEventButton).toHaveAttribute('aria-pressed', 'true');
+    });
 
     fireEvent.keyDown(secondEventButton!, { key: 'Home' });
     const firstEventButton = within(streamEventList).getByText('first event').closest('button');
-    expect(firstEventButton).toHaveAttribute('aria-pressed', 'true');
+    await waitFor(() => {
+      expect(firstEventButton).toHaveAttribute('aria-pressed', 'true');
+    });
   });
 
   it('supports loading older events plus jump and keyboard down/end shortcuts', async () => {

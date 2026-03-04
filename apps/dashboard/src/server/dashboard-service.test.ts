@@ -3979,6 +3979,100 @@ describe('createDashboardService', () => {
     });
   });
 
+  it('cleans up active run worktrees for terminal runs and returns updated records', async () => {
+    const { db, dependencies } = createHarness();
+    seedRunData(db);
+
+    const cleanupRun = vi.fn(async (runId: number) => {
+      db.update(runWorktrees)
+        .set({
+          status: 'removed',
+          removedAt: '2026-03-04T18:35:00.000Z',
+        })
+        .where(and(eq(runWorktrees.workflowRunId, runId), eq(runWorktrees.status, 'active')))
+        .run();
+    });
+    dependencies.createWorktreeManager = () => ({
+      createRunWorktree: vi.fn(),
+      cleanupRun,
+    });
+
+    const service = createDashboardService({ dependencies });
+    const result = await service.cleanupRunWorktree(1);
+
+    expect(cleanupRun).toHaveBeenCalledTimes(1);
+    expect(cleanupRun).toHaveBeenCalledWith(1);
+    expect(result.worktrees).toHaveLength(1);
+    expect(result.worktrees[0]).toMatchObject({
+      runId: 1,
+      status: 'removed',
+      removedAt: '2026-03-04T18:35:00.000Z',
+    });
+  });
+
+  it('rejects cleanup-worktree action for non-terminal runs', async () => {
+    const { db, dependencies } = createHarness();
+    seedRunData(db);
+    db.update(workflowRuns)
+      .set({
+        status: 'running',
+        completedAt: null,
+      })
+      .where(eq(workflowRuns.id, 1))
+      .run();
+
+    const cleanupRun = vi.fn(async () => undefined);
+    dependencies.createWorktreeManager = () => ({
+      createRunWorktree: vi.fn(),
+      cleanupRun,
+    });
+
+    const service = createDashboardService({ dependencies });
+
+    await expect(service.cleanupRunWorktree(1)).rejects.toMatchObject({
+      name: 'DashboardIntegrationError',
+      code: 'conflict',
+      status: 409,
+      message: 'Workflow run id=1 must be terminal before worktree cleanup; current status is "running".',
+      details: {
+        workflowRunId: 1,
+        runStatus: 'running',
+        allowedRunStatuses: ['completed', 'failed', 'cancelled'],
+      },
+    });
+    expect(cleanupRun).not.toHaveBeenCalled();
+  });
+
+  it('treats cleanup-worktree as idempotent when a run already has only removed worktrees', async () => {
+    const { db, dependencies } = createHarness();
+    seedRunData(db);
+    db.update(runWorktrees)
+      .set({
+        status: 'removed',
+        removedAt: '2026-03-04T18:36:00.000Z',
+      })
+      .where(eq(runWorktrees.workflowRunId, 1))
+      .run();
+
+    const cleanupRun = vi.fn(async () => undefined);
+    dependencies.createWorktreeManager = () => ({
+      createRunWorktree: vi.fn(),
+      cleanupRun,
+    });
+
+    const service = createDashboardService({ dependencies });
+    const result = await service.cleanupRunWorktree(1);
+
+    expect(cleanupRun).toHaveBeenCalledTimes(1);
+    expect(cleanupRun).toHaveBeenCalledWith(1);
+    expect(result.worktrees).toHaveLength(1);
+    expect(result.worktrees[0]).toMatchObject({
+      runId: 1,
+      status: 'removed',
+      removedAt: '2026-03-04T18:36:00.000Z',
+    });
+  });
+
   it('maps typed workflow run control errors to dashboard conflict errors', async () => {
     const pauseRun = vi.fn(async () => {
       throw new WorkflowRunControlError(

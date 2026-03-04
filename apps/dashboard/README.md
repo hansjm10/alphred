@@ -525,12 +525,12 @@ Applies a run lifecycle control action.
 
 Path parameters:
 - `runId`: positive integer.
-- `action`: one of `cancel`, `pause`, `resume`, `retry`.
+- `action`: one of `cancel`, `pause`, `resume`, `retry`, `cleanup-worktree`.
 
 Request body:
 - None.
 
-Response `200` (`DashboardRunControlResult`):
+Response `200` for lifecycle controls (`DashboardRunControlResult`):
 
 ```json
 {
@@ -553,6 +553,29 @@ Error semantics:
 - `404 not_found` when `runId` does not exist.
 - `409 conflict` for invalid lifecycle transitions, retry-target-not-found, or concurrent control conflicts.
 - Conflict responses include `error.details.controlCode` when available from typed runtime control errors.
+
+Response `200` for `cleanup-worktree` (`DashboardRunWorktreeCleanupResult`):
+
+```json
+{
+  "worktrees": [
+    {
+      "id": 21,
+      "runId": 42,
+      "repositoryId": 7,
+      "path": "/tmp/worktrees/demo-run-42",
+      "branch": "alphred/demo-tree/42",
+      "commitHash": "abc1234",
+      "status": "removed",
+      "createdAt": "2026-03-04T18:22:00.000Z",
+      "removedAt": "2026-03-04T18:25:00.000Z"
+    }
+  ]
+}
+```
+
+Additional `cleanup-worktree` error semantics:
+- `409 conflict` when the run is not in a terminal state (`completed`, `failed`, `cancelled`).
 
 ### `GET /runs/[runId]/nodes/[runNodeId]/stream`
 
