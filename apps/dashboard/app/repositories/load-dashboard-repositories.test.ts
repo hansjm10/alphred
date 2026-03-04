@@ -20,7 +20,7 @@ describe('loadDashboardRepositories', () => {
     });
   });
 
-  it('defaults to active repositories only', async () => {
+  it('includes archived repositories by default', async () => {
     const repositories: readonly DashboardRepositoryState[] = [];
     listRepositoriesMock.mockResolvedValue(repositories);
 
@@ -29,18 +29,18 @@ describe('loadDashboardRepositories', () => {
     await expect(loadDashboardRepositories()).resolves.toBe(repositories);
     expect(createDashboardServiceMock).toHaveBeenCalledTimes(1);
     expect(listRepositoriesMock).toHaveBeenCalledTimes(1);
-    expect(listRepositoriesMock).toHaveBeenCalledWith({ includeArchived: false });
+    expect(listRepositoriesMock).toHaveBeenCalledWith({ includeArchived: true });
   });
 
-  it('includes archived repositories when explicitly requested', async () => {
+  it('returns only active repositories when explicitly requested', async () => {
     const repositories: readonly DashboardRepositoryState[] = [];
     listRepositoriesMock.mockResolvedValue(repositories);
 
     const { loadDashboardRepositories } = await import('./load-dashboard-repositories');
 
-    await expect(loadDashboardRepositories(true)).resolves.toBe(repositories);
+    await expect(loadDashboardRepositories(false)).resolves.toBe(repositories);
     expect(createDashboardServiceMock).toHaveBeenCalledTimes(1);
     expect(listRepositoriesMock).toHaveBeenCalledTimes(1);
-    expect(listRepositoriesMock).toHaveBeenCalledWith({ includeArchived: true });
+    expect(listRepositoriesMock).toHaveBeenCalledWith({ includeArchived: false });
   });
 });
