@@ -732,6 +732,67 @@ describe('RunDetailContent realtime updates', () => {
     expect(screen.getByRole('link', { name: 'Open Worktree' })).toHaveAttribute('href', '/runs/412/worktree');
   });
 
+  it('applies cleanup-worktree metadata when immediate refresh fails with polling disabled', async () => {
+    const cleanedUpWorktrees = [
+      {
+        id: 5,
+        runId: 412,
+        repositoryId: 1,
+        path: '/tmp/worktrees/demo-tree-412',
+        branch: 'alphred/demo-tree/412',
+        commitHash: null,
+        status: 'removed',
+        createdAt: '2026-02-18T00:00:08.000Z',
+        removedAt: '2026-02-18T00:10:05.000Z',
+      },
+    ] as const;
+    let detailFetchCount = 0;
+
+    fetchMock.mockImplementation((input, init) => {
+      const url = String(input);
+      if (url === '/api/dashboard/runs/412/actions/cleanup-worktree' && init?.method === 'POST') {
+        return Promise.resolve(
+          createJsonResponse({
+            worktrees: cleanedUpWorktrees,
+          }),
+        );
+      }
+
+      if (url === '/api/dashboard/runs/412' && init?.method === 'GET') {
+        detailFetchCount += 1;
+        return Promise.reject(new Error('refresh down'));
+      }
+
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    });
+
+    render(
+      <RunDetailContent
+        initialDetail={createRunDetail({
+          run: {
+            status: 'completed',
+            completedAt: '2026-02-18T00:10:00.000Z',
+          },
+        })}
+        repositories={[createRepository()]}
+        enableRealtime={false}
+      />,
+    );
+
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('button', { name: 'Clean up worktree' }));
+
+    await waitFor(() => {
+      expect(
+        screen.getByText(/Run worktree cleanup completed. Unable to refresh run timeline: refresh down/i),
+      ).toBeInTheDocument();
+    }, { timeout: 2_000 });
+
+    expect(screen.queryByRole('button', { name: 'Clean up worktree' })).toBeNull();
+    expect(screen.getByRole('link', { name: 'Open Worktree' })).toHaveAttribute('href', '/runs/412/worktree');
+    expect(detailFetchCount).toBe(1);
+  });
+
   it('applies pause control, refreshes detail, and shows in-flight and success feedback', async () => {
     const pausedDetail = createRunDetail({
       run: {

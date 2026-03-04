@@ -239,6 +239,7 @@ export function applyRunControlRefreshSuccess(params: {
 
 export function applyRunControlRefreshFailure(params: {
   fallbackRunStatus: DashboardRunSummary['status'];
+  fallbackWorktrees?: DashboardRunDetail['worktrees'];
   successMessage: string;
   refreshMessage: string;
   enableRealtime: boolean;
@@ -252,6 +253,7 @@ export function applyRunControlRefreshFailure(params: {
 }): void {
   const {
     fallbackRunStatus,
+    fallbackWorktrees,
     successMessage,
     refreshMessage,
     enableRealtime,
@@ -269,6 +271,7 @@ export function applyRunControlRefreshFailure(params: {
       ...currentDetail.run,
       status: fallbackRunStatus,
     },
+    worktrees: fallbackWorktrees ?? currentDetail.worktrees,
   }));
   setUpdateError(refreshMessage);
   setIsRefreshing(false);
@@ -418,6 +421,7 @@ export async function executeRunWorktreeCleanupAction(params: {
       const refreshMessage = refreshError instanceof Error ? refreshError.message : 'Unable to refresh run timeline.';
       applyRunControlRefreshFailure({
         fallbackRunStatus: runStatus,
+        fallbackWorktrees: cleanupResult.worktrees,
         successMessage,
         refreshMessage,
         enableRealtime,
