@@ -631,7 +631,7 @@ function RunLaunchControls({
             />
           </label>
 
-          {launchWorkItemId !== null ? (
+          {launchWorkItemId === null ? null : (
             <label className="run-launch-form__field" htmlFor="run-launch-work-item-id">
               <span className="meta-text">Work item context</span>
               <input
@@ -641,7 +641,7 @@ function RunLaunchControls({
                 disabled={launchBlockedReason !== null}
               />
             </label>
-          ) : null}
+          )}
 
           <label className="run-launch-form__field" htmlFor="run-launch-issue-id">
             <span className="meta-text">Issue id (optional)</span>
