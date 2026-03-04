@@ -24,8 +24,8 @@ export type RepositoryQueryOptions = {
   includeArchived?: boolean;
 };
 
-function shouldIncludeArchived(options?: RepositoryQueryOptions): boolean {
-  return options?.includeArchived === true;
+function shouldIncludeArchived(options: RepositoryQueryOptions | undefined, defaultValue: boolean): boolean {
+  return options?.includeArchived ?? defaultValue;
 }
 
 function assertKnownProvider(provider: string): asserts provider is ScmProviderKind {
@@ -94,7 +94,7 @@ export function getRepositoryById(
   repositoryId: number,
   options?: RepositoryQueryOptions,
 ): RepositoryConfig | null {
-  const includeArchived = shouldIncludeArchived(options);
+  const includeArchived = shouldIncludeArchived(options, true);
   const row = db
     .select()
     .from(repositories)
@@ -117,7 +117,7 @@ export function getRepositoryByName(
   name: string,
   options?: RepositoryQueryOptions,
 ): RepositoryConfig | null {
-  const includeArchived = shouldIncludeArchived(options);
+  const includeArchived = shouldIncludeArchived(options, true);
   const row = db
     .select()
     .from(repositories)
@@ -132,7 +132,7 @@ export function getRepositoryByName(
 }
 
 export function listRepositories(db: AlphredDatabase, options?: RepositoryQueryOptions): RepositoryConfig[] {
-  const includeArchived = shouldIncludeArchived(options);
+  const includeArchived = shouldIncludeArchived(options, false);
   const rows = includeArchived
     ? db
         .select()

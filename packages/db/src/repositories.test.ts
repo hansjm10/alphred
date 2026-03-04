@@ -200,7 +200,9 @@ describe('repository registry CRUD helpers', () => {
       occurredAt: '2026-03-03T10:20:30.000Z',
     });
     expect(archived.archivedAt).toBe('2026-03-03T10:20:30.000Z');
-    expect(getRepositoryByName(db, inserted.name)).toBeNull();
+    expect(getRepositoryById(db, inserted.id)?.archivedAt).toBe('2026-03-03T10:20:30.000Z');
+    expect(getRepositoryByName(db, inserted.name)?.archivedAt).toBe('2026-03-03T10:20:30.000Z');
+    expect(getRepositoryByName(db, inserted.name, { includeArchived: false })).toBeNull();
     expect(getRepositoryByName(db, inserted.name, { includeArchived: true })?.archivedAt).toBe(
       '2026-03-03T10:20:30.000Z',
     );
