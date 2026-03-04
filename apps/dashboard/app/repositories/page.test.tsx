@@ -242,6 +242,69 @@ describe('RepositoriesPage', () => {
     expect(screen.queryByRole('button', { name: 'Sync demo-repo' })).toBeNull();
   });
 
+  it('refreshes archived data using the latest filter when archive completes after a toggle', async () => {
+    const active = createRepository({
+      id: 1,
+      name: 'demo-repo',
+      cloneStatus: 'cloned',
+    });
+    const archived = createRepository({
+      ...active,
+      archivedAt: '2026-03-03T10:20:30.000Z',
+    });
+
+    let resolveArchiveRequest!: (value: Response) => void;
+    const archiveRequest = new Promise<Response>((resolve) => {
+      resolveArchiveRequest = resolve;
+    });
+
+    const fetchMock = vi.mocked(global.fetch);
+    fetchMock
+      .mockReturnValueOnce(archiveRequest)
+      .mockResolvedValueOnce(
+        createJsonResponse({
+          repositories: [archived],
+        }),
+      )
+      .mockResolvedValueOnce(
+        createJsonResponse({
+          repositories: [archived],
+        }),
+      );
+
+    const user = userEvent.setup();
+    render(<RepositoriesPageContent repositories={[active]} authGate={createAuthenticatedAuthGate()} />);
+
+    await user.click(screen.getByRole('button', { name: 'Archive demo-repo' }));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenNthCalledWith(1, '/api/dashboard/repositories/demo-repo/actions/archive', {
+        method: 'POST',
+      });
+    });
+
+    await user.click(screen.getByRole('checkbox', { name: 'Show archived' }));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenNthCalledWith(2, '/api/dashboard/repositories?includeArchived=1', {
+        method: 'GET',
+      });
+      expect(screen.getByRole('checkbox', { name: 'Show archived' })).toBeChecked();
+    });
+
+    resolveArchiveRequest(
+      createJsonResponse({
+        repository: archived,
+      }),
+    );
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenNthCalledWith(3, '/api/dashboard/repositories?includeArchived=1', {
+        method: 'GET',
+      });
+    });
+  });
+
   it('shows archived repositories on demand and restores from row actions', async () => {
     const active = createRepository({
       id: 1,

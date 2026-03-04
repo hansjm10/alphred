@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState, type ReactNode } from 'react';
+import { useMemo, useRef, useState, type ReactNode } from 'react';
 import type {
   DashboardArchiveRepositoryResult,
   DashboardCreateRepositoryResult,
@@ -714,6 +714,7 @@ export function RepositoriesPageContent({
   const [archivingRepositoryName, setArchivingRepositoryName] = useState<string | null>(null);
   const [restoringRepositoryName, setRestoringRepositoryName] = useState<string | null>(null);
   const [showArchived, setShowArchived] = useState(false);
+  const showArchivedRef = useRef(showArchived);
   const [isRefreshingRepositoryList, setIsRefreshingRepositoryList] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [syncErrors, setSyncErrors] = useState<Record<string, string>>({});
@@ -809,6 +810,7 @@ export function RepositoriesPageContent({
     try {
       const nextRepositories = await fetchRepositories(includeArchived);
       applyRepositoriesSnapshot(nextRepositories);
+      showArchivedRef.current = includeArchived;
       setShowArchived(includeArchived);
     } finally {
       setIsRefreshingRepositoryList(false);
@@ -882,10 +884,13 @@ export function RepositoriesPageContent({
     }
 
     setSyncBanner(null);
+    const previousIncludeArchived = showArchivedRef.current;
+    showArchivedRef.current = next;
 
     try {
       await refreshRepositories(next);
     } catch (error) {
+      showArchivedRef.current = previousIncludeArchived;
       const message = error instanceof Error ? error.message : 'Repository list refresh failed.';
       setSyncBanner({
         tone: 'error',
@@ -915,7 +920,7 @@ export function RepositoriesPageContent({
       }
 
       const result = payload as DashboardArchiveRepositoryResult;
-      await refreshRepositories(showArchived);
+      await refreshRepositories(showArchivedRef.current);
       setSyncBanner({
         tone: 'success',
         message: `${result.repository.name} archived.`,
@@ -952,7 +957,7 @@ export function RepositoriesPageContent({
       }
 
       const result = payload as DashboardRestoreRepositoryResult;
-      await refreshRepositories(showArchived);
+      await refreshRepositories(showArchivedRef.current);
       setSyncBanner({
         tone: 'success',
         message: `${result.repository.name} restored.`,
