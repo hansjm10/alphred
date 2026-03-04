@@ -1,6 +1,6 @@
 import { spawnSync } from 'node:child_process';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const isWindows = process.platform === 'win32';
@@ -25,13 +25,77 @@ function hasDeclarationFiles(directoryPath) {
         continue;
       }
 
-      if (entry.isFile() && entry.name.endsWith('.d.ts')) {
+      if (
+        entry.isFile() &&
+        (entry.name.endsWith('.d.ts') ||
+          entry.name.endsWith('.d.mts') ||
+          entry.name.endsWith('.d.cts'))
+      ) {
         return true;
       }
     }
   }
 
   return false;
+}
+
+const declarationExtensionBySourceExtension = new Map([
+  ['.ts', '.d.ts'],
+  ['.tsx', '.d.ts'],
+  ['.mts', '.d.mts'],
+  ['.cts', '.d.cts'],
+]);
+
+function getDeclarationExtensionForSourceFile(fileName) {
+  if (fileName.endsWith('.d.ts') || fileName.endsWith('.d.mts') || fileName.endsWith('.d.cts')) {
+    return null;
+  }
+
+  for (const [sourceExtension, declarationExtension] of declarationExtensionBySourceExtension) {
+    if (fileName.endsWith(sourceExtension)) {
+      return declarationExtension;
+    }
+  }
+
+  return null;
+}
+
+function getMissingDeclarationOutputs(rootDirectoryPath, outputDirectoryPath) {
+  if (!existsSync(rootDirectoryPath)) return [];
+
+  const missingDeclarations = [];
+  const queue = [rootDirectoryPath];
+
+  while (queue.length > 0) {
+    const current = queue.pop();
+    const entries = readdirSync(current, { withFileTypes: true });
+    for (const entry of entries) {
+      const nextPath = resolve(current, entry.name);
+      if (entry.isDirectory()) {
+        queue.push(nextPath);
+        continue;
+      }
+
+      if (!entry.isFile()) {
+        continue;
+      }
+
+      const declarationExtension = getDeclarationExtensionForSourceFile(entry.name);
+      if (!declarationExtension) {
+        continue;
+      }
+
+      const relativeSourcePath = relative(rootDirectoryPath, nextPath);
+      const declarationRelativePath = relativeSourcePath.replace(/\.[^.]+$/, declarationExtension);
+      const declarationPath = resolve(outputDirectoryPath, declarationRelativePath);
+
+      if (!existsSync(declarationPath)) {
+        missingDeclarations.push(declarationPath);
+      }
+    }
+  }
+
+  return missingDeclarations;
 }
 
 function getPackageReferencePaths() {
@@ -57,6 +121,7 @@ function packageHasStaleBuildArtifacts(packageReferencePath) {
   const packageJson = readJsonFile(packageJsonPath);
   const compilerOptions = tsconfig.compilerOptions ?? {};
   const outDir = resolve(packageDirectory, compilerOptions.outDir ?? 'dist');
+  const rootDir = resolve(packageDirectory, compilerOptions.rootDir ?? '.');
   const tsBuildInfoPath = resolve(
     packageDirectory,
     compilerOptions.tsBuildInfoFile ?? `${compilerOptions.outDir ?? 'dist'}/tsconfig.tsbuildinfo`,
@@ -70,8 +135,9 @@ function packageHasStaleBuildArtifacts(packageReferencePath) {
     typeof packageJson.types === 'string' ? resolve(packageDirectory, packageJson.types) : null;
   const hasTypesEntry = typesPath ? existsSync(typesPath) : true;
   const hasDeclarations = hasDeclarationFiles(outDir);
+  const missingDeclarations = getMissingDeclarationOutputs(rootDir, outDir);
 
-  return !hasTypesEntry || !hasDeclarations;
+  return !hasTypesEntry || !hasDeclarations || missingDeclarations.length > 0;
 }
 
 function getStalePackageReferences() {
