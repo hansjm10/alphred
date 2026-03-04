@@ -8,6 +8,8 @@ import type {
   DashboardRunSummary,
 } from '@dashboard/server/dashboard-contracts';
 
+export type DashboardRunOperatorAction = DashboardRunControlAction | 'cleanup-worktree';
+
 export type TimelineCategory = 'lifecycle' | 'node' | 'artifact' | 'diagnostics' | 'routing';
 
 export type TimelineItem = Readonly<{
@@ -21,7 +23,7 @@ export type TimelineItem = Readonly<{
 export type OperatorActionState = Readonly<{
   label: string;
   href: string | null;
-  controlAction: DashboardRunControlAction | null;
+  controlAction: DashboardRunOperatorAction | null;
   disabledReason: string | null;
 }>;
 
@@ -203,7 +205,7 @@ export type RunOperatorFocusCardProps = Readonly<{
   hasHydrated: boolean;
   primaryAction: OperatorActionState;
   secondaryAction: OperatorActionState | null;
-  pendingControlAction: DashboardRunControlAction | null;
+  pendingControlAction: DashboardRunOperatorAction | null;
   actionHint: string | null;
   actionHintTone: 'info' | 'success' | 'error';
   channelState: RealtimeChannelState;
@@ -211,7 +213,7 @@ export type RunOperatorFocusCardProps = Readonly<{
   lastUpdatedAtMs: number;
   isRefreshing: boolean;
   updateError: string | null;
-  onRunControlAction: (action: DashboardRunControlAction) => void;
+  onRunControlAction: (action: DashboardRunOperatorAction) => Promise<void>;
 }>;
 
 export type RunDetailLifecycleGridProps = Readonly<{

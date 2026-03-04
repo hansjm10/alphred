@@ -1,24 +1,40 @@
 import { isActiveRunStatus } from '../../run-summary-utils';
 import type {
-  DashboardRunControlAction,
   DashboardRunControlResult,
   DashboardRunDetail,
   DashboardRunSummary,
+  DashboardRunWorktreeCleanupResult,
 } from '@dashboard/server/dashboard-contracts';
 import type {
   ActionFeedbackState,
+  DashboardRunOperatorAction,
   ExecuteRunControlActionParams,
   OperatorActionState,
   OperatorActionSet,
   RealtimeChannelState,
   StateSetter,
 } from './types';
-import { fetchRunDetailSnapshot, parseRunControlPayload, resolveApiErrorMessage } from './parsing';
+import {
+  fetchRunDetailSnapshot,
+  parseRunControlPayload,
+  parseRunWorktreeCleanupPayload,
+  resolveApiErrorMessage,
+} from './parsing';
 
 export function resolveOperatorActions(
   run: DashboardRunSummary,
   hasWorktree: boolean,
+  hasActiveWorktree: boolean,
 ): OperatorActionSet {
+  const cleanupWorktreeAction: OperatorActionState | null = hasActiveWorktree
+    ? {
+        label: 'Clean up worktree',
+        href: null,
+        controlAction: 'cleanup-worktree',
+        disabledReason: null,
+      }
+    : null;
+
   if (run.status === 'completed') {
     if (hasWorktree) {
       return {
@@ -28,7 +44,7 @@ export function resolveOperatorActions(
           controlAction: null,
           disabledReason: null,
         },
-        secondary: null,
+        secondary: cleanupWorktreeAction,
       };
     }
 
@@ -39,7 +55,7 @@ export function resolveOperatorActions(
         controlAction: null,
         disabledReason: 'No worktree was captured for this run.',
       },
-      secondary: null,
+      secondary: cleanupWorktreeAction,
     };
   }
 
@@ -85,7 +101,19 @@ export function resolveOperatorActions(
         controlAction: 'retry',
         disabledReason: null,
       },
-      secondary: null,
+      secondary: cleanupWorktreeAction,
+    };
+  }
+
+  if (run.status === 'cancelled') {
+    return {
+      primary: {
+        label: 'Run Cancelled',
+        href: null,
+        controlAction: null,
+        disabledReason: 'Cancelled runs cannot be resumed from this view.',
+      },
+      secondary: cleanupWorktreeAction,
     };
   }
 
@@ -117,7 +145,7 @@ export function resolveOperatorActions(
   };
 }
 
-export function toActionVerb(action: DashboardRunControlAction): string {
+export function toActionVerb(action: DashboardRunOperatorAction): string {
   switch (action) {
     case 'cancel':
       return 'cancel';
@@ -127,10 +155,12 @@ export function toActionVerb(action: DashboardRunControlAction): string {
       return 'resume';
     case 'retry':
       return 'retry';
+    case 'cleanup-worktree':
+      return 'cleanup worktree';
   }
 }
 
-export function resolveRunControlErrorPrefix(action: DashboardRunControlAction): string {
+export function resolveRunControlErrorPrefix(action: DashboardRunOperatorAction): string {
   switch (action) {
     case 'cancel':
       return 'Unable to cancel run';
@@ -140,6 +170,8 @@ export function resolveRunControlErrorPrefix(action: DashboardRunControlAction):
       return 'Unable to resume run';
     case 'retry':
       return 'Unable to retry failed node';
+    case 'cleanup-worktree':
+      return 'Unable to clean up worktree';
   }
 }
 
@@ -173,6 +205,10 @@ export function resolveRunControlSuccessMessage(result: DashboardRunControlResul
         ? 'Retry queued for 1 failed node.'
         : `Retry queued for ${result.retriedRunNodeIds.length} failed nodes.`;
   }
+}
+
+export function resolveRunWorktreeCleanupSuccessMessage(_result: DashboardRunWorktreeCleanupResult): string {
+  return 'Run worktree cleanup completed.';
 }
 
 
@@ -214,7 +250,8 @@ export function applyRunControlRefreshSuccess(params: {
 }
 
 export function applyRunControlRefreshFailure(params: {
-  controlResult: DashboardRunControlResult;
+  fallbackRunStatus: DashboardRunSummary['status'];
+  fallbackWorktrees?: DashboardRunDetail['worktrees'];
   successMessage: string;
   refreshMessage: string;
   enableRealtime: boolean;
@@ -227,7 +264,8 @@ export function applyRunControlRefreshFailure(params: {
   setActionFeedback: StateSetter<ActionFeedbackState>;
 }): void {
   const {
-    controlResult,
+    fallbackRunStatus,
+    fallbackWorktrees,
     successMessage,
     refreshMessage,
     enableRealtime,
@@ -239,13 +277,13 @@ export function applyRunControlRefreshFailure(params: {
     setChannelState,
     setActionFeedback,
   } = params;
-  const fallbackRunStatus = controlResult.runStatus;
   setDetail(currentDetail => ({
     ...currentDetail,
     run: {
       ...currentDetail.run,
       status: fallbackRunStatus,
     },
+    worktrees: fallbackWorktrees ?? currentDetail.worktrees,
   }));
   setUpdateError(refreshMessage);
   setIsRefreshing(false);
@@ -310,7 +348,7 @@ export async function executeRunControlAction(params: ExecuteRunControlActionPar
     } catch (refreshError) {
       const refreshMessage = refreshError instanceof Error ? refreshError.message : 'Unable to refresh run timeline.';
       applyRunControlRefreshFailure({
-        controlResult,
+        fallbackRunStatus: controlResult.runStatus,
         successMessage,
         refreshMessage,
         enableRealtime,
@@ -333,10 +371,95 @@ export async function executeRunControlAction(params: ExecuteRunControlActionPar
   }
 }
 
+export async function executeRunWorktreeCleanupAction(params: {
+  runId: number;
+  runStatus: DashboardRunSummary['status'];
+  enableRealtime: boolean;
+  setDetail: StateSetter<DashboardRunDetail>;
+  setUpdateError: StateSetter<string | null>;
+  setIsRefreshing: StateSetter<boolean>;
+  setLastUpdatedAtMs: StateSetter<number>;
+  setNextRetryAtMs: StateSetter<number | null>;
+  setChannelState: StateSetter<RealtimeChannelState>;
+  setActionFeedback: StateSetter<ActionFeedbackState>;
+}): Promise<void> {
+  const {
+    runId,
+    runStatus,
+    enableRealtime,
+    setDetail,
+    setUpdateError,
+    setIsRefreshing,
+    setLastUpdatedAtMs,
+    setNextRetryAtMs,
+    setChannelState,
+    setActionFeedback,
+  } = params;
+
+  try {
+    const response = await fetch(`/api/dashboard/runs/${runId}/actions/cleanup-worktree`, {
+      method: 'POST',
+      headers: {
+        accept: 'application/json',
+      },
+    });
+    const payload = (await response.json().catch(() => null)) as unknown;
+    if (!response.ok) {
+      throw new Error(resolveApiErrorMessage(response.status, payload, resolveRunControlErrorPrefix('cleanup-worktree')));
+    }
+
+    const cleanupResult = parseRunWorktreeCleanupPayload(payload, runId);
+    if (cleanupResult === null) {
+      throw new Error('Run action response was malformed.');
+    }
+
+    const successMessage = resolveRunWorktreeCleanupSuccessMessage(cleanupResult);
+
+    try {
+      const refreshedDetail = await fetchRunDetailSnapshot(runId);
+      applyRunControlRefreshSuccess({
+        refreshedDetail,
+        successMessage,
+        enableRealtime,
+        setDetail,
+        setUpdateError,
+        setIsRefreshing,
+        setLastUpdatedAtMs,
+        setNextRetryAtMs,
+        setChannelState,
+        setActionFeedback,
+      });
+    } catch (refreshError) {
+      const refreshMessage = refreshError instanceof Error ? refreshError.message : 'Unable to refresh run timeline.';
+      applyRunControlRefreshFailure({
+        fallbackRunStatus: runStatus,
+        fallbackWorktrees: cleanupResult.worktrees,
+        successMessage,
+        refreshMessage,
+        enableRealtime,
+        setDetail,
+        setUpdateError,
+        setIsRefreshing,
+        setLastUpdatedAtMs,
+        setNextRetryAtMs,
+        setChannelState,
+        setActionFeedback,
+      });
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : resolveRunControlErrorPrefix('cleanup-worktree');
+    setActionFeedback({
+      tone: 'error',
+      message,
+      runStatus,
+    });
+  }
+}
+
 
 export function triggerRunControlAction(params: {
-  action: DashboardRunControlAction | null;
-  onRunControlAction: (action: DashboardRunControlAction) => Promise<void>;
+  action: DashboardRunOperatorAction | null;
+  onRunControlAction: (action: DashboardRunOperatorAction) => Promise<void>;
 }): void {
   const { action, onRunControlAction } = params;
   if (action === null) {
@@ -348,7 +471,7 @@ export function triggerRunControlAction(params: {
 
 export function resolveActionButtonLabel(params: {
   action: OperatorActionState;
-  pendingControlAction: DashboardRunControlAction | null;
+  pendingControlAction: DashboardRunOperatorAction | null;
 }): string {
   const { action, pendingControlAction } = params;
   if (action.controlAction !== null && pendingControlAction === action.controlAction) {

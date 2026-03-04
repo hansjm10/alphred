@@ -1,8 +1,13 @@
 import { ActionButton, ButtonLink, Card, StatusBadge } from '../../../ui/primitives';
-import type { DashboardRunControlAction, DashboardRunDetail } from '@dashboard/server/dashboard-contracts';
+import type { DashboardRunDetail } from '@dashboard/server/dashboard-contracts';
 import { resolveActionButtonLabel, triggerRunControlAction } from './actions';
 import { formatLastUpdated, formatTimelineTime } from './formatting';
-import type { OperatorActionState, RealtimeChannelState, TimelineItem } from './types';
+import type {
+  DashboardRunOperatorAction,
+  OperatorActionState,
+  RealtimeChannelState,
+  TimelineItem,
+} from './types';
 
 type RunOperatorFocusCardProps = Readonly<{
   detail: DashboardRunDetail;
@@ -10,7 +15,7 @@ type RunOperatorFocusCardProps = Readonly<{
   hasHydrated: boolean;
   primaryAction: OperatorActionState;
   secondaryAction: OperatorActionState | null;
-  pendingControlAction: DashboardRunControlAction | null;
+  pendingControlAction: DashboardRunOperatorAction | null;
   actionHint: string | null;
   actionHintTone: 'info' | 'success' | 'error';
   channelState: RealtimeChannelState;
@@ -21,7 +26,7 @@ type RunOperatorFocusCardProps = Readonly<{
   lastUpdatedAtMs: number;
   isRefreshing: boolean;
   updateError: string | null;
-  onRunControlAction: (action: DashboardRunControlAction) => Promise<void>;
+  onRunControlAction: (action: DashboardRunOperatorAction) => Promise<void>;
 }>;
 
 export function RunOperatorFocusCard({

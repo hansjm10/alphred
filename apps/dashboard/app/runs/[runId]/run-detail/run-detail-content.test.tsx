@@ -561,6 +561,256 @@ describe('RunDetailContent realtime updates', () => {
     expect(screen.queryByRole('button', { name: 'Cancel Run' })).toBeNull();
   });
 
+  it('shows cleanup-worktree action for completed runs with active worktrees', () => {
+    render(
+      <RunDetailContent
+        initialDetail={createRunDetail({
+          run: {
+            status: 'completed',
+            completedAt: '2026-02-18T00:10:00.000Z',
+          },
+        })}
+        repositories={[createRepository()]}
+        enableRealtime={false}
+      />,
+    );
+
+    expect(screen.getByRole('link', { name: 'Open Worktree' })).toHaveAttribute('href', '/runs/412/worktree');
+    expect(screen.getByRole('button', { name: 'Clean up worktree' })).toBeEnabled();
+  });
+
+  it('shows cleanup-worktree action for failed runs with active worktrees', () => {
+    render(
+      <RunDetailContent
+        initialDetail={createRunDetail({
+          run: {
+            status: 'failed',
+            completedAt: '2026-02-18T00:10:00.000Z',
+          },
+          nodes: [
+            {
+              id: 1,
+              treeNodeId: 1,
+              nodeKey: 'design',
+              sequenceIndex: 0,
+              attempt: 1,
+              status: 'failed',
+              startedAt: '2026-02-18T00:00:10.000Z',
+              completedAt: '2026-02-18T00:01:00.000Z',
+              latestArtifact: null,
+              latestRoutingDecision: null,
+              latestDiagnostics: null,
+            },
+          ],
+        })}
+        repositories={[createRepository()]}
+        enableRealtime={false}
+      />,
+    );
+
+    expect(screen.getByRole('button', { name: 'Retry Failed Node' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Clean up worktree' })).toBeEnabled();
+  });
+
+  it('shows cleanup-worktree action for cancelled runs with active worktrees', () => {
+    render(
+      <RunDetailContent
+        initialDetail={createRunDetail({
+          run: {
+            status: 'cancelled',
+            completedAt: '2026-02-18T00:10:00.000Z',
+          },
+        })}
+        repositories={[createRepository()]}
+        enableRealtime={false}
+      />,
+    );
+
+    expect(screen.getByRole('button', { name: 'Run Cancelled' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Clean up worktree' })).toBeEnabled();
+  });
+
+  it('hides cleanup-worktree action when no active worktrees remain', () => {
+    render(
+      <RunDetailContent
+        initialDetail={createRunDetail({
+          run: {
+            status: 'completed',
+            completedAt: '2026-02-18T00:10:00.000Z',
+          },
+          worktrees: [
+            {
+              id: 5,
+              runId: 412,
+              repositoryId: 1,
+              path: '/tmp/worktrees/demo-tree-412',
+              branch: 'alphred/demo-tree/412',
+              commitHash: null,
+              status: 'removed',
+              createdAt: '2026-02-18T00:00:08.000Z',
+              removedAt: '2026-02-18T00:10:05.000Z',
+            },
+          ],
+        })}
+        repositories={[createRepository()]}
+        enableRealtime={false}
+      />,
+    );
+
+    expect(screen.getByRole('link', { name: 'Open Worktree' })).toHaveAttribute('href', '/runs/412/worktree');
+    expect(screen.queryByRole('button', { name: 'Clean up worktree' })).toBeNull();
+  });
+
+  it('applies cleanup-worktree action and refreshes run detail metadata', async () => {
+    const refreshedCompletedDetail = createRunDetail({
+      run: {
+        status: 'completed',
+        completedAt: '2026-02-18T00:10:00.000Z',
+      },
+      worktrees: [
+        {
+          id: 5,
+          runId: 412,
+          repositoryId: 1,
+          path: '/tmp/worktrees/demo-tree-412',
+          branch: 'alphred/demo-tree/412',
+          commitHash: null,
+          status: 'removed',
+          createdAt: '2026-02-18T00:00:08.000Z',
+          removedAt: '2026-02-18T00:10:05.000Z',
+        },
+      ],
+    });
+    let resolveCleanupActionResponse!: (response: Response) => void;
+    const cleanupActionResponse = new Promise<Response>((resolve) => {
+      resolveCleanupActionResponse = resolve;
+    });
+
+    fetchMock.mockImplementation((input, init) => {
+      const url = String(input);
+      if (url === '/api/dashboard/runs/412/actions/cleanup-worktree' && init?.method === 'POST') {
+        return cleanupActionResponse;
+      }
+
+      if (url === '/api/dashboard/runs/412' && init?.method === 'GET') {
+        return Promise.resolve(createJsonResponse(refreshedCompletedDetail));
+      }
+
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    });
+
+    render(
+      <RunDetailContent
+        initialDetail={createRunDetail({
+          run: {
+            status: 'completed',
+            completedAt: '2026-02-18T00:10:00.000Z',
+          },
+        })}
+        repositories={[createRepository()]}
+        enableRealtime={false}
+      />,
+    );
+
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('button', { name: 'Clean up worktree' }));
+
+    expect(screen.getByRole('button', { name: 'Clean up worktree...' })).toBeDisabled();
+    expect(screen.getByText('Applying cleanup worktree action...')).toBeInTheDocument();
+
+    resolveCleanupActionResponse(createJsonResponse({
+      worktrees: [
+        {
+          id: 5,
+          runId: 412,
+          repositoryId: 1,
+          path: '/tmp/worktrees/demo-tree-412',
+          branch: 'alphred/demo-tree/412',
+          commitHash: null,
+          status: 'removed',
+          createdAt: '2026-02-18T00:00:08.000Z',
+          removedAt: '2026-02-18T00:10:05.000Z',
+        },
+      ],
+    }));
+
+    await waitFor(() => {
+      expect(screen.getByText('Run worktree cleanup completed.')).toBeInTheDocument();
+    }, { timeout: 2_000 });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/dashboard/runs/412/actions/cleanup-worktree',
+      expect.objectContaining({ method: 'POST' }),
+    );
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/dashboard/runs/412',
+      expect.objectContaining({ method: 'GET' }),
+    );
+    expect(screen.queryByRole('button', { name: 'Clean up worktree' })).toBeNull();
+    expect(screen.getByRole('link', { name: 'Open Worktree' })).toHaveAttribute('href', '/runs/412/worktree');
+  });
+
+  it('applies cleanup-worktree metadata when immediate refresh fails with polling disabled', async () => {
+    const cleanedUpWorktrees = [
+      {
+        id: 5,
+        runId: 412,
+        repositoryId: 1,
+        path: '/tmp/worktrees/demo-tree-412',
+        branch: 'alphred/demo-tree/412',
+        commitHash: null,
+        status: 'removed',
+        createdAt: '2026-02-18T00:00:08.000Z',
+        removedAt: '2026-02-18T00:10:05.000Z',
+      },
+    ] as const;
+    let detailFetchCount = 0;
+
+    fetchMock.mockImplementation((input, init) => {
+      const url = String(input);
+      if (url === '/api/dashboard/runs/412/actions/cleanup-worktree' && init?.method === 'POST') {
+        return Promise.resolve(
+          createJsonResponse({
+            worktrees: cleanedUpWorktrees,
+          }),
+        );
+      }
+
+      if (url === '/api/dashboard/runs/412' && init?.method === 'GET') {
+        detailFetchCount += 1;
+        return Promise.reject(new Error('refresh down'));
+      }
+
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    });
+
+    render(
+      <RunDetailContent
+        initialDetail={createRunDetail({
+          run: {
+            status: 'completed',
+            completedAt: '2026-02-18T00:10:00.000Z',
+          },
+        })}
+        repositories={[createRepository()]}
+        enableRealtime={false}
+      />,
+    );
+
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('button', { name: 'Clean up worktree' }));
+
+    await waitFor(() => {
+      expect(
+        screen.getByText(/Run worktree cleanup completed. Unable to refresh run timeline: refresh down/i),
+      ).toBeInTheDocument();
+    }, { timeout: 2_000 });
+
+    expect(screen.queryByRole('button', { name: 'Clean up worktree' })).toBeNull();
+    expect(screen.getByRole('link', { name: 'Open Worktree' })).toHaveAttribute('href', '/runs/412/worktree');
+    expect(detailFetchCount).toBe(1);
+  });
+
   it('applies pause control, refreshes detail, and shows in-flight and success feedback', async () => {
     const pausedDetail = createRunDetail({
       run: {

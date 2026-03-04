@@ -298,6 +298,7 @@ async function postLaunchRequest(params: {
   executionScope: DashboardRunExecutionScope;
   nodeSelectorType: DashboardRunNodeSelector['type'];
   nodeKey: string;
+  cleanupWorktree: boolean;
 }): Promise<DashboardRunLaunchResult> {
   const selectorPayload = buildNodeSelectorPayload(params.executionScope, params.nodeSelectorType, params.nodeKey);
   const trimmedIssueId = params.issueId.trim();
@@ -315,6 +316,7 @@ async function postLaunchRequest(params: {
       executionMode: 'async',
       executionScope: params.executionScope,
       nodeSelector: selectorPayload,
+      cleanupWorktree: params.cleanupWorktree || undefined,
     }),
   });
   const payload = (await response.json().catch(() => null)) as unknown;
@@ -521,6 +523,7 @@ type RunLaunchControlsProps = Readonly<{
   launchWorkItemId: number | null;
   issueId: string;
   branch: string;
+  cleanupWorktree: boolean;
   executionScope: DashboardRunExecutionScope;
   nodeSelectorType: DashboardRunNodeSelector['type'];
   nodeKey: string;
@@ -535,6 +538,7 @@ type RunLaunchControlsProps = Readonly<{
   onSelectRepositoryName: (repositoryName: string) => void;
   onIssueIdChange: (issueId: string) => void;
   onBranchChange: (branch: string) => void;
+  onCleanupWorktreeChange: (cleanupWorktree: boolean) => void;
   onExecutionScopeChange: (scope: string) => void;
   onNodeSelectorTypeChange: (selectorType: string) => void;
   onNodeKeyChange: (nodeKey: string) => void;
@@ -551,6 +555,7 @@ function RunLaunchControls({
   launchWorkItemId,
   issueId,
   branch,
+  cleanupWorktree,
   executionScope,
   nodeSelectorType,
   nodeKey,
@@ -565,6 +570,7 @@ function RunLaunchControls({
   onSelectRepositoryName,
   onIssueIdChange,
   onBranchChange,
+  onCleanupWorktreeChange,
   onExecutionScopeChange,
   onNodeSelectorTypeChange,
   onNodeKeyChange,
@@ -629,6 +635,28 @@ function RunLaunchControls({
               }}
               placeholder="feature/dashboard-run-control"
             />
+          </label>
+
+          <label className="run-launch-form__field run-launch-form__field--checkbox" htmlFor="run-launch-cleanup-worktree">
+            <span className="meta-text">Worktree cleanup</span>
+            <span className="run-launch-checkbox">
+              <input
+                id="run-launch-cleanup-worktree"
+                type="checkbox"
+                aria-label="Auto-clean worktree on completion"
+                checked={cleanupWorktree}
+                disabled={launchBlockedReason !== null || selectedRepositoryName.length === 0}
+                onChange={(event) => {
+                  onCleanupWorktreeChange(event.currentTarget.checked);
+                }}
+              />
+              <span>Auto-clean worktree on completion</span>
+            </span>
+            <span className="meta-text">
+              {selectedRepositoryName.length === 0
+                ? 'Select a repository context to enable cleanup.'
+                : 'Attempt cleanup after the run reaches a terminal status.'}
+            </span>
           </label>
 
           {launchWorkItemId === null ? null : (
@@ -972,6 +1000,7 @@ export function RunsPageContent({
   const [launchWorkItemId, setLaunchWorkItemId] = useState<number | null>(initialLaunchWorkItemId);
   const [issueId, setIssueId] = useState<string>(initialLaunchIssueId ?? '');
   const [branch, setBranch] = useState<string>('');
+  const [cleanupWorktree, setCleanupWorktree] = useState<boolean>(false);
   const [executionScope, setExecutionScope] = useState<DashboardRunExecutionScope>('full');
   const [nodeSelectorType, setNodeSelectorType] = useState<DashboardRunNodeSelector['type']>('next_runnable');
   const [nodeKey, setNodeKey] = useState<string>('');
@@ -1063,6 +1092,9 @@ export function RunsPageContent({
 
   useEffect(() => {
     setSelectedRepositoryName(activeRepositoryName ?? '');
+    if (activeRepositoryName === null) {
+      setCleanupWorktree(false);
+    }
   }, [activeRepositoryName]);
 
   useEffect(() => {
@@ -1125,6 +1157,7 @@ export function RunsPageContent({
         executionScope,
         nodeSelectorType,
         nodeKey,
+        cleanupWorktree,
       });
       const postLaunchBanner = await resolvePostLaunchBannerState(refreshRunState, parsedResult.workflowRunId);
       setLaunchResult({
@@ -1158,6 +1191,7 @@ export function RunsPageContent({
           launchWorkItemId={launchWorkItemId}
           issueId={issueId}
           branch={branch}
+          cleanupWorktree={cleanupWorktree}
           executionScope={executionScope}
           nodeSelectorType={nodeSelectorType}
           nodeKey={nodeKey}
@@ -1174,9 +1208,13 @@ export function RunsPageContent({
             if (launchWorkItemId !== null && repositoryName !== (activeRepositoryName ?? '')) {
               setLaunchWorkItemId(null);
             }
+            if (repositoryName.length === 0) {
+              setCleanupWorktree(false);
+            }
           }}
           onIssueIdChange={setIssueId}
           onBranchChange={setBranch}
+          onCleanupWorktreeChange={setCleanupWorktree}
           onExecutionScopeChange={(scope) => {
             selectExecutionScope(scope, setExecutionScope);
           }}
