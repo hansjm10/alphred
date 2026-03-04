@@ -715,6 +715,8 @@ export function RepositoriesPageContent({
   const [restoringRepositoryName, setRestoringRepositoryName] = useState<string | null>(null);
   const [showArchived, setShowArchived] = useState(false);
   const showArchivedRef = useRef(showArchived);
+  const repositoryStateRef = useRef(repositoryState);
+  repositoryStateRef.current = repositoryState;
   const [isRefreshingRepositoryList, setIsRefreshingRepositoryList] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [syncErrors, setSyncErrors] = useState<Record<string, string>>({});
@@ -777,6 +779,21 @@ export function RepositoriesPageContent({
     setLastSyncLabels(current =>
       Object.fromEntries(Object.entries(current).filter(([name]) => names.has(name))),
     );
+  }
+
+  function applyRepositoryMutationResult(
+    nextRepository: DashboardRepositoryState,
+    includeArchived: boolean,
+  ): void {
+    const currentRepositories = repositoryStateRef.current;
+    const shouldIncludeRepository = includeArchived || nextRepository.archivedAt === null;
+    const nextRepositories = shouldIncludeRepository
+      ? currentRepositories.some(repository => repository.name === nextRepository.name)
+        ? currentRepositories.map(repository => (repository.name === nextRepository.name ? nextRepository : repository))
+        : [...currentRepositories, nextRepository]
+      : currentRepositories.filter(repository => repository.name !== nextRepository.name);
+
+    applyRepositoriesSnapshot(nextRepositories);
   }
 
   async function fetchRepositories(includeArchived: boolean): Promise<readonly DashboardRepositoryState[]> {
@@ -920,11 +937,22 @@ export function RepositoriesPageContent({
       }
 
       const result = payload as DashboardArchiveRepositoryResult;
-      await refreshRepositories(showArchivedRef.current);
-      setSyncBanner({
-        tone: 'success',
-        message: `${result.repository.name} archived.`,
-      });
+      const includeArchived = showArchivedRef.current;
+      applyRepositoryMutationResult(result.repository, includeArchived);
+
+      try {
+        await refreshRepositories(includeArchived);
+        setSyncBanner({
+          tone: 'success',
+          message: `${result.repository.name} archived.`,
+        });
+      } catch (error) {
+        const refreshMessage = error instanceof Error ? error.message : 'Repository list refresh failed.';
+        setSyncBanner({
+          tone: 'error',
+          message: `${result.repository.name} archived, but ${refreshMessage}`,
+        });
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Repository archive failed.';
       setSyncBanner({
@@ -957,11 +985,22 @@ export function RepositoriesPageContent({
       }
 
       const result = payload as DashboardRestoreRepositoryResult;
-      await refreshRepositories(showArchivedRef.current);
-      setSyncBanner({
-        tone: 'success',
-        message: `${result.repository.name} restored.`,
-      });
+      const includeArchived = showArchivedRef.current;
+      applyRepositoryMutationResult(result.repository, includeArchived);
+
+      try {
+        await refreshRepositories(includeArchived);
+        setSyncBanner({
+          tone: 'success',
+          message: `${result.repository.name} restored.`,
+        });
+      } catch (error) {
+        const refreshMessage = error instanceof Error ? error.message : 'Repository list refresh failed.';
+        setSyncBanner({
+          tone: 'error',
+          message: `${result.repository.name} restored, but ${refreshMessage}`,
+        });
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Repository restore failed.';
       setSyncBanner({
