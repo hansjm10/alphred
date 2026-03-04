@@ -71,6 +71,7 @@ function createHarness(options: {
         branchTemplate: null,
         localPath: '/tmp/repo',
         cloneStatus: 'cloned',
+        archivedAt: null,
       } satisfies RepositoryConfig,
     }),
     createSqlWorkflowPlanner: inputDb => createSqlWorkflowPlanner(inputDb),

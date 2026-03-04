@@ -47,6 +47,11 @@ Type: `DashboardGitHubAuthStatus` (`apps/dashboard/src/server/dashboard-contract
 
 Lists known repositories.
 
+Query params:
+- `includeArchived` (optional): `1|0|true|false`. Default is `false`.
+  - `false`: return only active repositories.
+  - `true`: return active + archived repositories.
+
 Response `200`:
 
 ```json
@@ -61,7 +66,8 @@ Response `200`:
       "defaultBranch": "main",
       "branchTemplate": null,
       "cloneStatus": "cloned",
-      "localPath": "/tmp/repos/demo-repo"
+      "localPath": "/tmp/repos/demo-repo",
+      "archivedAt": null
     }
   ]
 }
@@ -103,7 +109,8 @@ Response `201`:
     "defaultBranch": "main",
     "branchTemplate": null,
     "cloneStatus": "pending",
-    "localPath": null
+    "localPath": null,
+    "archivedAt": null
   }
 }
 ```
@@ -128,12 +135,63 @@ Response `200`:
     "defaultBranch": "main",
     "branchTemplate": null,
     "cloneStatus": "cloned",
-    "localPath": "/tmp/repos/demo-repo"
+    "localPath": "/tmp/repos/demo-repo",
+    "archivedAt": null
   }
 }
 ```
 
 Type: `DashboardRepositorySyncResult`.
+
+### `POST /repositories/[name]/actions/archive`
+
+Archives a repository (soft delete). Archived repositories are hidden from default repository listings and must be restored before sync/launch workflows.
+
+Response `200`:
+
+```json
+{
+  "repository": {
+    "id": 1,
+    "name": "demo-repo",
+    "provider": "github",
+    "remoteRef": "octocat/demo-repo",
+    "remoteUrl": "https://github.com/octocat/demo-repo.git",
+    "defaultBranch": "main",
+    "branchTemplate": null,
+    "cloneStatus": "cloned",
+    "localPath": "/tmp/repos/demo-repo",
+    "archivedAt": "2026-03-03T10:20:30.000Z"
+  }
+}
+```
+
+Type: `DashboardArchiveRepositoryResult`.
+
+### `POST /repositories/[name]/actions/restore`
+
+Restores a previously archived repository.
+
+Response `200`:
+
+```json
+{
+  "repository": {
+    "id": 1,
+    "name": "demo-repo",
+    "provider": "github",
+    "remoteRef": "octocat/demo-repo",
+    "remoteUrl": "https://github.com/octocat/demo-repo.git",
+    "defaultBranch": "main",
+    "branchTemplate": null,
+    "cloneStatus": "cloned",
+    "localPath": "/tmp/repos/demo-repo",
+    "archivedAt": null
+  }
+}
+```
+
+Type: `DashboardRestoreRepositoryResult`.
 
 ### `GET /workflows`
 

@@ -34,6 +34,7 @@ function createRepository(overrides: Partial<DashboardRepositoryState> = {}): Da
     branchTemplate: overrides.branchTemplate ?? null,
     cloneStatus: overrides.cloneStatus ?? 'cloned',
     localPath: overrides.localPath === undefined ? `/tmp/repos/${name}` : overrides.localPath,
+    archivedAt: overrides.archivedAt ?? null,
   };
 }
 
@@ -196,6 +197,115 @@ describe('RepositoriesPage', () => {
 
     expect(await screen.findAllByText('/tmp/repos/new-repo')).toHaveLength(2);
     expect(screen.getByText('new-repo sync completed (cloned, updated).')).toBeInTheDocument();
+  });
+
+  it('archives an active repository and refreshes the default active-only list', async () => {
+    const repositories = [
+      createRepository({
+        id: 1,
+        name: 'demo-repo',
+        cloneStatus: 'cloned',
+      }),
+    ];
+    const fetchMock = vi.mocked(global.fetch);
+    fetchMock
+      .mockResolvedValueOnce(
+        createJsonResponse({
+          repository: createRepository({
+            id: 1,
+            name: 'demo-repo',
+            archivedAt: '2026-03-03T10:20:30.000Z',
+          }),
+        }),
+      )
+      .mockResolvedValueOnce(
+        createJsonResponse({
+          repositories: [],
+        }),
+      );
+
+    const user = userEvent.setup();
+    render(<RepositoriesPageContent repositories={repositories} authGate={createAuthenticatedAuthGate()} />);
+
+    await user.click(screen.getByRole('button', { name: 'Archive demo-repo' }));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenNthCalledWith(1, '/api/dashboard/repositories/demo-repo/actions/archive', {
+        method: 'POST',
+      });
+      expect(fetchMock).toHaveBeenNthCalledWith(2, '/api/dashboard/repositories', {
+        method: 'GET',
+      });
+    });
+
+    expect(screen.getByText('demo-repo archived.')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Sync demo-repo' })).toBeNull();
+  });
+
+  it('shows archived repositories on demand and restores from row actions', async () => {
+    const active = createRepository({
+      id: 1,
+      name: 'active-repo',
+      cloneStatus: 'cloned',
+    });
+    const archived = createRepository({
+      id: 2,
+      name: 'archived-repo',
+      cloneStatus: 'cloned',
+      archivedAt: '2026-03-03T10:20:30.000Z',
+    });
+    const fetchMock = vi.mocked(global.fetch);
+    fetchMock
+      .mockResolvedValueOnce(
+        createJsonResponse({
+          repositories: [active, archived],
+        }),
+      )
+      .mockResolvedValueOnce(
+        createJsonResponse({
+          repository: createRepository({
+            ...archived,
+            archivedAt: null,
+          }),
+        }),
+      )
+      .mockResolvedValueOnce(
+        createJsonResponse({
+          repositories: [
+            active,
+            createRepository({
+              ...archived,
+              archivedAt: null,
+            }),
+          ],
+        }),
+      );
+
+    const user = userEvent.setup();
+    render(<RepositoriesPageContent repositories={[active]} authGate={createAuthenticatedAuthGate()} />);
+
+    await user.click(screen.getByRole('checkbox', { name: 'Show archived' }));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenNthCalledWith(1, '/api/dashboard/repositories?includeArchived=1', {
+        method: 'GET',
+      });
+    });
+    expect(await screen.findByRole('button', { name: 'Restore archived-repo' })).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Restore archived-repo' }));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenNthCalledWith(2, '/api/dashboard/repositories/archived-repo/actions/restore', {
+        method: 'POST',
+      });
+      expect(fetchMock).toHaveBeenNthCalledWith(3, '/api/dashboard/repositories?includeArchived=1', {
+        method: 'GET',
+      });
+    });
+
+    expect(screen.getByText('archived-repo restored.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Archive archived-repo' })).toBeInTheDocument();
   });
 
   it('disables all row sync actions while a sync is in progress', async () => {

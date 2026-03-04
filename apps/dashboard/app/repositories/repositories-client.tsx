@@ -2,8 +2,10 @@
 
 import { useMemo, useState, type ReactNode } from 'react';
 import type {
+  DashboardArchiveRepositoryResult,
   DashboardCreateRepositoryResult,
   DashboardRepositoryState,
+  DashboardRestoreRepositoryResult,
   DashboardRepositorySyncResult,
 } from '@dashboard/server/dashboard-contracts';
 import { AuthRemediation } from '../ui/auth-remediation';
@@ -47,9 +49,18 @@ function formatTimeLabel(date: Date): string {
   });
 }
 
-function mapCloneStatusToBadge(
+function formatDateTimeLabel(date: Date): string {
+  return date.toLocaleString();
+}
+
+function mapRepositoryStatusToBadge(
+  repository: DashboardRepositoryState,
   cloneStatus: DashboardRepositoryState['cloneStatus'] | 'syncing',
 ): Readonly<{ status: StatusVariant; label: string }> {
+  if (repository.archivedAt !== null) {
+    return { status: 'paused', label: 'Archived' };
+  }
+
   switch (cloneStatus) {
     case 'cloned':
       return { status: 'completed', label: 'Cloned' };
@@ -104,6 +115,10 @@ function resolveSyncErrorMessage(
   repository: DashboardRepositoryState,
   syncErrors: Readonly<Record<string, string>>,
 ): string | null {
+  if (repository.archivedAt !== null) {
+    return null;
+  }
+
   const syncError = syncErrors[repository.name];
   if (syncError) {
     return syncError;
@@ -120,6 +135,10 @@ function resolveSyncLabel(
   repository: DashboardRepositoryState,
   lastSyncLabels: Readonly<Record<string, string>>,
 ): string {
+  if (repository.archivedAt !== null) {
+    return `Archived ${formatDateTimeLabel(new Date(repository.archivedAt))}`;
+  }
+
   const lastSyncLabel = lastSyncLabels[repository.name];
   if (lastSyncLabel) {
     return lastSyncLabel;
@@ -189,6 +208,14 @@ function renderSelectedRepositoryDetails(
         <span>Local path</span>
         <span>{selectedRepository.localPath ?? 'Not available'}</span>
       </li>
+      <li>
+        <span>Lifecycle</span>
+        <span>
+          {selectedRepository.archivedAt === null
+            ? 'Active'
+            : `Archived (${formatDateTimeLabel(new Date(selectedRepository.archivedAt))})`}
+        </span>
+      </li>
     </ul>
   );
 }
@@ -214,8 +241,11 @@ function renderLaunchAction(
   );
 }
 
-function renderBoardAction(selectedRepository: DashboardRepositoryState | null): ReactNode {
-  if (selectedRepository !== null) {
+function renderBoardAction(
+  canOpenBoardWithSelectedRepository: boolean,
+  selectedRepository: DashboardRepositoryState | null,
+): ReactNode {
+  if (canOpenBoardWithSelectedRepository && selectedRepository !== null) {
     const boardHref = `/repositories/${selectedRepository.id}/board`;
 
     return (
@@ -236,36 +266,50 @@ type RepositoriesListCardProps = Readonly<{
   syncBanner: SyncBanner | null;
   searchQuery: string;
   onSearchQueryChange: (next: string) => void;
+  showArchived: boolean;
+  isRefreshingRepositoryList: boolean;
+  onToggleShowArchived: (next: boolean) => Promise<void> | void;
   hasRepositories: boolean;
   isAddFormOpen: boolean;
   actionBlocked: boolean;
   addFormHint: string;
   filteredRepositories: readonly DashboardRepositoryState[];
   syncingRepositoryName: string | null;
+  archivingRepositoryName: string | null;
+  restoringRepositoryName: string | null;
   syncErrors: Readonly<Record<string, string>>;
   lastSyncLabels: Readonly<Record<string, string>>;
   selectedRepositoryName: string | null;
   onSelectRepositoryName: (name: string) => void;
   onOpenAddForm: () => void;
   onSyncRepository: (repository: DashboardRepositoryState) => Promise<void> | void;
+  onArchiveRepository: (repository: DashboardRepositoryState) => Promise<void> | void;
+  onRestoreRepository: (repository: DashboardRepositoryState) => Promise<void> | void;
 }>;
 
 function RepositoriesListCard({
   syncBanner,
   searchQuery,
   onSearchQueryChange,
+  showArchived,
+  isRefreshingRepositoryList,
+  onToggleShowArchived,
   hasRepositories,
   isAddFormOpen,
   actionBlocked,
   addFormHint,
   filteredRepositories,
   syncingRepositoryName,
+  archivingRepositoryName,
+  restoringRepositoryName,
   syncErrors,
   lastSyncLabels,
   selectedRepositoryName,
   onSelectRepositoryName,
   onOpenAddForm,
   onSyncRepository,
+  onArchiveRepository,
+  onRestoreRepository,
 }: RepositoriesListCardProps): ReactNode {
   let repositoriesContent: ReactNode;
   if (!hasRepositories) {
@@ -307,11 +351,16 @@ function RepositoriesListCard({
           <tbody>
             {filteredRepositories.map((repository) => {
               const isSyncing = syncingRepositoryName === repository.name;
+              const isArchiving = archivingRepositoryName === repository.name;
+              const isRestoring = restoringRepositoryName === repository.name;
+              const isArchived = repository.archivedAt !== null;
               const cloneStatus = isSyncing ? 'syncing' : repository.cloneStatus;
-              const badge = mapCloneStatusToBadge(cloneStatus);
+              const badge = mapRepositoryStatusToBadge(repository, cloneStatus);
               const syncErrorMessage = resolveSyncErrorMessage(repository, syncErrors);
               const actionLabel = repository.cloneStatus === 'error' ? 'Retry' : 'Sync';
               const actionText = isSyncing ? 'Syncing...' : actionLabel;
+              const archiveText = isArchiving ? 'Archiving...' : 'Archive';
+              const restoreText = isRestoring ? 'Restoring...' : 'Restore';
               const syncLabel = resolveSyncLabel(repository, lastSyncLabels);
               const selected = selectedRepositoryName === repository.name;
               const rowClassName = selected ? 'repositories-row--selected' : undefined;
@@ -336,16 +385,43 @@ function RepositoriesListCard({
                   <td>{renderLocalPath(repository.localPath, syncErrorMessage)}</td>
                   <td className="meta-text">{syncLabel}</td>
                   <td>
-                    <ActionButton
-                      aria-label={`${actionLabel} ${repository.name}`}
-                      disabled={actionBlocked}
-	                      aria-disabled={actionBlocked}
-	                      onClick={() => {
-	                        onSyncRepository(repository);
-	                      }}
-	                    >
-	                      {actionText}
-	                    </ActionButton>
+                    <div className="repo-table-actions">
+                      {isArchived ? (
+                        <ActionButton
+                          aria-label={`Restore ${repository.name}`}
+                          disabled={actionBlocked}
+                          aria-disabled={actionBlocked}
+                          onClick={() => {
+                            onRestoreRepository(repository);
+                          }}
+                        >
+                          {restoreText}
+                        </ActionButton>
+                      ) : (
+                        <>
+                          <ActionButton
+                            aria-label={`${actionLabel} ${repository.name}`}
+                            disabled={actionBlocked}
+                            aria-disabled={actionBlocked}
+                            onClick={() => {
+                              onSyncRepository(repository);
+                            }}
+                          >
+                            {actionText}
+                          </ActionButton>
+                          <ActionButton
+                            aria-label={`Archive ${repository.name}`}
+                            disabled={actionBlocked}
+                            aria-disabled={actionBlocked}
+                            onClick={() => {
+                              onArchiveRepository(repository);
+                            }}
+                          >
+                            {archiveText}
+                          </ActionButton>
+                        </>
+                      )}
+                    </div>
                   </td>
                 </tr>
               );
@@ -372,6 +448,17 @@ function RepositoriesListCard({
             }}
             placeholder="Search name, provider, or remote ref"
           />
+        </label>
+        <label className="repo-show-archived">
+          <input
+            type="checkbox"
+            checked={showArchived}
+            disabled={isRefreshingRepositoryList}
+            onChange={(event) => {
+              onToggleShowArchived(event.currentTarget.checked);
+            }}
+          />
+          <span>{isRefreshingRepositoryList ? 'Refreshing...' : 'Show archived'}</span>
         </label>
       </div>
 
@@ -468,9 +555,14 @@ type RepositoriesActionsPanelProps = Readonly<{
   isAddFormOpen: boolean;
   addFormHint: string;
   syncingRepositoryName: string | null;
+  archivingRepositoryName: string | null;
+  restoringRepositoryName: string | null;
   canLaunchWithSelectedRepository: boolean;
+  canOpenBoardWithSelectedRepository: boolean;
   onOpenAddForm: () => void;
   onSyncRepository: (repository: DashboardRepositoryState) => Promise<void> | void;
+  onArchiveRepository: (repository: DashboardRepositoryState) => Promise<void> | void;
+  onRestoreRepository: (repository: DashboardRepositoryState) => Promise<void> | void;
   onAddRepository: () => Promise<void> | void;
   newRepositoryName: string;
   newRepositoryRemoteRef: string;
@@ -490,9 +582,14 @@ function RepositoriesActionsPanel({
   isAddFormOpen,
   addFormHint,
   syncingRepositoryName,
+  archivingRepositoryName,
+  restoringRepositoryName,
   canLaunchWithSelectedRepository,
+  canOpenBoardWithSelectedRepository,
   onOpenAddForm,
   onSyncRepository,
+  onArchiveRepository,
+  onRestoreRepository,
   onAddRepository,
   newRepositoryName,
   newRepositoryRemoteRef,
@@ -502,11 +599,19 @@ function RepositoriesActionsPanel({
   onChangeNewRepositoryRemoteRef,
   onCancelAddForm,
 }: RepositoriesActionsPanelProps): ReactNode {
-  const syncSelectedDisabled = selectedRepository === null || actionBlocked;
+  const syncSelectedDisabled =
+    selectedRepository === null || selectedRepository.archivedAt !== null || actionBlocked;
   const syncSelectedTone = isAddFormOpen ? undefined : 'primary';
   const shouldRenderAddRepositoryButton = hasRepositories && !isAddFormOpen;
   const shouldRenderLaunchAction = hasRepositories && !isAddFormOpen;
   const shouldRenderBoardAction = hasRepositories && !isAddFormOpen;
+  const shouldRenderArchiveAction = selectedRepository !== null && !isAddFormOpen;
+  const isArchivingSelected = selectedRepository !== null && archivingRepositoryName === selectedRepository.name;
+  const isRestoringSelected = selectedRepository !== null && restoringRepositoryName === selectedRepository.name;
+  const selectedArchiveActionLabel =
+    selectedRepository?.archivedAt === null
+      ? (isArchivingSelected ? 'Archiving...' : 'Archive Selected')
+      : (isRestoringSelected ? 'Restoring...' : 'Restore Selected');
 
   return (
     <Panel title="Repository actions" description="Select a row to inspect details and run sync.">
@@ -544,7 +649,25 @@ function RepositoriesActionsPanel({
 
         {shouldRenderLaunchAction ? renderLaunchAction(canLaunchWithSelectedRepository, selectedRepository) : null}
 
-        {shouldRenderBoardAction ? renderBoardAction(selectedRepository) : null}
+        {shouldRenderBoardAction ? renderBoardAction(canOpenBoardWithSelectedRepository, selectedRepository) : null}
+
+        {shouldRenderArchiveAction ? (
+          <ActionButton
+            disabled={actionBlocked}
+            aria-disabled={actionBlocked}
+            onClick={() => {
+              if (selectedRepository) {
+                if (selectedRepository.archivedAt === null) {
+                  onArchiveRepository(selectedRepository);
+                } else {
+                  onRestoreRepository(selectedRepository);
+                }
+              }
+            }}
+          >
+            {selectedArchiveActionLabel}
+          </ActionButton>
+        ) : null}
       </div>
       <p className="meta-text repo-add-hint">{addFormHint}</p>
 
@@ -588,6 +711,10 @@ export function RepositoriesPageContent({
   const [repositoryState, setRepositoryState] = useState<readonly DashboardRepositoryState[]>(repositories);
   const [selectedRepositoryName, setSelectedRepositoryName] = useState<string | null>(repositoryState[0]?.name ?? null);
   const [syncingRepositoryName, setSyncingRepositoryName] = useState<string | null>(null);
+  const [archivingRepositoryName, setArchivingRepositoryName] = useState<string | null>(null);
+  const [restoringRepositoryName, setRestoringRepositoryName] = useState<string | null>(null);
+  const [showArchived, setShowArchived] = useState(false);
+  const [isRefreshingRepositoryList, setIsRefreshingRepositoryList] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [syncErrors, setSyncErrors] = useState<Record<string, string>>({});
   const [lastSyncLabels, setLastSyncLabels] = useState<Record<string, string>>({});
@@ -599,7 +726,13 @@ export function RepositoriesPageContent({
   const [addRepositoryError, setAddRepositoryError] = useState<string | null>(null);
 
   const syncBlocked = !authGate.canMutate;
-  const actionBlocked = syncBlocked || syncingRepositoryName !== null || isAddingRepository;
+  const actionBlocked =
+    syncBlocked
+    || syncingRepositoryName !== null
+    || archivingRepositoryName !== null
+    || restoringRepositoryName !== null
+    || isAddingRepository
+    || isRefreshingRepositoryList;
   const normalizedQuery = searchQuery.trim().toLowerCase();
   const hasRepositories = repositoryState.length > 0;
 
@@ -619,11 +752,71 @@ export function RepositoriesPageContent({
   }, [filteredRepositories, selectedRepositoryName]);
   const selectedRepositorySyncError = selectedRepository ? syncErrors[selectedRepository.name] : undefined;
   const canLaunchWithSelectedRepository =
-    selectedRepository !== null && selectedRepository.cloneStatus === 'cloned' && authGate.canMutate;
-	  const addFormHint = getAddFormHint(syncBlocked);
+    selectedRepository !== null
+    && selectedRepository.archivedAt === null
+    && selectedRepository.cloneStatus === 'cloned'
+    && authGate.canMutate;
+  const canOpenBoardWithSelectedRepository = selectedRepository !== null && selectedRepository.archivedAt === null;
+  const addFormHint = getAddFormHint(syncBlocked);
+
+  function applyRepositoriesSnapshot(nextRepositories: readonly DashboardRepositoryState[]): void {
+    setRepositoryState(nextRepositories);
+    setSelectedRepositoryName(currentSelection => {
+      if (currentSelection && nextRepositories.some(repository => repository.name === currentSelection)) {
+        return currentSelection;
+      }
+
+      return nextRepositories[0]?.name ?? null;
+    });
+
+    const names = new Set(nextRepositories.map(repository => repository.name));
+    setSyncErrors(current =>
+      Object.fromEntries(Object.entries(current).filter(([name]) => names.has(name))),
+    );
+    setLastSyncLabels(current =>
+      Object.fromEntries(Object.entries(current).filter(([name]) => names.has(name))),
+    );
+  }
+
+  async function fetchRepositories(includeArchived: boolean): Promise<readonly DashboardRepositoryState[]> {
+    const response = await fetch(
+      includeArchived
+        ? '/api/dashboard/repositories?includeArchived=1'
+        : '/api/dashboard/repositories',
+      { method: 'GET' },
+    );
+    const payload = (await response.json().catch(() => null)) as unknown;
+
+    if (!response.ok) {
+      throw new Error(resolveApiErrorMessage(response.status, payload, 'Repository list refresh failed'));
+    }
+
+    if (
+      typeof payload !== 'object'
+      || payload === null
+      || !('repositories' in payload)
+      || !Array.isArray((payload as { repositories?: unknown }).repositories)
+    ) {
+      throw new Error('Repository list refresh failed (unexpected response shape).');
+    }
+
+    return (payload as { repositories: readonly DashboardRepositoryState[] }).repositories;
+  }
+
+  async function refreshRepositories(includeArchived: boolean): Promise<void> {
+    setIsRefreshingRepositoryList(true);
+
+    try {
+      const nextRepositories = await fetchRepositories(includeArchived);
+      applyRepositoriesSnapshot(nextRepositories);
+      setShowArchived(includeArchived);
+    } finally {
+      setIsRefreshingRepositoryList(false);
+    }
+  }
 
   async function handleSync(repository: DashboardRepositoryState): Promise<void> {
-    if (syncBlocked || syncingRepositoryName !== null || isAddingRepository) {
+    if (repository.archivedAt !== null || syncBlocked || actionBlocked) {
       return;
     }
 
@@ -680,6 +873,98 @@ export function RepositoriesPageContent({
       });
     } finally {
       setSyncingRepositoryName(null);
+    }
+  }
+
+  async function handleToggleShowArchived(next: boolean): Promise<void> {
+    if (isRefreshingRepositoryList) {
+      return;
+    }
+
+    setSyncBanner(null);
+
+    try {
+      await refreshRepositories(next);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Repository list refresh failed.';
+      setSyncBanner({
+        tone: 'error',
+        message,
+      });
+    }
+  }
+
+  async function handleArchive(repository: DashboardRepositoryState): Promise<void> {
+    if (repository.archivedAt !== null || syncBlocked || actionBlocked) {
+      return;
+    }
+
+    setSelectedRepositoryName(repository.name);
+    setSyncBanner(null);
+    setArchivingRepositoryName(repository.name);
+
+    try {
+      const response = await fetch(
+        `/api/dashboard/repositories/${encodeURIComponent(repository.name)}/actions/archive`,
+        { method: 'POST' },
+      );
+      const payload = (await response.json().catch(() => null)) as unknown;
+
+      if (!response.ok) {
+        throw new Error(resolveApiErrorMessage(response.status, payload, 'Repository archive failed'));
+      }
+
+      const result = payload as DashboardArchiveRepositoryResult;
+      await refreshRepositories(showArchived);
+      setSyncBanner({
+        tone: 'success',
+        message: `${result.repository.name} archived.`,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Repository archive failed.';
+      setSyncBanner({
+        tone: 'error',
+        message,
+      });
+    } finally {
+      setArchivingRepositoryName(null);
+    }
+  }
+
+  async function handleRestore(repository: DashboardRepositoryState): Promise<void> {
+    if (repository.archivedAt === null || syncBlocked || actionBlocked) {
+      return;
+    }
+
+    setSelectedRepositoryName(repository.name);
+    setSyncBanner(null);
+    setRestoringRepositoryName(repository.name);
+
+    try {
+      const response = await fetch(
+        `/api/dashboard/repositories/${encodeURIComponent(repository.name)}/actions/restore`,
+        { method: 'POST' },
+      );
+      const payload = (await response.json().catch(() => null)) as unknown;
+
+      if (!response.ok) {
+        throw new Error(resolveApiErrorMessage(response.status, payload, 'Repository restore failed'));
+      }
+
+      const result = payload as DashboardRestoreRepositoryResult;
+      await refreshRepositories(showArchived);
+      setSyncBanner({
+        tone: 'success',
+        message: `${result.repository.name} restored.`,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Repository restore failed.';
+      setSyncBanner({
+        tone: 'error',
+        message,
+      });
+    } finally {
+      setRestoringRepositoryName(null);
     }
   }
 
@@ -775,18 +1060,25 @@ export function RepositoriesPageContent({
           syncBanner={syncBanner}
           searchQuery={searchQuery}
           onSearchQueryChange={setSearchQuery}
+          showArchived={showArchived}
+          isRefreshingRepositoryList={isRefreshingRepositoryList}
+          onToggleShowArchived={handleToggleShowArchived}
           hasRepositories={hasRepositories}
           isAddFormOpen={isAddFormOpen}
           actionBlocked={actionBlocked}
           addFormHint={addFormHint}
           filteredRepositories={filteredRepositories}
           syncingRepositoryName={syncingRepositoryName}
+          archivingRepositoryName={archivingRepositoryName}
+          restoringRepositoryName={restoringRepositoryName}
           syncErrors={syncErrors}
           lastSyncLabels={lastSyncLabels}
           selectedRepositoryName={selectedRepository?.name ?? null}
           onSelectRepositoryName={setSelectedRepositoryName}
           onOpenAddForm={handleOpenAddForm}
           onSyncRepository={handleSync}
+          onArchiveRepository={handleArchive}
+          onRestoreRepository={handleRestore}
         />
 
         <RepositoriesActionsPanel
@@ -798,9 +1090,14 @@ export function RepositoriesPageContent({
           isAddFormOpen={isAddFormOpen}
           addFormHint={addFormHint}
           syncingRepositoryName={syncingRepositoryName}
+          archivingRepositoryName={archivingRepositoryName}
+          restoringRepositoryName={restoringRepositoryName}
           canLaunchWithSelectedRepository={canLaunchWithSelectedRepository}
+          canOpenBoardWithSelectedRepository={canOpenBoardWithSelectedRepository}
           onOpenAddForm={handleOpenAddForm}
           onSyncRepository={handleSync}
+          onArchiveRepository={handleArchive}
+          onRestoreRepository={handleRestore}
           onAddRepository={handleAddRepository}
           newRepositoryName={newRepositoryName}
           newRepositoryRemoteRef={newRepositoryRemoteRef}

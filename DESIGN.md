@@ -222,16 +222,18 @@ SQL-first workflow topology and execution state are modeled with normalized tabl
   - Constraint/index rationale:
     - Unique `(guard_key, version)` provides deterministic guard lookup.
 - `repositories`
-  - Managed repository registry (`name`, `provider`, `remote_url`, `remote_ref`, `default_branch`, `branch_template`, `local_path`, `clone_status`).
+  - Managed repository registry (`name`, `provider`, `remote_url`, `remote_ref`, `default_branch`, `branch_template`, `local_path`, `clone_status`, `archived_at`).
   - Constraint/index rationale:
     - Unique `name` prevents ambiguous repository aliases.
     - `provider` check enforces known SCM kinds (`github`, `azure-devops`).
     - `clone_status` check enforces lifecycle enum (`pending`, `cloned`, `error`).
+    - `archived_at` index supports active/archived list filtering for dashboard repository-management flows.
     - `created_at` index supports chronological listing hot paths.
   - Write semantics:
     - `remote_ref` is stored as a provider-scoped opaque identifier. Provider-specific shape validation is deferred to SCM adapter layers.
     - `branch_template` is optional and, when set, overrides the global branch naming template for worktree branch generation.
     - Clone-status updates preserve `local_path` unless an explicit `local_path` value is supplied with the update.
+    - `archived_at` is null for active repositories and timestamped for archived repositories (soft delete semantics preserving run/worktree history).
 - `tree_nodes`
   - Phase template nodes (`node_key`, `node_type`, `provider`, `prompt_template_id`, retry policy).
   - Constraint/index rationale:

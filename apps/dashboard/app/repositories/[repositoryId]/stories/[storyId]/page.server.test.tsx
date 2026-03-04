@@ -57,6 +57,7 @@ function createRepository(overrides: Partial<DashboardRepositoryState> = {}): Da
     branchTemplate: overrides.branchTemplate ?? null,
     cloneStatus: overrides.cloneStatus ?? 'cloned',
     localPath: overrides.localPath ?? '/tmp/repos/demo-repo',
+    archivedAt: overrides.archivedAt ?? null,
   };
 }
 

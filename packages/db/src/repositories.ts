@@ -1,4 +1,4 @@
-import { asc, eq } from 'drizzle-orm';
+import { and, asc, eq, isNotNull, isNull } from 'drizzle-orm';
 import type { CloneStatus, RepositoryConfig, ScmProviderKind } from '@alphred/shared';
 import type { AlphredDatabase } from './connection.js';
 import { repositories } from './schema.js';
@@ -19,6 +19,14 @@ export type InsertRepositoryParams = {
   cloneStatus?: CloneStatus;
   occurredAt?: string;
 };
+
+export type RepositoryQueryOptions = {
+  includeArchived?: boolean;
+};
+
+function shouldIncludeArchived(options?: RepositoryQueryOptions): boolean {
+  return options?.includeArchived === true;
+}
 
 function assertKnownProvider(provider: string): asserts provider is ScmProviderKind {
   if (!providerKinds.has(provider as ScmProviderKind)) {
@@ -46,6 +54,7 @@ function toRepositoryConfig(row: RepositoryRow): RepositoryConfig {
     branchTemplate: row.branchTemplate,
     localPath: row.localPath,
     cloneStatus: row.cloneStatus,
+    archivedAt: row.archivedAt,
   };
 }
 
@@ -72,7 +81,7 @@ export function insertRepository(db: AlphredDatabase, params: InsertRepositoryPa
     .run();
 
   const repositoryId = Number(inserted.lastInsertRowid);
-  const created = getRepositoryById(db, repositoryId);
+  const created = getRepositoryById(db, repositoryId, { includeArchived: true });
   if (!created) {
     throw new Error(`Repository insert did not return a row for id=${repositoryId}.`);
   }
@@ -80,11 +89,20 @@ export function insertRepository(db: AlphredDatabase, params: InsertRepositoryPa
   return created;
 }
 
-export function getRepositoryById(db: AlphredDatabase, repositoryId: number): RepositoryConfig | null {
+export function getRepositoryById(
+  db: AlphredDatabase,
+  repositoryId: number,
+  options?: RepositoryQueryOptions,
+): RepositoryConfig | null {
+  const includeArchived = shouldIncludeArchived(options);
   const row = db
     .select()
     .from(repositories)
-    .where(eq(repositories.id, repositoryId))
+    .where(
+      includeArchived
+        ? eq(repositories.id, repositoryId)
+        : and(eq(repositories.id, repositoryId), isNull(repositories.archivedAt)),
+    )
     .get();
 
   if (!row) {
@@ -94,11 +112,16 @@ export function getRepositoryById(db: AlphredDatabase, repositoryId: number): Re
   return toRepositoryConfig(row);
 }
 
-export function getRepositoryByName(db: AlphredDatabase, name: string): RepositoryConfig | null {
+export function getRepositoryByName(
+  db: AlphredDatabase,
+  name: string,
+  options?: RepositoryQueryOptions,
+): RepositoryConfig | null {
+  const includeArchived = shouldIncludeArchived(options);
   const row = db
     .select()
     .from(repositories)
-    .where(eq(repositories.name, name))
+    .where(includeArchived ? eq(repositories.name, name) : and(eq(repositories.name, name), isNull(repositories.archivedAt)))
     .get();
 
   if (!row) {
@@ -108,12 +131,20 @@ export function getRepositoryByName(db: AlphredDatabase, name: string): Reposito
   return toRepositoryConfig(row);
 }
 
-export function listRepositories(db: AlphredDatabase): RepositoryConfig[] {
-  const rows = db
-    .select()
-    .from(repositories)
-    .orderBy(asc(repositories.name), asc(repositories.id))
-    .all();
+export function listRepositories(db: AlphredDatabase, options?: RepositoryQueryOptions): RepositoryConfig[] {
+  const includeArchived = shouldIncludeArchived(options);
+  const rows = includeArchived
+    ? db
+        .select()
+        .from(repositories)
+        .orderBy(asc(repositories.name), asc(repositories.id))
+        .all()
+    : db
+        .select()
+        .from(repositories)
+        .where(isNull(repositories.archivedAt))
+        .orderBy(asc(repositories.name), asc(repositories.id))
+        .all();
 
   return rows.map(toRepositoryConfig);
 }
@@ -158,9 +189,67 @@ export function updateRepositoryCloneStatus(
     throw new Error(`Repository clone-status update precondition failed for id=${params.repositoryId}.`);
   }
 
-  const repository = getRepositoryById(db, params.repositoryId);
+  const repository = getRepositoryById(db, params.repositoryId, { includeArchived: true });
   if (!repository) {
     throw new Error(`Repository disappeared after clone-status update for id=${params.repositoryId}.`);
+  }
+
+  return repository;
+}
+
+export function archiveRepository(
+  db: AlphredDatabase,
+  params: {
+    repositoryId: number;
+    occurredAt?: string;
+  },
+): RepositoryConfig {
+  const occurredAt = params.occurredAt ?? new Date().toISOString();
+  const updated = db
+    .update(repositories)
+    .set({
+      archivedAt: occurredAt,
+      updatedAt: occurredAt,
+    })
+    .where(and(eq(repositories.id, params.repositoryId), isNull(repositories.archivedAt)))
+    .run();
+
+  if (updated.changes !== 1) {
+    throw new Error(`Repository archive precondition failed for id=${params.repositoryId}.`);
+  }
+
+  const repository = getRepositoryById(db, params.repositoryId, { includeArchived: true });
+  if (!repository) {
+    throw new Error(`Repository disappeared after archive for id=${params.repositoryId}.`);
+  }
+
+  return repository;
+}
+
+export function restoreRepository(
+  db: AlphredDatabase,
+  params: {
+    repositoryId: number;
+    occurredAt?: string;
+  },
+): RepositoryConfig {
+  const occurredAt = params.occurredAt ?? new Date().toISOString();
+  const updated = db
+    .update(repositories)
+    .set({
+      archivedAt: null,
+      updatedAt: occurredAt,
+    })
+    .where(and(eq(repositories.id, params.repositoryId), isNotNull(repositories.archivedAt)))
+    .run();
+
+  if (updated.changes !== 1) {
+    throw new Error(`Repository restore precondition failed for id=${params.repositoryId}.`);
+  }
+
+  const repository = getRepositoryById(db, params.repositoryId, { includeArchived: true });
+  if (!repository) {
+    throw new Error(`Repository disappeared after restore for id=${params.repositoryId}.`);
   }
 
   return repository;

@@ -40,10 +40,11 @@ describe('Route /api/dashboard/repositories', () => {
         {
           id: 1,
           name: 'demo',
+          archivedAt: null,
         },
       ]);
 
-      const response = await GET();
+      const response = await GET(new Request('http://localhost/api/dashboard/repositories'));
 
       expect(response.status).toBe(200);
       await expect(response.json()).resolves.toEqual({
@@ -51,16 +52,40 @@ describe('Route /api/dashboard/repositories', () => {
           {
             id: 1,
             name: 'demo',
+            archivedAt: null,
           },
         ],
       });
       expect(listRepositoriesMock).toHaveBeenCalledTimes(1);
+      expect(listRepositoriesMock).toHaveBeenCalledWith({ includeArchived: false });
+    });
+
+    it('forwards includeArchived=1 to list options', async () => {
+      listRepositoriesMock.mockResolvedValue([]);
+
+      const response = await GET(new Request('http://localhost/api/dashboard/repositories?includeArchived=1'));
+
+      expect(response.status).toBe(200);
+      expect(listRepositoriesMock).toHaveBeenCalledWith({ includeArchived: true });
+    });
+
+    it('returns 400 for invalid includeArchived query values', async () => {
+      const response = await GET(new Request('http://localhost/api/dashboard/repositories?includeArchived=maybe'));
+
+      expect(response.status).toBe(400);
+      await expect(response.json()).resolves.toEqual({
+        error: {
+          code: 'invalid_request',
+          message: 'Query parameter "includeArchived" must be one of: 1, 0, true, false.',
+        },
+      });
+      expect(listRepositoriesMock).not.toHaveBeenCalled();
     });
 
     it('maps service failures to integration error responses', async () => {
       listRepositoriesMock.mockRejectedValue(new Error('cannot connect'));
 
-      const response = await GET();
+      const response = await GET(new Request('http://localhost/api/dashboard/repositories'));
 
       expect(response.status).toBe(500);
       await expect(response.json()).resolves.toEqual({
@@ -88,6 +113,7 @@ describe('Route /api/dashboard/repositories', () => {
           branchTemplate: null,
           cloneStatus: 'pending',
           localPath: null,
+          archivedAt: null,
         },
       });
 
@@ -111,6 +137,7 @@ describe('Route /api/dashboard/repositories', () => {
           branchTemplate: null,
           cloneStatus: 'pending',
           localPath: null,
+          archivedAt: null,
         },
       });
       expect(createRepositoryMock).toHaveBeenCalledWith({

@@ -115,6 +115,7 @@ describe('shared types', () => {
       branchTemplate: null,
       localPath: null,
       cloneStatus,
+      archivedAt: null,
     };
 
     expect(repository.cloneStatus).toBe('pending');
