@@ -117,7 +117,7 @@ export function getRepositoryByName(
   name: string,
   options?: RepositoryQueryOptions,
 ): RepositoryConfig | null {
-  const includeArchived = shouldIncludeArchived(options, true);
+  const includeArchived = shouldIncludeArchived(options, false);
   const row = db
     .select()
     .from(repositories)

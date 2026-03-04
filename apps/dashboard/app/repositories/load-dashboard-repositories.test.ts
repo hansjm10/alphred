@@ -20,7 +20,7 @@ describe('loadDashboardRepositories', () => {
     });
   });
 
-  it('includes archived repositories by default', async () => {
+  it('excludes archived repositories by default', async () => {
     const repositories: readonly DashboardRepositoryState[] = [];
     listRepositoriesMock.mockResolvedValue(repositories);
 
@@ -29,7 +29,7 @@ describe('loadDashboardRepositories', () => {
     await expect(loadDashboardRepositories()).resolves.toBe(repositories);
     expect(createDashboardServiceMock).toHaveBeenCalledTimes(1);
     expect(listRepositoriesMock).toHaveBeenCalledTimes(1);
-    expect(listRepositoriesMock).toHaveBeenCalledWith({ includeArchived: true });
+    expect(listRepositoriesMock).toHaveBeenCalledWith({ includeArchived: false });
   });
 
   it('excludes archived repositories when explicitly requested', async () => {
