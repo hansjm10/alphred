@@ -3275,7 +3275,7 @@ describe('createDashboardService', () => {
     });
   });
 
-  it('archives repositories, keeps them in default listings, and restores them', async () => {
+  it('archives repositories, hides them from default listings, preserves run history access, and restores them', async () => {
     const { db, dependencies } = createHarness();
     seedRunData(db);
     const service = createDashboardService({ dependencies });
@@ -3285,9 +3285,7 @@ describe('createDashboardService', () => {
     expect(archived.repository.archivedAt).toBeTruthy();
 
     const defaultList = await service.listRepositories();
-    expect(defaultList).toHaveLength(1);
-    expect(defaultList[0]?.name).toBe('demo-repo');
-    expect(defaultList[0]?.archivedAt).toBeTruthy();
+    expect(defaultList).toEqual([]);
 
     const activeOnlyList = await service.listRepositories({ includeArchived: false });
     expect(activeOnlyList).toEqual([]);
@@ -3296,6 +3294,17 @@ describe('createDashboardService', () => {
     expect(allRepositories).toHaveLength(1);
     expect(allRepositories[0]?.name).toBe('demo-repo');
     expect(allRepositories[0]?.archivedAt).toBeTruthy();
+
+    const runsAfterArchive = await service.listWorkflowRuns();
+    expect(runsAfterArchive).toHaveLength(1);
+    expect(runsAfterArchive[0]?.repository).toEqual({
+      id: 1,
+      name: 'demo-repo',
+    });
+
+    const runDetailAfterArchive = await service.getWorkflowRunDetail(1);
+    expect(runDetailAfterArchive.worktrees).toHaveLength(1);
+    expect(runDetailAfterArchive.worktrees[0]?.repositoryId).toBe(1);
 
     const restored = await service.restoreRepository('demo-repo');
     expect(restored.repository.archivedAt).toBeNull();

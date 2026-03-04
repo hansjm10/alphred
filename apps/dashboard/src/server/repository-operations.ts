@@ -104,7 +104,7 @@ export function createRepositoryOperations(params: {
   return {
     listRepositories(options?: { includeArchived?: boolean }): Promise<DashboardRepositoryState[]> {
       return withDatabase(async db =>
-        listRepositoryConfigs(db, { includeArchived: options?.includeArchived !== false }).map(toRepositoryState),
+        listRepositoryConfigs(db, { includeArchived: options?.includeArchived ?? false }).map(toRepositoryState),
       );
     },
 
