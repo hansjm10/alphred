@@ -132,7 +132,7 @@ export function getRepositoryByName(
 }
 
 export function listRepositories(db: AlphredDatabase, options?: RepositoryQueryOptions): RepositoryConfig[] {
-  const includeArchived = shouldIncludeArchived(options, true);
+  const includeArchived = shouldIncludeArchived(options, false);
   const rows = includeArchived
     ? db
         .select()

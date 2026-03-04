@@ -60,7 +60,7 @@ describe('repository registry CRUD helpers', () => {
     expect(listed.map(repository => repository.name)).toEqual(['alpha-service', 'zeta-service']);
   });
 
-  it('includes archived repositories by default and allows opt-out listing', () => {
+  it('excludes archived repositories by default and allows opt-in listing', () => {
     const db = createMigratedDb();
     const active = insertRepository(db, {
       name: 'active-repo',
@@ -76,11 +76,12 @@ describe('repository registry CRUD helpers', () => {
     });
     archiveRepository(db, { repositoryId: archived.id, occurredAt: '2026-03-03T00:00:00.000Z' });
 
-    expect(listRepositories(db).map(repository => repository.name)).toEqual([
+    expect(listRepositories(db).map(repository => repository.name)).toEqual([active.name]);
+    expect(listRepositories(db, { includeArchived: false }).map(repository => repository.name)).toEqual([active.name]);
+    expect(listRepositories(db, { includeArchived: true }).map(repository => repository.name)).toEqual([
       active.name,
       archived.name,
     ]);
-    expect(listRepositories(db, { includeArchived: false }).map(repository => repository.name)).toEqual([active.name]);
   });
 
   it('updates clone status and local path', () => {

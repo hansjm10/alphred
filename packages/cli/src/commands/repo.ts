@@ -115,7 +115,7 @@ export async function handleRepoListCommand(
 
   try {
     const db = openInitializedDatabase(dependencies, io);
-    const repositoryRows = listRepositories(db);
+    const repositoryRows = listRepositories(db, { includeArchived: true });
     if (repositoryRows.length === 0) {
       io.stdout('No repositories registered.');
       return EXIT_SUCCESS;
