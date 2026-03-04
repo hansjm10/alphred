@@ -823,6 +823,7 @@ describe('RepositoriesPage', () => {
     }>;
 
     expect(loadDashboardRepositoriesMock).toHaveBeenCalledTimes(1);
+    expect(loadDashboardRepositoriesMock).toHaveBeenCalledWith(false);
     expect(loadGitHubAuthGateMock).toHaveBeenCalledTimes(1);
     expect(root.type).toBe(RepositoriesPageContent);
     expect(root.props.repositories).toEqual(repositories);

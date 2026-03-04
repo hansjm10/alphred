@@ -90,6 +90,7 @@ describe('StoriesIndexPage', () => {
     const root = await StoriesIndexPage({ params: Promise.resolve({ repositoryId: '1' }) });
     render(root);
 
+    expect(loadDashboardRepositoriesMock).toHaveBeenCalledWith(false);
     expect(screen.getByRole('heading', { name: 'demo-repo / Stories' })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Board' })).toHaveAttribute('href', '/repositories/1/board');
 

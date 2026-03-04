@@ -3275,7 +3275,7 @@ describe('createDashboardService', () => {
     });
   });
 
-  it('archives repositories, hides them by default, and restores them', async () => {
+  it('archives repositories, keeps them in default listings, and restores them', async () => {
     const { db, dependencies } = createHarness();
     seedRunData(db);
     const service = createDashboardService({ dependencies });
@@ -3285,7 +3285,12 @@ describe('createDashboardService', () => {
     expect(archived.repository.archivedAt).toBeTruthy();
 
     const defaultList = await service.listRepositories();
-    expect(defaultList).toEqual([]);
+    expect(defaultList).toHaveLength(1);
+    expect(defaultList[0]?.name).toBe('demo-repo');
+    expect(defaultList[0]?.archivedAt).toBeTruthy();
+
+    const activeOnlyList = await service.listRepositories({ includeArchived: false });
+    expect(activeOnlyList).toEqual([]);
 
     const allRepositories = await service.listRepositories({ includeArchived: true });
     expect(allRepositories).toHaveLength(1);

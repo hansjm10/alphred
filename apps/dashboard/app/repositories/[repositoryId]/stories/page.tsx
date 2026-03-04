@@ -50,7 +50,7 @@ export default async function StoriesIndexPage({ params }: StoriesIndexPageProps
   }
 
   const service = createDashboardService();
-  const repositories = await loadDashboardRepositories();
+  const repositories = await loadDashboardRepositories(false);
 
   const repository = resolveRepository(repositories, parsedRepositoryId);
   if (!repository) {

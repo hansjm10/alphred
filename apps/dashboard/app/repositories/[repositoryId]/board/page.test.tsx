@@ -1000,6 +1000,7 @@ describe('RepositoryBoardPage (server wrapper)', () => {
     }>;
 
     expect(service.listRepositories).toHaveBeenCalledTimes(1);
+    expect(service.listRepositories).toHaveBeenCalledWith({ includeArchived: false });
     expect(service.getRepositoryBoardBootstrap).toHaveBeenCalledWith({ repositoryId: 1 });
     expect(loadGitHubAuthGateMock).toHaveBeenCalledTimes(1);
 

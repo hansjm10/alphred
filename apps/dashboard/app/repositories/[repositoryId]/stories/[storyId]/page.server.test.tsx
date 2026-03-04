@@ -103,6 +103,7 @@ describe('StoryDetailPage', () => {
 
     await renderStoryPage({ repositoryId: '1', storyId: '3' });
 
+    expect(loadDashboardRepositoriesMock).toHaveBeenCalledWith(false);
     const payload = JSON.parse(screen.getByTestId('payload').textContent ?? '{}');
     expect(payload.repository.name).toBe('demo-repo');
     expect(payload.actor.actorLabel).toBe('octocat');
