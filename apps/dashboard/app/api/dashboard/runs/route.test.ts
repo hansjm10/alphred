@@ -106,6 +106,8 @@ describe('Route /api/dashboard/runs', () => {
         treeKey: 'default',
         repositoryName: undefined,
         branch: undefined,
+        workItemId: undefined,
+        issueId: undefined,
         executionMode: 'sync',
         executionScope: undefined,
         nodeSelector: undefined,
@@ -155,6 +157,8 @@ describe('Route /api/dashboard/runs', () => {
         treeKey: 'default',
         repositoryName: undefined,
         branch: undefined,
+        workItemId: undefined,
+        issueId: undefined,
         executionMode: undefined,
         executionScope: 'single_node',
         nodeSelector: {
@@ -184,11 +188,40 @@ describe('Route /api/dashboard/runs', () => {
         treeKey: 'default',
         repositoryName: undefined,
         branch: undefined,
+        workItemId: undefined,
+        issueId: undefined,
         executionMode: undefined,
         executionScope: 'single_node',
         nodeSelector: {
           type: 'next_runnable',
         },
+        cleanupWorktree: undefined,
+      });
+      expect(response.status).toBe(202);
+    });
+
+    it('parses launch association payload fields', async () => {
+      launchWorkflowRunMock.mockResolvedValue({
+        mode: 'async',
+        id: 14,
+      });
+
+      const response = await POST(createJsonRequest('http://localhost/api/dashboard/runs', {
+        treeKey: 'default',
+        repositoryName: 'demo-repo',
+        workItemId: 42,
+        issueId: '273',
+      }));
+
+      expect(launchWorkflowRunMock).toHaveBeenCalledWith({
+        treeKey: 'default',
+        repositoryName: 'demo-repo',
+        branch: undefined,
+        workItemId: 42,
+        issueId: '273',
+        executionMode: undefined,
+        executionScope: undefined,
+        nodeSelector: undefined,
         cleanupWorktree: undefined,
       });
       expect(response.status).toBe(202);
@@ -243,6 +276,21 @@ describe('Route /api/dashboard/runs', () => {
         title: 'branch has an invalid type',
         payload: { treeKey: 'default', branch: false },
         message: 'Field "branch" must be a string when provided.',
+      },
+      {
+        title: 'workItemId is not a positive integer',
+        payload: { treeKey: 'default', workItemId: 0 },
+        message: 'Field "workItemId" must be a positive integer when provided.',
+      },
+      {
+        title: 'issueId has an invalid type',
+        payload: { treeKey: 'default', issueId: 273 },
+        message: 'Field "issueId" must be a string when provided.',
+      },
+      {
+        title: 'issueId cannot be empty',
+        payload: { treeKey: 'default', issueId: '   ' },
+        message: 'Field "issueId" cannot be empty when provided.',
       },
       {
         title: 'executionMode has an invalid value',

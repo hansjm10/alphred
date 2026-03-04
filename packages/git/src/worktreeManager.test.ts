@@ -121,6 +121,63 @@ describe('WorktreeManager', () => {
     expect(active[0]?.branch).toBe('alphred/design_tree/1-implement');
   });
 
+  it('passes issueId into branch template context when provided', async () => {
+    const db = createMigratedDb();
+    const runId = seedRun(db);
+    const repository = insertRepository(db, {
+      name: 'frontend-issue-context',
+      provider: 'github',
+      remoteUrl: 'https://github.com/acme/frontend.git',
+      remoteRef: 'acme/frontend',
+      defaultBranch: 'main',
+      branchTemplate: 'alphred/{tree-key}/{issue-id}/{run-id}',
+      localPath: '/tmp/alphred/repos/github/acme/frontend',
+      cloneStatus: 'pending',
+    });
+
+    const ensureRepositoryClone = vi.fn(async () => ({
+      repository: {
+        ...repository,
+        localPath: '/tmp/alphred/repos/github/acme/frontend',
+        cloneStatus: 'cloned' as const,
+      },
+      action: 'fetched' as const,
+    }));
+    const createWorktree = vi.fn(async () => ({
+      path: '/tmp/alphred/worktrees/alphred-design-tree-273-1',
+      branch: 'alphred/design-tree/273/1',
+      commit: 'abc123',
+    }));
+
+    const manager = new WorktreeManager(db, {
+      worktreeBase: '/tmp/alphred/worktrees',
+      ensureRepositoryClone,
+      createWorktree,
+    });
+
+    await manager.createRunWorktree({
+      repoName: 'frontend-issue-context',
+      treeKey: 'design_tree',
+      runId,
+      issueId: '273',
+    });
+
+    expect(createWorktree).toHaveBeenCalledWith(
+      '/tmp/alphred/repos/github/acme/frontend',
+      '/tmp/alphred/worktrees',
+      {
+        branchTemplate: 'alphred/{tree-key}/{issue-id}/{run-id}',
+        branchContext: {
+          treeKey: 'design_tree',
+          runId,
+          nodeKey: undefined,
+          issueId: '273',
+        },
+        baseRef: 'main',
+      },
+    );
+  });
+
   it('uses an explicit branch name override when provided', async () => {
     const db = createMigratedDb();
     const runId = seedRun(db);

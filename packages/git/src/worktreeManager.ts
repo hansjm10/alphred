@@ -41,6 +41,7 @@ export type CreateRunWorktreeParams = {
   treeKey: string;
   runId: number;
   nodeKey?: string;
+  issueId?: string;
   branch?: string;
   branchTemplate?: string;
   baseBranch?: string;
@@ -62,6 +63,7 @@ export type WorktreeManagerOptions = {
         treeKey: string;
         runId: number;
         nodeKey?: string;
+        issueId?: string;
       };
       baseRef?: string;
     },
@@ -153,6 +155,7 @@ export class WorktreeManager {
           treeKey: params.treeKey,
           runId: params.runId,
           nodeKey: params.nodeKey,
+          ...(params.issueId === undefined ? {} : { issueId: params.issueId }),
         },
         baseRef: params.baseBranch ?? clonedRepository.defaultBranch,
       };
