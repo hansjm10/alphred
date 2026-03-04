@@ -16,7 +16,7 @@ export default async function RepositoriesPage({
   authGate,
 }: RepositoriesPageProps = {}) {
   const [resolvedRepositories, resolvedAuthGate] = await Promise.all([
-    repositories ?? loadDashboardRepositories(),
+    repositories ?? loadDashboardRepositories(false),
     authGate ?? loadGitHubAuthGate(),
   ]);
 

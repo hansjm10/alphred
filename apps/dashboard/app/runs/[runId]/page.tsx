@@ -46,7 +46,7 @@ export default async function RunDetailPage({
     throw error;
   }
 
-  const resolvedRepositories = repositories ?? (await loadDashboardRepositories());
+  const resolvedRepositories = repositories ?? (await loadDashboardRepositories(true));
 
   return (
     <RunDetailContent

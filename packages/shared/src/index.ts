@@ -36,6 +36,7 @@ export type RepositoryConfig = {
   branchTemplate: string | null;
   localPath: string | null;
   cloneStatus: CloneStatus;
+  archivedAt: string | null;
 };
 
 // Normalized SCM work item

@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
+  archiveRepository,
   createDatabase,
   getRepositoryByName,
   insertRepository,
@@ -153,6 +154,34 @@ describe('CLI repo commands', () => {
     expect(showCaptured.stdout).toContain('Name: frontend');
     expect(showCaptured.stdout).toContain('Provider: github');
     expect(showCaptured.stdout).toContain('Remote ref: acme/frontend');
+  });
+
+  it('includes archived repositories in repo list output', async () => {
+    const db = createDatabase(':memory:');
+    migrateDatabase(db);
+    const repository = insertRepository(db, {
+      name: 'frontend',
+      provider: 'github',
+      remoteUrl: 'https://github.com/acme/frontend.git',
+      remoteRef: 'acme/frontend',
+      defaultBranch: 'main',
+      cloneStatus: 'cloned',
+      localPath: '/tmp/alphred/repos/github/acme/frontend',
+    });
+    archiveRepository(db, {
+      repositoryId: repository.id,
+      occurredAt: '2026-03-04T00:00:00.000Z',
+    });
+
+    const listCaptured = createCapturedIo();
+    const listExitCode = await main(['repo', 'list'], {
+      dependencies: createDependencies(db, createUnusedProviderResolver()),
+      io: listCaptured.io,
+    });
+
+    expect(listExitCode).toBe(0);
+    expect(listCaptured.stderr).toEqual([]);
+    expect(listCaptured.stdout.some(line => line.includes('frontend'))).toBe(true);
   });
 
   it('removes repositories and optionally purges local clones', async () => {
@@ -582,4 +611,3 @@ describe('CLI repo commands', () => {
     }
   });
 });
-

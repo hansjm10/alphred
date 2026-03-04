@@ -88,6 +88,7 @@ function createRepository(overrides: Partial<DashboardRepositoryState> = {}): Da
     branchTemplate: overrides.branchTemplate ?? null,
     cloneStatus: overrides.cloneStatus ?? 'cloned',
     localPath: overrides.localPath ?? '/tmp/repos/demo-repo',
+    archivedAt: overrides.archivedAt ?? null,
   };
 }
 
@@ -999,6 +1000,7 @@ describe('RepositoryBoardPage (server wrapper)', () => {
     }>;
 
     expect(service.listRepositories).toHaveBeenCalledTimes(1);
+    expect(service.listRepositories).toHaveBeenCalledWith({ includeArchived: false });
     expect(service.getRepositoryBoardBootstrap).toHaveBeenCalledWith({ repositoryId: 1 });
     expect(loadGitHubAuthGateMock).toHaveBeenCalledTimes(1);
 

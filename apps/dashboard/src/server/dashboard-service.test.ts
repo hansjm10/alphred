@@ -60,6 +60,7 @@ function createHarness(overrides: Partial<DashboardServiceDependencies> = {}): {
         branchTemplate: null,
         localPath: '/tmp/repo',
         cloneStatus: 'cloned',
+        archivedAt: null,
       } satisfies RepositoryConfig,
     }),
     createSqlWorkflowPlanner: inputDb => createSqlWorkflowPlanner(inputDb),
@@ -3058,6 +3059,7 @@ describe('createDashboardService', () => {
         branchTemplate: null,
         localPath: '/tmp/repos/demo-repo',
         cloneStatus: 'cloned',
+        archivedAt: null,
       } satisfies RepositoryConfig,
       sync: {
         mode: 'pull' as const,
@@ -3112,6 +3114,7 @@ describe('createDashboardService', () => {
         branchTemplate: null,
         localPath: '/tmp/repos/demo-repo',
         cloneStatus: 'cloned',
+        archivedAt: null,
       } satisfies RepositoryConfig,
     }));
 
@@ -3152,6 +3155,7 @@ describe('createDashboardService', () => {
         branchTemplate: null,
         localPath: '/tmp/repos/demo-repo',
         cloneStatus: 'cloned',
+        archivedAt: null,
       } satisfies RepositoryConfig,
       sync: {
         mode: 'pull' as const,
@@ -3269,6 +3273,132 @@ describe('createDashboardService', () => {
       status: 409,
       message: 'Repository "demo-repo" already exists.',
     });
+  });
+
+  it('archives repositories, keeps them in default listings, and restores them', async () => {
+    const { db, dependencies } = createHarness();
+    seedRunData(db);
+    const service = createDashboardService({ dependencies });
+
+    const archived = await service.archiveRepository('demo-repo');
+    expect(archived.repository.name).toBe('demo-repo');
+    expect(archived.repository.archivedAt).toBeTruthy();
+
+    const defaultList = await service.listRepositories();
+    expect(defaultList).toHaveLength(1);
+    expect(defaultList[0]?.name).toBe('demo-repo');
+    expect(defaultList[0]?.archivedAt).toBeTruthy();
+
+    const activeOnlyList = await service.listRepositories({ includeArchived: false });
+    expect(activeOnlyList).toEqual([]);
+
+    const allRepositories = await service.listRepositories({ includeArchived: true });
+    expect(allRepositories).toHaveLength(1);
+    expect(allRepositories[0]?.name).toBe('demo-repo');
+    expect(allRepositories[0]?.archivedAt).toBeTruthy();
+
+    const restored = await service.restoreRepository('demo-repo');
+    expect(restored.repository.archivedAt).toBeNull();
+
+    const restoredList = await service.listRepositories();
+    expect(restoredList).toHaveLength(1);
+    expect(restoredList[0]?.name).toBe('demo-repo');
+    expect(restoredList[0]?.archivedAt).toBeNull();
+  });
+
+  it('gates repository archive mutation behind scm auth checks', async () => {
+    const createScmProviderMock = vi.fn(() => ({
+      checkAuth: async () =>
+        ({
+          authenticated: false,
+          error: 'Run gh auth login before mutating repositories.',
+        }) satisfies AuthStatus,
+    }));
+    const { db, dependencies } = createHarness({
+      createScmProvider: createScmProviderMock,
+    });
+    seedRunData(db);
+    const service = createDashboardService({ dependencies });
+
+    await expect(service.archiveRepository('demo-repo')).rejects.toMatchObject({
+      name: 'DashboardIntegrationError',
+      code: 'auth_required',
+      status: 401,
+      message: 'Run gh auth login before mutating repositories.',
+    });
+    expect(createScmProviderMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('blocks sync for archived repositories until restored', async () => {
+    const ensureRepositoryCloneMock: DashboardServiceDependencies['ensureRepositoryClone'] = vi.fn(async () => ({
+      action: 'fetched' as const,
+      repository: {
+        id: 1,
+        name: 'demo-repo',
+        provider: 'github',
+        remoteUrl: 'https://github.com/octocat/demo-repo.git',
+        remoteRef: 'octocat/demo-repo',
+        defaultBranch: 'main',
+        branchTemplate: null,
+        localPath: '/tmp/repos/demo-repo',
+        cloneStatus: 'cloned',
+        archivedAt: null,
+      } satisfies RepositoryConfig,
+    }));
+    const { db, dependencies } = createHarness({
+      ensureRepositoryClone: ensureRepositoryCloneMock,
+    });
+    seedRunData(db);
+    const service = createDashboardService({ dependencies });
+
+    await service.archiveRepository('demo-repo');
+
+    await expect(service.syncRepository('demo-repo')).rejects.toMatchObject({
+      name: 'DashboardIntegrationError',
+      code: 'conflict',
+      status: 409,
+      message: 'Repository "demo-repo" is archived. Restore it before syncing.',
+    });
+    expect(ensureRepositoryCloneMock).not.toHaveBeenCalled();
+  });
+
+  it('blocks run launches for archived repositories until restored', async () => {
+    const createRunWorktreeMock = vi.fn(async () => ({
+      id: 1,
+      runId: 1,
+      repositoryId: 1,
+      path: '/tmp/worktree',
+      branch: 'main',
+      commitHash: null,
+      createdAt: '2026-02-17T20:00:00.000Z',
+    }));
+    const { db, dependencies } = createHarness({
+      createWorktreeManager: () => ({
+        createRunWorktree: createRunWorktreeMock,
+        cleanupRun: async () => undefined,
+      }),
+    });
+    seedRunData(db);
+    const service = createDashboardService({ dependencies });
+
+    await service.archiveRepository('demo-repo');
+
+    await expect(
+      service.launchWorkflowRun({
+        treeKey: 'demo-tree',
+        repositoryName: 'demo-repo',
+        executionMode: 'sync',
+      }),
+    ).rejects.toMatchObject({
+      name: 'DashboardIntegrationError',
+      code: 'conflict',
+      status: 409,
+      message: 'Repository "demo-repo" is archived. Restore it before launching runs.',
+      details: {
+        archivedAt: expect.any(String),
+      },
+    });
+    expect(createRunWorktreeMock).not.toHaveBeenCalled();
   });
 
   it('translates planner missing-tree failures to not_found errors', async () => {

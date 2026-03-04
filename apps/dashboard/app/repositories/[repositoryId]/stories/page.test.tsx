@@ -40,6 +40,7 @@ function createRepository(overrides: Partial<DashboardRepositoryState> = {}): Da
     branchTemplate: overrides.branchTemplate ?? null,
     cloneStatus: overrides.cloneStatus ?? 'cloned',
     localPath: overrides.localPath ?? '/tmp/repos/demo-repo',
+    archivedAt: overrides.archivedAt ?? null,
   };
 }
 
@@ -89,6 +90,7 @@ describe('StoriesIndexPage', () => {
     const root = await StoriesIndexPage({ params: Promise.resolve({ repositoryId: '1' }) });
     render(root);
 
+    expect(loadDashboardRepositoriesMock).toHaveBeenCalledWith(false);
     expect(screen.getByRole('heading', { name: 'demo-repo / Stories' })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Board' })).toHaveAttribute('href', '/repositories/1/board');
 

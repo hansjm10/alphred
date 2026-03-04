@@ -659,7 +659,7 @@ describe('database schema hardening', () => {
     ]);
   });
 
-  it('adds repositories.branch_template when migrating a legacy repositories table', () => {
+  it('adds repositories archival and branch-template columns when migrating a legacy repositories table', () => {
     const db = createDatabase(':memory:');
 
     db.run(sql`CREATE TABLE repositories (
@@ -679,6 +679,7 @@ describe('database schema hardening', () => {
 
     const columns = db.all<{ name: string }>(sql`SELECT name FROM pragma_table_info('repositories') ORDER BY cid`);
     expect(columns.map(column => column.name)).toContain('branch_template');
+    expect(columns.map(column => column.name)).toContain('archived_at');
   });
 
   it('runs migrations reproducibly in repeated executions without dropping existing data', () => {
@@ -1941,6 +1942,7 @@ describe('database schema hardening', () => {
     expect(names.has('tree_nodes_node_key_idx')).toBe(true);
     expect(names.has('repositories_name_uq')).toBe(true);
     expect(names.has('repositories_name_idx')).toBe(false);
+    expect(names.has('repositories_archived_at_idx')).toBe(true);
     expect(names.has('repositories_created_at_idx')).toBe(true);
     expect(names.has('phase_artifacts_created_at_idx')).toBe(true);
     expect(names.has('routing_decisions_created_at_idx')).toBe(true);

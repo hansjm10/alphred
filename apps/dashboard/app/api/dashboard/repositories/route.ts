@@ -40,11 +40,37 @@ function parseCreateRepositoryRequest(payload: unknown): DashboardCreateReposito
   };
 }
 
-export async function GET(): Promise<Response> {
+function parseIncludeArchived(searchParams: URLSearchParams): boolean {
+  const raw = searchParams.get('includeArchived');
+  if (raw === null) {
+    return false;
+  }
+
+  if (raw === '1' || raw === 'true') {
+    return true;
+  }
+
+  if (raw === '0' || raw === 'false') {
+    return false;
+  }
+
+  throw new DashboardIntegrationError(
+    'invalid_request',
+    'Query parameter "includeArchived" must be one of: 1, 0, true, false.',
+    {
+      status: 400,
+    },
+  );
+}
+
+export async function GET(request: Request): Promise<Response> {
   const service = createDashboardService();
 
   try {
-    const repositories = await service.listRepositories();
+    const includeArchived = parseIncludeArchived(new URL(request.url).searchParams);
+    const repositories = await service.listRepositories({
+      includeArchived,
+    });
     return NextResponse.json({ repositories });
   } catch (error) {
     return toErrorResponse(error);

@@ -1,7 +1,9 @@
 import {
+  archiveRepository as archiveRepositoryConfig,
   getRepositoryByName,
   insertRepository,
   listRepositories as listRepositoryConfigs,
+  restoreRepository as restoreRepositoryConfig,
   type AlphredDatabase,
 } from '@alphred/db';
 import {
@@ -14,10 +16,12 @@ import {
   type RepositoryConfig,
 } from '@alphred/shared';
 import type {
+  DashboardArchiveRepositoryResult,
   DashboardCreateRepositoryRequest,
   DashboardCreateRepositoryResult,
   DashboardGitHubAuthStatus,
   DashboardRepositoryState,
+  DashboardRestoreRepositoryResult,
   DashboardRepositorySyncRequest,
   DashboardRepositorySyncResult,
 } from './dashboard-contracts';
@@ -41,10 +45,12 @@ export type RepositoryOperationsDependencies = {
 };
 
 export type RepositoryOperations = {
-  listRepositories: () => Promise<DashboardRepositoryState[]>;
+  listRepositories: (options?: { includeArchived?: boolean }) => Promise<DashboardRepositoryState[]>;
   createRepository: (request: DashboardCreateRepositoryRequest) => Promise<DashboardCreateRepositoryResult>;
   checkGitHubAuth: () => Promise<DashboardGitHubAuthStatus>;
   syncRepository: (repositoryName: string, request?: DashboardRepositorySyncRequest) => Promise<DashboardRepositorySyncResult>;
+  archiveRepository: (repositoryName: string) => Promise<DashboardArchiveRepositoryResult>;
+  restoreRepository: (repositoryName: string) => Promise<DashboardRestoreRepositoryResult>;
 };
 
 export function toAuthScmProviderConfig(repository: Pick<RepositoryConfig, 'provider' | 'remoteRef'>): ScmProviderConfig {
@@ -96,8 +102,10 @@ export function createRepositoryOperations(params: {
   const { withDatabase, dependencies, environment } = params;
 
   return {
-    listRepositories(): Promise<DashboardRepositoryState[]> {
-      return withDatabase(async db => listRepositoryConfigs(db).map(toRepositoryState));
+    listRepositories(options?: { includeArchived?: boolean }): Promise<DashboardRepositoryState[]> {
+      return withDatabase(async db =>
+        listRepositoryConfigs(db, { includeArchived: options?.includeArchived !== false }).map(toRepositoryState),
+      );
     },
 
     async createRepository(request: DashboardCreateRepositoryRequest): Promise<DashboardCreateRepositoryResult> {
@@ -116,7 +124,7 @@ export function createRepositoryOperations(params: {
       }
 
       return withDatabase(async db => {
-        const existing = getRepositoryByName(db, trimmedName);
+        const existing = getRepositoryByName(db, trimmedName, { includeArchived: true });
         if (existing) {
           throw new DashboardIntegrationError('conflict', `Repository "${trimmedName}" already exists.`, {
             status: 409,
@@ -139,7 +147,7 @@ export function createRepositoryOperations(params: {
 
     checkGitHubAuth(): Promise<DashboardGitHubAuthStatus> {
       return withDatabase(async db => {
-        const githubRepo = listRepositoryConfigs(db).find(repository => repository.provider === 'github');
+        const githubRepo = listRepositoryConfigs(db, { includeArchived: true }).find(repository => repository.provider === 'github');
         const provider = dependencies.createScmProvider({
           kind: 'github',
           repo: githubRepo?.remoteRef ?? environment.ALPHRED_DASHBOARD_GITHUB_AUTH_REPO ?? DEFAULT_GITHUB_AUTH_REPO,
@@ -165,11 +173,23 @@ export function createRepositoryOperations(params: {
       const strategy: RepositorySyncStrategy = request.strategy ?? 'ff-only';
 
       return withDatabase(async db => {
-        const repository = getRepositoryByName(db, trimmedRepositoryName);
+        const repository = getRepositoryByName(db, trimmedRepositoryName, { includeArchived: true });
         if (!repository) {
           throw new DashboardIntegrationError('not_found', `Repository "${trimmedRepositoryName}" was not found.`, {
             status: 404,
           });
+        }
+        if (repository.archivedAt !== null) {
+          throw new DashboardIntegrationError(
+            'conflict',
+            `Repository "${trimmedRepositoryName}" is archived. Restore it before syncing.`,
+            {
+              status: 409,
+              details: {
+                archivedAt: repository.archivedAt,
+              },
+            },
+          );
         }
 
         await ensureRepositoryAuth(repository, dependencies, environment);
@@ -208,6 +228,72 @@ export function createRepositoryOperations(params: {
           action: cloned.action,
           repository: toRepositoryState(cloned.repository),
           sync: syncDetails,
+        };
+      });
+    },
+
+    archiveRepository(repositoryName: string): Promise<DashboardArchiveRepositoryResult> {
+      const trimmedRepositoryName = repositoryName.trim();
+      if (trimmedRepositoryName.length === 0) {
+        throw new DashboardIntegrationError('invalid_request', 'Repository name cannot be empty.', {
+          status: 400,
+        });
+      }
+
+      return withDatabase(async db => {
+        const repository = getRepositoryByName(db, trimmedRepositoryName, { includeArchived: true });
+        if (!repository) {
+          throw new DashboardIntegrationError('not_found', `Repository "${trimmedRepositoryName}" was not found.`, {
+            status: 404,
+          });
+        }
+        if (repository.archivedAt !== null) {
+          throw new DashboardIntegrationError('conflict', `Repository "${trimmedRepositoryName}" is already archived.`, {
+            status: 409,
+          });
+        }
+
+        await ensureRepositoryAuth(repository, dependencies, environment);
+
+        return {
+          repository: toRepositoryState(
+            archiveRepositoryConfig(db, {
+              repositoryId: repository.id,
+            }),
+          ),
+        };
+      });
+    },
+
+    restoreRepository(repositoryName: string): Promise<DashboardRestoreRepositoryResult> {
+      const trimmedRepositoryName = repositoryName.trim();
+      if (trimmedRepositoryName.length === 0) {
+        throw new DashboardIntegrationError('invalid_request', 'Repository name cannot be empty.', {
+          status: 400,
+        });
+      }
+
+      return withDatabase(async db => {
+        const repository = getRepositoryByName(db, trimmedRepositoryName, { includeArchived: true });
+        if (!repository) {
+          throw new DashboardIntegrationError('not_found', `Repository "${trimmedRepositoryName}" was not found.`, {
+            status: 404,
+          });
+        }
+        if (repository.archivedAt === null) {
+          throw new DashboardIntegrationError('conflict', `Repository "${trimmedRepositoryName}" is not archived.`, {
+            status: 409,
+          });
+        }
+
+        await ensureRepositoryAuth(repository, dependencies, environment);
+
+        return {
+          repository: toRepositoryState(
+            restoreRepositoryConfig(db, {
+              repositoryId: repository.id,
+            }),
+          ),
         };
       });
     },

@@ -110,6 +110,7 @@ export function migrateDatabase(db: AlphredDatabase): void {
     branch_template TEXT,
     local_path TEXT,
     clone_status TEXT NOT NULL DEFAULT 'pending',
+    archived_at TEXT,
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
     updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
     CONSTRAINT repositories_provider_ck
@@ -121,9 +122,15 @@ export function migrateDatabase(db: AlphredDatabase): void {
     existsQuery: sql`SELECT COUNT(*) AS count FROM pragma_table_info('repositories') WHERE name = 'branch_template'`,
     alterQuery: sql`ALTER TABLE repositories ADD COLUMN branch_template TEXT`,
   });
+  addColumnIfMissing(tx, {
+    existsQuery: sql`SELECT COUNT(*) AS count FROM pragma_table_info('repositories') WHERE name = 'archived_at'`,
+    alterQuery: sql`ALTER TABLE repositories ADD COLUMN archived_at TEXT`,
+  });
   tx.run(sql`CREATE UNIQUE INDEX IF NOT EXISTS repositories_name_uq
     ON repositories(name)`);
   tx.run(sql`DROP INDEX IF EXISTS repositories_name_idx`);
+  tx.run(sql`CREATE INDEX IF NOT EXISTS repositories_archived_at_idx
+    ON repositories(archived_at)`);
   tx.run(sql`CREATE INDEX IF NOT EXISTS repositories_created_at_idx
     ON repositories(created_at)`);
 

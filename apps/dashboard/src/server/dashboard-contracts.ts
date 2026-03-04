@@ -156,6 +156,7 @@ export type DashboardRepositoryState = {
   branchTemplate: string | null;
   cloneStatus: 'pending' | 'cloned' | 'error';
   localPath: string | null;
+  archivedAt: string | null;
 };
 
 export type DashboardRunSummary = {
@@ -422,6 +423,14 @@ export type DashboardCreateRepositoryRequest = {
 };
 
 export type DashboardCreateRepositoryResult = {
+  repository: DashboardRepositoryState;
+};
+
+export type DashboardArchiveRepositoryResult = {
+  repository: DashboardRepositoryState;
+};
+
+export type DashboardRestoreRepositoryResult = {
   repository: DashboardRepositoryState;
 };
 

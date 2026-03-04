@@ -3,10 +3,12 @@ import { describe, expect, it } from 'vitest';
 import { createDatabase } from './connection.js';
 import { migrateDatabase } from './migrate.js';
 import {
+  archiveRepository,
   getRepositoryById,
   getRepositoryByName,
   insertRepository,
   listRepositories,
+  restoreRepository,
   updateRepositoryCloneStatus,
 } from './repositories.js';
 import { repositories } from './schema.js';
@@ -31,6 +33,7 @@ describe('repository registry CRUD helpers', () => {
     expect(inserted.branchTemplate).toBeNull();
     expect(inserted.localPath).toBeNull();
     expect(inserted.cloneStatus).toBe('pending');
+    expect(inserted.archivedAt).toBeNull();
 
     const byId = getRepositoryById(db, inserted.id);
     const byName = getRepositoryByName(db, inserted.name);
@@ -55,6 +58,29 @@ describe('repository registry CRUD helpers', () => {
 
     const listed = listRepositories(db);
     expect(listed.map(repository => repository.name)).toEqual(['alpha-service', 'zeta-service']);
+  });
+
+  it('includes archived repositories by default and allows opt-out listing', () => {
+    const db = createMigratedDb();
+    const active = insertRepository(db, {
+      name: 'active-repo',
+      provider: 'github',
+      remoteUrl: 'https://github.com/acme/active-repo.git',
+      remoteRef: 'acme/active-repo',
+    });
+    const archived = insertRepository(db, {
+      name: 'archived-repo',
+      provider: 'github',
+      remoteUrl: 'https://github.com/acme/archived-repo.git',
+      remoteRef: 'acme/archived-repo',
+    });
+    archiveRepository(db, { repositoryId: archived.id, occurredAt: '2026-03-03T00:00:00.000Z' });
+
+    expect(listRepositories(db).map(repository => repository.name)).toEqual([
+      active.name,
+      archived.name,
+    ]);
+    expect(listRepositories(db, { includeArchived: false }).map(repository => repository.name)).toEqual([active.name]);
   });
 
   it('updates clone status and local path', () => {
@@ -158,6 +184,54 @@ describe('repository registry CRUD helpers', () => {
         cloneStatus: 'error',
       }),
     ).toThrow('Repository clone-status update precondition failed for id=999.');
+  });
+
+  it('archives and restores repositories', () => {
+    const db = createMigratedDb();
+    const inserted = insertRepository(db, {
+      name: 'archivable',
+      provider: 'github',
+      remoteUrl: 'https://github.com/acme/archivable.git',
+      remoteRef: 'acme/archivable',
+    });
+
+    const archived = archiveRepository(db, {
+      repositoryId: inserted.id,
+      occurredAt: '2026-03-03T10:20:30.000Z',
+    });
+    expect(archived.archivedAt).toBe('2026-03-03T10:20:30.000Z');
+    expect(getRepositoryById(db, inserted.id)?.archivedAt).toBe('2026-03-03T10:20:30.000Z');
+    expect(getRepositoryByName(db, inserted.name)?.archivedAt).toBe('2026-03-03T10:20:30.000Z');
+    expect(getRepositoryByName(db, inserted.name, { includeArchived: false })).toBeNull();
+    expect(getRepositoryByName(db, inserted.name, { includeArchived: true })?.archivedAt).toBe(
+      '2026-03-03T10:20:30.000Z',
+    );
+
+    const restored = restoreRepository(db, {
+      repositoryId: inserted.id,
+      occurredAt: '2026-03-03T11:00:00.000Z',
+    });
+    expect(restored.archivedAt).toBeNull();
+    expect(getRepositoryByName(db, inserted.name)?.id).toBe(inserted.id);
+  });
+
+  it('enforces archive/restore preconditions', () => {
+    const db = createMigratedDb();
+    const inserted = insertRepository(db, {
+      name: 'preconditions',
+      provider: 'github',
+      remoteUrl: 'https://github.com/acme/preconditions.git',
+      remoteRef: 'acme/preconditions',
+    });
+
+    expect(() => restoreRepository(db, { repositoryId: inserted.id })).toThrow(
+      `Repository restore precondition failed for id=${inserted.id}.`,
+    );
+
+    archiveRepository(db, { repositoryId: inserted.id });
+    expect(() => archiveRepository(db, { repositoryId: inserted.id })).toThrow(
+      `Repository archive precondition failed for id=${inserted.id}.`,
+    );
   });
 
   it('enforces unique repository names', () => {

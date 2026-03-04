@@ -25,6 +25,7 @@ export function toRepositoryState(repository: RepositoryConfig): DashboardReposi
     branchTemplate: repository.branchTemplate,
     cloneStatus: repository.cloneStatus,
     localPath: repository.localPath,
+    archivedAt: repository.archivedAt,
   };
 }
 

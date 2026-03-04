@@ -45,6 +45,7 @@ function createRepository(overrides: Partial<DashboardRepositoryState> = {}): Da
     branchTemplate: overrides.branchTemplate ?? null,
     cloneStatus: overrides.cloneStatus ?? 'cloned',
     localPath: overrides.localPath ?? `/tmp/repos/${name}`,
+    archivedAt: overrides.archivedAt ?? null,
   };
 }
 
@@ -263,6 +264,7 @@ describe('RunDetailPage', () => {
     render(await RunDetailPage({ params: Promise.resolve({ runId: '410' }) }));
 
     expect(loadDashboardRunDetailMock).toHaveBeenCalledWith(410);
+    expect(loadDashboardRepositoriesMock).toHaveBeenCalledWith(true);
     expect(screen.getByRole('heading', { name: 'Run #410' })).toBeInTheDocument();
     expect(screen.getByText('demo-repo')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Open Worktree' })).toHaveAttribute('href', '/runs/410/worktree');

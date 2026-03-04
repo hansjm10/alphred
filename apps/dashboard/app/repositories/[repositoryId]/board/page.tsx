@@ -30,7 +30,7 @@ export default async function RepositoryBoardPage({ params }: RepositoryBoardPag
   const service = createDashboardService();
 
   const [repositories, authGate] = await Promise.all([
-    service.listRepositories(),
+    service.listRepositories({ includeArchived: false }),
     loadGitHubAuthGate(),
   ]);
 

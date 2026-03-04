@@ -88,6 +88,7 @@ export const repositories = sqliteTable(
     branchTemplate: text('branch_template'),
     localPath: text('local_path'),
     cloneStatus: text('clone_status').notNull().default('pending'),
+    archivedAt: text('archived_at'),
     createdAt: text('created_at').notNull().default(utcNow),
     updatedAt: text('updated_at').notNull().default(utcNow),
   },
@@ -95,6 +96,7 @@ export const repositories = sqliteTable(
     nameUnique: uniqueIndex('repositories_name_uq').on(table.name),
     providerCheck: check('repositories_provider_ck', sql`${table.provider} in ('github', 'azure-devops')`),
     cloneStatusCheck: check('repositories_clone_status_ck', sql`${table.cloneStatus} in ('pending', 'cloned', 'error')`),
+    archivedAtIdx: index('repositories_archived_at_idx').on(table.archivedAt),
     createdAtIdx: index('repositories_created_at_idx').on(table.createdAt),
   }),
 );

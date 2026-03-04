@@ -57,6 +57,7 @@ function createRepository(overrides: Partial<DashboardRepositoryState> = {}): Da
     branchTemplate: overrides.branchTemplate ?? null,
     cloneStatus: overrides.cloneStatus ?? 'cloned',
     localPath: overrides.localPath ?? '/tmp/repos/demo-repo',
+    archivedAt: overrides.archivedAt ?? null,
   };
 }
 
@@ -102,6 +103,7 @@ describe('StoryDetailPage', () => {
 
     await renderStoryPage({ repositoryId: '1', storyId: '3' });
 
+    expect(loadDashboardRepositoriesMock).toHaveBeenCalledWith(false);
     const payload = JSON.parse(screen.getByTestId('payload').textContent ?? '{}');
     expect(payload.repository.name).toBe('demo-repo');
     expect(payload.actor.actorLabel).toBe('octocat');

@@ -71,6 +71,7 @@ function createHarness(options: {
         branchTemplate: null,
         localPath: '/tmp/repo',
         cloneStatus: 'cloned',
+        archivedAt: null,
       } satisfies RepositoryConfig,
     }),
     createSqlWorkflowPlanner: inputDb => createSqlWorkflowPlanner(inputDb),
@@ -1008,6 +1009,77 @@ describe('work-item-operations', () => {
       .get();
     const eventPayload = event?.payload as { linkedWorkflowRun?: { workflowRunId?: number } | null };
     expect(eventPayload.linkedWorkflowRun?.workflowRunId).toBe(moved.workItem.linkedWorkflowRun?.workflowRunId);
+  });
+
+  it('blocks autolaunch when repository is archived', async () => {
+    const { db, service } = createHarness({
+      environment: {
+        ...process.env,
+        ALPHRED_DASHBOARD_TASK_RUN_AUTOLAUNCH: '1',
+        ALPHRED_DASHBOARD_TASK_RUN_TREE_KEY: 'design-implement-review',
+      },
+    });
+
+    const repository = insertRepository(db, {
+      name: 'repo',
+      provider: 'github',
+      remoteUrl: 'https://example.com/repo.git',
+      remoteRef: 'acme/repo',
+    });
+
+    seedPublishedWorkflowTree(db, { treeKey: 'design-implement-review', provider: 'codex' });
+    await service.archiveRepository(repository.name);
+
+    const taskId = Number(
+      db.insert(workItems)
+        .values({
+          repositoryId: repository.id,
+          type: 'task',
+          status: 'Ready',
+          title: 'Archived autolaunch task',
+          revision: 0,
+        })
+        .run().lastInsertRowid,
+    );
+
+    await expect(
+      service.moveWorkItemStatus({
+        repositoryId: repository.id,
+        workItemId: taskId,
+        expectedRevision: 0,
+        toStatus: 'InProgress',
+        actorType: 'human',
+        actorLabel: 'alice',
+      }),
+    ).rejects.toMatchObject({
+      code: 'conflict',
+      status: 409,
+      message: 'Repository "repo" is archived. Restore it before launching runs.',
+    });
+
+    const taskRow = db
+      .select({
+        status: workItems.status,
+        revision: workItems.revision,
+      })
+      .from(workItems)
+      .where(and(eq(workItems.repositoryId, repository.id), eq(workItems.id, taskId)))
+      .get();
+    expect(taskRow).toEqual({
+      status: 'Ready',
+      revision: 0,
+    });
+
+    const linkedRows = db
+      .select()
+      .from(workItemWorkflowRuns)
+      .where(and(eq(workItemWorkflowRuns.repositoryId, repository.id), eq(workItemWorkflowRuns.workItemId, taskId)))
+      .all();
+    expect(linkedRows).toHaveLength(0);
+
+    const runRows = db.select().from(workflowRuns).orderBy(desc(workflowRuns.id)).all();
+    expect(runRows).toHaveLength(1);
+    expect(runRows[0]?.status).toBe('cancelled');
   });
 
   it('rejects invalid autolaunch move requests before creating workflow runs', async () => {

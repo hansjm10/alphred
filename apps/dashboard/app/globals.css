@@ -400,6 +400,18 @@ output {
   justify-content: space-between;
 }
 
+.repo-show-archived {
+  align-items: center;
+  display: inline-flex;
+  gap: 8px;
+  font: 400 13px/20px var(--font-body);
+  white-space: nowrap;
+}
+
+.repo-show-archived input {
+  accent-color: var(--accent-active);
+}
+
 .repositories-search {
   display: grid;
   gap: 4px;
@@ -453,6 +465,12 @@ output {
 
 .repositories-table tbody tr:last-child td {
   border-bottom: 0;
+}
+
+.repo-table-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 
 .repositories-row--selected {
