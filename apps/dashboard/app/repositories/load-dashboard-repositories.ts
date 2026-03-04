@@ -3,7 +3,7 @@ import type { DashboardRepositoryState } from '@dashboard/server/dashboard-contr
 import { createDashboardService } from '@dashboard/server/dashboard-service';
 
 export const loadDashboardRepositories = cache(
-  async (includeArchived = false): Promise<readonly DashboardRepositoryState[]> => {
+  async (includeArchived = true): Promise<readonly DashboardRepositoryState[]> => {
     const service = createDashboardService();
     return service.listRepositories({ includeArchived });
   },
