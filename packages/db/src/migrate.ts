@@ -13,6 +13,63 @@ import {
 
 type MigrationExecutor = Pick<AlphredDatabase, 'get' | 'run'>;
 
+const TASK_WORK_REVIEW_LOOP_TREE_KEY = 'task-work-review-loop';
+const TASK_WORK_REVIEW_LOOP_WORK_PROMPT_TEMPLATE_KEY = `${TASK_WORK_REVIEW_LOOP_TREE_KEY}/v1/work/prompt`;
+const TASK_WORK_REVIEW_LOOP_REVIEW_PROMPT_TEMPLATE_KEY = `${TASK_WORK_REVIEW_LOOP_TREE_KEY}/v1/review/prompt`;
+const TASK_WORK_REVIEW_LOOP_FIX_PROMPT_TEMPLATE_KEY = `${TASK_WORK_REVIEW_LOOP_TREE_KEY}/v1/fix/prompt`;
+const TASK_WORK_REVIEW_LOOP_APPROVED_PROMPT_TEMPLATE_KEY = `${TASK_WORK_REVIEW_LOOP_TREE_KEY}/v1/approved/prompt`;
+const TASK_WORK_REVIEW_LOOP_REVIEW_TO_FIX_GUARD_KEY = `${TASK_WORK_REVIEW_LOOP_TREE_KEY}/v1/review->fix/changes-requested`;
+const TASK_WORK_REVIEW_LOOP_REVIEW_TO_FIX_BLOCKED_GUARD_KEY = `${TASK_WORK_REVIEW_LOOP_TREE_KEY}/v1/review->fix/blocked`;
+const TASK_WORK_REVIEW_LOOP_REVIEW_TO_FIX_RETRY_GUARD_KEY = `${TASK_WORK_REVIEW_LOOP_TREE_KEY}/v1/review->fix/retry`;
+const TASK_WORK_REVIEW_LOOP_REVIEW_TO_APPROVED_GUARD_KEY = `${TASK_WORK_REVIEW_LOOP_TREE_KEY}/v1/review->approved/approved`;
+const TASK_WORK_REVIEW_LOOP_EXECUTION_PERMISSIONS = JSON.stringify({
+  sandboxMode: 'workspace-write',
+});
+const TASK_WORK_REVIEW_LOOP_WORK_PROMPT_CONTENT = [
+  'You are the task execution phase.',
+  'Implement the assigned task with concrete code changes.',
+  'Run relevant tests or checks when possible.',
+  'Return a concise implementation report of what changed and what was validated.',
+].join('\n');
+const TASK_WORK_REVIEW_LOOP_REVIEW_PROMPT_CONTENT = [
+  'You are the task review phase.',
+  'Review the implementation for correctness, regressions, and missing validation.',
+  'Emit exactly one routing decision line in this format:',
+  'result.metadata.routingDecision: <approved|changes_requested|blocked|retry>',
+  'Use `changes_requested` to send work back for fixes.',
+  'Use `approved` only when the implementation is ready to ship.',
+].join('\n');
+const TASK_WORK_REVIEW_LOOP_FIX_PROMPT_CONTENT = [
+  'You are the task fix phase.',
+  'Address every review finding with concrete code changes.',
+  'Run relevant tests or checks when possible.',
+  'Return a concise fix report mapping each requested change to what was updated.',
+].join('\n');
+const TASK_WORK_REVIEW_LOOP_APPROVED_PROMPT_CONTENT = [
+  'The task has been approved.',
+  'Produce a short completion summary and call out any follow-up risks or TODOs.',
+].join('\n');
+const TASK_WORK_REVIEW_LOOP_REVIEW_TO_FIX_GUARD_EXPRESSION = JSON.stringify({
+  field: 'decision',
+  operator: '==',
+  value: 'changes_requested',
+});
+const TASK_WORK_REVIEW_LOOP_REVIEW_TO_FIX_BLOCKED_GUARD_EXPRESSION = JSON.stringify({
+  field: 'decision',
+  operator: '==',
+  value: 'blocked',
+});
+const TASK_WORK_REVIEW_LOOP_REVIEW_TO_FIX_RETRY_GUARD_EXPRESSION = JSON.stringify({
+  field: 'decision',
+  operator: '==',
+  value: 'retry',
+});
+const TASK_WORK_REVIEW_LOOP_REVIEW_TO_APPROVED_GUARD_EXPRESSION = JSON.stringify({
+  field: 'decision',
+  operator: '==',
+  value: 'approved',
+});
+
 function addColumnIfMissing(
   tx: MigrationExecutor,
   params: {
@@ -1390,5 +1447,613 @@ export function migrateDatabase(db: AlphredDatabase): void {
     ON run_node_stream_events(run_node_id, created_at)`);
   tx.run(sql`CREATE INDEX IF NOT EXISTS run_node_stream_events_created_at_idx
     ON run_node_stream_events(created_at)`);
+
+  tx.run(sql`INSERT INTO workflow_trees (
+      tree_key,
+      version,
+      status,
+      name,
+      description,
+      version_notes,
+      draft_revision
+    )
+    SELECT
+      ${TASK_WORK_REVIEW_LOOP_TREE_KEY},
+      1,
+      'published',
+      'Task Work Review Loop',
+      'Executes task work and review in a loop until approved.',
+      'Seeded default task execution workflow with review loop routing.',
+      0
+    WHERE NOT EXISTS (
+      SELECT 1
+      FROM workflow_trees
+      WHERE tree_key = ${TASK_WORK_REVIEW_LOOP_TREE_KEY}
+        AND version = 1
+    )`);
+
+  tx.run(sql`INSERT INTO prompt_templates (
+      template_key,
+      version,
+      content,
+      content_type
+    )
+    SELECT
+      ${TASK_WORK_REVIEW_LOOP_WORK_PROMPT_TEMPLATE_KEY},
+      1,
+      ${TASK_WORK_REVIEW_LOOP_WORK_PROMPT_CONTENT},
+      'markdown'
+    WHERE NOT EXISTS (
+      SELECT 1
+      FROM prompt_templates
+      WHERE template_key = ${TASK_WORK_REVIEW_LOOP_WORK_PROMPT_TEMPLATE_KEY}
+        AND version = 1
+    )`);
+
+  tx.run(sql`INSERT INTO prompt_templates (
+      template_key,
+      version,
+      content,
+      content_type
+    )
+    SELECT
+      ${TASK_WORK_REVIEW_LOOP_REVIEW_PROMPT_TEMPLATE_KEY},
+      1,
+      ${TASK_WORK_REVIEW_LOOP_REVIEW_PROMPT_CONTENT},
+      'markdown'
+    WHERE NOT EXISTS (
+      SELECT 1
+      FROM prompt_templates
+      WHERE template_key = ${TASK_WORK_REVIEW_LOOP_REVIEW_PROMPT_TEMPLATE_KEY}
+        AND version = 1
+    )`);
+
+  tx.run(sql`INSERT INTO prompt_templates (
+      template_key,
+      version,
+      content,
+      content_type
+    )
+    SELECT
+      ${TASK_WORK_REVIEW_LOOP_FIX_PROMPT_TEMPLATE_KEY},
+      1,
+      ${TASK_WORK_REVIEW_LOOP_FIX_PROMPT_CONTENT},
+      'markdown'
+    WHERE NOT EXISTS (
+      SELECT 1
+      FROM prompt_templates
+      WHERE template_key = ${TASK_WORK_REVIEW_LOOP_FIX_PROMPT_TEMPLATE_KEY}
+        AND version = 1
+    )`);
+
+  tx.run(sql`INSERT INTO prompt_templates (
+      template_key,
+      version,
+      content,
+      content_type
+    )
+    SELECT
+      ${TASK_WORK_REVIEW_LOOP_APPROVED_PROMPT_TEMPLATE_KEY},
+      1,
+      ${TASK_WORK_REVIEW_LOOP_APPROVED_PROMPT_CONTENT},
+      'markdown'
+    WHERE NOT EXISTS (
+      SELECT 1
+      FROM prompt_templates
+      WHERE template_key = ${TASK_WORK_REVIEW_LOOP_APPROVED_PROMPT_TEMPLATE_KEY}
+        AND version = 1
+    )`);
+
+  tx.run(sql`INSERT INTO guard_definitions (
+      guard_key,
+      version,
+      expression,
+      description
+    )
+    SELECT
+      ${TASK_WORK_REVIEW_LOOP_REVIEW_TO_FIX_GUARD_KEY},
+      1,
+      ${TASK_WORK_REVIEW_LOOP_REVIEW_TO_FIX_GUARD_EXPRESSION},
+      'Route review outcomes that request more changes to the fix phase.'
+    WHERE NOT EXISTS (
+      SELECT 1
+      FROM guard_definitions
+      WHERE guard_key = ${TASK_WORK_REVIEW_LOOP_REVIEW_TO_FIX_GUARD_KEY}
+        AND version = 1
+    )`);
+
+  tx.run(sql`INSERT INTO guard_definitions (
+      guard_key,
+      version,
+      expression,
+      description
+    )
+    SELECT
+      ${TASK_WORK_REVIEW_LOOP_REVIEW_TO_FIX_BLOCKED_GUARD_KEY},
+      1,
+      ${TASK_WORK_REVIEW_LOOP_REVIEW_TO_FIX_BLOCKED_GUARD_EXPRESSION},
+      'Route review outcomes that are blocked to the fix phase.'
+    WHERE NOT EXISTS (
+      SELECT 1
+      FROM guard_definitions
+      WHERE guard_key = ${TASK_WORK_REVIEW_LOOP_REVIEW_TO_FIX_BLOCKED_GUARD_KEY}
+        AND version = 1
+    )`);
+
+  tx.run(sql`INSERT INTO guard_definitions (
+      guard_key,
+      version,
+      expression,
+      description
+    )
+    SELECT
+      ${TASK_WORK_REVIEW_LOOP_REVIEW_TO_FIX_RETRY_GUARD_KEY},
+      1,
+      ${TASK_WORK_REVIEW_LOOP_REVIEW_TO_FIX_RETRY_GUARD_EXPRESSION},
+      'Route review outcomes that request retry to the fix phase.'
+    WHERE NOT EXISTS (
+      SELECT 1
+      FROM guard_definitions
+      WHERE guard_key = ${TASK_WORK_REVIEW_LOOP_REVIEW_TO_FIX_RETRY_GUARD_KEY}
+        AND version = 1
+    )`);
+
+  tx.run(sql`INSERT INTO guard_definitions (
+      guard_key,
+      version,
+      expression,
+      description
+    )
+    SELECT
+      ${TASK_WORK_REVIEW_LOOP_REVIEW_TO_APPROVED_GUARD_KEY},
+      1,
+      ${TASK_WORK_REVIEW_LOOP_REVIEW_TO_APPROVED_GUARD_EXPRESSION},
+      'Route review outcomes that are approved to terminal completion.'
+    WHERE NOT EXISTS (
+      SELECT 1
+      FROM guard_definitions
+      WHERE guard_key = ${TASK_WORK_REVIEW_LOOP_REVIEW_TO_APPROVED_GUARD_KEY}
+        AND version = 1
+    )`);
+
+  tx.run(sql`INSERT INTO tree_nodes (
+      workflow_tree_id,
+      node_key,
+      display_name,
+      node_type,
+      node_role,
+      provider,
+      model,
+      execution_permissions,
+      error_handler_config,
+      prompt_template_id,
+      max_children,
+      max_retries,
+      sequence_index,
+      position_x,
+      position_y
+    )
+    SELECT
+      trees.id,
+      'work',
+      'Work',
+      'agent',
+      'standard',
+      'codex',
+      'gpt-5-codex',
+      ${TASK_WORK_REVIEW_LOOP_EXECUTION_PERMISSIONS},
+      NULL,
+      prompts.id,
+      12,
+      0,
+      10,
+      0,
+      0
+    FROM workflow_trees AS trees
+    INNER JOIN prompt_templates AS prompts
+      ON prompts.template_key = ${TASK_WORK_REVIEW_LOOP_WORK_PROMPT_TEMPLATE_KEY}
+      AND prompts.version = 1
+    WHERE trees.tree_key = ${TASK_WORK_REVIEW_LOOP_TREE_KEY}
+      AND trees.version = 1
+      AND NOT EXISTS (
+        SELECT 1
+        FROM tree_nodes
+        WHERE workflow_tree_id = trees.id
+          AND node_key = 'work'
+      )`);
+
+  tx.run(sql`INSERT INTO tree_nodes (
+      workflow_tree_id,
+      node_key,
+      display_name,
+      node_type,
+      node_role,
+      provider,
+      model,
+      execution_permissions,
+      error_handler_config,
+      prompt_template_id,
+      max_children,
+      max_retries,
+      sequence_index,
+      position_x,
+      position_y
+    )
+    SELECT
+      trees.id,
+      'review',
+      'Review',
+      'agent',
+      'standard',
+      'codex',
+      'gpt-5-codex',
+      ${TASK_WORK_REVIEW_LOOP_EXECUTION_PERMISSIONS},
+      NULL,
+      prompts.id,
+      12,
+      0,
+      20,
+      320,
+      0
+    FROM workflow_trees AS trees
+    INNER JOIN prompt_templates AS prompts
+      ON prompts.template_key = ${TASK_WORK_REVIEW_LOOP_REVIEW_PROMPT_TEMPLATE_KEY}
+      AND prompts.version = 1
+    WHERE trees.tree_key = ${TASK_WORK_REVIEW_LOOP_TREE_KEY}
+      AND trees.version = 1
+      AND NOT EXISTS (
+        SELECT 1
+        FROM tree_nodes
+        WHERE workflow_tree_id = trees.id
+          AND node_key = 'review'
+      )`);
+
+  tx.run(sql`INSERT INTO tree_nodes (
+      workflow_tree_id,
+      node_key,
+      display_name,
+      node_type,
+      node_role,
+      provider,
+      model,
+      execution_permissions,
+      error_handler_config,
+      prompt_template_id,
+      max_children,
+      max_retries,
+      sequence_index,
+      position_x,
+      position_y
+    )
+    SELECT
+      trees.id,
+      'fix',
+      'Fix',
+      'agent',
+      'standard',
+      'codex',
+      'gpt-5-codex',
+      ${TASK_WORK_REVIEW_LOOP_EXECUTION_PERMISSIONS},
+      NULL,
+      prompts.id,
+      12,
+      0,
+      25,
+      480,
+      0
+    FROM workflow_trees AS trees
+    INNER JOIN prompt_templates AS prompts
+      ON prompts.template_key = ${TASK_WORK_REVIEW_LOOP_FIX_PROMPT_TEMPLATE_KEY}
+      AND prompts.version = 1
+    WHERE trees.tree_key = ${TASK_WORK_REVIEW_LOOP_TREE_KEY}
+      AND trees.version = 1
+      AND NOT EXISTS (
+        SELECT 1
+        FROM tree_nodes
+        WHERE workflow_tree_id = trees.id
+          AND node_key = 'fix'
+      )`);
+
+  tx.run(sql`INSERT INTO tree_nodes (
+      workflow_tree_id,
+      node_key,
+      display_name,
+      node_type,
+      node_role,
+      provider,
+      model,
+      execution_permissions,
+      error_handler_config,
+      prompt_template_id,
+      max_children,
+      max_retries,
+      sequence_index,
+      position_x,
+      position_y
+    )
+    SELECT
+      trees.id,
+      'approved',
+      'Approved',
+      'agent',
+      'standard',
+      'codex',
+      'gpt-5-codex',
+      ${TASK_WORK_REVIEW_LOOP_EXECUTION_PERMISSIONS},
+      NULL,
+      prompts.id,
+      12,
+      0,
+      30,
+      640,
+      0
+    FROM workflow_trees AS trees
+    INNER JOIN prompt_templates AS prompts
+      ON prompts.template_key = ${TASK_WORK_REVIEW_LOOP_APPROVED_PROMPT_TEMPLATE_KEY}
+      AND prompts.version = 1
+    WHERE trees.tree_key = ${TASK_WORK_REVIEW_LOOP_TREE_KEY}
+      AND trees.version = 1
+      AND NOT EXISTS (
+        SELECT 1
+        FROM tree_nodes
+        WHERE workflow_tree_id = trees.id
+          AND node_key = 'approved'
+      )`);
+
+  tx.run(sql`UPDATE tree_nodes
+    SET execution_permissions = ${TASK_WORK_REVIEW_LOOP_EXECUTION_PERMISSIONS}
+    WHERE workflow_tree_id IN (
+      SELECT id
+      FROM workflow_trees
+      WHERE tree_key = ${TASK_WORK_REVIEW_LOOP_TREE_KEY}
+        AND version = 1
+    )
+      AND node_key IN ('work', 'review', 'fix', 'approved')
+      AND COALESCE(execution_permissions, '') <> ${TASK_WORK_REVIEW_LOOP_EXECUTION_PERMISSIONS}`);
+
+  tx.run(sql`INSERT INTO tree_edges (
+      workflow_tree_id,
+      source_node_id,
+      target_node_id,
+      route_on,
+      priority,
+      auto,
+      guard_definition_id
+    )
+    SELECT
+      trees.id,
+      source_node.id,
+      target_node.id,
+      'success',
+      100,
+      1,
+      NULL
+    FROM workflow_trees AS trees
+    INNER JOIN tree_nodes AS source_node
+      ON source_node.workflow_tree_id = trees.id
+      AND source_node.node_key = 'work'
+    INNER JOIN tree_nodes AS target_node
+      ON target_node.workflow_tree_id = trees.id
+      AND target_node.node_key = 'review'
+    WHERE trees.tree_key = ${TASK_WORK_REVIEW_LOOP_TREE_KEY}
+      AND trees.version = 1
+      AND NOT EXISTS (
+        SELECT 1
+        FROM tree_edges AS edges
+        WHERE edges.workflow_tree_id = trees.id
+          AND edges.source_node_id = source_node.id
+          AND edges.target_node_id = target_node.id
+          AND edges.route_on = 'success'
+          AND edges.priority = 100
+      )`);
+
+  tx.run(sql`DELETE FROM tree_edges
+    WHERE id IN (
+      SELECT edges.id
+      FROM tree_edges AS edges
+      INNER JOIN workflow_trees AS trees
+        ON trees.id = edges.workflow_tree_id
+      INNER JOIN tree_nodes AS source_node
+        ON source_node.id = edges.source_node_id
+      INNER JOIN tree_nodes AS target_node
+        ON target_node.id = edges.target_node_id
+      WHERE trees.tree_key = ${TASK_WORK_REVIEW_LOOP_TREE_KEY}
+        AND trees.version = 1
+        AND source_node.node_key = 'review'
+        AND target_node.node_key = 'work'
+        AND edges.route_on = 'success'
+    )`);
+
+  tx.run(sql`INSERT INTO tree_edges (
+      workflow_tree_id,
+      source_node_id,
+      target_node_id,
+      route_on,
+      priority,
+      auto,
+      guard_definition_id
+    )
+    SELECT
+      trees.id,
+      source_node.id,
+      target_node.id,
+      'success',
+      100,
+      1,
+      NULL
+    FROM workflow_trees AS trees
+    INNER JOIN tree_nodes AS source_node
+      ON source_node.workflow_tree_id = trees.id
+      AND source_node.node_key = 'fix'
+    INNER JOIN tree_nodes AS target_node
+      ON target_node.workflow_tree_id = trees.id
+      AND target_node.node_key = 'review'
+    WHERE trees.tree_key = ${TASK_WORK_REVIEW_LOOP_TREE_KEY}
+      AND trees.version = 1
+      AND NOT EXISTS (
+        SELECT 1
+        FROM tree_edges AS edges
+        WHERE edges.workflow_tree_id = trees.id
+          AND edges.source_node_id = source_node.id
+          AND edges.target_node_id = target_node.id
+          AND edges.route_on = 'success'
+          AND edges.priority = 100
+      )`);
+
+  tx.run(sql`INSERT INTO tree_edges (
+      workflow_tree_id,
+      source_node_id,
+      target_node_id,
+      route_on,
+      priority,
+      auto,
+      guard_definition_id
+    )
+    SELECT
+      trees.id,
+      source_node.id,
+      target_node.id,
+      'success',
+      10,
+      0,
+      guard.id
+    FROM workflow_trees AS trees
+    INNER JOIN tree_nodes AS source_node
+      ON source_node.workflow_tree_id = trees.id
+      AND source_node.node_key = 'review'
+    INNER JOIN tree_nodes AS target_node
+      ON target_node.workflow_tree_id = trees.id
+      AND target_node.node_key = 'fix'
+    INNER JOIN guard_definitions AS guard
+      ON guard.guard_key = ${TASK_WORK_REVIEW_LOOP_REVIEW_TO_FIX_GUARD_KEY}
+      AND guard.version = 1
+    WHERE trees.tree_key = ${TASK_WORK_REVIEW_LOOP_TREE_KEY}
+      AND trees.version = 1
+      AND NOT EXISTS (
+        SELECT 1
+        FROM tree_edges AS edges
+        WHERE edges.workflow_tree_id = trees.id
+          AND edges.source_node_id = source_node.id
+          AND edges.target_node_id = target_node.id
+          AND edges.route_on = 'success'
+          AND edges.priority = 10
+      )`);
+
+  tx.run(sql`INSERT INTO tree_edges (
+      workflow_tree_id,
+      source_node_id,
+      target_node_id,
+      route_on,
+      priority,
+      auto,
+      guard_definition_id
+    )
+    SELECT
+      trees.id,
+      source_node.id,
+      target_node.id,
+      'success',
+      11,
+      0,
+      guard.id
+    FROM workflow_trees AS trees
+    INNER JOIN tree_nodes AS source_node
+      ON source_node.workflow_tree_id = trees.id
+      AND source_node.node_key = 'review'
+    INNER JOIN tree_nodes AS target_node
+      ON target_node.workflow_tree_id = trees.id
+      AND target_node.node_key = 'fix'
+    INNER JOIN guard_definitions AS guard
+      ON guard.guard_key = ${TASK_WORK_REVIEW_LOOP_REVIEW_TO_FIX_BLOCKED_GUARD_KEY}
+      AND guard.version = 1
+    WHERE trees.tree_key = ${TASK_WORK_REVIEW_LOOP_TREE_KEY}
+      AND trees.version = 1
+      AND NOT EXISTS (
+        SELECT 1
+        FROM tree_edges AS edges
+        WHERE edges.workflow_tree_id = trees.id
+          AND edges.source_node_id = source_node.id
+          AND edges.target_node_id = target_node.id
+          AND edges.route_on = 'success'
+          AND edges.priority = 11
+      )`);
+
+  tx.run(sql`INSERT INTO tree_edges (
+      workflow_tree_id,
+      source_node_id,
+      target_node_id,
+      route_on,
+      priority,
+      auto,
+      guard_definition_id
+    )
+    SELECT
+      trees.id,
+      source_node.id,
+      target_node.id,
+      'success',
+      12,
+      0,
+      guard.id
+    FROM workflow_trees AS trees
+    INNER JOIN tree_nodes AS source_node
+      ON source_node.workflow_tree_id = trees.id
+      AND source_node.node_key = 'review'
+    INNER JOIN tree_nodes AS target_node
+      ON target_node.workflow_tree_id = trees.id
+      AND target_node.node_key = 'fix'
+    INNER JOIN guard_definitions AS guard
+      ON guard.guard_key = ${TASK_WORK_REVIEW_LOOP_REVIEW_TO_FIX_RETRY_GUARD_KEY}
+      AND guard.version = 1
+    WHERE trees.tree_key = ${TASK_WORK_REVIEW_LOOP_TREE_KEY}
+      AND trees.version = 1
+      AND NOT EXISTS (
+        SELECT 1
+        FROM tree_edges AS edges
+        WHERE edges.workflow_tree_id = trees.id
+          AND edges.source_node_id = source_node.id
+          AND edges.target_node_id = target_node.id
+          AND edges.route_on = 'success'
+          AND edges.priority = 12
+      )`);
+
+  tx.run(sql`INSERT INTO tree_edges (
+      workflow_tree_id,
+      source_node_id,
+      target_node_id,
+      route_on,
+      priority,
+      auto,
+      guard_definition_id
+    )
+    SELECT
+      trees.id,
+      source_node.id,
+      target_node.id,
+      'success',
+      20,
+      0,
+      guard.id
+    FROM workflow_trees AS trees
+    INNER JOIN tree_nodes AS source_node
+      ON source_node.workflow_tree_id = trees.id
+      AND source_node.node_key = 'review'
+    INNER JOIN tree_nodes AS target_node
+      ON target_node.workflow_tree_id = trees.id
+      AND target_node.node_key = 'approved'
+    INNER JOIN guard_definitions AS guard
+      ON guard.guard_key = ${TASK_WORK_REVIEW_LOOP_REVIEW_TO_APPROVED_GUARD_KEY}
+      AND guard.version = 1
+    WHERE trees.tree_key = ${TASK_WORK_REVIEW_LOOP_TREE_KEY}
+      AND trees.version = 1
+      AND NOT EXISTS (
+        SELECT 1
+        FROM tree_edges AS edges
+        WHERE edges.workflow_tree_id = trees.id
+          AND edges.source_node_id = source_node.id
+          AND edges.target_node_id = target_node.id
+          AND edges.route_on = 'success'
+          AND edges.priority = 20
+      )`);
   });
 }
