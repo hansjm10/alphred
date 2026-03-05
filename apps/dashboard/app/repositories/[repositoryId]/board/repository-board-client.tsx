@@ -29,10 +29,11 @@ import {
   parseJsonSafely,
   requestWorkItemReplan,
   toWorkItemsById,
+  updateWorkItemFields,
 } from '../_shared/work-items-shared';
 
-function isTaskStatus(value: string): value is TaskWorkItemStatus {
-  return (taskWorkItemStatuses as readonly string[]).includes(value);
+function isTaskStatus(value: unknown): value is TaskWorkItemStatus {
+  return typeof value === 'string' && (taskWorkItemStatuses as readonly string[]).includes(value);
 }
 
 function formatTaskStatusLabel(status: TaskWorkItemStatus): string {
@@ -130,6 +131,295 @@ type ParentChainEntry = Readonly<{
   type: DashboardWorkItemSnapshot['type'];
 }>;
 
+type TaskFlyoutDraft = Readonly<{
+  workItemId: number;
+  status: TaskWorkItemStatus;
+  plannedFiles: string[];
+  plannedFileInput: string;
+  assignees: string[];
+  assigneeInput: string;
+}>;
+
+function createTaskFlyoutDraft(workItem: DashboardWorkItemSnapshot, status: TaskWorkItemStatus): TaskFlyoutDraft {
+  return {
+    workItemId: workItem.id,
+    status,
+    plannedFiles: toUniqueSortedStrings(workItem.plannedFiles),
+    plannedFileInput: '',
+    assignees: toUniqueSortedStrings(workItem.assignees),
+    assigneeInput: '',
+  };
+}
+
+function hasTaskFlyoutTrackedFieldChanges(
+  draft: Pick<TaskFlyoutDraft, 'status' | 'plannedFiles' | 'assignees'>,
+  baseline: Pick<TaskFlyoutDraft, 'status' | 'plannedFiles' | 'assignees'>,
+): boolean {
+  return (
+    draft.status !== baseline.status ||
+    !areSortedStringArraysEqual(draft.plannedFiles, baseline.plannedFiles) ||
+    !areSortedStringArraysEqual(draft.assignees, baseline.assignees)
+  );
+}
+
+function rebaseTaskFlyoutDraft(
+  previousDraft: TaskFlyoutDraft,
+  baselineDraft: TaskFlyoutDraft,
+  nextSnapshotDraft: TaskFlyoutDraft,
+): TaskFlyoutDraft {
+  const statusWasEdited = previousDraft.status !== baselineDraft.status;
+
+  return {
+    ...nextSnapshotDraft,
+    status: statusWasEdited ? previousDraft.status : nextSnapshotDraft.status,
+    plannedFiles: rebaseEditedSortedStringArray(previousDraft.plannedFiles, baselineDraft.plannedFiles, nextSnapshotDraft.plannedFiles),
+    plannedFileInput: previousDraft.plannedFileInput,
+    assignees: rebaseEditedSortedStringArray(previousDraft.assignees, baselineDraft.assignees, nextSnapshotDraft.assignees),
+    assigneeInput: previousDraft.assigneeInput,
+  };
+}
+
+function rebaseEditedSortedStringArray(
+  previousValues: readonly string[],
+  baselineValues: readonly string[],
+  nextSnapshotValues: readonly string[],
+): string[] {
+  if (areSortedStringArraysEqual(previousValues, baselineValues)) {
+    return [...nextSnapshotValues];
+  }
+
+  const baselineSet = new Set(baselineValues);
+  const previousSet = new Set(previousValues);
+  const rebasedValues = new Set(nextSnapshotValues);
+
+  for (const baselineValue of baselineSet) {
+    if (!previousSet.has(baselineValue)) {
+      rebasedValues.delete(baselineValue);
+    }
+  }
+
+  for (const previousValue of previousSet) {
+    if (!baselineSet.has(previousValue)) {
+      rebasedValues.add(previousValue);
+    }
+  }
+
+  return toUniqueSortedStrings([...rebasedValues]);
+}
+
+function areSortedStringArraysEqual(left: readonly string[], right: readonly string[]): boolean {
+  if (left.length !== right.length) {
+    return false;
+  }
+  return left.every((entry, index) => entry === right[index]);
+}
+
+function toNullableStringArray(items: readonly string[]): string[] | null {
+  return items.length > 0 ? [...items] : null;
+}
+
+function normalizeRepoRelativePath(value: string): string | null {
+  const trimmed = value.trim();
+  if (trimmed.length === 0) {
+    return null;
+  }
+  const normalized = trimmed.replaceAll('\\', '/').replace(/^\.\/+/, '');
+  if (normalized.length === 0 || normalized.startsWith('/') || /^[A-Za-z]:($|\/)/.test(normalized)) {
+    return null;
+  }
+  const segments = new Set(normalized.split('/'));
+  if (segments.has('') || segments.has('.') || segments.has('..')) {
+    return null;
+  }
+  return normalized;
+}
+
+function splitPath(path: string): { filename: string; directory: string } {
+  const lastSlash = path.lastIndexOf('/');
+  if (lastSlash < 0) {
+    return { filename: path, directory: '' };
+  }
+  return {
+    filename: path.slice(lastSlash + 1),
+    directory: path.slice(0, lastSlash + 1),
+  };
+}
+
+function trimPathSlashes(value: string): string {
+  let start = 0;
+  let end = value.length;
+  while (start < end && value[start] === '/') {
+    start += 1;
+  }
+  while (end > start && value[end - 1] === '/') {
+    end -= 1;
+  }
+  return value.slice(start, end);
+}
+
+function trimGitSuffix(value: string): string {
+  if (value.toLowerCase().endsWith('.git')) {
+    return value.slice(0, -4);
+  }
+  return value;
+}
+
+function normalizeGitHubRepositoryPath(value: string): string | null {
+  const normalizedPath = trimGitSuffix(trimPathSlashes(value.trim()));
+  if (normalizedPath.length === 0) {
+    return null;
+  }
+
+  const segments = normalizedPath.split('/').filter(segment => segment.length > 0);
+  if (segments.length < 2) {
+    return null;
+  }
+
+  const owner = segments.at(-2);
+  const repository = segments.at(-1);
+  if (!owner || !repository) {
+    return null;
+  }
+
+  return `${owner}/${repository}`;
+}
+
+function parseGitHubRemoteUrl(remoteUrl: string): { origin: string; repositoryPath: string } | null {
+  const trimmedRemoteUrl = remoteUrl.trim();
+  if (trimmedRemoteUrl.length === 0) {
+    return null;
+  }
+
+  const scpStyleMatch = /^git@([^:/\s]+):(.+)$/.exec(trimmedRemoteUrl);
+  if (scpStyleMatch) {
+    const host = scpStyleMatch[1];
+    const repositoryPath = normalizeGitHubRepositoryPath(scpStyleMatch[2]);
+    if (!host || !repositoryPath) {
+      return null;
+    }
+    return {
+      origin: `https://${host}`,
+      repositoryPath,
+    };
+  }
+
+  let parsedUrl: URL;
+  try {
+    parsedUrl = new URL(trimmedRemoteUrl);
+  } catch {
+    return null;
+  }
+
+  const repositoryPath = normalizeGitHubRepositoryPath(parsedUrl.pathname);
+  if (!repositoryPath) {
+    return null;
+  }
+
+  const protocol = parsedUrl.protocol === 'http:' || parsedUrl.protocol === 'https:' ? parsedUrl.protocol : 'https:';
+  return {
+    origin: `${protocol}//${parsedUrl.host}`,
+    repositoryPath,
+  };
+}
+
+function resolveGitHubRepositoryWebUrl(repository: DashboardRepositoryState): string | null {
+  const parsedRemoteUrl = parseGitHubRemoteUrl(repository.remoteUrl);
+  if (parsedRemoteUrl) {
+    return `${parsedRemoteUrl.origin}/${parsedRemoteUrl.repositoryPath}`;
+  }
+
+  const remoteRefSegments = repository.remoteRef
+    .trim()
+    .split('/')
+    .filter(segment => segment.length > 0);
+
+  if (remoteRefSegments.length < 2) {
+    return null;
+  }
+
+  if (remoteRefSegments.length === 2) {
+    const [owner, repositoryName] = remoteRefSegments;
+    return `https://github.com/${owner}/${repositoryName}`;
+  }
+
+  const host = remoteRefSegments[0];
+  const owner = remoteRefSegments.at(-2);
+  const repositoryName = remoteRefSegments.at(-1);
+  if (!host || !owner || !repositoryName) {
+    return null;
+  }
+  return `https://${host}/${owner}/${repositoryName}`;
+}
+
+type SelectedTaskWorkItem = DashboardWorkItemSnapshot & Readonly<{ type: 'task'; status: TaskWorkItemStatus }>;
+
+type TaskDraftChanges = Readonly<{
+  statusChanged: boolean;
+  plannedFilesChanged: boolean;
+  assigneesChanged: boolean;
+  nextPlannedFiles: string[];
+  nextAssignees: string[];
+}>;
+
+function asSelectedTaskWorkItem(workItem: DashboardWorkItemSnapshot | null): SelectedTaskWorkItem | null {
+  if (workItem?.type !== 'task' || !isTaskStatus(workItem.status)) {
+    return null;
+  }
+  return workItem as SelectedTaskWorkItem;
+}
+
+function resolveTaskDraftChanges(taskDraft: TaskFlyoutDraft, selectedTask: SelectedTaskWorkItem): TaskDraftChanges | null {
+  const statusChanged = taskDraft.status !== selectedTask.status;
+  const nextPlannedFiles = toUniqueSortedStrings(taskDraft.plannedFiles);
+  const nextAssignees = toUniqueSortedStrings(taskDraft.assignees);
+  const currentPlannedFiles = toUniqueSortedStrings(selectedTask.plannedFiles);
+  const currentAssignees = toUniqueSortedStrings(selectedTask.assignees);
+  const plannedFilesChanged = !areSortedStringArraysEqual(nextPlannedFiles, currentPlannedFiles);
+  const assigneesChanged = !areSortedStringArraysEqual(nextAssignees, currentAssignees);
+
+  if (!statusChanged && !plannedFilesChanged && !assigneesChanged) {
+    return null;
+  }
+
+  return {
+    statusChanged,
+    plannedFilesChanged,
+    assigneesChanged,
+    nextPlannedFiles,
+    nextAssignees,
+  };
+}
+
+function buildRepositoryFileUrl(repository: DashboardRepositoryState, path: string): string | null {
+  if (repository.provider !== 'github') {
+    return null;
+  }
+
+  const repositoryWebUrl = resolveGitHubRepositoryWebUrl(repository);
+  if (!repositoryWebUrl) {
+    return null;
+  }
+
+  const encodedPath = path
+    .split('/')
+    .map(segment => encodeURIComponent(segment))
+    .join('/');
+  return `${repositoryWebUrl}/blob/${encodeURIComponent(repository.defaultBranch)}/${encodedPath}`;
+}
+
+async function copyTextToClipboard(value: string): Promise<boolean> {
+  if (typeof navigator === 'undefined' || typeof navigator.clipboard?.writeText !== 'function') {
+    return false;
+  }
+
+  try {
+    await navigator.clipboard.writeText(value);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function getReplanActionLabel(requestingReplan: boolean, hasMismatch: boolean): string {
   if (requestingReplan) {
     return 'Requesting replanning…';
@@ -140,49 +430,104 @@ function getReplanActionLabel(requestingReplan: boolean, hasMismatch: boolean): 
   return 'Request replanning';
 }
 
+function renderTaskStatusIcon(status: TaskWorkItemStatus): ReactNode {
+  const commonProps = {
+    width: 12,
+    height: 12,
+    viewBox: '0 0 12 12',
+    fill: 'none',
+    stroke: 'currentColor',
+    strokeWidth: 1.7,
+    strokeLinecap: 'round' as const,
+    strokeLinejoin: 'round' as const,
+    'aria-hidden': true,
+    focusable: false,
+    className: 'board-status-icon',
+  };
+
+  switch (status) {
+    case 'Draft':
+      return (
+        <svg {...commonProps}>
+          <circle cx="6" cy="6" r="4.25" />
+        </svg>
+      );
+    case 'Ready':
+      return (
+        <svg {...commonProps}>
+          <path d="M2.4 6h7.2" />
+          <path d="M6.3 3.6 9 6l-2.7 2.4" />
+        </svg>
+      );
+    case 'InProgress':
+      return (
+        <svg {...commonProps}>
+          <path d="M2.1 6A3.9 3.9 0 1 1 6 9.9" />
+          <path d="M5.7 2.1h2.4v2.4" />
+        </svg>
+      );
+    case 'Blocked':
+      return (
+        <svg {...commonProps}>
+          <circle cx="6" cy="6" r="4.25" />
+          <path d="M3.4 8.6 8.6 3.4" />
+        </svg>
+      );
+    case 'InReview':
+      return (
+        <svg {...commonProps}>
+          <path d="M1.8 6s1.8-2.9 4.2-2.9S10.2 6 10.2 6 8.4 8.9 6 8.9 1.8 6 1.8 6Z" />
+          <circle cx="6" cy="6" r="1.2" />
+        </svg>
+      );
+    case 'Done':
+      return (
+        <svg {...commonProps}>
+          <path d="M2.2 6.3 4.8 8.9 9.8 3.9" />
+        </svg>
+      );
+  }
+}
+
 function renderStatusControl({
   status,
   statusSelectId,
-  moving,
-  workItemId,
-  onMove,
+  disabled,
+  onStatusChange,
 }: Readonly<{
   status: TaskWorkItemStatus | null;
   statusSelectId: string;
-  moving: boolean;
-  workItemId: number;
-  onMove: (workItemId: number, nextStatusRaw: string) => Promise<void>;
+  disabled: boolean;
+  onStatusChange: (nextStatusRaw: string) => void;
 }>): ReactNode {
   if (status === null) {
     return null;
   }
 
   return (
-    <div className="board-drawer__control">
+    <div className="board-drawer__control board-drawer__control--status">
       <label htmlFor={statusSelectId} className="meta-text">
         Status
       </label>
-      <select
-        id={statusSelectId}
-        value={status}
-        onChange={(event) => {
-          void onMove(workItemId, event.target.value);
-        }}
-        disabled={moving}
-        aria-disabled={moving}
-        className="board-drawer__select"
-      >
-        {taskWorkItemStatuses.map(entry => (
-          <option key={entry} value={entry}>
-            {formatTaskStatusLabel(entry)}
-          </option>
-        ))}
-      </select>
-      {moving ? (
-        <output className="meta-text board-drawer__moving" aria-live="polite">
-          Moving…
-        </output>
-      ) : null}
+      <div className={`board-status-select board-status-select--${status}`} data-status={status}>
+        {renderTaskStatusIcon(status)}
+        <select
+          id={statusSelectId}
+          value={status}
+          onChange={(event) => {
+            onStatusChange(event.target.value);
+          }}
+          disabled={disabled}
+          aria-disabled={disabled}
+          className="board-drawer__select board-drawer__select--status"
+        >
+          {taskWorkItemStatuses.map(entry => (
+            <option key={entry} value={entry}>
+              {formatTaskStatusLabel(entry)}
+            </option>
+          ))}
+        </select>
+      </div>
     </div>
   );
 }
@@ -191,34 +536,46 @@ function renderParentChainSection({
   parentChain,
   repositoryId,
   onSelectWorkItem,
+  onLinkParent,
 }: Readonly<{
   parentChain: readonly ParentChainEntry[];
   repositoryId: number;
   onSelectWorkItem: (workItemId: number) => void;
+  onLinkParent: () => void;
 }>): ReactNode {
   return (
-    <div className="board-detail__section board-detail__section--divider">
-      <h5>Parent chain</h5>
+    <div className="board-detail__section">
+      <h5>Parent</h5>
       {parentChain.length === 0 ? (
-        <p className="meta-text">None</p>
+        <div className="board-detail__empty">
+          <span className="meta-text">No parent</span>
+          <ActionButton tone="secondary" className="board-inline-action" onClick={onLinkParent}>
+            Link parent…
+          </ActionButton>
+        </div>
       ) : (
-        <ol className="board-parent-chain">
-          {parentChain.map(parent => (
-            <li key={parent.id}>
-              <span className="board-pill">{parent.type}</span>
-              <span>
-                {parent.type === 'story' ? (
-                  <Link href={`/repositories/${repositoryId}/stories/${parent.id}`}>{parent.title}</Link>
-                ) : (
-                  <button type="button" onClick={() => onSelectWorkItem(parent.id)}>
-                    {parent.title}
-                  </button>
-                )}{' '}
-                <span className="meta-text">#{parent.id}</span>
-              </span>
-            </li>
-          ))}
-        </ol>
+        <>
+          <ol className="board-parent-chain">
+            {parentChain.map(parent => (
+              <li key={parent.id}>
+                <span className="board-pill">{parent.type}</span>
+                <span>
+                  {parent.type === 'story' ? (
+                    <Link href={`/repositories/${repositoryId}/stories/${parent.id}`}>{parent.title}</Link>
+                  ) : (
+                    <button type="button" onClick={() => onSelectWorkItem(parent.id)}>
+                      {parent.title}
+                    </button>
+                  )}{' '}
+                  <span className="meta-text">#{parent.id}</span>
+                </span>
+              </li>
+            ))}
+          </ol>
+          <ActionButton tone="secondary" className="board-inline-action" onClick={onLinkParent}>
+            Change parent…
+          </ActionButton>
+        </>
       )}
     </div>
   );
@@ -316,6 +673,109 @@ function renderEffectivePolicy(effectivePolicy: DashboardWorkItemSnapshot['effec
       </ul>
     </div>
   );
+}
+
+type DetailsPanelState = Readonly<{
+  selectedWorkItem: DashboardWorkItemSnapshot;
+  status: TaskWorkItemStatus | null;
+  linkedWorkflowRun: DashboardWorkItemSnapshot['linkedWorkflowRun'] | null;
+  moving: boolean;
+  dialogTitleId: string;
+  statusSelectId: string;
+  effectivePolicy: DashboardWorkItemSnapshot['effectivePolicy'] | null;
+  touchedFiles: string[] | null | undefined;
+  hasTouchedFiles: boolean;
+  canComparePlanVsActual: boolean;
+  planVsActual: PlanVsActualDelta;
+  requestingReplan: boolean;
+  openFullPageHref: string | null;
+  draftMatchesSelection: boolean;
+  draftStatus: TaskWorkItemStatus | null;
+  draftedPlannedFiles: string[];
+  draftedAssignees: string[];
+  hasDraftChanges: boolean;
+  canEditDraft: boolean;
+  fileInputId: string;
+  assigneeInputId: string;
+  assigneeOptionsId: string;
+  metadataLabel: string;
+}>;
+
+function buildDetailsPanelState(params: {
+  selectedWorkItem: DashboardWorkItemSnapshot;
+  taskDraft: TaskFlyoutDraft | null;
+  selectedParentChain: readonly ParentChainEntry[];
+  movingWorkItemIds: ReadonlySet<number>;
+  replanningWorkItemIds: ReadonlySet<number>;
+  repositoryId: number;
+}): DetailsPanelState {
+  const { selectedWorkItem, taskDraft, selectedParentChain, movingWorkItemIds, replanningWorkItemIds, repositoryId } = params;
+
+  let status: TaskWorkItemStatus | null = null;
+  if (selectedWorkItem.type === 'task' && isTaskStatus(selectedWorkItem.status)) {
+    status = selectedWorkItem.status;
+  }
+
+  const linkedWorkflowRun = selectedWorkItem.linkedWorkflowRun ?? null;
+  const moving = movingWorkItemIds.has(selectedWorkItem.id);
+  const dialogTitleId = `board-detail-dialog-title-${selectedWorkItem.id}`;
+  const statusSelectId = `board-detail-status-${selectedWorkItem.id}`;
+  const detailTypeLabel = selectedWorkItem.type.charAt(0).toUpperCase() + selectedWorkItem.type.slice(1);
+  const effectivePolicy = selectedWorkItem.effectivePolicy ?? null;
+  const touchedFiles = linkedWorkflowRun?.touchedFiles;
+  const hasTouchedFiles = touchedFiles !== null && touchedFiles !== undefined;
+  const canComparePlanVsActual = linkedWorkflowRun !== null && hasTouchedFiles;
+  const planVsActual = canComparePlanVsActual
+    ? resolvePlanVsActualDelta(selectedWorkItem.plannedFiles, touchedFiles)
+    : { plannedButUntouched: [], touchedButUnplanned: [] };
+  const requestingReplan = replanningWorkItemIds.has(selectedWorkItem.id);
+  const parentStory = [...selectedParentChain].reverse().find(parent => parent.type === 'story') ?? null;
+  const openFullPageHref = parentStory ? `/repositories/${repositoryId}/stories/${parentStory.id}` : null;
+  const draftMatchesSelection = taskDraft !== null && taskDraft.workItemId === selectedWorkItem.id;
+  const draftStatus = draftMatchesSelection && status !== null ? taskDraft.status : status;
+  const draftedPlannedFiles = draftMatchesSelection
+    ? toUniqueSortedStrings(taskDraft.plannedFiles)
+    : toUniqueSortedStrings(selectedWorkItem.plannedFiles);
+  const draftedAssignees = draftMatchesSelection
+    ? toUniqueSortedStrings(taskDraft.assignees)
+    : toUniqueSortedStrings(selectedWorkItem.assignees);
+  const currentPlannedFiles = toUniqueSortedStrings(selectedWorkItem.plannedFiles);
+  const currentAssignees = toUniqueSortedStrings(selectedWorkItem.assignees);
+  const statusChanged = status !== null && draftStatus !== null && draftStatus !== status;
+  const plannedFilesChanged = !areSortedStringArraysEqual(draftedPlannedFiles, currentPlannedFiles);
+  const assigneesChanged = !areSortedStringArraysEqual(draftedAssignees, currentAssignees);
+  const hasDraftChanges = draftMatchesSelection && (statusChanged || plannedFilesChanged || assigneesChanged);
+  const canEditDraft = draftMatchesSelection && !moving;
+  const fileInputId = `board-detail-file-input-${selectedWorkItem.id}`;
+  const assigneeInputId = `board-detail-assignee-input-${selectedWorkItem.id}`;
+  const assigneeOptionsId = `board-detail-assignee-options-${selectedWorkItem.id}`;
+  const metadataLabel = `${detailTypeLabel} · #${selectedWorkItem.id}`;
+
+  return {
+    selectedWorkItem,
+    status,
+    linkedWorkflowRun,
+    moving,
+    dialogTitleId,
+    statusSelectId,
+    effectivePolicy,
+    touchedFiles,
+    hasTouchedFiles,
+    canComparePlanVsActual,
+    planVsActual,
+    requestingReplan,
+    openFullPageHref,
+    draftMatchesSelection,
+    draftStatus,
+    draftedPlannedFiles,
+    draftedAssignees,
+    hasDraftChanges,
+    canEditDraft,
+    fileInputId,
+    assigneeInputId,
+    assigneeOptionsId,
+    metadataLabel,
+  };
 }
 
 type BoardTaskCardProps = Readonly<{
@@ -440,8 +900,14 @@ export function RepositoryBoardPageContent({
   const [movingWorkItemIds, setMovingWorkItemIds] = useState<ReadonlySet<number>>(() => new Set());
   const [replanningWorkItemIds, setReplanningWorkItemIds] = useState<ReadonlySet<number>>(() => new Set());
   const [activeDragWorkItemId, setActiveDragWorkItemId] = useState<number | null>(null);
+  const [taskDraft, setTaskDraft] = useState<TaskFlyoutDraft | null>(null);
 
   const lastEventIdRef = useRef<number>(initialLatestEventId);
+  const selectedWorkItemIdRef = useRef<number | null>(selectedWorkItemId);
+  const taskDraftDirtyRef = useRef<boolean>(false);
+  const taskDraftBaselineRef = useRef<TaskFlyoutDraft | null>(null);
+
+  selectedWorkItemIdRef.current = selectedWorkItemId;
 
   const tasksByStatus = useMemo(() => {
     const grouped: Record<TaskWorkItemStatus, DashboardWorkItemSnapshot[]> = {
@@ -477,6 +943,49 @@ export function RepositoryBoardPageContent({
     }
     return buildParentChain(selectedWorkItem, workItemsById);
   }, [selectedWorkItem, workItemsById]);
+  const knownAssigneeOptions = useMemo(() => {
+    const values: string[] = [];
+    for (const workItem of Object.values(workItemsById)) {
+      values.push(...(workItem.assignees ?? []));
+    }
+    return toUniqueSortedStrings(values);
+  }, [workItemsById]);
+
+  useEffect(() => {
+    if (selectedWorkItem?.type !== 'task' || !isTaskStatus(selectedWorkItem?.status)) {
+      setTaskDraft(null);
+      taskDraftDirtyRef.current = false;
+      taskDraftBaselineRef.current = null;
+      return;
+    }
+
+    const nextSnapshotDraft = createTaskFlyoutDraft(selectedWorkItem, selectedWorkItem.status as TaskWorkItemStatus);
+    setTaskDraft(previous => {
+      if (previous && previous.workItemId === selectedWorkItem.id && taskDraftDirtyRef.current) {
+        const baseline = taskDraftBaselineRef.current;
+        const rebasedDraft =
+          baseline && baseline.workItemId === selectedWorkItem.id
+            ? rebaseTaskFlyoutDraft(previous, baseline, nextSnapshotDraft)
+            : {
+                ...nextSnapshotDraft,
+                status: previous.status,
+                plannedFiles: [...previous.plannedFiles],
+                plannedFileInput: previous.plannedFileInput,
+                assignees: [...previous.assignees],
+                assigneeInput: previous.assigneeInput,
+              };
+        taskDraftBaselineRef.current = nextSnapshotDraft;
+        taskDraftDirtyRef.current =
+          hasTaskFlyoutTrackedFieldChanges(rebasedDraft, nextSnapshotDraft) ||
+          rebasedDraft.plannedFileInput.length > 0 ||
+          rebasedDraft.assigneeInput.length > 0;
+        return rebasedDraft;
+      }
+      taskDraftDirtyRef.current = false;
+      taskDraftBaselineRef.current = nextSnapshotDraft;
+      return nextSnapshotDraft;
+    });
+  }, [selectedWorkItem]);
 
   useEffect(() => {
     if (typeof EventSource === 'undefined') {
@@ -664,6 +1173,261 @@ export function RepositoryBoardPageContent({
     }
   };
 
+  const resetTaskDraftFromSnapshot = (workItem: DashboardWorkItemSnapshot): void => {
+    if (workItem.type !== 'task' || !isTaskStatus(workItem.status)) {
+      return;
+    }
+    if (selectedWorkItemIdRef.current !== workItem.id) {
+      return;
+    }
+    const nextDraft = createTaskFlyoutDraft(workItem, workItem.status);
+    taskDraftBaselineRef.current = nextDraft;
+    taskDraftDirtyRef.current = false;
+    setTaskDraft(nextDraft);
+  };
+
+  const refreshWorkItemFromServer = async (workItemId: number, conflictMessage: string): Promise<DashboardWorkItemSnapshot | null> => {
+    try {
+      const refreshed = await fetchWorkItem({ repositoryId: repository.id, workItemId });
+      setWorkItemsById(previous => ({
+        ...previous,
+        [workItemId]: refreshed,
+      }));
+      resetTaskDraftFromSnapshot(refreshed);
+      setActionMessage({ tone: 'error', message: `${conflictMessage} Refreshed from server.` });
+      return refreshed;
+    } catch (error) {
+      setActionMessage({
+        tone: 'error',
+        message: error instanceof Error ? error.message : 'Unable to refresh work item.',
+      });
+      return null;
+    }
+  };
+
+  const handleDraftPlannedFileInput = (value: string): void => {
+    taskDraftDirtyRef.current = true;
+    setTaskDraft(previous => (previous ? { ...previous, plannedFileInput: value } : previous));
+  };
+
+  const handleAddDraftPlannedFile = (): void => {
+    if (!taskDraft) {
+      return;
+    }
+
+    const normalized = normalizeRepoRelativePath(taskDraft.plannedFileInput);
+    if (!normalized) {
+      setActionMessage({ tone: 'error', message: 'Enter a repo-relative path (for example: app/page.tsx).' });
+      return;
+    }
+
+    setActionMessage(null);
+    taskDraftDirtyRef.current = true;
+    setTaskDraft(previous => {
+      if (!previous) {
+        return previous;
+      }
+      return {
+        ...previous,
+        plannedFiles: toUniqueSortedStrings([...previous.plannedFiles, normalized]),
+        plannedFileInput: '',
+      };
+    });
+  };
+
+  const handleRemoveDraftPlannedFile = (path: string): void => {
+    taskDraftDirtyRef.current = true;
+    setTaskDraft(previous => {
+      if (!previous) {
+        return previous;
+      }
+      return {
+        ...previous,
+        plannedFiles: previous.plannedFiles.filter(entry => entry !== path),
+      };
+    });
+  };
+
+  const handleDraftAssigneeInput = (value: string): void => {
+    taskDraftDirtyRef.current = true;
+    setTaskDraft(previous => (previous ? { ...previous, assigneeInput: value } : previous));
+  };
+
+  const handleAddDraftAssignee = (): void => {
+    if (!taskDraft) {
+      return;
+    }
+
+    const candidate = taskDraft.assigneeInput.trim();
+    if (candidate.length === 0) {
+      setActionMessage({ tone: 'error', message: 'Enter an assignee name.' });
+      return;
+    }
+
+    setActionMessage(null);
+    taskDraftDirtyRef.current = true;
+    setTaskDraft(previous => {
+      if (!previous) {
+        return previous;
+      }
+      return {
+        ...previous,
+        assignees: toUniqueSortedStrings([...previous.assignees, candidate]),
+        assigneeInput: '',
+      };
+    });
+  };
+
+  const handleRemoveDraftAssignee = (assignee: string): void => {
+    taskDraftDirtyRef.current = true;
+    setTaskDraft(previous => {
+      if (!previous) {
+        return previous;
+      }
+      return {
+        ...previous,
+        assignees: previous.assignees.filter(entry => entry !== assignee),
+      };
+    });
+  };
+
+  const handleCopyPlannedFile = async (path: string): Promise<void> => {
+    const copied = await copyTextToClipboard(path);
+    setActionMessage(
+      copied
+        ? { tone: 'success', message: 'Copied file path to clipboard.' }
+        : { tone: 'error', message: 'Unable to copy path in this environment.' },
+    );
+  };
+
+  const handleLinkParent = (): void => {
+    setActionMessage({
+      tone: 'error',
+      message: 'Parent relinking is not available in this flyout yet. Open the related story page to adjust hierarchy.',
+    });
+  };
+
+  const syncWorkItemSnapshot = (workItem: DashboardWorkItemSnapshot): void => {
+    setWorkItemsById(previous => ({
+      ...previous,
+      [workItem.id]: workItem,
+    }));
+  };
+
+  const moveTaskForDraftSave = async (params: {
+    workItemId: number;
+    expectedRevision: number;
+    toStatus: TaskWorkItemStatus;
+  }): Promise<DashboardWorkItemSnapshot | null> => {
+    const moveResult = await moveWorkItemStatus({
+      repositoryId: repository.id,
+      workItemId: params.workItemId,
+      expectedRevision: params.expectedRevision,
+      toStatus: params.toStatus,
+      actor,
+    });
+    if (moveResult.ok) {
+      syncWorkItemSnapshot(moveResult.workItem);
+      return moveResult.workItem;
+    }
+    if (moveResult.status === 409) {
+      await refreshWorkItemFromServer(params.workItemId, moveResult.message);
+      return null;
+    }
+    setActionMessage({ tone: 'error', message: moveResult.message });
+    return null;
+  };
+
+  const updateTaskFieldsForDraftSave = async (params: {
+    workItemId: number;
+    expectedRevision: number;
+    draftChanges: TaskDraftChanges;
+  }): Promise<DashboardWorkItemSnapshot | null> => {
+    const updateResult = await updateWorkItemFields({
+      repositoryId: repository.id,
+      workItemId: params.workItemId,
+      expectedRevision: params.expectedRevision,
+      actor,
+      ...(params.draftChanges.plannedFilesChanged
+        ? { plannedFiles: toNullableStringArray(params.draftChanges.nextPlannedFiles) }
+        : {}),
+      ...(params.draftChanges.assigneesChanged
+        ? { assignees: toNullableStringArray(params.draftChanges.nextAssignees) }
+        : {}),
+    });
+    if (updateResult.ok) {
+      syncWorkItemSnapshot(updateResult.workItem);
+      return updateResult.workItem;
+    }
+    if (updateResult.status === 409) {
+      await refreshWorkItemFromServer(params.workItemId, updateResult.message);
+      return null;
+    }
+    setActionMessage({ tone: 'error', message: updateResult.message });
+    return null;
+  };
+
+  const handleSaveTaskDraft = async (): Promise<void> => {
+    const selectedTask = asSelectedTaskWorkItem(selectedWorkItem);
+    if (!selectedTask) {
+      return;
+    }
+    if (taskDraft?.workItemId !== selectedTask.id) {
+      return;
+    }
+
+    const draftChanges = resolveTaskDraftChanges(taskDraft, selectedTask);
+    if (!draftChanges) {
+      return;
+    }
+
+    const workItemId = selectedTask.id;
+    setActionMessage(null);
+    setMovingWorkItemIds(previous => new Set([...previous, workItemId]));
+
+    try {
+      let latest: DashboardWorkItemSnapshot = selectedTask;
+
+      if (draftChanges.statusChanged) {
+        const moved = await moveTaskForDraftSave({
+          workItemId,
+          expectedRevision: latest.revision,
+          toStatus: taskDraft.status,
+        });
+        if (!moved) {
+          return;
+        }
+        latest = moved;
+      }
+
+      if (draftChanges.plannedFilesChanged || draftChanges.assigneesChanged) {
+        const updated = await updateTaskFieldsForDraftSave({
+          workItemId,
+          expectedRevision: latest.revision,
+          draftChanges,
+        });
+        if (!updated) {
+          return;
+        }
+        latest = updated;
+      }
+
+      resetTaskDraftFromSnapshot(latest);
+      setActionMessage({ tone: 'success', message: `Saved updates for "${latest.title}".` });
+    } catch (error) {
+      setActionMessage({
+        tone: 'error',
+        message: error instanceof Error ? error.message : 'Unable to save task updates.',
+      });
+    } finally {
+      setMovingWorkItemIds(previous => {
+        const next = new Set(previous);
+        next.delete(workItemId);
+        return next;
+      });
+    }
+  };
+
   const handleRequestReplan = async (workItem: DashboardWorkItemSnapshot) => {
     setActionMessage(null);
     setReplanningWorkItemIds((previous) => new Set([...previous, workItem.id]));
@@ -779,28 +1543,208 @@ export function RepositoryBoardPageContent({
 
   const clearSelection = () => setSelectedWorkItemId(null);
 
+  const renderOpenFullPageLink = (href: string | null): ReactNode => {
+    if (!href) {
+      return null;
+    }
+
+    return (
+      <ButtonLink href={href} tone="secondary" className="board-drawer__open-link">
+        Open full page
+      </ButtonLink>
+    );
+  };
+
+  const renderOpenRepositoryFileAction = (openFileHref: string | null, path: string): ReactNode => {
+    if (!openFileHref) {
+      return (
+        <ActionButton
+          tone="secondary"
+          className="board-file-action"
+          disabled
+          aria-disabled="true"
+          title="Open file links are available for GitHub repositories."
+        >
+          Open
+        </ActionButton>
+      );
+    }
+
+    return (
+      <a
+        href={openFileHref}
+        target="_blank"
+        rel="noreferrer"
+        className="button-link button-link--secondary board-file-action"
+        aria-label={`Open ${path} in GitHub`}
+      >
+        Open
+      </a>
+    );
+  };
+
+  const renderPlannedFilesSection = (details: DetailsPanelState): ReactNode => {
+    const plannedFileInputValue = details.draftMatchesSelection && taskDraft ? taskDraft.plannedFileInput : '';
+
+    return (
+      <div className="board-detail__section">
+        <h5>Files ({details.draftedPlannedFiles.length})</h5>
+        {details.draftedPlannedFiles.length === 0 ? (
+          <p className="meta-text">No files linked yet.</p>
+        ) : (
+          <ul className="board-file-list">
+            {details.draftedPlannedFiles.map(path => {
+              const split = splitPath(path);
+              const openFileHref = buildRepositoryFileUrl(repository, path);
+              return (
+                <li key={path} className="board-file-list__item">
+                  <div className="board-file-list__content">
+                    <span className="board-file-list__name">{split.filename}</span>
+                    <code className="board-file-list__path">{split.directory.length > 0 ? split.directory : './'}</code>
+                  </div>
+                  <div className="board-file-list__actions">
+                    <ActionButton
+                      tone="secondary"
+                      className="board-file-action"
+                      onClick={() => {
+                        void handleCopyPlannedFile(path);
+                      }}
+                      aria-label={`Copy path ${path}`}
+                      title="Copy path"
+                    >
+                      Copy
+                    </ActionButton>
+                    {renderOpenRepositoryFileAction(openFileHref, path)}
+                    <ActionButton
+                      tone="secondary"
+                      className="board-file-action"
+                      disabled={!details.canEditDraft}
+                      aria-disabled={!details.canEditDraft}
+                      onClick={() => {
+                        handleRemoveDraftPlannedFile(path);
+                      }}
+                      aria-label={`Remove planned file ${path}`}
+                    >
+                      Remove
+                    </ActionButton>
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+        <div className="board-inline-editor">
+          <input
+            id={details.fileInputId}
+            value={plannedFileInputValue}
+            onChange={(event) => {
+              handleDraftPlannedFileInput(event.target.value);
+            }}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter') {
+                event.preventDefault();
+                handleAddDraftPlannedFile();
+              }
+            }}
+            placeholder="Add repo-relative file path"
+            disabled={!details.canEditDraft}
+            aria-disabled={!details.canEditDraft}
+            aria-label="Add planned file path"
+          />
+          <ActionButton
+            tone="secondary"
+            className="board-inline-action"
+            disabled={!details.canEditDraft}
+            aria-disabled={!details.canEditDraft}
+            onClick={handleAddDraftPlannedFile}
+          >
+            Add file
+          </ActionButton>
+        </div>
+      </div>
+    );
+  };
+
+  const renderAssigneesSection = (details: DetailsPanelState): ReactNode => {
+    const assigneeInputValue = details.draftMatchesSelection && taskDraft ? taskDraft.assigneeInput : '';
+
+    return (
+      <div className="board-detail__section">
+        <h5>Assignees</h5>
+        {details.draftedAssignees.length === 0 ? (
+          <p className="meta-text">No assignees yet.</p>
+        ) : (
+          <ul className="board-assignee-list">
+            {details.draftedAssignees.map(assignee => (
+              <li key={assignee}>
+                <span className="board-pill">{assignee}</span>
+                <ActionButton
+                  tone="secondary"
+                  className="board-inline-action"
+                  disabled={!details.canEditDraft}
+                  aria-disabled={!details.canEditDraft}
+                  onClick={() => {
+                    handleRemoveDraftAssignee(assignee);
+                  }}
+                  aria-label={`Remove assignee ${assignee}`}
+                >
+                  Remove
+                </ActionButton>
+              </li>
+            ))}
+          </ul>
+        )}
+        <div className="board-inline-editor">
+          <input
+            id={details.assigneeInputId}
+            value={assigneeInputValue}
+            onChange={(event) => {
+              handleDraftAssigneeInput(event.target.value);
+            }}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter') {
+                event.preventDefault();
+                handleAddDraftAssignee();
+              }
+            }}
+            placeholder="Add assignee"
+            list={details.assigneeOptionsId}
+            disabled={!details.canEditDraft}
+            aria-disabled={!details.canEditDraft}
+            aria-label="Add assignee"
+          />
+          <datalist id={details.assigneeOptionsId}>
+            {knownAssigneeOptions.map(candidate => (
+              <option key={candidate} value={candidate} />
+            ))}
+          </datalist>
+          <ActionButton
+            tone="secondary"
+            className="board-inline-action"
+            disabled={!details.canEditDraft}
+            aria-disabled={!details.canEditDraft}
+            onClick={handleAddDraftAssignee}
+          >
+            Add assignee
+          </ActionButton>
+        </div>
+      </div>
+    );
+  };
+
   const renderDetails = (): ReactNode => {
     if (!selectedWorkItem) {
       return null;
     }
 
-    let status: TaskWorkItemStatus | null = null;
-    if (selectedWorkItem.type === 'task' && isTaskStatus(selectedWorkItem.status)) {
-      status = selectedWorkItem.status;
-    }
-    const linkedWorkflowRun = selectedWorkItem.linkedWorkflowRun ?? null;
-    const moving = movingWorkItemIds.has(selectedWorkItem.id);
-    const dialogTitleId = `board-detail-dialog-title-${selectedWorkItem.id}`;
-    const statusSelectId = `board-detail-status-${selectedWorkItem.id}`;
-    const detailTypeLabel = selectedWorkItem.type.charAt(0).toUpperCase() + selectedWorkItem.type.slice(1);
-    const effectivePolicy = selectedWorkItem.effectivePolicy ?? null;
-    const touchedFiles = linkedWorkflowRun?.touchedFiles;
-    const hasTouchedFiles = touchedFiles !== null && touchedFiles !== undefined;
-    const canComparePlanVsActual = linkedWorkflowRun !== null && hasTouchedFiles;
-    const planVsActual = canComparePlanVsActual
-      ? resolvePlanVsActualDelta(selectedWorkItem.plannedFiles, touchedFiles)
-      : { plannedButUntouched: [], touchedButUnplanned: [] };
-    const requestingReplan = replanningWorkItemIds.has(selectedWorkItem.id);
+    const details = buildDetailsPanelState({
+      selectedWorkItem,
+      taskDraft,
+      selectedParentChain,
+      movingWorkItemIds,
+      replanningWorkItemIds,
+      repositoryId: repository.id,
+    });
 
     return (
       <div className="board-drawer-scrim">
@@ -811,82 +1755,111 @@ export function RepositoryBoardPageContent({
           aria-label="Close work item details"
           title="Close"
         />
-        <dialog className="board-drawer" open aria-modal="true" aria-labelledby={dialogTitleId} aria-busy={moving || undefined}>
+        <dialog
+          className="board-drawer"
+          open
+          aria-modal="true"
+          aria-labelledby={details.dialogTitleId}
+          aria-busy={details.moving || undefined}
+        >
           <header className="board-drawer__header">
-            <span className="board-drawer__kicker meta-text">{detailTypeLabel}</span>
-            <ActionButton
-              tone="secondary"
-              className="board-drawer__close"
-              onClick={clearSelection}
-              aria-label="Close work item details"
-              title="Close"
-            >
-              ×
-            </ActionButton>
+            <span className="board-drawer__kicker meta-text">{details.metadataLabel}</span>
+            <div className="board-drawer__header-actions">
+              {renderOpenFullPageLink(details.openFullPageHref)}
+              <ActionButton
+                tone="secondary"
+                className="board-drawer__close"
+                onClick={clearSelection}
+                aria-label="Close work item details"
+                title="Close"
+              >
+                ×
+              </ActionButton>
+            </div>
           </header>
 
           <div className="board-drawer__summary">
-            <h3 className="board-drawer__title" id={dialogTitleId}>
-              {selectedWorkItem.title}
+            <h3 className="board-drawer__title" id={details.dialogTitleId}>
+              {details.selectedWorkItem.title}
             </h3>
-
-            <div className="board-drawer__meta" aria-label="Task metadata">
-              <span className="board-pill">#{selectedWorkItem.id}</span>
-              <span className="board-pill">{selectedWorkItem.type}</span>
-            </div>
           </div>
 
           {renderStatusControl({
-            status,
-            statusSelectId,
-            moving,
-            workItemId: selectedWorkItem.id,
-            onMove: handleMove,
+            status: details.draftStatus,
+            statusSelectId: details.statusSelectId,
+            disabled: !details.canEditDraft,
+            onStatusChange: (nextStatusRaw) => {
+              if (!isTaskStatus(nextStatusRaw)) {
+                setActionMessage({ tone: 'error', message: 'Invalid target status.' });
+                return;
+              }
+              setActionMessage(null);
+              taskDraftDirtyRef.current = true;
+              setTaskDraft(previous => {
+                if (previous?.workItemId !== details.selectedWorkItem.id) {
+                  return previous;
+                }
+                return {
+                  ...previous,
+                  status: nextStatusRaw,
+                };
+              });
+            },
           })}
 
           {renderParentChainSection({
             parentChain: selectedParentChain,
             repositoryId: repository.id,
             onSelectWorkItem: setSelectedWorkItemId,
+            onLinkParent: handleLinkParent,
           })}
 
-          <div className="board-detail__section board-detail__section--divider">
+          {renderPlannedFilesSection(details)}
+          {renderAssigneesSection(details)}
+
+          <div className="board-detail__section board-detail__section--muted">
             <h5>Linked run</h5>
-            {renderLinkedRun(linkedWorkflowRun)}
+            {renderLinkedRun(details.linkedWorkflowRun)}
           </div>
 
-          <div className="board-detail__section board-detail__section--divider">
-            <h5>Planned files</h5>
-            {renderStringList(selectedWorkItem.plannedFiles)}
-          </div>
-
-          <div className="board-detail__section board-detail__section--divider">
+          <div className="board-detail__section board-detail__section--muted">
             <h5>Touched files</h5>
             {renderTouchedFiles({
-              linkedWorkflowRun,
-              hasTouchedFiles,
-              touchedFiles,
+              linkedWorkflowRun: details.linkedWorkflowRun,
+              hasTouchedFiles: details.hasTouchedFiles,
+              touchedFiles: details.touchedFiles,
             })}
           </div>
 
-          <div className="board-detail__section board-detail__section--divider">
+          <div className="board-detail__section board-detail__section--muted">
             <h5>Plan vs actual</h5>
             {renderPlanVsActual({
-              canComparePlanVsActual,
-              planVsActual,
-              requestingReplan,
+              canComparePlanVsActual: details.canComparePlanVsActual,
+              planVsActual: details.planVsActual,
+              requestingReplan: details.requestingReplan,
               onRequestReplan: () => {
-                void handleRequestReplan(selectedWorkItem);
+                void handleRequestReplan(details.selectedWorkItem);
               },
             })}
           </div>
 
-          <div className="board-detail__section board-detail__section--divider">
-            <h5>Assignees</h5>
-            {renderStringList(selectedWorkItem.assignees)}
-          </div>
+          {renderEffectivePolicy(details.effectivePolicy)}
 
-          {renderEffectivePolicy(effectivePolicy)}
+          <footer className="board-drawer__footer">
+            <ActionButton tone="secondary" onClick={clearSelection} disabled={details.moving} aria-disabled={details.moving}>
+              Cancel
+            </ActionButton>
+            <ActionButton
+              tone="primary"
+              onClick={() => {
+                void handleSaveTaskDraft();
+              }}
+              disabled={!details.hasDraftChanges || details.moving}
+              aria-disabled={!details.hasDraftChanges || details.moving}
+            >
+              {details.moving ? 'Saving…' : 'Save'}
+            </ActionButton>
+          </footer>
         </dialog>
       </div>
     );

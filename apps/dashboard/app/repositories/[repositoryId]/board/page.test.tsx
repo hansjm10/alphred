@@ -160,7 +160,7 @@ describe('RepositoryBoardPageContent', () => {
     expect(within(screen.getByRole('region', { name: 'Tasks Done' })).getByRole('button', { name: /Ship it/ })).toBeInTheDocument();
   });
 
-  it('shows a detail panel including parent chain, planned files, and assignees', async () => {
+  it('shows a detail panel including parent hierarchy, files, and assignees', async () => {
     const user = userEvent.setup();
 
     render(
@@ -188,19 +188,154 @@ describe('RepositoryBoardPageContent', () => {
     await user.click(screen.getByRole('button', { name: /Write tests/ }));
 
     expect(screen.getByRole('dialog', { name: 'Write tests' })).toBeInTheDocument();
-    expect(screen.getByText('Parent chain')).toBeInTheDocument();
+    expect(screen.getByText('Parent')).toBeInTheDocument();
     expect(screen.getByText('epic')).toBeInTheDocument();
     expect(screen.getByText('feature')).toBeInTheDocument();
     expect(screen.getByText('story')).toBeInTheDocument();
     expect(screen.getByText('Work items v1')).toBeInTheDocument();
     expect(screen.getByText('Board UI')).toBeInTheDocument();
     expect(screen.getByText('Repo board page')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Open full page' })).toHaveAttribute('href', '/repositories/1/stories/3');
 
-    expect(screen.getByText('Planned files')).toBeInTheDocument();
-    expect(screen.getByText('apps/dashboard/app/repositories/[repositoryId]/board/page.tsx')).toBeInTheDocument();
+    expect(screen.getByText('Files (1)')).toBeInTheDocument();
+    expect(screen.getByText('page.tsx')).toBeInTheDocument();
+    expect(screen.getByText('apps/dashboard/app/repositories/[repositoryId]/board/')).toBeInTheDocument();
     expect(screen.getByText('Assignees')).toBeInTheDocument();
     expect(screen.getByText('octocat')).toBeInTheDocument();
     expect(screen.getByText('Linked run')).toBeInTheDocument();
+  });
+
+  it('builds GitHub file links from remoteUrl host when remoteRef is host-prefixed', async () => {
+    const user = userEvent.setup();
+
+    render(
+      <RepositoryBoardPageContent
+        repository={createRepository({
+          id: 1,
+          name: 'demo-repo',
+          remoteRef: 'ghe.internal.example/octocat/demo-repo',
+          remoteUrl: 'https://ghe.internal.example/octocat/demo-repo.git',
+        })}
+        actor={{ actorType: 'human', actorLabel: 'octocat' }}
+        initialLatestEventId={0}
+        initialWorkItems={[
+          createWorkItem({
+            id: 10,
+            type: 'task',
+            status: 'Ready',
+            title: 'Write tests',
+            plannedFiles: ['src/main.ts'],
+          }),
+        ]}
+      />,
+    );
+
+    await user.click(screen.getByRole('button', { name: /Write tests/ }));
+
+    expect(screen.getByRole('link', { name: 'Open src/main.ts in GitHub' })).toHaveAttribute(
+      'href',
+      'https://ghe.internal.example/octocat/demo-repo/blob/main/src/main.ts',
+    );
+  });
+
+  it('builds GitHub file links from scp-style remote URLs', async () => {
+    const user = userEvent.setup();
+
+    render(
+      <RepositoryBoardPageContent
+        repository={createRepository({
+          id: 1,
+          name: 'demo-repo',
+          remoteRef: 'ignored/for-scp',
+          remoteUrl: 'git@ghe.internal.example:octocat/demo-repo.git',
+        })}
+        actor={{ actorType: 'human', actorLabel: 'octocat' }}
+        initialLatestEventId={0}
+        initialWorkItems={[
+          createWorkItem({
+            id: 10,
+            type: 'task',
+            status: 'Ready',
+            title: 'Write tests',
+            plannedFiles: ['src/main.ts'],
+          }),
+        ]}
+      />,
+    );
+
+    await user.click(screen.getByRole('button', { name: /Write tests/ }));
+
+    expect(screen.getByRole('link', { name: 'Open src/main.ts in GitHub' })).toHaveAttribute(
+      'href',
+      'https://ghe.internal.example/octocat/demo-repo/blob/main/src/main.ts',
+    );
+  });
+
+  it('falls back to owner/repo remoteRef links when remoteUrl is invalid', async () => {
+    const user = userEvent.setup();
+
+    render(
+      <RepositoryBoardPageContent
+        repository={createRepository({
+          id: 1,
+          name: 'demo-repo',
+          remoteRef: 'octocat/demo-repo',
+          remoteUrl: 'not-a-valid-url',
+        })}
+        actor={{ actorType: 'human', actorLabel: 'octocat' }}
+        initialLatestEventId={0}
+        initialWorkItems={[
+          createWorkItem({
+            id: 10,
+            type: 'task',
+            status: 'Ready',
+            title: 'Write tests',
+            plannedFiles: ['src/main.ts'],
+          }),
+        ]}
+      />,
+    );
+
+    await user.click(screen.getByRole('button', { name: /Write tests/ }));
+
+    expect(screen.getByRole('link', { name: 'Open src/main.ts in GitHub' })).toHaveAttribute(
+      'href',
+      'https://github.com/octocat/demo-repo/blob/main/src/main.ts',
+    );
+  });
+
+  it('disables file links when repository web URL cannot be resolved', async () => {
+    const user = userEvent.setup();
+
+    render(
+      <RepositoryBoardPageContent
+        repository={createRepository({
+          id: 1,
+          name: 'demo-repo',
+          remoteRef: 'invalid-remote-ref',
+          remoteUrl: 'still-not-a-valid-url',
+        })}
+        actor={{ actorType: 'human', actorLabel: 'octocat' }}
+        initialLatestEventId={0}
+        initialWorkItems={[
+          createWorkItem({
+            id: 10,
+            type: 'task',
+            status: 'Ready',
+            title: 'Write tests',
+            plannedFiles: ['README.md'],
+          }),
+        ]}
+      />,
+    );
+
+    await user.click(screen.getByRole('button', { name: /Write tests/ }));
+    expect(screen.getByText('./')).toBeInTheDocument();
+
+    const fileItem = screen.getByText('README.md').closest('li');
+    expect(fileItem).not.toBeNull();
+    expect(within(fileItem ?? document.body).queryByRole('link', { name: /Open README\.md in GitHub/ })).not.toBeInTheDocument();
+    expect(within(fileItem ?? document.body).getByRole('button', { name: 'Open' })).toBeDisabled();
   });
 
   it('shows linked run metadata in task details when available', async () => {
@@ -520,7 +655,7 @@ describe('RepositoryBoardPageContent', () => {
     expect(screen.getByText('Breakdown approval required: Yes')).toBeInTheDocument();
   });
 
-  it('moves a task via the move API and updates the UI', async () => {
+  it('saves staged status changes via the move API and updates the UI', async () => {
     const user = userEvent.setup();
     const fetchMock = vi.mocked(global.fetch);
 
@@ -540,7 +675,9 @@ describe('RepositoryBoardPageContent', () => {
     );
 
     await user.click(screen.getByRole('button', { name: /Write tests/ }));
+    expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled();
     await user.selectOptions(screen.getByRole('combobox', { name: 'Status' }), 'Done');
+    await user.click(screen.getByRole('button', { name: 'Save' }));
 
     expect(fetchMock).toHaveBeenCalledWith('/api/dashboard/work-items/10/actions/move', {
       method: 'POST',
@@ -555,6 +692,319 @@ describe('RepositoryBoardPageContent', () => {
     });
 
     expect(within(screen.getByRole('region', { name: 'Tasks Done' })).getByRole('button', { name: /Write tests/ })).toBeInTheDocument();
+  });
+
+  it('saves drafted files and assignees via the patch API', async () => {
+    const user = userEvent.setup();
+    const fetchMock = vi.mocked(global.fetch);
+
+    fetchMock.mockResolvedValueOnce(
+      createJsonResponse({
+        workItem: createWorkItem({
+          id: 10,
+          status: 'Draft',
+          revision: 1,
+          title: 'Write tests',
+          plannedFiles: ['src/new-file.ts'],
+          assignees: ['alice', 'octocat'],
+        }),
+      }),
+    );
+
+    render(
+      <RepositoryBoardPageContent
+        repository={createRepository({ id: 1, name: 'demo-repo' })}
+        actor={{ actorType: 'human', actorLabel: 'octocat' }}
+        initialLatestEventId={0}
+        initialWorkItems={[
+          createWorkItem({ id: 10, status: 'Draft', revision: 0, title: 'Write tests', plannedFiles: null, assignees: ['octocat'] }),
+        ]}
+      />,
+    );
+
+    await user.click(screen.getByRole('button', { name: /Write tests/ }));
+    await user.type(screen.getByRole('textbox', { name: 'Add planned file path' }), 'src/new-file.ts');
+    await user.click(screen.getByRole('button', { name: 'Add file' }));
+    await user.type(screen.getByRole('combobox', { name: 'Add assignee' }), 'alice');
+    await user.click(screen.getByRole('button', { name: 'Add assignee' }));
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/dashboard/work-items/10', {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        repositoryId: 1,
+        expectedRevision: 0,
+        actorType: 'human',
+        actorLabel: 'octocat',
+        plannedFiles: ['src/new-file.ts'],
+        assignees: ['alice', 'octocat'],
+      }),
+    });
+
+    expect(await screen.findByText('Saved updates for "Write tests".')).toBeInTheDocument();
+  });
+
+  it('rejects invalid planned file paths that are not repo-relative file paths', async () => {
+    const user = userEvent.setup();
+
+    render(
+      <RepositoryBoardPageContent
+        repository={createRepository({ id: 1, name: 'demo-repo' })}
+        actor={{ actorType: 'human', actorLabel: 'octocat' }}
+        initialLatestEventId={0}
+        initialWorkItems={[createWorkItem({ id: 10, status: 'Draft', revision: 0, title: 'Write tests', plannedFiles: null })]}
+      />,
+    );
+
+    await user.click(screen.getByRole('button', { name: /Write tests/ }));
+
+    const plannedFileInput = screen.getByRole('textbox', { name: 'Add planned file path' });
+    expect(screen.getByText('No files linked yet.')).toBeInTheDocument();
+
+    await user.type(plannedFileInput, '..');
+    await user.click(screen.getByRole('button', { name: 'Add file' }));
+
+    expect(screen.getByText('Enter a repo-relative path (for example: app/page.tsx).')).toBeInTheDocument();
+    expect(screen.getByText('No files linked yet.')).toBeInTheDocument();
+
+    await user.clear(plannedFileInput);
+    await user.type(plannedFileInput, 'src/..');
+    await user.click(screen.getByRole('button', { name: 'Add file' }));
+
+    expect(screen.getByText('Enter a repo-relative path (for example: app/page.tsx).')).toBeInTheDocument();
+    expect(screen.getByText('No files linked yet.')).toBeInTheDocument();
+
+    await user.clear(plannedFileInput);
+    await user.type(plannedFileInput, '.');
+    await user.click(screen.getByRole('button', { name: 'Add file' }));
+
+    expect(screen.getByText('Enter a repo-relative path (for example: app/page.tsx).')).toBeInTheDocument();
+    expect(screen.getByText('No files linked yet.')).toBeInTheDocument();
+
+    await user.clear(plannedFileInput);
+    await user.type(plannedFileInput, 'src/');
+    await user.click(screen.getByRole('button', { name: 'Add file' }));
+
+    expect(screen.getByText('Enter a repo-relative path (for example: app/page.tsx).')).toBeInTheDocument();
+    expect(screen.getByText('No files linked yet.')).toBeInTheDocument();
+
+    await user.clear(plannedFileInput);
+    await user.type(plannedFileInput, 'src//new-file.ts');
+    await user.click(screen.getByRole('button', { name: 'Add file' }));
+
+    expect(screen.getByText('Enter a repo-relative path (for example: app/page.tsx).')).toBeInTheDocument();
+    expect(screen.getByText('No files linked yet.')).toBeInTheDocument();
+
+    await user.clear(plannedFileInput);
+    await user.type(plannedFileInput, 'C:\\repo\\src\\new-file.ts');
+    await user.click(screen.getByRole('button', { name: 'Add file' }));
+
+    expect(screen.getByText('Enter a repo-relative path (for example: app/page.tsx).')).toBeInTheDocument();
+    expect(screen.getByText('No files linked yet.')).toBeInTheDocument();
+
+    await user.clear(plannedFileInput);
+    await user.type(plannedFileInput, 'C:/repo/src/new-file.ts');
+    await user.click(screen.getByRole('button', { name: 'Add file' }));
+
+    expect(screen.getByText('Enter a repo-relative path (for example: app/page.tsx).')).toBeInTheDocument();
+    expect(screen.getByText('No files linked yet.')).toBeInTheDocument();
+  });
+
+  it('keeps the current task draft when an earlier task save resolves later', async () => {
+    const user = userEvent.setup();
+    const fetchMock = vi.mocked(global.fetch);
+
+    let resolveMove!: (response: Response) => void;
+    fetchMock.mockReturnValueOnce(
+      new Promise<Response>((resolve) => {
+        resolveMove = resolve;
+      }),
+    );
+
+    render(
+      <RepositoryBoardPageContent
+        repository={createRepository({ id: 1, name: 'demo-repo' })}
+        actor={{ actorType: 'human', actorLabel: 'octocat' }}
+        initialLatestEventId={0}
+        initialWorkItems={[
+          createWorkItem({ id: 10, status: 'Draft', revision: 0, title: 'Task A' }),
+          createWorkItem({ id: 11, status: 'Draft', revision: 0, title: 'Task B' }),
+        ]}
+      />,
+    );
+
+    await user.click(screen.getByRole('button', { name: /Task A/ }));
+    await user.selectOptions(screen.getByRole('combobox', { name: 'Status' }), 'Done');
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+
+    await user.click(screen.getByRole('button', { name: /Task B/ }));
+    await user.type(screen.getByRole('textbox', { name: 'Add planned file path' }), 'src/task-b.ts');
+    await user.click(screen.getByRole('button', { name: 'Add file' }));
+    expect(screen.getByRole('button', { name: 'Save' })).toBeEnabled();
+
+    await act(async () => {
+      resolveMove(
+        createJsonResponse({
+          workItem: createWorkItem({ id: 10, status: 'Done', revision: 1, title: 'Task A' }),
+        }),
+      );
+    });
+
+    expect(await screen.findByText('Saved updates for "Task A".')).toBeInTheDocument();
+    expect(screen.getByRole('dialog', { name: 'Task B' })).toBeInTheDocument();
+    expect(screen.getByRole('combobox', { name: 'Status' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Save' })).toBeEnabled();
+  });
+
+  it('rebases dirty draft fields when board events update the selected task', async () => {
+    const user = userEvent.setup();
+    const fetchMock = vi.mocked(global.fetch);
+
+    fetchMock.mockResolvedValueOnce(
+      createJsonResponse({
+        workItem: createWorkItem({
+          id: 10,
+          status: 'InProgress',
+          revision: 2,
+          title: 'Write tests',
+          plannedFiles: ['src/new-file.ts'],
+          assignees: ['octocat'],
+        }),
+      }),
+    );
+
+    render(
+      <RepositoryBoardPageContent
+        repository={createRepository({ id: 1, name: 'demo-repo' })}
+        actor={{ actorType: 'human', actorLabel: 'octocat' }}
+        initialLatestEventId={0}
+        initialWorkItems={[
+          createWorkItem({ id: 10, status: 'Draft', revision: 0, title: 'Write tests', plannedFiles: null, assignees: ['octocat'] }),
+        ]}
+      />,
+    );
+
+    expect(MockEventSource.instances).toHaveLength(1);
+    MockEventSource.instances[0]?.emitOpen();
+
+    await user.click(screen.getByRole('button', { name: /Write tests/ }));
+    await user.type(screen.getByRole('textbox', { name: 'Add planned file path' }), 'src/new-file.ts');
+    await user.click(screen.getByRole('button', { name: 'Add file' }));
+
+    act(() => {
+      MockEventSource.instances[0]?.emit('board_event', {
+        id: 5,
+        repositoryId: 1,
+        workItemId: 10,
+        eventType: 'status_changed',
+        payload: { type: 'task', fromStatus: 'Draft', toStatus: 'InProgress', expectedRevision: 0, revision: 1 },
+        createdAt: new Date('2026-03-02T01:00:00.000Z').toISOString(),
+      });
+    });
+
+    expect(screen.getByRole('combobox', { name: 'Status' })).toHaveValue('InProgress');
+
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+
+    const [url, init] = fetchMock.mock.calls[0] ?? [];
+    expect(url).toBe('/api/dashboard/work-items/10');
+    expect(init).toMatchObject({
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        repositoryId: 1,
+        expectedRevision: 1,
+        actorType: 'human',
+        actorLabel: 'octocat',
+        plannedFiles: ['src/new-file.ts'],
+      }),
+    });
+    expect(fetchMock.mock.calls.some(([requestUrl]) => requestUrl === '/api/dashboard/work-items/10/actions/move')).toBe(false);
+
+    expect(await screen.findByText('Saved updates for "Write tests".')).toBeInTheDocument();
+  });
+
+  it('merges concurrent board updates into dirty planned files and assignees before save', async () => {
+    const user = userEvent.setup();
+    const fetchMock = vi.mocked(global.fetch);
+
+    fetchMock.mockResolvedValueOnce(
+      createJsonResponse({
+        workItem: createWorkItem({
+          id: 10,
+          status: 'Draft',
+          revision: 2,
+          title: 'Write tests',
+          plannedFiles: ['src/base.ts', 'src/local.ts', 'src/server.ts'],
+          assignees: ['alice', 'bob', 'octocat'],
+        }),
+      }),
+    );
+
+    render(
+      <RepositoryBoardPageContent
+        repository={createRepository({ id: 1, name: 'demo-repo' })}
+        actor={{ actorType: 'human', actorLabel: 'octocat' }}
+        initialLatestEventId={0}
+        initialWorkItems={[
+          createWorkItem({
+            id: 10,
+            status: 'Draft',
+            revision: 0,
+            title: 'Write tests',
+            plannedFiles: ['src/base.ts'],
+            assignees: ['octocat'],
+          }),
+        ]}
+      />,
+    );
+
+    expect(MockEventSource.instances).toHaveLength(1);
+    MockEventSource.instances[0]?.emitOpen();
+
+    await user.click(screen.getByRole('button', { name: /Write tests/ }));
+    await user.type(screen.getByRole('textbox', { name: 'Add planned file path' }), 'src/local.ts');
+    await user.click(screen.getByRole('button', { name: 'Add file' }));
+    await user.type(screen.getByRole('combobox', { name: 'Add assignee' }), 'alice');
+    await user.click(screen.getByRole('button', { name: 'Add assignee' }));
+
+    act(() => {
+      MockEventSource.instances[0]?.emit('board_event', {
+        id: 6,
+        repositoryId: 1,
+        workItemId: 10,
+        eventType: 'updated',
+        payload: {
+          changes: {
+            plannedFiles: ['src/base.ts', 'src/server.ts'],
+            assignees: ['bob', 'octocat'],
+          },
+          revision: 1,
+        },
+        createdAt: new Date('2026-03-02T01:05:00.000Z').toISOString(),
+      });
+    });
+
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+
+    const [url, init] = fetchMock.mock.calls[0] ?? [];
+    expect(url).toBe('/api/dashboard/work-items/10');
+    expect(init).toMatchObject({
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        repositoryId: 1,
+        expectedRevision: 1,
+        actorType: 'human',
+        actorLabel: 'octocat',
+        plannedFiles: ['src/base.ts', 'src/local.ts', 'src/server.ts'],
+        assignees: ['alice', 'bob', 'octocat'],
+      }),
+    });
+    expect(fetchMock.mock.calls.some(([requestUrl]) => requestUrl === '/api/dashboard/work-items/10/actions/move')).toBe(false);
+
+    expect(await screen.findByText('Saved updates for "Write tests".')).toBeInTheDocument();
   });
 
   it('handles 409 conflicts by refreshing the task from the server', async () => {
@@ -585,6 +1035,7 @@ describe('RepositoryBoardPageContent', () => {
 
     await user.click(screen.getByRole('button', { name: /Write tests/ }));
     await user.selectOptions(screen.getByRole('combobox', { name: 'Status' }), 'InProgress');
+    await user.click(screen.getByRole('button', { name: 'Save' }));
 
     expect(await screen.findByRole('alert')).toHaveTextContent('Refreshed from server.');
     expect(within(screen.getByRole('region', { name: 'Tasks InProgress' })).getByRole('button', { name: /Write tests/ })).toBeInTheDocument();
@@ -683,7 +1134,8 @@ describe('RepositoryBoardPageContent', () => {
 
     await user.click(screen.getByRole('button', { name: /New task/ }));
     expect(screen.getByRole('dialog', { name: 'New task' })).toBeInTheDocument();
-    expect(screen.getByText('apps/dashboard/app/repositories/[repositoryId]/board/page.tsx')).toBeInTheDocument();
+    expect(screen.getByText('page.tsx')).toBeInTheDocument();
+    expect(screen.getByText('apps/dashboard/app/repositories/[repositoryId]/board/')).toBeInTheDocument();
     expect(screen.getByText('octocat')).toBeInTheDocument();
     expect(screen.getByText('Repo policy #11 · Epic policy #21')).toBeInTheDocument();
   });
@@ -736,8 +1188,9 @@ describe('RepositoryBoardPageContent', () => {
 
     await user.click(screen.getByRole('button', { name: /New title/ }));
     expect(screen.getByRole('dialog', { name: 'New title' })).toBeInTheDocument();
-    expect(screen.getByText('apps/dashboard/app/repositories/[repositoryId]/board/repository-board-client.tsx')).toBeInTheDocument();
-    expect(within(screen.getByText('Assignees').closest('div') ?? document.body).getByText('None')).toBeInTheDocument();
+    expect(screen.getByText('repository-board-client.tsx')).toBeInTheDocument();
+    expect(screen.getByText('apps/dashboard/app/repositories/[repositoryId]/board/')).toBeInTheDocument();
+    expect(screen.getByText('No assignees yet.')).toBeInTheDocument();
 
     act(() => {
       MockEventSource.instances[0]?.emit('board_event', {
@@ -756,7 +1209,7 @@ describe('RepositoryBoardPageContent', () => {
       });
     });
 
-    expect(screen.getByText('apps/dashboard/app/repositories/[repositoryId]/board/repository-board-client.tsx')).toBeInTheDocument();
+    expect(screen.getByText('repository-board-client.tsx')).toBeInTheDocument();
     expect(screen.getByText('octocat')).toBeInTheDocument();
   });
 
@@ -968,6 +1421,111 @@ describe('RepositoryBoardPageContent', () => {
       MockEventSource.instances[0]?.emitError();
     });
     expect(screen.getByLabelText('Connection status: Reconnecting')).toBeInTheDocument();
+  });
+
+  it('shows stale connection and error banner when EventSource is unavailable', () => {
+    vi.stubGlobal('EventSource', undefined as unknown as typeof EventSource);
+
+    render(
+      <RepositoryBoardPageContent
+        repository={createRepository({ id: 1, name: 'demo-repo' })}
+        actor={{ actorType: 'human', actorLabel: 'octocat' }}
+        initialLatestEventId={0}
+        initialWorkItems={[createWorkItem({ id: 10, status: 'Draft', revision: 0, title: 'Write tests' })]}
+      />,
+    );
+
+    expect(screen.getByLabelText('Connection status: Stale')).toBeInTheDocument();
+    expect(screen.getByRole('alert')).toHaveTextContent('Board live updates are unavailable in this environment.');
+  });
+
+  it('shows an error when copying planned file path fails', async () => {
+    const user = userEvent.setup();
+    const writeText = vi.fn().mockRejectedValue(new Error('clipboard blocked'));
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText },
+    });
+
+    render(
+      <RepositoryBoardPageContent
+        repository={createRepository({ id: 1, name: 'demo-repo' })}
+        actor={{ actorType: 'human', actorLabel: 'octocat' }}
+        initialLatestEventId={0}
+        initialWorkItems={[
+          createWorkItem({
+            id: 10,
+            type: 'task',
+            status: 'Ready',
+            title: 'Write tests',
+            plannedFiles: ['src/main.ts'],
+          }),
+        ]}
+      />,
+    );
+
+    await user.click(screen.getByRole('button', { name: /Write tests/ }));
+    await user.click(screen.getByRole('button', { name: 'Copy path src/main.ts' }));
+
+    expect(writeText).toHaveBeenCalledWith('src/main.ts');
+    expect(await screen.findByText('Unable to copy path in this environment.')).toBeInTheDocument();
+  });
+
+  it('shows move API errors when status save fails without conflict', async () => {
+    const user = userEvent.setup();
+    const fetchMock = vi.mocked(global.fetch);
+
+    fetchMock.mockResolvedValueOnce(
+      createJsonResponse(
+        { error: { code: 'bad_request', message: 'Move was rejected.' } },
+        { status: 400 },
+      ),
+    );
+
+    render(
+      <RepositoryBoardPageContent
+        repository={createRepository({ id: 1, name: 'demo-repo' })}
+        actor={{ actorType: 'human', actorLabel: 'octocat' }}
+        initialLatestEventId={0}
+        initialWorkItems={[createWorkItem({ id: 10, status: 'Draft', revision: 0, title: 'Write tests' })]}
+      />,
+    );
+
+    await user.click(screen.getByRole('button', { name: /Write tests/ }));
+    await user.selectOptions(screen.getByRole('combobox', { name: 'Status' }), 'Done');
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Move was rejected.');
+  });
+
+  it('shows patch API errors when draft field save fails without conflict', async () => {
+    const user = userEvent.setup();
+    const fetchMock = vi.mocked(global.fetch);
+
+    fetchMock.mockResolvedValueOnce(
+      createJsonResponse(
+        { error: { code: 'bad_request', message: 'Field update was rejected.' } },
+        { status: 400 },
+      ),
+    );
+
+    render(
+      <RepositoryBoardPageContent
+        repository={createRepository({ id: 1, name: 'demo-repo' })}
+        actor={{ actorType: 'human', actorLabel: 'octocat' }}
+        initialLatestEventId={0}
+        initialWorkItems={[
+          createWorkItem({ id: 10, status: 'Draft', revision: 0, title: 'Write tests', plannedFiles: null, assignees: ['octocat'] }),
+        ]}
+      />,
+    );
+
+    await user.click(screen.getByRole('button', { name: /Write tests/ }));
+    await user.type(screen.getByRole('textbox', { name: 'Add planned file path' }), 'src/new-file.ts');
+    await user.click(screen.getByRole('button', { name: 'Add file' }));
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Field update was rejected.');
   });
 });
 
