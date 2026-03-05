@@ -695,6 +695,20 @@ describe('RepositoryBoardPageContent', () => {
 
     expect(screen.getByText('Enter a repo-relative path (for example: app/page.tsx).')).toBeInTheDocument();
     expect(screen.getByText('No files linked yet.')).toBeInTheDocument();
+
+    await user.clear(plannedFileInput);
+    await user.type(plannedFileInput, 'C:\\repo\\src\\new-file.ts');
+    await user.click(screen.getByRole('button', { name: 'Add file' }));
+
+    expect(screen.getByText('Enter a repo-relative path (for example: app/page.tsx).')).toBeInTheDocument();
+    expect(screen.getByText('No files linked yet.')).toBeInTheDocument();
+
+    await user.clear(plannedFileInput);
+    await user.type(plannedFileInput, 'C:/repo/src/new-file.ts');
+    await user.click(screen.getByRole('button', { name: 'Add file' }));
+
+    expect(screen.getByText('Enter a repo-relative path (for example: app/page.tsx).')).toBeInTheDocument();
+    expect(screen.getByText('No files linked yet.')).toBeInTheDocument();
   });
 
   it('keeps the current task draft when an earlier task save resolves later', async () => {
