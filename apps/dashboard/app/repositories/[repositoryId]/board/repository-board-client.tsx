@@ -227,8 +227,8 @@ function normalizeRepoRelativePath(value: string): string | null {
   if (normalized.length === 0 || normalized.startsWith('/') || /^[A-Za-z]:($|\/)/.test(normalized)) {
     return null;
   }
-  const segments = normalized.split('/');
-  if (segments.includes('') || segments.includes('.') || segments.includes('..')) {
+  const segments = new Set(normalized.split('/'));
+  if (segments.has('') || segments.has('.') || segments.has('..')) {
     return null;
   }
   return normalized;
@@ -1288,12 +1288,72 @@ export function RepositoryBoardPageContent({
     });
   };
 
+  const syncWorkItemSnapshot = (workItem: DashboardWorkItemSnapshot): void => {
+    setWorkItemsById(previous => ({
+      ...previous,
+      [workItem.id]: workItem,
+    }));
+  };
+
+  const moveTaskForDraftSave = async (params: {
+    workItemId: number;
+    expectedRevision: number;
+    toStatus: TaskWorkItemStatus;
+  }): Promise<DashboardWorkItemSnapshot | null> => {
+    const moveResult = await moveWorkItemStatus({
+      repositoryId: repository.id,
+      workItemId: params.workItemId,
+      expectedRevision: params.expectedRevision,
+      toStatus: params.toStatus,
+      actor,
+    });
+    if (moveResult.ok) {
+      syncWorkItemSnapshot(moveResult.workItem);
+      return moveResult.workItem;
+    }
+    if (moveResult.status === 409) {
+      await refreshWorkItemFromServer(params.workItemId, moveResult.message);
+      return null;
+    }
+    setActionMessage({ tone: 'error', message: moveResult.message });
+    return null;
+  };
+
+  const updateTaskFieldsForDraftSave = async (params: {
+    workItemId: number;
+    expectedRevision: number;
+    draftChanges: TaskDraftChanges;
+  }): Promise<DashboardWorkItemSnapshot | null> => {
+    const updateResult = await updateWorkItemFields({
+      repositoryId: repository.id,
+      workItemId: params.workItemId,
+      expectedRevision: params.expectedRevision,
+      actor,
+      ...(params.draftChanges.plannedFilesChanged
+        ? { plannedFiles: toNullableStringArray(params.draftChanges.nextPlannedFiles) }
+        : {}),
+      ...(params.draftChanges.assigneesChanged
+        ? { assignees: toNullableStringArray(params.draftChanges.nextAssignees) }
+        : {}),
+    });
+    if (updateResult.ok) {
+      syncWorkItemSnapshot(updateResult.workItem);
+      return updateResult.workItem;
+    }
+    if (updateResult.status === 409) {
+      await refreshWorkItemFromServer(params.workItemId, updateResult.message);
+      return null;
+    }
+    setActionMessage({ tone: 'error', message: updateResult.message });
+    return null;
+  };
+
   const handleSaveTaskDraft = async (): Promise<void> => {
     const selectedTask = asSelectedTaskWorkItem(selectedWorkItem);
     if (!selectedTask) {
       return;
     }
-    if (!taskDraft || taskDraft.workItemId !== selectedTask.id) {
+    if (taskDraft?.workItemId !== selectedTask.id) {
       return;
     }
 
@@ -1310,54 +1370,27 @@ export function RepositoryBoardPageContent({
       let latest: DashboardWorkItemSnapshot = selectedTask;
 
       if (draftChanges.statusChanged) {
-        const moveResult = await moveWorkItemStatus({
-          repositoryId: repository.id,
+        const moved = await moveTaskForDraftSave({
           workItemId,
           expectedRevision: latest.revision,
           toStatus: taskDraft.status,
-          actor,
         });
-
-        if (!moveResult.ok) {
-          if (moveResult.status === 409) {
-            await refreshWorkItemFromServer(workItemId, moveResult.message);
-            return;
-          }
-          setActionMessage({ tone: 'error', message: moveResult.message });
+        if (!moved) {
           return;
         }
-
-        latest = moveResult.workItem;
-        setWorkItemsById(previous => ({
-          ...previous,
-          [workItemId]: latest,
-        }));
+        latest = moved;
       }
 
       if (draftChanges.plannedFilesChanged || draftChanges.assigneesChanged) {
-        const updateResult = await updateWorkItemFields({
-          repositoryId: repository.id,
+        const updated = await updateTaskFieldsForDraftSave({
           workItemId,
           expectedRevision: latest.revision,
-          actor,
-          ...(draftChanges.plannedFilesChanged ? { plannedFiles: toNullableStringArray(draftChanges.nextPlannedFiles) } : {}),
-          ...(draftChanges.assigneesChanged ? { assignees: toNullableStringArray(draftChanges.nextAssignees) } : {}),
+          draftChanges,
         });
-
-        if (!updateResult.ok) {
-          if (updateResult.status === 409) {
-            await refreshWorkItemFromServer(workItemId, updateResult.message);
-            return;
-          }
-          setActionMessage({ tone: 'error', message: updateResult.message });
+        if (!updated) {
           return;
         }
-
-        latest = updateResult.workItem;
-        setWorkItemsById(previous => ({
-          ...previous,
-          [workItemId]: latest,
-        }));
+        latest = updated;
       }
 
       resetTaskDraftFromSnapshot(latest);
@@ -1744,7 +1777,7 @@ export function RepositoryBoardPageContent({
               setActionMessage(null);
               taskDraftDirtyRef.current = true;
               setTaskDraft(previous => {
-                if (!previous || previous.workItemId !== details.selectedWorkItem.id) {
+                if (previous?.workItemId !== details.selectedWorkItem.id) {
                   return previous;
                 }
                 return {
