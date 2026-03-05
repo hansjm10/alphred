@@ -5,6 +5,7 @@ import {
   fetchWorkItem,
   moveWorkItemStatus,
   parseBoardEventSnapshot,
+  runStoryWorkflow,
   requestWorkItemReplan,
   toWorkItemsById,
   type BoardEventSnapshot,
@@ -357,6 +358,72 @@ describe('moveWorkItemStatus', () => {
     if (!result.ok) {
       expect(result.message).toBe('Unable to move work item (malformed response).');
     }
+  });
+});
+
+describe('runStoryWorkflow', () => {
+  it('returns ok=true for successful responses', async () => {
+    const fetchMock = vi.fn(async () =>
+      new Response(
+        JSON.stringify({
+          story: createWorkItem({ id: 3, status: 'Approved', revision: 2 }),
+          updatedTasks: [createWorkItem({ id: 20, type: 'task', parentId: 3, status: 'Ready', revision: 1 })],
+          startedTasks: [createWorkItem({ id: 20, type: 'task', parentId: 3, status: 'InProgress', revision: 2 })],
+          steps: [{ step: 'start_ready_tasks', outcome: 'applied', message: 'Started 1 task(s).', startedTaskIds: [20] }],
+        }),
+        { status: 200 },
+      ),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await runStoryWorkflow({
+      repositoryId: 1,
+      storyId: 3,
+      expectedRevision: 1,
+      actor,
+      approveAndStart: true,
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/dashboard/work-items/3/actions/run-story-workflow', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        repositoryId: 1,
+        expectedRevision: 1,
+        actorType: 'human',
+        actorLabel: 'octocat',
+        approveAndStart: true,
+      }),
+    });
+    expect(result).toEqual({
+      ok: true,
+      result: {
+        story: createWorkItem({ id: 3, status: 'Approved', revision: 2 }),
+        updatedTasks: [createWorkItem({ id: 20, type: 'task', parentId: 3, status: 'Ready', revision: 1 })],
+        startedTasks: [createWorkItem({ id: 20, type: 'task', parentId: 3, status: 'InProgress', revision: 2 })],
+        steps: [{ step: 'start_ready_tasks', outcome: 'applied', message: 'Started 1 task(s).', startedTaskIds: [20] }],
+      },
+    });
+  });
+
+  it('returns ok=false for malformed success payloads', async () => {
+    const fetchMock = vi.fn(async () =>
+      new Response(JSON.stringify({ story: createWorkItem({ id: 3 }) }), { status: 200 }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await runStoryWorkflow({
+      repositoryId: 1,
+      storyId: 3,
+      expectedRevision: 1,
+      actor,
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      status: 500,
+      message: 'Unable to run story workflow (malformed response).',
+    });
   });
 });
 

@@ -5,6 +5,7 @@ import type {
   DashboardCreateWorkItemRequest,
   DashboardMoveWorkItemStatusRequest,
   DashboardProposeStoryBreakdownRequest,
+  DashboardRunStoryWorkflowRequest,
   DashboardRequestWorkItemReplanRequest,
   DashboardUpdateWorkItemFieldsRequest,
   DashboardWorkItemProposedBreakdownTask,
@@ -54,6 +55,14 @@ function parseNonNegativeInteger(value: unknown, message: string): number {
 
 function parseString(value: unknown, message: string): string {
   if (typeof value !== 'string') {
+    throw invalidRequest(message);
+  }
+
+  return value;
+}
+
+function parseBoolean(value: unknown, message: string): boolean {
+  if (typeof value !== 'boolean') {
     throw invalidRequest(message);
   }
 
@@ -482,4 +491,46 @@ export function parseApproveStoryBreakdownRequest(
     actorType,
     actorLabel,
   };
+}
+
+export function parseRunStoryWorkflowRequest(
+  payload: Record<string, unknown>,
+  storyId: number,
+): DashboardRunStoryWorkflowRequest {
+  const repositoryId = parsePositiveInteger(payload.repositoryId, 'Field "repositoryId" must be a positive integer.');
+  const expectedRevision = parseNonNegativeInteger(
+    payload.expectedRevision,
+    'Field "expectedRevision" must be a non-negative integer.',
+  );
+  const actorType = parseActorType(payload.actorType);
+  const actorLabel = parseActorLabel(payload.actorLabel);
+
+  const request: DashboardRunStoryWorkflowRequest = {
+    repositoryId,
+    storyId,
+    expectedRevision,
+    actorType,
+    actorLabel,
+  };
+
+  if ('generateOnly' in payload) {
+    request.generateOnly = parseBoolean(payload.generateOnly, 'Field "generateOnly" must be a boolean when provided.');
+  }
+  if ('approveOnly' in payload) {
+    request.approveOnly = parseBoolean(payload.approveOnly, 'Field "approveOnly" must be a boolean when provided.');
+  }
+  if ('approveAndStart' in payload) {
+    request.approveAndStart = parseBoolean(
+      payload.approveAndStart,
+      'Field "approveAndStart" must be a boolean when provided.',
+    );
+  }
+
+  const activeModeCount =
+    Number(request.generateOnly === true) + Number(request.approveOnly === true) + Number(request.approveAndStart === true);
+  if (activeModeCount > 1) {
+    throw invalidRequest('Only one workflow mode flag can be true at a time.');
+  }
+
+  return request;
 }
