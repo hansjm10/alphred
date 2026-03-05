@@ -379,6 +379,35 @@ export const runWorktrees = sqliteTable(
   }),
 );
 
+export const storyWorkspaces = sqliteTable(
+  'story_workspaces',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    repositoryId: integer('repository_id')
+      .notNull()
+      .references(() => repositories.id, { onDelete: 'restrict' }),
+    storyWorkItemId: integer('story_work_item_id')
+      .notNull()
+      .references(() => workItems.id, { onDelete: 'cascade' }),
+    worktreePath: text('worktree_path').notNull(),
+    branch: text('branch').notNull(),
+    baseBranch: text('base_branch').notNull(),
+    baseCommitHash: text('base_commit_hash'),
+    createdAt: text('created_at').notNull().default(utcNow),
+    updatedAt: text('updated_at').notNull().default(utcNow),
+  },
+  table => ({
+    repositoryStoryFk: foreignKey({
+      columns: [table.repositoryId, table.storyWorkItemId],
+      foreignColumns: [workItems.repositoryId, workItems.id],
+      name: 'story_workspaces_repository_id_story_work_item_id_fk',
+    }).onDelete('cascade'),
+    storyWorkItemUnique: uniqueIndex('story_workspaces_story_work_item_id_uq').on(table.storyWorkItemId),
+    repositoryIdx: index('story_workspaces_repository_id_idx').on(table.repositoryId),
+    createdAtIdx: index('story_workspaces_created_at_idx').on(table.createdAt),
+  }),
+);
+
 export const treeNodes = sqliteTable(
   'tree_nodes',
   {

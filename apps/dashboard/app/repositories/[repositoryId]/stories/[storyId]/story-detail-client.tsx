@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import type {
   DashboardRepositoryState,
+  DashboardStoryWorkspaceSnapshot,
   DashboardStoryBreakdownProposalSnapshot,
   DashboardWorkItemSnapshot,
 } from '@dashboard/server/dashboard-contracts';
@@ -57,6 +58,35 @@ async function fetchBreakdownProposal(params: { repositoryId: number; storyId: n
   return (payload.proposal ?? null) as DashboardStoryBreakdownProposalSnapshot | null;
 }
 
+async function createStoryWorkspace(params: {
+  repositoryId: number;
+  storyId: number;
+}): Promise<{ workspace: DashboardStoryWorkspaceSnapshot; created: boolean }> {
+  const response = await fetch(`/api/dashboard/work-items/${params.storyId}/actions/create-workspace`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify({
+      repositoryId: params.repositoryId,
+    }),
+  });
+  const payload = parseJsonSafely(await response.text());
+
+  if (!response.ok) {
+    throw new Error(resolveApiErrorMessage(response.status, payload, 'Unable to create story workspace'));
+  }
+
+  if (!isRecord(payload) || !isRecord(payload.workspace) || typeof payload.created !== 'boolean') {
+    throw new Error('Unable to create story workspace (malformed response).');
+  }
+
+  return {
+    workspace: payload.workspace as DashboardStoryWorkspaceSnapshot,
+    created: payload.created,
+  };
+}
+
 function renderStringList(values: string[] | null): ReactNode {
   if (!values || values.length === 0) {
     return <p className="meta-text">None</p>;
@@ -93,13 +123,23 @@ export function StoryDetailPageContent(props: Readonly<{
   initialLatestEventId: number;
   initialWorkItems: readonly DashboardWorkItemSnapshot[];
   initialProposal: DashboardStoryBreakdownProposalSnapshot | null;
+  initialWorkspace?: DashboardStoryWorkspaceSnapshot | null;
 }>) {
-  const { repository, actor, storyId, initialLatestEventId, initialWorkItems, initialProposal } = props;
+  const {
+    repository,
+    actor,
+    storyId,
+    initialLatestEventId,
+    initialWorkItems,
+    initialProposal,
+    initialWorkspace = null,
+  } = props;
 
   const [workItemsById, setWorkItemsById] = useState<Readonly<Record<number, DashboardWorkItemSnapshot>>>(() =>
     toWorkItemsById(initialWorkItems),
   );
   const [proposal, setProposal] = useState<DashboardStoryBreakdownProposalSnapshot | null>(initialProposal);
+  const [workspace, setWorkspace] = useState<DashboardStoryWorkspaceSnapshot | null>(initialWorkspace);
   const [connectionState, setConnectionState] = useState<BoardConnectionState>('connecting');
   const [connectionError, setConnectionError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -525,6 +565,33 @@ export function StoryDetailPageContent(props: Readonly<{
     setCreatingTask(false);
   };
 
+  const handleCreateStoryWorkspace = async () => {
+    if (!story) {
+      return;
+    }
+
+    setBusy(true);
+    setActionError(null);
+    setActionNotice(null);
+
+    try {
+      const created = await createStoryWorkspace({
+        repositoryId: repository.id,
+        storyId: story.id,
+      });
+      setWorkspace(created.workspace);
+      setActionNotice(
+        created.created
+          ? `Story workspace ready on branch ${created.workspace.branch}.`
+          : `Story workspace already exists on branch ${created.workspace.branch}.`,
+      );
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : 'Unable to create story workspace.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
   if (story?.type !== 'story') {
     return (
       <div className="page-stack">
@@ -630,6 +697,10 @@ export function StoryDetailPageContent(props: Readonly<{
               </>
             ) : null}
 
+            <ActionButton tone="secondary" onClick={() => void handleCreateStoryWorkspace()} disabled={busy}>
+              {workspace ? 'Re-check workspace' : 'Create story workspace'}
+            </ActionButton>
+
             <ActionButton tone="secondary" onClick={() => void refreshAll()} disabled={busy}>
               Refresh
             </ActionButton>
@@ -662,6 +733,22 @@ export function StoryDetailPageContent(props: Readonly<{
               Ready.
             </p>
           ) : null}
+        </div>
+
+        <div className="board-detail__section board-detail__section--divider">
+          <h5>Story workspace</h5>
+          {workspace ? (
+            <>
+              <p className="meta-text">
+                Branch: <code>{workspace.branch}</code> · Base: <code>{workspace.baseBranch}</code>
+              </p>
+              <p className="meta-text">
+                Path: <code>{workspace.path}</code>
+              </p>
+            </>
+          ) : (
+            <p className="meta-text">No workspace created yet.</p>
+          )}
         </div>
 
         {story.status === 'BreakdownProposed' ? (

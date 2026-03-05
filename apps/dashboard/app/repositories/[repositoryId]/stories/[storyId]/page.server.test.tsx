@@ -94,6 +94,7 @@ describe('StoryDetailPage', () => {
     createDashboardServiceMock.mockReturnValue({
       getRepositoryBoardBootstrap: vi.fn(async () => ({ latestEventId: 7, workItems: [story] })),
       getStoryBreakdownProposal: vi.fn(async () => ({ proposal: null })),
+      getStoryWorkspace: vi.fn(async () => ({ workspace: null })),
     });
     loadDashboardRepositoriesMock.mockResolvedValue([repository]);
     loadGitHubAuthGateMock.mockResolvedValue({ state: 'authenticated', user: 'octocat' });
@@ -110,6 +111,7 @@ describe('StoryDetailPage', () => {
     expect(payload.storyId).toBe(3);
     expect(payload.initialLatestEventId).toBe(7);
     expect(payload.initialWorkItems).toHaveLength(1);
+    expect(payload.initialWorkspace).toBeNull();
   });
 
   it('calls notFound when ids are invalid', async () => {
@@ -135,6 +137,7 @@ describe('StoryDetailPage', () => {
     createDashboardServiceMock.mockReturnValue({
       getRepositoryBoardBootstrap: vi.fn(async () => ({ latestEventId: 0, workItems: [createWorkItem({ id: 5, type: 'task' })] })),
       getStoryBreakdownProposal: vi.fn(async () => ({ proposal: null })),
+      getStoryWorkspace: vi.fn(async () => ({ workspace: null })),
     });
     loadDashboardRepositoriesMock.mockResolvedValue([repository]);
     loadGitHubAuthGateMock.mockResolvedValue({ state: 'authenticated', user: 'octocat' });

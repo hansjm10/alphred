@@ -2,6 +2,7 @@ import type { WorkItemActorType } from '@alphred/db';
 import { workItemStatusesByType, workItemTypes, type WorkItemStatus, type WorkItemType } from '@alphred/shared';
 import type {
   DashboardApproveStoryBreakdownRequest,
+  DashboardCreateStoryWorkspaceRequest,
   DashboardCreateWorkItemRequest,
   DashboardGenerateStoryBreakdownDraftRequest,
   DashboardMoveWorkItemStatusRequest,
@@ -499,5 +500,16 @@ export function parseGenerateStoryBreakdownDraftRequest(
     repositoryId,
     storyId,
     expectedRevision,
+  };
+}
+
+export function parseCreateStoryWorkspaceRequest(
+  payload: Record<string, unknown>,
+  storyId: number,
+): DashboardCreateStoryWorkspaceRequest {
+  const repositoryId = parsePositiveInteger(payload.repositoryId, 'Field "repositoryId" must be a positive integer.');
+  return {
+    repositoryId,
+    storyId,
   };
 }

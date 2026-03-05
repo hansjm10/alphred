@@ -14,6 +14,7 @@ import {
   runNodeEdges,
   runNodeStreamEvents,
   routingDecisions,
+  storyWorkspaces,
   runWorktrees,
   runNodes,
   treeEdges,
@@ -1450,6 +1451,80 @@ describe('database schema hardening', () => {
         worktreePath: '/tmp/alphred/worktrees/run-worktree-removed-missing-removed-at',
         branch: 'alphred/design_tree/removed-missing-removed-at',
         status: 'removed',
+      }).run(),
+    ).toThrow();
+  });
+
+  it('enforces story workspace uniqueness and repository/story ownership invariants', () => {
+    const db = createDatabase(':memory:');
+    migrateDatabase(db);
+    const firstRepository = db
+      .insert(repositories)
+      .values({
+        name: 'story-workspace-constraints-repo-1',
+        provider: 'github',
+        remoteUrl: 'https://github.com/acme/story-workspace-constraints-repo-1.git',
+        remoteRef: 'acme/story-workspace-constraints-repo-1',
+        defaultBranch: 'main',
+        cloneStatus: 'cloned',
+      })
+      .returning({ id: repositories.id })
+      .get();
+    const secondRepository = db
+      .insert(repositories)
+      .values({
+        name: 'story-workspace-constraints-repo-2',
+        provider: 'github',
+        remoteUrl: 'https://github.com/acme/story-workspace-constraints-repo-2.git',
+        remoteRef: 'acme/story-workspace-constraints-repo-2',
+        defaultBranch: 'main',
+        cloneStatus: 'cloned',
+      })
+      .returning({ id: repositories.id })
+      .get();
+
+    const story = db
+      .insert(workItems)
+      .values({
+        repositoryId: firstRepository.id,
+        type: 'story',
+        status: 'Draft',
+        title: 'Story workspace checks',
+        revision: 0,
+      })
+      .returning({ id: workItems.id })
+      .get();
+
+    expect(() =>
+      db.insert(storyWorkspaces).values({
+        repositoryId: secondRepository.id,
+        storyWorkItemId: story.id,
+        worktreePath: '/tmp/alphred/worktrees/story-workspace-cross-repo',
+        branch: 'alphred/story/cross-repo',
+        baseBranch: 'main',
+        baseCommitHash: null,
+      }).run(),
+    ).toThrow();
+
+    expect(() =>
+      db.insert(storyWorkspaces).values({
+        repositoryId: firstRepository.id,
+        storyWorkItemId: story.id,
+        worktreePath: '/tmp/alphred/worktrees/story-workspace-first',
+        branch: 'alphred/story/first',
+        baseBranch: 'main',
+        baseCommitHash: 'abc123',
+      }).run(),
+    ).not.toThrow();
+
+    expect(() =>
+      db.insert(storyWorkspaces).values({
+        repositoryId: firstRepository.id,
+        storyWorkItemId: story.id,
+        worktreePath: '/tmp/alphred/worktrees/story-workspace-duplicate',
+        branch: 'alphred/story/duplicate',
+        baseBranch: 'main',
+        baseCommitHash: null,
       }).run(),
     ).toThrow();
   });

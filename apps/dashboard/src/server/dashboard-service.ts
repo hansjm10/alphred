@@ -36,6 +36,7 @@ import { DashboardIntegrationError, toDashboardIntegrationError } from './dashbo
 import { createRepositoryOperations } from './repository-operations';
 import { createRunOperations } from './run-operations';
 import { resolveDatabasePath } from './dashboard-utils';
+import { createStoryWorkspaceOperations } from './story-workspace-operations';
 import { createWorkItemOperations, validateMoveWorkItemStatusRequest } from './work-item-operations';
 import { createWorkflowDraftOperations } from './workflow-draft-operations';
 import { createWorkflowOperations } from './workflow-operations';
@@ -133,6 +134,13 @@ export function createDashboardService(options: {
     environment,
   });
   const workItemOperations = createWorkItemOperations({ withDatabase });
+  const storyWorkspaceOperations = createStoryWorkspaceOperations({
+    withDatabase,
+    dependencies: {
+      ensureRepositoryClone: dependencies.ensureRepositoryClone,
+    },
+    environment,
+  });
   const runOperations = createRunOperations({
     withDatabase,
     dependencies: {
@@ -929,6 +937,7 @@ export function createDashboardService(options: {
     ...workflowDraftOperations,
     ...repositoryOperations,
     ...workItemOperations,
+    ...storyWorkspaceOperations,
     generateStoryBreakdownDraft: generateStoryBreakdownDraftWithCodex,
     moveWorkItemStatus: moveWorkItemStatusWithTaskRunOrchestration,
     ...runOperations,

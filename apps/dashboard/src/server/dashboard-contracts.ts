@@ -552,6 +552,18 @@ export type DashboardWorkItemLinkedRunSnapshot = {
   touchedFiles?: string[] | null;
 };
 
+export type DashboardStoryWorkspaceSnapshot = {
+  id: number;
+  repositoryId: number;
+  storyId: number;
+  path: string;
+  branch: string;
+  baseBranch: string;
+  baseCommitHash: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
 export type DashboardWorkItemSnapshot = {
   id: number;
   repositoryId: number;
@@ -716,6 +728,22 @@ export type DashboardGenerateStoryBreakdownDraftRequest = {
 };
 
 export type DashboardGenerateStoryBreakdownDraftResult = DashboardProposeStoryBreakdownResult;
+
+export type DashboardGetStoryWorkspaceRequest = {
+  repositoryId: number;
+  storyId: number;
+};
+
+export type DashboardGetStoryWorkspaceResult = {
+  workspace: DashboardStoryWorkspaceSnapshot | null;
+};
+
+export type DashboardCreateStoryWorkspaceRequest = DashboardGetStoryWorkspaceRequest;
+
+export type DashboardCreateStoryWorkspaceResult = {
+  workspace: DashboardStoryWorkspaceSnapshot;
+  created: boolean;
+};
 
 export type DashboardApproveStoryBreakdownRequest = {
   repositoryId: number;

@@ -65,7 +65,10 @@ export default async function StoryDetailPage({ params }: StoryDetailPageProps) 
     notFound();
   }
 
-  const proposal = await service.getStoryBreakdownProposal({ repositoryId: parsedRepositoryId, storyId: parsedStoryId });
+  const [proposal, workspace] = await Promise.all([
+    service.getStoryBreakdownProposal({ repositoryId: parsedRepositoryId, storyId: parsedStoryId }),
+    service.getStoryWorkspace({ repositoryId: parsedRepositoryId, storyId: parsedStoryId }),
+  ]);
 
   return (
     <StoryDetailPageContent
@@ -75,6 +78,7 @@ export default async function StoryDetailPage({ params }: StoryDetailPageProps) 
       initialLatestEventId={bootstrap.latestEventId}
       initialWorkItems={bootstrap.workItems}
       initialProposal={proposal.proposal}
+      initialWorkspace={workspace.workspace}
     />
   );
 }

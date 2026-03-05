@@ -317,6 +317,54 @@ describe('StoryDetailPageContent', () => {
     expect(await screen.findByText('Follow-up task')).toBeInTheDocument();
   });
 
+  it('creates a story workspace from the story detail actions', async () => {
+    const user = userEvent.setup();
+    const fetchMock = vi.mocked(global.fetch);
+
+    fetchMock.mockResolvedValueOnce(
+      createJsonResponse({
+        workspace: {
+          id: 9,
+          repositoryId: 1,
+          storyId: 3,
+          path: '/tmp/alphred/worktrees/alphred-story-3-a1b2c3',
+          branch: 'alphred/story/3-a1b2c3',
+          baseBranch: 'main',
+          baseCommitHash: 'abc123',
+          createdAt: '2026-03-05T10:00:00.000Z',
+          updatedAt: '2026-03-05T10:00:00.000Z',
+        },
+        created: true,
+      }),
+    );
+
+    render(
+      <StoryDetailPageContent
+        repository={createRepository({ id: 1, name: 'demo-repo' })}
+        actor={{ actorType: 'human', actorLabel: 'octocat' }}
+        storyId={3}
+        initialLatestEventId={0}
+        initialProposal={null}
+        initialWorkspace={null}
+        initialWorkItems={[createWorkItem({ id: 3, type: 'story', title: 'Story title', status: 'Approved', revision: 1 })]}
+      />,
+    );
+
+    await user.click(screen.getByRole('button', { name: 'Create story workspace' }));
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/dashboard/work-items/3/actions/create-workspace', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        repositoryId: 1,
+      }),
+    });
+
+    expect(await screen.findByText('Story workspace ready on branch alphred/story/3-a1b2c3.')).toBeInTheDocument();
+    expect(screen.getByText('alphred/story/3-a1b2c3')).toBeInTheDocument();
+    expect(screen.getByText('/tmp/alphred/worktrees/alphred-story-3-a1b2c3')).toBeInTheDocument();
+  });
+
   it('shows proposed plan in BreakdownProposed and supports approval', async () => {
     const user = userEvent.setup();
     const fetchMock = vi.mocked(global.fetch);
