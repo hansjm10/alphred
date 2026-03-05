@@ -27,6 +27,7 @@ import { DashboardIntegrationError, toDashboardIntegrationError } from './dashbo
 import { createRepositoryOperations } from './repository-operations';
 import { createRunOperations } from './run-operations';
 import { resolveDatabasePath } from './dashboard-utils';
+import { runStoryWorkflowOrchestration } from './story-workflow-orchestration';
 import { createWorkItemOperations, validateMoveWorkItemStatusRequest } from './work-item-operations';
 import { createWorkflowDraftOperations } from './workflow-draft-operations';
 import { createWorkflowOperations } from './workflow-operations';
@@ -218,11 +219,26 @@ export function createDashboardService(options: {
     }
   }
 
+  async function runStoryWorkflow(
+    request: Parameters<typeof runStoryWorkflowOrchestration>[0]['request'],
+  ): Promise<Awaited<ReturnType<typeof runStoryWorkflowOrchestration>>> {
+    return runStoryWorkflowOrchestration({
+      request,
+      operations: {
+        getWorkItem: workItemOperations.getWorkItem,
+        listWorkItems: workItemOperations.listWorkItems,
+        moveWorkItemStatus: moveWorkItemStatusWithTaskRunOrchestration,
+        approveStoryBreakdown: workItemOperations.approveStoryBreakdown,
+      },
+    });
+  }
+
   return {
     ...workflowOperations,
     ...workflowDraftOperations,
     ...repositoryOperations,
     ...workItemOperations,
+    runStoryWorkflow,
     moveWorkItemStatus: moveWorkItemStatusWithTaskRunOrchestration,
     ...runOperations,
   };

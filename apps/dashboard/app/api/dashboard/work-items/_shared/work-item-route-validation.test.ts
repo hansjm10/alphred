@@ -6,6 +6,7 @@ import {
   parseJsonObjectBody,
   parseMoveWorkItemStatusRequest,
   parseProposeStoryBreakdownRequest,
+  parseRunStoryWorkflowRequest,
   parseRequestWorkItemReplanRequest,
   parseRepositoryIdFromPathSegment,
   parseRepositoryIdFromQuery,
@@ -650,6 +651,71 @@ describe('work item route validation', () => {
             actorLabel: null,
           },
           20,
+        ),
+      ).toThrowError(DashboardIntegrationError);
+    });
+  });
+
+  describe('parseRunStoryWorkflowRequest', () => {
+    it('parses orchestration payloads with mode flags', () => {
+      expect(
+        parseRunStoryWorkflowRequest(
+          {
+            repositoryId: 9,
+            expectedRevision: 4,
+            actorType: 'human',
+            actorLabel: 'alice',
+            approveAndStart: true,
+          },
+          22,
+        ),
+      ).toEqual({
+        repositoryId: 9,
+        storyId: 22,
+        expectedRevision: 4,
+        actorType: 'human',
+        actorLabel: 'alice',
+        approveAndStart: true,
+      });
+    });
+
+    it('rejects invalid orchestration payloads', () => {
+      expect(() =>
+        parseRunStoryWorkflowRequest(
+          {
+            repositoryId: '9',
+            expectedRevision: 4,
+            actorType: 'human',
+            actorLabel: 'alice',
+          },
+          22,
+        ),
+      ).toThrowError(DashboardIntegrationError);
+
+      expect(() =>
+        parseRunStoryWorkflowRequest(
+          {
+            repositoryId: 9,
+            expectedRevision: 4,
+            actorType: 'human',
+            actorLabel: 'alice',
+            generateOnly: 'true',
+          },
+          22,
+        ),
+      ).toThrowError(DashboardIntegrationError);
+
+      expect(() =>
+        parseRunStoryWorkflowRequest(
+          {
+            repositoryId: 9,
+            expectedRevision: 4,
+            actorType: 'human',
+            actorLabel: 'alice',
+            generateOnly: true,
+            approveOnly: true,
+          },
+          22,
         ),
       ).toThrowError(DashboardIntegrationError);
     });

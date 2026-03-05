@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import type {
   DashboardRepositoryState,
+  DashboardRunStoryWorkflowResult,
   DashboardStoryBreakdownProposalSnapshot,
   DashboardWorkItemSnapshot,
 } from '@dashboard/server/dashboard-contracts';
@@ -16,6 +17,7 @@ import {
   fetchWorkItem,
   isRecord,
   moveWorkItemStatus,
+  runStoryWorkflow,
   parseBoardEventSnapshot,
   parseJsonSafely,
   resolveApiErrorMessage,
@@ -54,47 +56,6 @@ async function fetchBreakdownProposal(params: { repositoryId: number; storyId: n
   return (payload.proposal ?? null) as DashboardStoryBreakdownProposalSnapshot | null;
 }
 
-async function approveStoryBreakdown(params: {
-  repositoryId: number;
-  storyId: number;
-  expectedRevision: number;
-  actor: WorkItemActor;
-}): Promise<
-  | { ok: true; story: DashboardWorkItemSnapshot; tasks: DashboardWorkItemSnapshot[] }
-  | { ok: false; status: number; message: string }
-> {
-  const response = await fetch(`/api/dashboard/work-items/${params.storyId}/actions/approve-breakdown`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({
-      repositoryId: params.repositoryId,
-      expectedRevision: params.expectedRevision,
-      actorType: params.actor.actorType,
-      actorLabel: params.actor.actorLabel,
-    }),
-  });
-
-  const payload = parseJsonSafely(await response.text());
-
-  if (!response.ok) {
-    return {
-      ok: false,
-      status: response.status,
-      message: resolveApiErrorMessage(response.status, payload, 'Unable to approve breakdown'),
-    };
-  }
-
-  if (!isRecord(payload) || !isRecord(payload.story) || !Array.isArray(payload.tasks)) {
-    return { ok: false, status: 500, message: 'Unable to approve breakdown (malformed response).' };
-  }
-
-  return {
-    ok: true,
-    story: payload.story as DashboardWorkItemSnapshot,
-    tasks: payload.tasks as DashboardWorkItemSnapshot[],
-  };
-}
-
 function renderStringList(values: string[] | null): ReactNode {
   if (!values || values.length === 0) {
     return <p className="meta-text">None</p>;
@@ -122,6 +83,18 @@ function formatWorkItemStatusLabel(status: WorkItemStatus): string {
     default:
       return status;
   }
+}
+
+function mergeStoryWorkflowWorkItems(
+  previous: Readonly<Record<number, DashboardWorkItemSnapshot>>,
+  result: DashboardRunStoryWorkflowResult,
+): Record<number, DashboardWorkItemSnapshot> {
+  const next: Record<number, DashboardWorkItemSnapshot> = { ...previous };
+  next[result.story.id] = result.story;
+  for (const task of result.updatedTasks) {
+    next[task.id] = task;
+  }
+  return next;
 }
 
 export function StoryDetailPageContent(props: Readonly<{
@@ -311,20 +284,20 @@ export function StoryDetailPageContent(props: Readonly<{
     if (!story) return;
     setBusy(true);
     setActionError(null);
-    const moveResult = await moveWorkItemStatus({
+    const workflowResult = await runStoryWorkflow({
       repositoryId: repository.id,
-      workItemId: story.id,
+      storyId: story.id,
       expectedRevision: story.revision,
-      toStatus: 'NeedsBreakdown',
       actor,
-      errorPrefix: 'Unable to move story status',
+      generateOnly: true,
+      errorPrefix: 'Unable to run story workflow',
     });
-    if (moveResult.ok) {
-      setWorkItemsById(previous => ({ ...previous, [moveResult.workItem.id]: moveResult.workItem }));
-    } else if (moveResult.status === 409) {
-      await refreshAll({ bannerMessage: `Revision conflict: ${moveResult.message}` });
+    if (workflowResult.ok) {
+      setWorkItemsById(previous => mergeStoryWorkflowWorkItems(previous, workflowResult.result));
+    } else if (workflowResult.status === 409) {
+      await refreshAll({ bannerMessage: `Revision conflict: ${workflowResult.message}` });
     } else {
-      setActionError(moveResult.message);
+      setActionError(workflowResult.message);
     }
     setBusy(false);
   };
@@ -356,27 +329,22 @@ export function StoryDetailPageContent(props: Readonly<{
     if (!story) return;
     setBusy(true);
     setActionError(null);
-    const approveResult = await approveStoryBreakdown({
+    const workflowResult = await runStoryWorkflow({
       repositoryId: repository.id,
       storyId,
       expectedRevision: story.revision,
       actor,
+      approveOnly: true,
+      errorPrefix: 'Unable to run story workflow',
     });
 
-    if (approveResult.ok) {
+    if (workflowResult.ok) {
       setProposal(null);
-      setWorkItemsById(previous => {
-        const next: Record<number, DashboardWorkItemSnapshot> = { ...previous };
-        next[approveResult.story.id] = approveResult.story;
-        for (const task of approveResult.tasks) {
-          next[task.id] = task;
-        }
-        return next;
-      });
-    } else if (approveResult.status === 409) {
-      await refreshAll({ bannerMessage: `Revision conflict: ${approveResult.message}` });
+      setWorkItemsById(previous => mergeStoryWorkflowWorkItems(previous, workflowResult.result));
+    } else if (workflowResult.status === 409) {
+      await refreshAll({ bannerMessage: `Revision conflict: ${workflowResult.message}` });
     } else {
-      setActionError(approveResult.message);
+      setActionError(workflowResult.message);
     }
 
     setBusy(false);

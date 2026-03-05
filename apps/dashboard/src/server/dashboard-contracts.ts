@@ -721,3 +721,31 @@ export type DashboardApproveStoryBreakdownResult = {
   story: DashboardWorkItemSnapshot;
   tasks: DashboardWorkItemSnapshot[];
 };
+
+export type DashboardRunStoryWorkflowRequest = {
+  repositoryId: number;
+  storyId: number;
+  expectedRevision: number;
+  actorType: WorkItemActorType;
+  actorLabel: string;
+  generateOnly?: boolean;
+  approveOnly?: boolean;
+  approveAndStart?: boolean;
+};
+
+export type DashboardRunStoryWorkflowStep = 'move_to_needs_breakdown' | 'generate_breakdown' | 'approve_breakdown' | 'start_ready_tasks';
+
+export type DashboardRunStoryWorkflowStepResult = {
+  step: DashboardRunStoryWorkflowStep;
+  outcome: 'applied' | 'skipped' | 'blocked' | 'partial_failure';
+  message: string;
+  startedTaskIds?: number[];
+  failedTaskIds?: number[];
+};
+
+export type DashboardRunStoryWorkflowResult = {
+  story: DashboardWorkItemSnapshot;
+  updatedTasks: DashboardWorkItemSnapshot[];
+  startedTasks: DashboardWorkItemSnapshot[];
+  steps: DashboardRunStoryWorkflowStepResult[];
+};

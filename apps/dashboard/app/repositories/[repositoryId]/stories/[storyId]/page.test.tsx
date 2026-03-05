@@ -158,7 +158,19 @@ describe('StoryDetailPageContent', () => {
 
     fetchMock.mockResolvedValueOnce(
       createJsonResponse({
-        workItem: createWorkItem({ id: 3, type: 'story', title: 'Story title', status: 'NeedsBreakdown', revision: 1 }),
+        story: createWorkItem({ id: 3, type: 'story', title: 'Story title', status: 'NeedsBreakdown', revision: 1 }),
+        updatedTasks: [],
+        startedTasks: [],
+        steps: [
+          { step: 'move_to_needs_breakdown', outcome: 'applied', message: 'Moved story to NeedsBreakdown.' },
+          {
+            step: 'generate_breakdown',
+            outcome: 'blocked',
+            message: 'Story is waiting for a breakdown proposal.',
+          },
+          { step: 'approve_breakdown', outcome: 'skipped', message: 'Skipped approval in generate-only mode.' },
+          { step: 'start_ready_tasks', outcome: 'skipped', message: 'Skipped task start in generate-only mode.' },
+        ],
       }),
     );
 
@@ -175,15 +187,15 @@ describe('StoryDetailPageContent', () => {
 
     await user.click(screen.getByRole('button', { name: 'Request breakdown' }));
 
-    expect(fetchMock).toHaveBeenCalledWith('/api/dashboard/work-items/3/actions/move', {
+    expect(fetchMock).toHaveBeenCalledWith('/api/dashboard/work-items/3/actions/run-story-workflow', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
         repositoryId: 1,
         expectedRevision: 0,
-        toStatus: 'NeedsBreakdown',
         actorType: 'human',
         actorLabel: 'octocat',
+        generateOnly: true,
       }),
     });
 
@@ -197,9 +209,14 @@ describe('StoryDetailPageContent', () => {
     fetchMock.mockResolvedValueOnce(
       createJsonResponse({
         story: createWorkItem({ id: 3, type: 'story', title: 'Story title', status: 'Approved', revision: 2 }),
-        tasks: [
+        updatedTasks: [
           createWorkItem({ id: 20, type: 'task', title: 'Task A', parentId: 3, status: 'Ready', revision: 1 }),
           createWorkItem({ id: 21, type: 'task', title: 'Task B', parentId: 3, status: 'Ready', revision: 1 }),
+        ],
+        startedTasks: [],
+        steps: [
+          { step: 'approve_breakdown', outcome: 'applied', message: 'Approved breakdown and moved child tasks to Ready.' },
+          { step: 'start_ready_tasks', outcome: 'skipped', message: 'Skipped task start for this mode.' },
         ],
       }),
     );
@@ -229,7 +246,17 @@ describe('StoryDetailPageContent', () => {
 
     await user.click(screen.getByRole('button', { name: 'Approve breakdown' }));
 
-    expect(fetchMock).toHaveBeenCalledWith('/api/dashboard/work-items/3/actions/approve-breakdown', expect.anything());
+    expect(fetchMock).toHaveBeenCalledWith('/api/dashboard/work-items/3/actions/run-story-workflow', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        repositoryId: 1,
+        expectedRevision: 1,
+        actorType: 'human',
+        actorLabel: 'octocat',
+        approveOnly: true,
+      }),
+    });
     expect(screen.getByText('Approved')).toBeInTheDocument();
     const childTasksSection = screen.getByText('Child tasks').closest('div') as HTMLElement;
     expect(within(childTasksSection).getAllByText('Ready')).toHaveLength(2);

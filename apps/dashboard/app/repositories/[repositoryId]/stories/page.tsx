@@ -1,10 +1,9 @@
-import Link from 'next/link';
 import { notFound } from 'next/navigation';
-import type { WorkItemStatus } from '@alphred/shared';
-import type { DashboardRepositoryState, DashboardWorkItemSnapshot } from '@dashboard/server/dashboard-contracts';
+import type { DashboardRepositoryState } from '@dashboard/server/dashboard-contracts';
 import { createDashboardService } from '@dashboard/server/dashboard-service';
-import { ButtonLink } from '../../../ui/primitives';
+import { loadGitHubAuthGate } from '../../../ui/load-github-auth-gate';
 import { loadDashboardRepositories } from '../../load-dashboard-repositories';
+import { StoriesIndexPageContent } from './stories-index-client';
 
 type StoriesIndexPageProps = Readonly<{
   params: Promise<{
@@ -27,19 +26,14 @@ function resolveRepository(
   return repositories.find(candidate => candidate.id === repositoryId) ?? null;
 }
 
-function formatWorkItemStatusLabel(status: WorkItemStatus): string {
-  switch (status) {
-    case 'NeedsBreakdown':
-      return 'Needs breakdown';
-    case 'BreakdownProposed':
-      return 'Breakdown proposed';
-    default:
-      return status;
-  }
-}
-
-function countChildTasks(workItems: readonly DashboardWorkItemSnapshot[], storyId: number): number {
-  return workItems.filter(item => item.type === 'task' && item.parentId === storyId).length;
+function resolveActor(authGate: Awaited<ReturnType<typeof loadGitHubAuthGate>>): {
+  actorType: 'human' | 'agent' | 'system';
+  actorLabel: string;
+} {
+  return {
+    actorType: 'human',
+    actorLabel: authGate.state === 'authenticated' && authGate.user ? authGate.user : 'dashboard',
+  };
 }
 
 export default async function StoriesIndexPage({ params }: StoriesIndexPageProps) {
@@ -50,7 +44,10 @@ export default async function StoriesIndexPage({ params }: StoriesIndexPageProps
   }
 
   const service = createDashboardService();
-  const repositories = await loadDashboardRepositories(false);
+  const [repositories, authGate] = await Promise.all([
+    loadDashboardRepositories(false),
+    loadGitHubAuthGate(),
+  ]);
 
   const repository = resolveRepository(repositories, parsedRepositoryId);
   if (!repository) {
@@ -58,59 +55,5 @@ export default async function StoriesIndexPage({ params }: StoriesIndexPageProps
   }
 
   const bootstrap = await service.getRepositoryBoardBootstrap({ repositoryId: parsedRepositoryId });
-
-  const stories = bootstrap.workItems
-    .filter(item => item.type === 'story')
-    .sort((a, b) => b.id - a.id);
-
-  return (
-    <div className="page-stack">
-      <header className="board-page-header">
-        <div>
-          <h2 className="board-page-title">
-            <Link href={`/repositories/${repository.id}/board`}>{repository.name}</Link> / Stories
-          </h2>
-          <p className="meta-text">Stories tracked for this repository.</p>
-        </div>
-        <div className="board-page-header__status">
-          <div className="board-page-header__actions">
-            <ButtonLink href={`/repositories/${repository.id}/board`} tone="secondary">
-              Board
-            </ButtonLink>
-          </div>
-        </div>
-      </header>
-
-      <section className="surface surface-card surface--default">
-        <header className="surface-header">
-          <h3>Stories</h3>
-          <p>{stories.length}</p>
-        </header>
-
-        <div className="board-detail__section">
-          {stories.length === 0 ? (
-            <p className="meta-text">None</p>
-          ) : (
-            <ol className="stories-list">
-              {stories.map(story => (
-                <li key={story.id} className="stories-list__item">
-                  <div className="stories-list__content">
-                    <div className="stories-list__meta">
-                      <span className="board-pill">#{story.id}</span>
-                      <span className="board-pill">{formatWorkItemStatusLabel(story.status)}</span>
-                      <span className="meta-text">{countChildTasks(bootstrap.workItems, story.id)} tasks</span>
-                    </div>
-                    <Link href={`/repositories/${repository.id}/stories/${story.id}`}>{story.title}</Link>
-                  </div>
-                  <ButtonLink href={`/repositories/${repository.id}/stories/${story.id}`} tone="secondary">
-                    Open
-                  </ButtonLink>
-                </li>
-              ))}
-            </ol>
-          )}
-        </div>
-      </section>
-    </div>
-  );
+  return <StoriesIndexPageContent repository={repository} actor={resolveActor(authGate)} initialWorkItems={bootstrap.workItems} />;
 }

@@ -1,16 +1,18 @@
 // @vitest-environment jsdom
 
 import { render, screen, within } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import userEvent from '@testing-library/user-event';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { DashboardRepositoryState, DashboardWorkItemSnapshot } from '@dashboard/server/dashboard-contracts';
 import StoriesIndexPage from './page';
 
-const { NOT_FOUND_ERROR, createDashboardServiceMock, loadDashboardRepositoriesMock, notFoundMock } = vi.hoisted(() => {
+const { NOT_FOUND_ERROR, createDashboardServiceMock, loadDashboardRepositoriesMock, loadGitHubAuthGateMock, notFoundMock } = vi.hoisted(() => {
   const NOT_FOUND_ERROR = new Error('NOT_FOUND');
   return {
     NOT_FOUND_ERROR,
     createDashboardServiceMock: vi.fn(),
     loadDashboardRepositoriesMock: vi.fn(),
+    loadGitHubAuthGateMock: vi.fn(),
     notFoundMock: vi.fn(() => {
       throw NOT_FOUND_ERROR;
     }),
@@ -23,6 +25,10 @@ vi.mock('@dashboard/server/dashboard-service', () => ({
 
 vi.mock('../../load-dashboard-repositories', () => ({
   loadDashboardRepositories: loadDashboardRepositoriesMock,
+}));
+
+vi.mock('../../../ui/load-github-auth-gate', () => ({
+  loadGitHubAuthGate: loadGitHubAuthGateMock,
 }));
 
 vi.mock('next/navigation', () => ({
@@ -64,11 +70,34 @@ function createWorkItem(overrides: Partial<DashboardWorkItemSnapshot> = {}): Das
   };
 }
 
+function createJsonResponse(payload: unknown, init?: ResponseInit): Response {
+  return new Response(JSON.stringify(payload), init);
+}
+
 describe('StoriesIndexPage', () => {
   beforeEach(() => {
     createDashboardServiceMock.mockReset();
     loadDashboardRepositoriesMock.mockReset();
+    loadGitHubAuthGateMock.mockReset();
     notFoundMock.mockClear();
+    loadGitHubAuthGateMock.mockResolvedValue({
+      state: 'authenticated',
+      badge: {
+        status: 'completed',
+        label: 'Authenticated',
+      },
+      canMutate: true,
+      detail: 'Signed in as octocat.',
+      user: 'octocat',
+      scopes: ['repo'],
+      checkedAtLabel: '10:00:00',
+      remediationCommands: [],
+      needsRemediation: false,
+    });
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
   });
 
   it('renders stories with status and child task counts', async () => {
@@ -100,6 +129,131 @@ describe('StoriesIndexPage', () => {
     expect(screen.getByRole('link', { name: 'Story A' })).toHaveAttribute('href', '/repositories/1/stories/3');
     expect(screen.getByText('Needs breakdown')).toBeInTheDocument();
     expect(screen.getByText('2 tasks')).toBeInTheDocument();
+  });
+
+  it('runs story workflow from the stories list and shows the result banner', async () => {
+    const user = userEvent.setup();
+    const fetchMock = vi.fn();
+    fetchMock.mockResolvedValueOnce(
+      createJsonResponse({
+        story: createWorkItem({ id: 3, type: 'story', title: 'Story A', status: 'Approved', revision: 5 }),
+        updatedTasks: [
+          createWorkItem({ id: 20, type: 'task', title: 'Task A', parentId: 3, status: 'InProgress', revision: 2 }),
+        ],
+        startedTasks: [
+          createWorkItem({ id: 20, type: 'task', title: 'Task A', parentId: 3, status: 'InProgress', revision: 2 }),
+        ],
+        steps: [
+          { step: 'approve_breakdown', outcome: 'applied', message: 'Approved breakdown.' },
+          { step: 'start_ready_tasks', outcome: 'applied', message: 'Started 1 task(s).', startedTaskIds: [20] },
+        ],
+      }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const repository = createRepository({ id: 1, name: 'demo-repo' });
+    const workItems = [
+      createWorkItem({ id: 3, type: 'story', title: 'Story A', status: 'BreakdownProposed', revision: 4 }),
+      createWorkItem({ id: 20, type: 'task', title: 'Task A', parentId: 3, status: 'Ready', revision: 1 }),
+    ];
+    const service = {
+      getRepositoryBoardBootstrap: vi.fn().mockResolvedValue({ repositoryId: 1, latestEventId: 0, workItems }),
+    };
+    createDashboardServiceMock.mockReturnValue(service);
+    loadDashboardRepositoriesMock.mockResolvedValue([repository]);
+
+    const root = await StoriesIndexPage({ params: Promise.resolve({ repositoryId: '1' }) });
+    render(root);
+
+    await user.click(screen.getByRole('button', { name: 'Run workflow' }));
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/dashboard/work-items/3/actions/run-story-workflow', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        repositoryId: 1,
+        expectedRevision: 4,
+        actorType: 'human',
+        actorLabel: 'octocat',
+      }),
+    });
+    expect(await screen.findByText('Story #3 workflow ran and 1 task started.')).toBeInTheDocument();
+    expect(screen.getByText('Approved')).toBeInTheDocument();
+  });
+
+  it('refreshes repository work items on workflow conflict so retry uses latest revision and child task counts', async () => {
+    const user = userEvent.setup();
+    const fetchMock = vi.fn();
+    fetchMock
+      .mockResolvedValueOnce(createJsonResponse({ error: { message: 'Story revision conflict.' } }, { status: 409 }))
+      .mockResolvedValueOnce(
+        createJsonResponse({
+          workItems: [
+            createWorkItem({ id: 3, type: 'story', title: 'Story A', status: 'BreakdownProposed', revision: 7 }),
+            createWorkItem({ id: 20, type: 'task', title: 'Task A', parentId: 3, status: 'Draft', revision: 1 }),
+            createWorkItem({ id: 21, type: 'task', title: 'Task B', parentId: 3, status: 'Draft', revision: 0 }),
+          ],
+        }),
+      )
+      .mockResolvedValueOnce(
+        createJsonResponse({
+          story: createWorkItem({ id: 3, type: 'story', title: 'Story A', status: 'Approved', revision: 8 }),
+          updatedTasks: [
+            createWorkItem({ id: 20, type: 'task', title: 'Task A', parentId: 3, status: 'InProgress', revision: 2 }),
+          ],
+          startedTasks: [
+            createWorkItem({ id: 20, type: 'task', title: 'Task A', parentId: 3, status: 'InProgress', revision: 2 }),
+          ],
+          steps: [
+            { step: 'approve_breakdown', outcome: 'applied', message: 'Approved breakdown.' },
+            { step: 'start_ready_tasks', outcome: 'applied', message: 'Started 1 task(s).', startedTaskIds: [20] },
+          ],
+        }),
+      );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const repository = createRepository({ id: 1, name: 'demo-repo' });
+    const workItems = [createWorkItem({ id: 3, type: 'story', title: 'Story A', status: 'NeedsBreakdown', revision: 4 })];
+    const service = {
+      getRepositoryBoardBootstrap: vi.fn().mockResolvedValue({ repositoryId: 1, latestEventId: 0, workItems }),
+    };
+    createDashboardServiceMock.mockReturnValue(service);
+    loadDashboardRepositoriesMock.mockResolvedValue([repository]);
+
+    const root = await StoriesIndexPage({ params: Promise.resolve({ repositoryId: '1' }) });
+    render(root);
+
+    await user.click(screen.getByRole('button', { name: 'Run workflow' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('Story revision conflict.');
+    expect(screen.getByText('Breakdown proposed')).toBeInTheDocument();
+    expect(screen.getByText('2 tasks')).toBeInTheDocument();
+
+    expect(fetchMock).toHaveBeenNthCalledWith(1, '/api/dashboard/work-items/3/actions/run-story-workflow', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        repositoryId: 1,
+        expectedRevision: 4,
+        actorType: 'human',
+        actorLabel: 'octocat',
+      }),
+    });
+    expect(fetchMock).toHaveBeenNthCalledWith(2, '/api/dashboard/repositories/1/work-items', {
+      method: 'GET',
+    });
+
+    await user.click(screen.getByRole('button', { name: 'Run workflow' }));
+    expect(fetchMock).toHaveBeenNthCalledWith(3, '/api/dashboard/work-items/3/actions/run-story-workflow', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        repositoryId: 1,
+        expectedRevision: 7,
+        actorType: 'human',
+        actorLabel: 'octocat',
+      }),
+    });
+    expect(await screen.findByText('Story #3 workflow ran and 1 task started.')).toBeInTheDocument();
   });
 
   it('shows an empty state when no stories exist', async () => {

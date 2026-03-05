@@ -2,6 +2,7 @@
 
 import type { WorkItemStatus, WorkItemType } from '@alphred/shared';
 import type {
+  DashboardRunStoryWorkflowResult,
   DashboardWorkItemEffectivePolicySnapshot,
   DashboardWorkItemLinkedRunSnapshot,
   DashboardRequestWorkItemReplanResult,
@@ -481,6 +482,75 @@ export async function moveWorkItemStatus<TStatus extends string>(params: {
   }
 
   return { ok: true, workItem: payload.workItem as DashboardWorkItemSnapshot };
+}
+
+export async function runStoryWorkflow(params: {
+  repositoryId: number;
+  storyId: number;
+  expectedRevision: number;
+  actor: WorkItemActor;
+  generateOnly?: boolean;
+  approveOnly?: boolean;
+  approveAndStart?: boolean;
+  errorPrefix?: string;
+}): Promise<{ ok: true; result: DashboardRunStoryWorkflowResult } | { ok: false; status: number; message: string }> {
+  const errorPrefix = params.errorPrefix ?? 'Unable to run story workflow';
+  type StoryWorkflowRequestBody = {
+    repositoryId: number;
+    expectedRevision: number;
+    actorType: WorkItemActor['actorType'];
+    actorLabel: WorkItemActor['actorLabel'];
+    generateOnly?: boolean;
+    approveOnly?: boolean;
+    approveAndStart?: boolean;
+  };
+  const requestBody: StoryWorkflowRequestBody = {
+    repositoryId: params.repositoryId,
+    expectedRevision: params.expectedRevision,
+    actorType: params.actor.actorType,
+    actorLabel: params.actor.actorLabel,
+  };
+  const assignOptionalFlag = <TKey extends 'generateOnly' | 'approveOnly' | 'approveAndStart'>(
+    key: TKey,
+    value: StoryWorkflowRequestBody[TKey],
+  ) => {
+    if (value === undefined) {
+      return;
+    }
+    requestBody[key] = value;
+  };
+  assignOptionalFlag('generateOnly', params.generateOnly);
+  assignOptionalFlag('approveOnly', params.approveOnly);
+  assignOptionalFlag('approveAndStart', params.approveAndStart);
+  const response = await fetch(`/api/dashboard/work-items/${params.storyId}/actions/run-story-workflow`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(requestBody),
+  });
+  const payload = parseJsonSafely(await response.text());
+
+  if (!response.ok) {
+    return {
+      ok: false,
+      status: response.status,
+      message: resolveApiErrorMessage(response.status, payload, errorPrefix),
+    };
+  }
+
+  if (
+    !isRecord(payload)
+    || !isRecord(payload.story)
+    || !Array.isArray(payload.updatedTasks)
+    || !Array.isArray(payload.startedTasks)
+    || !Array.isArray(payload.steps)
+  ) {
+    return { ok: false, status: 500, message: `${errorPrefix} (malformed response).` };
+  }
+
+  return {
+    ok: true,
+    result: payload as DashboardRunStoryWorkflowResult,
+  };
 }
 
 export async function updateWorkItemFields(params: {
