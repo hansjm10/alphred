@@ -284,6 +284,7 @@ export async function runStoryWorkflowOrchestration(params: {
 
   const failures: TaskStartFailure[] = [];
   let fatalStartError: { error: unknown; message: string } | null = null;
+  let conflictStartError: DashboardIntegrationError | null = null;
   for (const task of readyTasks) {
     try {
       const startedTask = await params.operations.moveWorkItemStatus({
@@ -297,6 +298,7 @@ export async function runStoryWorkflowOrchestration(params: {
       startedTasks.push(startedTask.workItem);
     } catch (error) {
       if (error instanceof DashboardIntegrationError && error.code === 'conflict') {
+        conflictStartError ??= error;
         failures.push({
           taskId: task.id,
           status: error.status,
@@ -319,6 +321,10 @@ export async function runStoryWorkflowOrchestration(params: {
   }
 
   if (failures.length > 0) {
+    if (fatalStartError === null && conflictStartError !== null && !didApproveBreakdown && startedTasks.length === 0) {
+      throw conflictStartError;
+    }
+
     const conflictedTaskIds = new Set(
       failures.filter(failure => failure.status === 409).map(failure => failure.taskId),
     );

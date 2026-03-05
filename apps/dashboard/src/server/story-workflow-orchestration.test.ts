@@ -118,6 +118,37 @@ describe('runStoryWorkflowOrchestration', () => {
     );
   });
 
+  it('rethrows task start conflicts when no task start mutation succeeds', async () => {
+    const story = createWorkItem({ id: 3, type: 'story', status: 'Approved', revision: 2 });
+    const readyTask = createWorkItem({ id: 20, type: 'task', parentId: 3, status: 'Ready', revision: 1 });
+
+    const operations = createOperations({
+      getWorkItem: vi.fn().mockResolvedValue({ workItem: story }),
+      listWorkItems: vi.fn().mockResolvedValue({ workItems: [readyTask] }),
+      moveWorkItemStatus: vi
+        .fn()
+        .mockRejectedValueOnce(new DashboardIntegrationError('conflict', 'Task revision conflict.', { status: 409 })),
+    });
+
+    await expect(
+      runStoryWorkflowOrchestration({
+        request: {
+          repositoryId: 1,
+          storyId: 3,
+          expectedRevision: 2,
+          actorType: 'human',
+          actorLabel: 'alice',
+        },
+        operations,
+      }),
+    ).rejects.toMatchObject({
+      code: 'conflict',
+      status: 409,
+      message: 'Task revision conflict.',
+    });
+    expect(operations.getWorkItem).toHaveBeenCalledTimes(1);
+  });
+
   it('returns partial workflow state when task start fails after breakdown approval commits', async () => {
     const story = createWorkItem({ id: 3, type: 'story', status: 'BreakdownProposed', revision: 4 });
     const approvedStory = createWorkItem({ id: 3, type: 'story', status: 'Approved', revision: 5 });
