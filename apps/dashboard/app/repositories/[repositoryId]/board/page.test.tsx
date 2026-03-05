@@ -205,6 +205,39 @@ describe('RepositoryBoardPageContent', () => {
     expect(screen.getByText('Linked run')).toBeInTheDocument();
   });
 
+  it('builds GitHub file links from remoteUrl host when remoteRef is host-prefixed', async () => {
+    const user = userEvent.setup();
+
+    render(
+      <RepositoryBoardPageContent
+        repository={createRepository({
+          id: 1,
+          name: 'demo-repo',
+          remoteRef: 'ghe.internal.example/octocat/demo-repo',
+          remoteUrl: 'https://ghe.internal.example/octocat/demo-repo.git',
+        })}
+        actor={{ actorType: 'human', actorLabel: 'octocat' }}
+        initialLatestEventId={0}
+        initialWorkItems={[
+          createWorkItem({
+            id: 10,
+            type: 'task',
+            status: 'Ready',
+            title: 'Write tests',
+            plannedFiles: ['src/main.ts'],
+          }),
+        ]}
+      />,
+    );
+
+    await user.click(screen.getByRole('button', { name: /Write tests/ }));
+
+    expect(screen.getByRole('link', { name: 'Open src/main.ts in GitHub' })).toHaveAttribute(
+      'href',
+      'https://ghe.internal.example/octocat/demo-repo/blob/main/src/main.ts',
+    );
+  });
+
   it('shows linked run metadata in task details when available', async () => {
     const user = userEvent.setup();
 

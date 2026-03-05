@@ -241,19 +241,108 @@ function splitPath(path: string): { filename: string; directory: string } {
   };
 }
 
+function normalizeGitHubRepositoryPath(value: string): string | null {
+  const normalizedPath = value.trim().replace(/^\/+/, '').replace(/\/+$/, '').replace(/\.git$/i, '');
+  if (normalizedPath.length === 0) {
+    return null;
+  }
+
+  const segments = normalizedPath.split('/').filter(segment => segment.length > 0);
+  if (segments.length < 2) {
+    return null;
+  }
+
+  const owner = segments[segments.length - 2];
+  const repository = segments[segments.length - 1];
+  if (!owner || !repository) {
+    return null;
+  }
+
+  return `${owner}/${repository}`;
+}
+
+function parseGitHubRemoteUrl(remoteUrl: string): { origin: string; repositoryPath: string } | null {
+  const trimmedRemoteUrl = remoteUrl.trim();
+  if (trimmedRemoteUrl.length === 0) {
+    return null;
+  }
+
+  const scpStyleMatch = /^git@([^:/\s]+):(.+)$/.exec(trimmedRemoteUrl);
+  if (scpStyleMatch) {
+    const host = scpStyleMatch[1];
+    const repositoryPath = normalizeGitHubRepositoryPath(scpStyleMatch[2]);
+    if (!host || !repositoryPath) {
+      return null;
+    }
+    return {
+      origin: `https://${host}`,
+      repositoryPath,
+    };
+  }
+
+  let parsedUrl: URL;
+  try {
+    parsedUrl = new URL(trimmedRemoteUrl);
+  } catch {
+    return null;
+  }
+
+  const repositoryPath = normalizeGitHubRepositoryPath(parsedUrl.pathname);
+  if (!repositoryPath) {
+    return null;
+  }
+
+  const protocol = parsedUrl.protocol === 'http:' || parsedUrl.protocol === 'https:' ? parsedUrl.protocol : 'https:';
+  return {
+    origin: `${protocol}//${parsedUrl.host}`,
+    repositoryPath,
+  };
+}
+
+function resolveGitHubRepositoryWebUrl(repository: DashboardRepositoryState): string | null {
+  const parsedRemoteUrl = parseGitHubRemoteUrl(repository.remoteUrl);
+  if (parsedRemoteUrl) {
+    return `${parsedRemoteUrl.origin}/${parsedRemoteUrl.repositoryPath}`;
+  }
+
+  const remoteRefSegments = repository.remoteRef
+    .trim()
+    .split('/')
+    .filter(segment => segment.length > 0);
+
+  if (remoteRefSegments.length < 2) {
+    return null;
+  }
+
+  if (remoteRefSegments.length === 2) {
+    const [owner, repositoryName] = remoteRefSegments;
+    return `https://github.com/${owner}/${repositoryName}`;
+  }
+
+  const host = remoteRefSegments[0];
+  const owner = remoteRefSegments[remoteRefSegments.length - 2];
+  const repositoryName = remoteRefSegments[remoteRefSegments.length - 1];
+  if (!host || !owner || !repositoryName) {
+    return null;
+  }
+  return `https://${host}/${owner}/${repositoryName}`;
+}
+
 function buildRepositoryFileUrl(repository: DashboardRepositoryState, path: string): string | null {
   if (repository.provider !== 'github') {
     return null;
   }
-  const remoteRef = repository.remoteRef.trim();
-  if (remoteRef.length === 0) {
+
+  const repositoryWebUrl = resolveGitHubRepositoryWebUrl(repository);
+  if (!repositoryWebUrl) {
     return null;
   }
+
   const encodedPath = path
     .split('/')
     .map(segment => encodeURIComponent(segment))
     .join('/');
-  return `https://github.com/${remoteRef}/blob/${encodeURIComponent(repository.defaultBranch)}/${encodedPath}`;
+  return `${repositoryWebUrl}/blob/${encodeURIComponent(repository.defaultBranch)}/${encodedPath}`;
 }
 
 async function copyTextToClipboard(value: string): Promise<boolean> {
