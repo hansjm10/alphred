@@ -493,17 +493,30 @@ export async function updateWorkItemFields(params: {
   errorPrefix?: string;
 }): Promise<{ ok: true; workItem: DashboardWorkItemSnapshot } | { ok: false; status: number; message: string }> {
   const errorPrefix = params.errorPrefix ?? 'Unable to save work item';
+  const requestBody: {
+    repositoryId: number;
+    expectedRevision: number;
+    actorType: WorkItemActor['actorType'];
+    actorLabel: WorkItemActor['actorLabel'];
+    plannedFiles?: string[] | null;
+    assignees?: string[] | null;
+  } = {
+    repositoryId: params.repositoryId,
+    expectedRevision: params.expectedRevision,
+    actorType: params.actor.actorType,
+    actorLabel: params.actor.actorLabel,
+  };
+  if (params.plannedFiles !== undefined) {
+    requestBody.plannedFiles = params.plannedFiles;
+  }
+  if (params.assignees !== undefined) {
+    requestBody.assignees = params.assignees;
+  }
+
   const response = await fetch(`/api/dashboard/work-items/${params.workItemId}`, {
     method: 'PATCH',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({
-      repositoryId: params.repositoryId,
-      expectedRevision: params.expectedRevision,
-      actorType: params.actor.actorType,
-      actorLabel: params.actor.actorLabel,
-      ...(params.plannedFiles !== undefined ? { plannedFiles: params.plannedFiles } : {}),
-      ...(params.assignees !== undefined ? { assignees: params.assignees } : {}),
-    }),
+    body: JSON.stringify(requestBody),
   });
 
   const payload = parseJsonSafely(await response.text());

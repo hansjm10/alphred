@@ -32,8 +32,8 @@ import {
   updateWorkItemFields,
 } from '../_shared/work-items-shared';
 
-function isTaskStatus(value: string): value is TaskWorkItemStatus {
-  return (taskWorkItemStatuses as readonly string[]).includes(value);
+function isTaskStatus(value: unknown): value is TaskWorkItemStatus {
+  return typeof value === 'string' && (taskWorkItemStatuses as readonly string[]).includes(value);
 }
 
 function formatTaskStatusLabel(status: TaskWorkItemStatus): string {
@@ -227,7 +227,8 @@ function normalizeRepoRelativePath(value: string): string | null {
   if (normalized.length === 0 || normalized.startsWith('/') || /^[A-Za-z]:($|\/)/.test(normalized)) {
     return null;
   }
-  if (normalized.split('/').some(segment => segment.length === 0 || segment === '.' || segment === '..')) {
+  const segments = normalized.split('/');
+  if (segments.includes('') || segments.includes('.') || segments.includes('..')) {
     return null;
   }
   return normalized;
@@ -255,8 +256,8 @@ function normalizeGitHubRepositoryPath(value: string): string | null {
     return null;
   }
 
-  const owner = segments[segments.length - 2];
-  const repository = segments[segments.length - 1];
+  const owner = segments.at(-2);
+  const repository = segments.at(-1);
   if (!owner || !repository) {
     return null;
   }
@@ -323,12 +324,51 @@ function resolveGitHubRepositoryWebUrl(repository: DashboardRepositoryState): st
   }
 
   const host = remoteRefSegments[0];
-  const owner = remoteRefSegments[remoteRefSegments.length - 2];
-  const repositoryName = remoteRefSegments[remoteRefSegments.length - 1];
+  const owner = remoteRefSegments.at(-2);
+  const repositoryName = remoteRefSegments.at(-1);
   if (!host || !owner || !repositoryName) {
     return null;
   }
   return `https://${host}/${owner}/${repositoryName}`;
+}
+
+type SelectedTaskWorkItem = DashboardWorkItemSnapshot & Readonly<{ type: 'task'; status: TaskWorkItemStatus }>;
+
+type TaskDraftChanges = Readonly<{
+  statusChanged: boolean;
+  plannedFilesChanged: boolean;
+  assigneesChanged: boolean;
+  nextPlannedFiles: string[];
+  nextAssignees: string[];
+}>;
+
+function asSelectedTaskWorkItem(workItem: DashboardWorkItemSnapshot | null): SelectedTaskWorkItem | null {
+  if (workItem?.type !== 'task' || !isTaskStatus(workItem.status)) {
+    return null;
+  }
+  return workItem as SelectedTaskWorkItem;
+}
+
+function resolveTaskDraftChanges(taskDraft: TaskFlyoutDraft, selectedTask: SelectedTaskWorkItem): TaskDraftChanges | null {
+  const statusChanged = taskDraft.status !== selectedTask.status;
+  const nextPlannedFiles = toUniqueSortedStrings(taskDraft.plannedFiles);
+  const nextAssignees = toUniqueSortedStrings(taskDraft.assignees);
+  const currentPlannedFiles = toUniqueSortedStrings(selectedTask.plannedFiles);
+  const currentAssignees = toUniqueSortedStrings(selectedTask.assignees);
+  const plannedFilesChanged = !areSortedStringArraysEqual(nextPlannedFiles, currentPlannedFiles);
+  const assigneesChanged = !areSortedStringArraysEqual(nextAssignees, currentAssignees);
+
+  if (!statusChanged && !plannedFilesChanged && !assigneesChanged) {
+    return null;
+  }
+
+  return {
+    statusChanged,
+    plannedFilesChanged,
+    assigneesChanged,
+    nextPlannedFiles,
+    nextAssignees,
+  };
 }
 
 function buildRepositoryFileUrl(repository: DashboardRepositoryState, path: string): string | null {
@@ -616,6 +656,109 @@ function renderEffectivePolicy(effectivePolicy: DashboardWorkItemSnapshot['effec
   );
 }
 
+type DetailsPanelState = Readonly<{
+  selectedWorkItem: DashboardWorkItemSnapshot;
+  status: TaskWorkItemStatus | null;
+  linkedWorkflowRun: DashboardWorkItemSnapshot['linkedWorkflowRun'] | null;
+  moving: boolean;
+  dialogTitleId: string;
+  statusSelectId: string;
+  effectivePolicy: DashboardWorkItemSnapshot['effectivePolicy'] | null;
+  touchedFiles: string[] | null | undefined;
+  hasTouchedFiles: boolean;
+  canComparePlanVsActual: boolean;
+  planVsActual: PlanVsActualDelta;
+  requestingReplan: boolean;
+  openFullPageHref: string | null;
+  draftMatchesSelection: boolean;
+  draftStatus: TaskWorkItemStatus | null;
+  draftedPlannedFiles: string[];
+  draftedAssignees: string[];
+  hasDraftChanges: boolean;
+  canEditDraft: boolean;
+  fileInputId: string;
+  assigneeInputId: string;
+  assigneeOptionsId: string;
+  metadataLabel: string;
+}>;
+
+function buildDetailsPanelState(params: {
+  selectedWorkItem: DashboardWorkItemSnapshot;
+  taskDraft: TaskFlyoutDraft | null;
+  selectedParentChain: readonly ParentChainEntry[];
+  movingWorkItemIds: ReadonlySet<number>;
+  replanningWorkItemIds: ReadonlySet<number>;
+  repositoryId: number;
+}): DetailsPanelState {
+  const { selectedWorkItem, taskDraft, selectedParentChain, movingWorkItemIds, replanningWorkItemIds, repositoryId } = params;
+
+  let status: TaskWorkItemStatus | null = null;
+  if (selectedWorkItem.type === 'task' && isTaskStatus(selectedWorkItem.status)) {
+    status = selectedWorkItem.status;
+  }
+
+  const linkedWorkflowRun = selectedWorkItem.linkedWorkflowRun ?? null;
+  const moving = movingWorkItemIds.has(selectedWorkItem.id);
+  const dialogTitleId = `board-detail-dialog-title-${selectedWorkItem.id}`;
+  const statusSelectId = `board-detail-status-${selectedWorkItem.id}`;
+  const detailTypeLabel = selectedWorkItem.type.charAt(0).toUpperCase() + selectedWorkItem.type.slice(1);
+  const effectivePolicy = selectedWorkItem.effectivePolicy ?? null;
+  const touchedFiles = linkedWorkflowRun?.touchedFiles;
+  const hasTouchedFiles = touchedFiles !== null && touchedFiles !== undefined;
+  const canComparePlanVsActual = linkedWorkflowRun !== null && hasTouchedFiles;
+  const planVsActual = canComparePlanVsActual
+    ? resolvePlanVsActualDelta(selectedWorkItem.plannedFiles, touchedFiles)
+    : { plannedButUntouched: [], touchedButUnplanned: [] };
+  const requestingReplan = replanningWorkItemIds.has(selectedWorkItem.id);
+  const parentStory = [...selectedParentChain].reverse().find(parent => parent.type === 'story') ?? null;
+  const openFullPageHref = parentStory ? `/repositories/${repositoryId}/stories/${parentStory.id}` : null;
+  const draftMatchesSelection = taskDraft !== null && taskDraft.workItemId === selectedWorkItem.id;
+  const draftStatus = draftMatchesSelection && status !== null ? taskDraft.status : status;
+  const draftedPlannedFiles = draftMatchesSelection
+    ? toUniqueSortedStrings(taskDraft.plannedFiles)
+    : toUniqueSortedStrings(selectedWorkItem.plannedFiles);
+  const draftedAssignees = draftMatchesSelection
+    ? toUniqueSortedStrings(taskDraft.assignees)
+    : toUniqueSortedStrings(selectedWorkItem.assignees);
+  const currentPlannedFiles = toUniqueSortedStrings(selectedWorkItem.plannedFiles);
+  const currentAssignees = toUniqueSortedStrings(selectedWorkItem.assignees);
+  const statusChanged = status !== null && draftStatus !== null && draftStatus !== status;
+  const plannedFilesChanged = !areSortedStringArraysEqual(draftedPlannedFiles, currentPlannedFiles);
+  const assigneesChanged = !areSortedStringArraysEqual(draftedAssignees, currentAssignees);
+  const hasDraftChanges = draftMatchesSelection && (statusChanged || plannedFilesChanged || assigneesChanged);
+  const canEditDraft = draftMatchesSelection && !moving;
+  const fileInputId = `board-detail-file-input-${selectedWorkItem.id}`;
+  const assigneeInputId = `board-detail-assignee-input-${selectedWorkItem.id}`;
+  const assigneeOptionsId = `board-detail-assignee-options-${selectedWorkItem.id}`;
+  const metadataLabel = `${detailTypeLabel} · #${selectedWorkItem.id}`;
+
+  return {
+    selectedWorkItem,
+    status,
+    linkedWorkflowRun,
+    moving,
+    dialogTitleId,
+    statusSelectId,
+    effectivePolicy,
+    touchedFiles,
+    hasTouchedFiles,
+    canComparePlanVsActual,
+    planVsActual,
+    requestingReplan,
+    openFullPageHref,
+    draftMatchesSelection,
+    draftStatus,
+    draftedPlannedFiles,
+    draftedAssignees,
+    hasDraftChanges,
+    canEditDraft,
+    fileInputId,
+    assigneeInputId,
+    assigneeOptionsId,
+    metadataLabel,
+  };
+}
+
 type BoardTaskCardProps = Readonly<{
   task: DashboardWorkItemSnapshot;
   selected: boolean;
@@ -790,7 +933,7 @@ export function RepositoryBoardPageContent({
   }, [workItemsById]);
 
   useEffect(() => {
-    if (!selectedWorkItem || selectedWorkItem.type !== 'task' || !isTaskStatus(selectedWorkItem.status)) {
+    if (selectedWorkItem?.type !== 'task' || !isTaskStatus(selectedWorkItem?.status)) {
       setTaskDraft(null);
       taskDraftDirtyRef.current = false;
       taskDraftBaselineRef.current = null;
@@ -1146,33 +1289,27 @@ export function RepositoryBoardPageContent({
   };
 
   const handleSaveTaskDraft = async (): Promise<void> => {
-    if (!selectedWorkItem || selectedWorkItem.type !== 'task' || !isTaskStatus(selectedWorkItem.status)) {
+    const selectedTask = asSelectedTaskWorkItem(selectedWorkItem);
+    if (!selectedTask) {
       return;
     }
-    if (!taskDraft || taskDraft.workItemId !== selectedWorkItem.id) {
-      return;
-    }
-
-    const statusChanged = taskDraft.status !== selectedWorkItem.status;
-    const nextPlannedFiles = toUniqueSortedStrings(taskDraft.plannedFiles);
-    const nextAssignees = toUniqueSortedStrings(taskDraft.assignees);
-    const currentPlannedFiles = toUniqueSortedStrings(selectedWorkItem.plannedFiles);
-    const currentAssignees = toUniqueSortedStrings(selectedWorkItem.assignees);
-    const plannedFilesChanged = !areSortedStringArraysEqual(nextPlannedFiles, currentPlannedFiles);
-    const assigneesChanged = !areSortedStringArraysEqual(nextAssignees, currentAssignees);
-
-    if (!statusChanged && !plannedFilesChanged && !assigneesChanged) {
+    if (!taskDraft || taskDraft.workItemId !== selectedTask.id) {
       return;
     }
 
-    const workItemId = selectedWorkItem.id;
+    const draftChanges = resolveTaskDraftChanges(taskDraft, selectedTask);
+    if (!draftChanges) {
+      return;
+    }
+
+    const workItemId = selectedTask.id;
     setActionMessage(null);
     setMovingWorkItemIds(previous => new Set([...previous, workItemId]));
 
     try {
-      let latest = selectedWorkItem;
+      let latest: DashboardWorkItemSnapshot = selectedTask;
 
-      if (statusChanged) {
+      if (draftChanges.statusChanged) {
         const moveResult = await moveWorkItemStatus({
           repositoryId: repository.id,
           workItemId,
@@ -1197,14 +1334,14 @@ export function RepositoryBoardPageContent({
         }));
       }
 
-      if (plannedFilesChanged || assigneesChanged) {
+      if (draftChanges.plannedFilesChanged || draftChanges.assigneesChanged) {
         const updateResult = await updateWorkItemFields({
           repositoryId: repository.id,
           workItemId,
           expectedRevision: latest.revision,
           actor,
-          ...(plannedFilesChanged ? { plannedFiles: toNullableStringArray(nextPlannedFiles) } : {}),
-          ...(assigneesChanged ? { assignees: toNullableStringArray(nextAssignees) } : {}),
+          ...(draftChanges.plannedFilesChanged ? { plannedFiles: toNullableStringArray(draftChanges.nextPlannedFiles) } : {}),
+          ...(draftChanges.assigneesChanged ? { assignees: toNullableStringArray(draftChanges.nextAssignees) } : {}),
         });
 
         if (!updateResult.ok) {
@@ -1354,45 +1491,208 @@ export function RepositoryBoardPageContent({
 
   const clearSelection = () => setSelectedWorkItemId(null);
 
+  const renderOpenFullPageLink = (href: string | null): ReactNode => {
+    if (!href) {
+      return null;
+    }
+
+    return (
+      <ButtonLink href={href} tone="secondary" className="board-drawer__open-link">
+        Open full page
+      </ButtonLink>
+    );
+  };
+
+  const renderOpenRepositoryFileAction = (openFileHref: string | null, path: string): ReactNode => {
+    if (!openFileHref) {
+      return (
+        <ActionButton
+          tone="secondary"
+          className="board-file-action"
+          disabled
+          aria-disabled="true"
+          title="Open file links are available for GitHub repositories."
+        >
+          Open
+        </ActionButton>
+      );
+    }
+
+    return (
+      <a
+        href={openFileHref}
+        target="_blank"
+        rel="noreferrer"
+        className="button-link button-link--secondary board-file-action"
+        aria-label={`Open ${path} in GitHub`}
+      >
+        Open
+      </a>
+    );
+  };
+
+  const renderPlannedFilesSection = (details: DetailsPanelState): ReactNode => {
+    const plannedFileInputValue = details.draftMatchesSelection && taskDraft ? taskDraft.plannedFileInput : '';
+
+    return (
+      <div className="board-detail__section">
+        <h5>Files ({details.draftedPlannedFiles.length})</h5>
+        {details.draftedPlannedFiles.length === 0 ? (
+          <p className="meta-text">No files linked yet.</p>
+        ) : (
+          <ul className="board-file-list">
+            {details.draftedPlannedFiles.map(path => {
+              const split = splitPath(path);
+              const openFileHref = buildRepositoryFileUrl(repository, path);
+              return (
+                <li key={path} className="board-file-list__item">
+                  <div className="board-file-list__content">
+                    <span className="board-file-list__name">{split.filename}</span>
+                    <code className="board-file-list__path">{split.directory.length > 0 ? split.directory : './'}</code>
+                  </div>
+                  <div className="board-file-list__actions">
+                    <ActionButton
+                      tone="secondary"
+                      className="board-file-action"
+                      onClick={() => {
+                        void handleCopyPlannedFile(path);
+                      }}
+                      aria-label={`Copy path ${path}`}
+                      title="Copy path"
+                    >
+                      Copy
+                    </ActionButton>
+                    {renderOpenRepositoryFileAction(openFileHref, path)}
+                    <ActionButton
+                      tone="secondary"
+                      className="board-file-action"
+                      disabled={!details.canEditDraft}
+                      aria-disabled={!details.canEditDraft}
+                      onClick={() => {
+                        handleRemoveDraftPlannedFile(path);
+                      }}
+                      aria-label={`Remove planned file ${path}`}
+                    >
+                      Remove
+                    </ActionButton>
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+        <div className="board-inline-editor">
+          <input
+            id={details.fileInputId}
+            value={plannedFileInputValue}
+            onChange={(event) => {
+              handleDraftPlannedFileInput(event.target.value);
+            }}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter') {
+                event.preventDefault();
+                handleAddDraftPlannedFile();
+              }
+            }}
+            placeholder="Add repo-relative file path"
+            disabled={!details.canEditDraft}
+            aria-disabled={!details.canEditDraft}
+            aria-label="Add planned file path"
+          />
+          <ActionButton
+            tone="secondary"
+            className="board-inline-action"
+            disabled={!details.canEditDraft}
+            aria-disabled={!details.canEditDraft}
+            onClick={handleAddDraftPlannedFile}
+          >
+            Add file
+          </ActionButton>
+        </div>
+      </div>
+    );
+  };
+
+  const renderAssigneesSection = (details: DetailsPanelState): ReactNode => {
+    const assigneeInputValue = details.draftMatchesSelection && taskDraft ? taskDraft.assigneeInput : '';
+
+    return (
+      <div className="board-detail__section">
+        <h5>Assignees</h5>
+        {details.draftedAssignees.length === 0 ? (
+          <p className="meta-text">No assignees yet.</p>
+        ) : (
+          <ul className="board-assignee-list">
+            {details.draftedAssignees.map(assignee => (
+              <li key={assignee}>
+                <span className="board-pill">{assignee}</span>
+                <ActionButton
+                  tone="secondary"
+                  className="board-inline-action"
+                  disabled={!details.canEditDraft}
+                  aria-disabled={!details.canEditDraft}
+                  onClick={() => {
+                    handleRemoveDraftAssignee(assignee);
+                  }}
+                  aria-label={`Remove assignee ${assignee}`}
+                >
+                  Remove
+                </ActionButton>
+              </li>
+            ))}
+          </ul>
+        )}
+        <div className="board-inline-editor">
+          <input
+            id={details.assigneeInputId}
+            value={assigneeInputValue}
+            onChange={(event) => {
+              handleDraftAssigneeInput(event.target.value);
+            }}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter') {
+                event.preventDefault();
+                handleAddDraftAssignee();
+              }
+            }}
+            placeholder="Add assignee"
+            list={details.assigneeOptionsId}
+            disabled={!details.canEditDraft}
+            aria-disabled={!details.canEditDraft}
+            aria-label="Add assignee"
+          />
+          <datalist id={details.assigneeOptionsId}>
+            {knownAssigneeOptions.map(candidate => (
+              <option key={candidate} value={candidate} />
+            ))}
+          </datalist>
+          <ActionButton
+            tone="secondary"
+            className="board-inline-action"
+            disabled={!details.canEditDraft}
+            aria-disabled={!details.canEditDraft}
+            onClick={handleAddDraftAssignee}
+          >
+            Add assignee
+          </ActionButton>
+        </div>
+      </div>
+    );
+  };
+
   const renderDetails = (): ReactNode => {
     if (!selectedWorkItem) {
       return null;
     }
 
-    let status: TaskWorkItemStatus | null = null;
-    if (selectedWorkItem.type === 'task' && isTaskStatus(selectedWorkItem.status)) {
-      status = selectedWorkItem.status;
-    }
-    const linkedWorkflowRun = selectedWorkItem.linkedWorkflowRun ?? null;
-    const moving = movingWorkItemIds.has(selectedWorkItem.id);
-    const dialogTitleId = `board-detail-dialog-title-${selectedWorkItem.id}`;
-    const statusSelectId = `board-detail-status-${selectedWorkItem.id}`;
-    const detailTypeLabel = selectedWorkItem.type.charAt(0).toUpperCase() + selectedWorkItem.type.slice(1);
-    const effectivePolicy = selectedWorkItem.effectivePolicy ?? null;
-    const touchedFiles = linkedWorkflowRun?.touchedFiles;
-    const hasTouchedFiles = touchedFiles !== null && touchedFiles !== undefined;
-    const canComparePlanVsActual = linkedWorkflowRun !== null && hasTouchedFiles;
-    const planVsActual = canComparePlanVsActual
-      ? resolvePlanVsActualDelta(selectedWorkItem.plannedFiles, touchedFiles)
-      : { plannedButUntouched: [], touchedButUnplanned: [] };
-    const requestingReplan = replanningWorkItemIds.has(selectedWorkItem.id);
-    const parentStory = [...selectedParentChain].reverse().find(parent => parent.type === 'story') ?? null;
-    const openFullPageHref = parentStory ? `/repositories/${repository.id}/stories/${parentStory.id}` : null;
-    const draftMatchesSelection = taskDraft !== null && taskDraft.workItemId === selectedWorkItem.id;
-    const draftStatus = draftMatchesSelection && status !== null ? taskDraft.status : status;
-    const draftedPlannedFiles = draftMatchesSelection ? toUniqueSortedStrings(taskDraft.plannedFiles) : toUniqueSortedStrings(selectedWorkItem.plannedFiles);
-    const draftedAssignees = draftMatchesSelection ? toUniqueSortedStrings(taskDraft.assignees) : toUniqueSortedStrings(selectedWorkItem.assignees);
-    const currentPlannedFiles = toUniqueSortedStrings(selectedWorkItem.plannedFiles);
-    const currentAssignees = toUniqueSortedStrings(selectedWorkItem.assignees);
-    const statusChanged = status !== null && draftStatus !== null && draftStatus !== status;
-    const plannedFilesChanged = !areSortedStringArraysEqual(draftedPlannedFiles, currentPlannedFiles);
-    const assigneesChanged = !areSortedStringArraysEqual(draftedAssignees, currentAssignees);
-    const hasDraftChanges = draftMatchesSelection && (statusChanged || plannedFilesChanged || assigneesChanged);
-    const canEditDraft = draftMatchesSelection && !moving;
-    const fileInputId = `board-detail-file-input-${selectedWorkItem.id}`;
-    const assigneeInputId = `board-detail-assignee-input-${selectedWorkItem.id}`;
-    const assigneeOptionsId = `board-detail-assignee-options-${selectedWorkItem.id}`;
-    const metadataLabel = `${detailTypeLabel} · #${selectedWorkItem.id}`;
+    const details = buildDetailsPanelState({
+      selectedWorkItem,
+      taskDraft,
+      selectedParentChain,
+      movingWorkItemIds,
+      replanningWorkItemIds,
+      repositoryId: repository.id,
+    });
 
     return (
       <div className="board-drawer-scrim">
@@ -1403,15 +1703,17 @@ export function RepositoryBoardPageContent({
           aria-label="Close work item details"
           title="Close"
         />
-        <dialog className="board-drawer" open aria-modal="true" aria-labelledby={dialogTitleId} aria-busy={moving || undefined}>
+        <dialog
+          className="board-drawer"
+          open
+          aria-modal="true"
+          aria-labelledby={details.dialogTitleId}
+          aria-busy={details.moving || undefined}
+        >
           <header className="board-drawer__header">
-            <span className="board-drawer__kicker meta-text">{metadataLabel}</span>
+            <span className="board-drawer__kicker meta-text">{details.metadataLabel}</span>
             <div className="board-drawer__header-actions">
-              {openFullPageHref ? (
-                <ButtonLink href={openFullPageHref} tone="secondary" className="board-drawer__open-link">
-                  Open full page
-                </ButtonLink>
-              ) : null}
+              {renderOpenFullPageLink(details.openFullPageHref)}
               <ActionButton
                 tone="secondary"
                 className="board-drawer__close"
@@ -1425,15 +1727,15 @@ export function RepositoryBoardPageContent({
           </header>
 
           <div className="board-drawer__summary">
-            <h3 className="board-drawer__title" id={dialogTitleId}>
-              {selectedWorkItem.title}
+            <h3 className="board-drawer__title" id={details.dialogTitleId}>
+              {details.selectedWorkItem.title}
             </h3>
           </div>
 
           {renderStatusControl({
-            status: draftStatus,
-            statusSelectId,
-            disabled: !canEditDraft,
+            status: details.draftStatus,
+            statusSelectId: details.statusSelectId,
+            disabled: !details.canEditDraft,
             onStatusChange: (nextStatusRaw) => {
               if (!isTaskStatus(nextStatusRaw)) {
                 setActionMessage({ tone: 'error', message: 'Invalid target status.' });
@@ -1442,7 +1744,7 @@ export function RepositoryBoardPageContent({
               setActionMessage(null);
               taskDraftDirtyRef.current = true;
               setTaskDraft(previous => {
-                if (!previous || previous.workItemId !== selectedWorkItem.id) {
+                if (!previous || previous.workItemId !== details.selectedWorkItem.id) {
                   return previous;
                 }
                 return {
@@ -1460,193 +1762,39 @@ export function RepositoryBoardPageContent({
             onLinkParent: handleLinkParent,
           })}
 
-          <div className="board-detail__section">
-            <h5>Files ({draftedPlannedFiles.length})</h5>
-            {draftedPlannedFiles.length === 0 ? (
-              <p className="meta-text">No files linked yet.</p>
-            ) : (
-              <ul className="board-file-list">
-                {draftedPlannedFiles.map(path => {
-                  const split = splitPath(path);
-                  const openFileHref = buildRepositoryFileUrl(repository, path);
-                  return (
-                    <li key={path} className="board-file-list__item">
-                      <div className="board-file-list__content">
-                        <span className="board-file-list__name">{split.filename}</span>
-                        <code className="board-file-list__path">{split.directory.length > 0 ? split.directory : './'}</code>
-                      </div>
-                      <div className="board-file-list__actions">
-                        <ActionButton
-                          tone="secondary"
-                          className="board-file-action"
-                          onClick={() => {
-                            void handleCopyPlannedFile(path);
-                          }}
-                          aria-label={`Copy path ${path}`}
-                          title="Copy path"
-                        >
-                          Copy
-                        </ActionButton>
-                        {openFileHref ? (
-                          <a
-                            href={openFileHref}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="button-link button-link--secondary board-file-action"
-                            aria-label={`Open ${path} in GitHub`}
-                          >
-                            Open
-                          </a>
-                        ) : (
-                          <ActionButton
-                            tone="secondary"
-                            className="board-file-action"
-                            disabled
-                            aria-disabled="true"
-                            title="Open file links are available for GitHub repositories."
-                          >
-                            Open
-                          </ActionButton>
-                        )}
-                        <ActionButton
-                          tone="secondary"
-                          className="board-file-action"
-                          disabled={!canEditDraft}
-                          aria-disabled={!canEditDraft}
-                          onClick={() => {
-                            handleRemoveDraftPlannedFile(path);
-                          }}
-                          aria-label={`Remove planned file ${path}`}
-                        >
-                          Remove
-                        </ActionButton>
-                      </div>
-                    </li>
-                  );
-                })}
-              </ul>
-            )}
-            <div className="board-inline-editor">
-              <input
-                id={fileInputId}
-                value={draftMatchesSelection ? taskDraft.plannedFileInput : ''}
-                onChange={(event) => {
-                  handleDraftPlannedFileInput(event.target.value);
-                }}
-                onKeyDown={(event) => {
-                  if (event.key === 'Enter') {
-                    event.preventDefault();
-                    handleAddDraftPlannedFile();
-                  }
-                }}
-                placeholder="Add repo-relative file path"
-                disabled={!canEditDraft}
-                aria-disabled={!canEditDraft}
-                aria-label="Add planned file path"
-              />
-              <ActionButton
-                tone="secondary"
-                className="board-inline-action"
-                disabled={!canEditDraft}
-                aria-disabled={!canEditDraft}
-                onClick={handleAddDraftPlannedFile}
-              >
-                Add file
-              </ActionButton>
-            </div>
-          </div>
-
-          <div className="board-detail__section">
-            <h5>Assignees</h5>
-            {draftedAssignees.length === 0 ? (
-              <p className="meta-text">No assignees yet.</p>
-            ) : (
-              <ul className="board-assignee-list">
-                {draftedAssignees.map(assignee => (
-                  <li key={assignee}>
-                    <span className="board-pill">{assignee}</span>
-                    <ActionButton
-                      tone="secondary"
-                      className="board-inline-action"
-                      disabled={!canEditDraft}
-                      aria-disabled={!canEditDraft}
-                      onClick={() => {
-                        handleRemoveDraftAssignee(assignee);
-                      }}
-                      aria-label={`Remove assignee ${assignee}`}
-                    >
-                      Remove
-                    </ActionButton>
-                  </li>
-                ))}
-              </ul>
-            )}
-            <div className="board-inline-editor">
-              <input
-                id={assigneeInputId}
-                value={draftMatchesSelection ? taskDraft.assigneeInput : ''}
-                onChange={(event) => {
-                  handleDraftAssigneeInput(event.target.value);
-                }}
-                onKeyDown={(event) => {
-                  if (event.key === 'Enter') {
-                    event.preventDefault();
-                    handleAddDraftAssignee();
-                  }
-                }}
-                placeholder="Add assignee"
-                list={assigneeOptionsId}
-                disabled={!canEditDraft}
-                aria-disabled={!canEditDraft}
-                aria-label="Add assignee"
-              />
-              <datalist id={assigneeOptionsId}>
-                {knownAssigneeOptions.map(candidate => (
-                  <option key={candidate} value={candidate} />
-                ))}
-              </datalist>
-              <ActionButton
-                tone="secondary"
-                className="board-inline-action"
-                disabled={!canEditDraft}
-                aria-disabled={!canEditDraft}
-                onClick={handleAddDraftAssignee}
-              >
-                Add assignee
-              </ActionButton>
-            </div>
-          </div>
+          {renderPlannedFilesSection(details)}
+          {renderAssigneesSection(details)}
 
           <div className="board-detail__section board-detail__section--muted">
             <h5>Linked run</h5>
-            {renderLinkedRun(linkedWorkflowRun)}
+            {renderLinkedRun(details.linkedWorkflowRun)}
           </div>
 
           <div className="board-detail__section board-detail__section--muted">
             <h5>Touched files</h5>
             {renderTouchedFiles({
-              linkedWorkflowRun,
-              hasTouchedFiles,
-              touchedFiles,
+              linkedWorkflowRun: details.linkedWorkflowRun,
+              hasTouchedFiles: details.hasTouchedFiles,
+              touchedFiles: details.touchedFiles,
             })}
           </div>
 
           <div className="board-detail__section board-detail__section--muted">
             <h5>Plan vs actual</h5>
             {renderPlanVsActual({
-              canComparePlanVsActual,
-              planVsActual,
-              requestingReplan,
+              canComparePlanVsActual: details.canComparePlanVsActual,
+              planVsActual: details.planVsActual,
+              requestingReplan: details.requestingReplan,
               onRequestReplan: () => {
-                void handleRequestReplan(selectedWorkItem);
+                void handleRequestReplan(details.selectedWorkItem);
               },
             })}
           </div>
 
-          {renderEffectivePolicy(effectivePolicy)}
+          {renderEffectivePolicy(details.effectivePolicy)}
 
           <footer className="board-drawer__footer">
-            <ActionButton tone="secondary" onClick={clearSelection} disabled={moving} aria-disabled={moving}>
+            <ActionButton tone="secondary" onClick={clearSelection} disabled={details.moving} aria-disabled={details.moving}>
               Cancel
             </ActionButton>
             <ActionButton
@@ -1654,10 +1802,10 @@ export function RepositoryBoardPageContent({
               onClick={() => {
                 void handleSaveTaskDraft();
               }}
-              disabled={!hasDraftChanges || moving}
-              aria-disabled={!hasDraftChanges || moving}
+              disabled={!details.hasDraftChanges || details.moving}
+              aria-disabled={!details.hasDraftChanges || details.moving}
             >
-              {moving ? 'Saving…' : 'Save'}
+              {details.moving ? 'Saving…' : 'Save'}
             </ActionButton>
           </footer>
         </dialog>
