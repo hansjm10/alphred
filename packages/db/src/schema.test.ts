@@ -991,6 +991,38 @@ describe('database schema hardening', () => {
           AND guards.guard_key = 'task-work-review-loop/v1/review->fix/changes-requested'`)?.count ?? 0;
     expect(reviewToFixGuardedEdgeCount).toBe(1);
 
+    const reviewToFixBlockedGuardedEdgeCount =
+      db.get<{ count: number }>(sql`SELECT COUNT(*) AS count
+        FROM tree_edges AS edges
+        INNER JOIN tree_nodes AS source_node
+          ON source_node.id = edges.source_node_id
+        INNER JOIN tree_nodes AS target_node
+          ON target_node.id = edges.target_node_id
+        INNER JOIN guard_definitions AS guards
+          ON guards.id = edges.guard_definition_id
+        WHERE edges.workflow_tree_id = ${tree?.id ?? -1}
+          AND source_node.node_key = 'review'
+          AND target_node.node_key = 'fix'
+          AND edges.auto = 0
+          AND guards.guard_key = 'task-work-review-loop/v1/review->fix/blocked'`)?.count ?? 0;
+    expect(reviewToFixBlockedGuardedEdgeCount).toBe(1);
+
+    const reviewToFixRetryGuardedEdgeCount =
+      db.get<{ count: number }>(sql`SELECT COUNT(*) AS count
+        FROM tree_edges AS edges
+        INNER JOIN tree_nodes AS source_node
+          ON source_node.id = edges.source_node_id
+        INNER JOIN tree_nodes AS target_node
+          ON target_node.id = edges.target_node_id
+        INNER JOIN guard_definitions AS guards
+          ON guards.id = edges.guard_definition_id
+        WHERE edges.workflow_tree_id = ${tree?.id ?? -1}
+          AND source_node.node_key = 'review'
+          AND target_node.node_key = 'fix'
+          AND edges.auto = 0
+          AND guards.guard_key = 'task-work-review-loop/v1/review->fix/retry'`)?.count ?? 0;
+    expect(reviewToFixRetryGuardedEdgeCount).toBe(1);
+
     const legacyReviewToWorkEdgeCount =
       db.get<{ count: number }>(sql`SELECT COUNT(*) AS count
         FROM tree_edges AS edges
