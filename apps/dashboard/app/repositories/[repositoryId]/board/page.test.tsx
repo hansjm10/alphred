@@ -645,6 +645,37 @@ describe('RepositoryBoardPageContent', () => {
     expect(await screen.findByText('Saved updates for "Write tests".')).toBeInTheDocument();
   });
 
+  it('rejects parent-directory segments in planned file paths', async () => {
+    const user = userEvent.setup();
+
+    render(
+      <RepositoryBoardPageContent
+        repository={createRepository({ id: 1, name: 'demo-repo' })}
+        actor={{ actorType: 'human', actorLabel: 'octocat' }}
+        initialLatestEventId={0}
+        initialWorkItems={[createWorkItem({ id: 10, status: 'Draft', revision: 0, title: 'Write tests', plannedFiles: null })]}
+      />,
+    );
+
+    await user.click(screen.getByRole('button', { name: /Write tests/ }));
+
+    const plannedFileInput = screen.getByRole('textbox', { name: 'Add planned file path' });
+    expect(screen.getByText('No files linked yet.')).toBeInTheDocument();
+
+    await user.type(plannedFileInput, '..');
+    await user.click(screen.getByRole('button', { name: 'Add file' }));
+
+    expect(screen.getByText('Enter a repo-relative path (for example: app/page.tsx).')).toBeInTheDocument();
+    expect(screen.getByText('No files linked yet.')).toBeInTheDocument();
+
+    await user.clear(plannedFileInput);
+    await user.type(plannedFileInput, 'src/..');
+    await user.click(screen.getByRole('button', { name: 'Add file' }));
+
+    expect(screen.getByText('Enter a repo-relative path (for example: app/page.tsx).')).toBeInTheDocument();
+    expect(screen.getByText('No files linked yet.')).toBeInTheDocument();
+  });
+
   it('keeps the current task draft when an earlier task save resolves later', async () => {
     const user = userEvent.setup();
     const fetchMock = vi.mocked(global.fetch);

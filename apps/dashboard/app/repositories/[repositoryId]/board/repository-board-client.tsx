@@ -224,7 +224,7 @@ function normalizeRepoRelativePath(value: string): string | null {
     return null;
   }
   const normalized = trimmed.replaceAll('\\', '/').replace(/^\.\/+/, '');
-  if (normalized.length === 0 || normalized.startsWith('/') || normalized.startsWith('../') || normalized.includes('/../')) {
+  if (normalized.length === 0 || normalized.startsWith('/') || normalized.split('/').some(segment => segment === '..')) {
     return null;
   }
   return normalized;
