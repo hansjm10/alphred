@@ -118,6 +118,36 @@ describe('runStoryWorkflowOrchestration', () => {
     );
   });
 
+  it('rethrows non-conflict task start failures', async () => {
+    const story = createWorkItem({ id: 3, type: 'story', status: 'Approved', revision: 2 });
+    const readyTask = createWorkItem({ id: 20, type: 'task', parentId: 3, status: 'Ready', revision: 1 });
+
+    const operations = createOperations({
+      getWorkItem: vi.fn().mockResolvedValue({ workItem: story }),
+      listWorkItems: vi.fn().mockResolvedValue({ workItems: [readyTask] }),
+      moveWorkItemStatus: vi
+        .fn()
+        .mockRejectedValueOnce(new DashboardIntegrationError('internal_error', 'Task launch failed.', { status: 500 })),
+    });
+
+    await expect(
+      runStoryWorkflowOrchestration({
+        request: {
+          repositoryId: 1,
+          storyId: 3,
+          expectedRevision: 2,
+          actorType: 'human',
+          actorLabel: 'alice',
+        },
+        operations,
+      }),
+    ).rejects.toMatchObject({
+      code: 'internal_error',
+      status: 500,
+      message: 'Task launch failed.',
+    });
+  });
+
   it('throws a revision conflict before mutating when story revision mismatches expectedRevision', async () => {
     const operations = createOperations({
       getWorkItem: vi.fn().mockResolvedValue({

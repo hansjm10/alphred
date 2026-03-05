@@ -181,6 +181,78 @@ describe('StoriesIndexPage', () => {
     expect(screen.getByText('Approved')).toBeInTheDocument();
   });
 
+  it('refreshes story revision on workflow conflict so retry uses latest revision', async () => {
+    const user = userEvent.setup();
+    const fetchMock = vi.fn();
+    fetchMock
+      .mockResolvedValueOnce(createJsonResponse({ error: { message: 'Story revision conflict.' } }, { status: 409 }))
+      .mockResolvedValueOnce(
+        createJsonResponse({
+          workItem: createWorkItem({ id: 3, type: 'story', title: 'Story A', status: 'BreakdownProposed', revision: 7 }),
+        }),
+      )
+      .mockResolvedValueOnce(
+        createJsonResponse({
+          story: createWorkItem({ id: 3, type: 'story', title: 'Story A', status: 'Approved', revision: 8 }),
+          updatedTasks: [
+            createWorkItem({ id: 20, type: 'task', title: 'Task A', parentId: 3, status: 'InProgress', revision: 2 }),
+          ],
+          startedTasks: [
+            createWorkItem({ id: 20, type: 'task', title: 'Task A', parentId: 3, status: 'InProgress', revision: 2 }),
+          ],
+          steps: [
+            { step: 'approve_breakdown', outcome: 'applied', message: 'Approved breakdown.' },
+            { step: 'start_ready_tasks', outcome: 'applied', message: 'Started 1 task(s).', startedTaskIds: [20] },
+          ],
+        }),
+      );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const repository = createRepository({ id: 1, name: 'demo-repo' });
+    const workItems = [
+      createWorkItem({ id: 3, type: 'story', title: 'Story A', status: 'BreakdownProposed', revision: 4 }),
+      createWorkItem({ id: 20, type: 'task', title: 'Task A', parentId: 3, status: 'Ready', revision: 1 }),
+    ];
+    const service = {
+      getRepositoryBoardBootstrap: vi.fn().mockResolvedValue({ repositoryId: 1, latestEventId: 0, workItems }),
+    };
+    createDashboardServiceMock.mockReturnValue(service);
+    loadDashboardRepositoriesMock.mockResolvedValue([repository]);
+
+    const root = await StoriesIndexPage({ params: Promise.resolve({ repositoryId: '1' }) });
+    render(root);
+
+    await user.click(screen.getByRole('button', { name: 'Run workflow' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('Story revision conflict.');
+
+    expect(fetchMock).toHaveBeenNthCalledWith(1, '/api/dashboard/work-items/3/actions/run-story-workflow', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        repositoryId: 1,
+        expectedRevision: 4,
+        actorType: 'human',
+        actorLabel: 'octocat',
+      }),
+    });
+    expect(fetchMock).toHaveBeenNthCalledWith(2, '/api/dashboard/work-items/3?repositoryId=1', {
+      method: 'GET',
+    });
+
+    await user.click(screen.getByRole('button', { name: 'Run workflow' }));
+    expect(fetchMock).toHaveBeenNthCalledWith(3, '/api/dashboard/work-items/3/actions/run-story-workflow', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        repositoryId: 1,
+        expectedRevision: 7,
+        actorType: 'human',
+        actorLabel: 'octocat',
+      }),
+    });
+    expect(await screen.findByText('Story #3 workflow ran and 1 task started.')).toBeInTheDocument();
+  });
+
   it('shows an empty state when no stories exist', async () => {
     const repository = createRepository({ id: 1, name: 'demo-repo' });
     const service = {

@@ -88,7 +88,7 @@ function ensureStoryWorkItem(story: DashboardWorkItemSnapshot, storyId: number):
 }
 
 function mapTaskStartFailure(taskId: number, error: unknown): TaskStartFailure {
-  if (error instanceof DashboardIntegrationError) {
+  if (error instanceof DashboardIntegrationError && error.code === 'conflict') {
     return {
       taskId,
       status: error.status,

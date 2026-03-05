@@ -5,7 +5,7 @@ import { useMemo, useState } from 'react';
 import type { WorkItemStatus } from '@alphred/shared';
 import type { DashboardRepositoryState, DashboardWorkItemSnapshot } from '@dashboard/server/dashboard-contracts';
 import { ActionButton, ButtonLink } from '../../../ui/primitives';
-import { runStoryWorkflow, toWorkItemsById, type WorkItemActor } from '../_shared/work-items-shared';
+import { fetchWorkItem, runStoryWorkflow, toWorkItemsById, type WorkItemActor } from '../_shared/work-items-shared';
 
 function formatWorkItemStatusLabel(status: WorkItemStatus): string {
   switch (status) {
@@ -82,6 +82,18 @@ export function StoriesIndexPageContent(props: Readonly<{
       });
 
       if (!runResult.ok) {
+        if (runResult.status === 409) {
+          try {
+            const refreshedStory = await fetchWorkItem({
+              repositoryId: repository.id,
+              workItemId: story.id,
+            });
+            upsertWorkItems(refreshedStory);
+          } catch (error) {
+            setActionError(error instanceof Error ? error.message : String(error));
+            return;
+          }
+        }
         setActionError(runResult.message);
         return;
       }
