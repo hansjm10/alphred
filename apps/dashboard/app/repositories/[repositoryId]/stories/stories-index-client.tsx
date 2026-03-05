@@ -3,7 +3,11 @@
 import Link from 'next/link';
 import { useMemo, useState } from 'react';
 import type { WorkItemStatus } from '@alphred/shared';
-import type { DashboardRepositoryState, DashboardWorkItemSnapshot } from '@dashboard/server/dashboard-contracts';
+import type {
+  DashboardRepositoryState,
+  DashboardRunStoryWorkflowResult,
+  DashboardWorkItemSnapshot,
+} from '@dashboard/server/dashboard-contracts';
 import { ActionButton, ButtonLink } from '../../../ui/primitives';
 import { fetchWorkItem, runStoryWorkflow, toWorkItemsById, type WorkItemActor } from '../_shared/work-items-shared';
 
@@ -20,6 +24,48 @@ function formatWorkItemStatusLabel(status: WorkItemStatus): string {
 
 function canRunStoryWorkflow(status: WorkItemStatus): boolean {
   return status === 'Draft' || status === 'NeedsBreakdown' || status === 'BreakdownProposed' || status === 'Approved';
+}
+
+async function refreshStoryAfterConflict(params: {
+  repositoryId: number;
+  storyId: number;
+}): Promise<{ ok: true; story: DashboardWorkItemSnapshot } | { ok: false; message: string }> {
+  try {
+    const story = await fetchWorkItem({
+      repositoryId: params.repositoryId,
+      workItemId: params.storyId,
+    });
+    return { ok: true, story };
+  } catch (error) {
+    return {
+      ok: false,
+      message: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+function resolveWorkflowFeedback(params: {
+  storyId: number;
+  result: DashboardRunStoryWorkflowResult;
+}): { notice?: string; error?: string } {
+  const { storyId, result } = params;
+  const startStep = result.steps.find(step => step.step === 'start_ready_tasks');
+  if (startStep?.outcome === 'partial_failure') {
+    return { error: startStep.message };
+  }
+
+  if (result.startedTasks.length > 0) {
+    return {
+      notice: `Story #${storyId} workflow ran and ${result.startedTasks.length} task${result.startedTasks.length === 1 ? '' : 's'} started.`,
+    };
+  }
+
+  const blockedStep = result.steps.find(step => step.step === 'generate_breakdown' && step.outcome === 'blocked');
+  if (blockedStep) {
+    return { notice: blockedStep.message };
+  }
+
+  return { notice: `Story #${storyId} workflow completed with no task starts.` };
 }
 
 export function StoriesIndexPageContent(props: Readonly<{
@@ -83,43 +129,30 @@ export function StoriesIndexPageContent(props: Readonly<{
 
       if (!runResult.ok) {
         if (runResult.status === 409) {
-          try {
-            const refreshedStory = await fetchWorkItem({
-              repositoryId: repository.id,
-              workItemId: story.id,
-            });
-            upsertWorkItems(refreshedStory);
-          } catch (error) {
-            setActionError(error instanceof Error ? error.message : String(error));
+          const refreshedStoryResult = await refreshStoryAfterConflict({
+            repositoryId: repository.id,
+            storyId: story.id,
+          });
+          if (!refreshedStoryResult.ok) {
+            setActionError(refreshedStoryResult.message);
             return;
           }
+          upsertWorkItems(refreshedStoryResult.story);
         }
         setActionError(runResult.message);
         return;
       }
 
       upsertWorkItems(runResult.result.story, ...runResult.result.updatedTasks);
-      const startStep = runResult.result.steps.find(step => step.step === 'start_ready_tasks');
-      const blockedStep = runResult.result.steps.find(step => step.step === 'generate_breakdown' && step.outcome === 'blocked');
-
-      if (startStep?.outcome === 'partial_failure') {
-        setActionError(startStep.message);
+      const workflowFeedback = resolveWorkflowFeedback({
+        storyId: story.id,
+        result: runResult.result,
+      });
+      if (workflowFeedback.error) {
+        setActionError(workflowFeedback.error);
         return;
       }
-
-      if (runResult.result.startedTasks.length > 0) {
-        setActionNotice(
-          `Story #${story.id} workflow ran and ${runResult.result.startedTasks.length} task${runResult.result.startedTasks.length === 1 ? '' : 's'} started.`,
-        );
-        return;
-      }
-
-      if (blockedStep) {
-        setActionNotice(blockedStep.message);
-        return;
-      }
-
-      setActionNotice(`Story #${story.id} workflow completed with no task starts.`);
+      setActionNotice(workflowFeedback.notice ?? null);
     } catch (error) {
       setActionError(error instanceof Error ? error.message : String(error));
     } finally {

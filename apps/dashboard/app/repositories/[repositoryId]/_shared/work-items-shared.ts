@@ -495,18 +495,33 @@ export async function runStoryWorkflow(params: {
   errorPrefix?: string;
 }): Promise<{ ok: true; result: DashboardRunStoryWorkflowResult } | { ok: false; status: number; message: string }> {
   const errorPrefix = params.errorPrefix ?? 'Unable to run story workflow';
+  const requestBody: {
+    repositoryId: number;
+    expectedRevision: number;
+    actorType: WorkItemActor['actorType'];
+    actorLabel: WorkItemActor['actorLabel'];
+    generateOnly?: boolean;
+    approveOnly?: boolean;
+    approveAndStart?: boolean;
+  } = {
+    repositoryId: params.repositoryId,
+    expectedRevision: params.expectedRevision,
+    actorType: params.actor.actorType,
+    actorLabel: params.actor.actorLabel,
+  };
+  if (params.generateOnly !== undefined) {
+    requestBody.generateOnly = params.generateOnly;
+  }
+  if (params.approveOnly !== undefined) {
+    requestBody.approveOnly = params.approveOnly;
+  }
+  if (params.approveAndStart !== undefined) {
+    requestBody.approveAndStart = params.approveAndStart;
+  }
   const response = await fetch(`/api/dashboard/work-items/${params.storyId}/actions/run-story-workflow`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({
-      repositoryId: params.repositoryId,
-      expectedRevision: params.expectedRevision,
-      actorType: params.actor.actorType,
-      actorLabel: params.actor.actorLabel,
-      ...(params.generateOnly !== undefined ? { generateOnly: params.generateOnly } : {}),
-      ...(params.approveOnly !== undefined ? { approveOnly: params.approveOnly } : {}),
-      ...(params.approveAndStart !== undefined ? { approveAndStart: params.approveAndStart } : {}),
-    }),
+    body: JSON.stringify(requestBody),
   });
   const payload = parseJsonSafely(await response.text());
 
