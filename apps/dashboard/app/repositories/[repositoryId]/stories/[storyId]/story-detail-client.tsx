@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import type {
   DashboardRepositoryState,
+  DashboardWorkItemProposedBreakdownTask,
   DashboardStoryBreakdownProposalSnapshot,
   DashboardWorkItemSnapshot,
 } from '@dashboard/server/dashboard-contracts';
@@ -96,6 +97,102 @@ async function approveStoryBreakdown(params: {
   };
 }
 
+type StoryBreakdownProposalDraft = Readonly<{
+  tags?: string[] | null;
+  plannedFiles?: string[] | null;
+  links?: string[] | null;
+  tasks: DashboardWorkItemProposedBreakdownTask[];
+}>;
+
+async function proposeStoryBreakdown(params: {
+  repositoryId: number;
+  storyId: number;
+  expectedRevision: number;
+  actor: WorkItemActor;
+  proposed: StoryBreakdownProposalDraft;
+}): Promise<
+  | { ok: true; story: DashboardWorkItemSnapshot; tasks: DashboardWorkItemSnapshot[] }
+  | { ok: false; status: number; message: string }
+> {
+  const response = await fetch(`/api/dashboard/work-items/${params.storyId}/actions/propose-breakdown`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      repositoryId: params.repositoryId,
+      expectedRevision: params.expectedRevision,
+      actorType: params.actor.actorType,
+      actorLabel: params.actor.actorLabel,
+      proposed: params.proposed,
+    }),
+  });
+
+  const payload = parseJsonSafely(await response.text());
+
+  if (!response.ok) {
+    return {
+      ok: false,
+      status: response.status,
+      message: resolveApiErrorMessage(response.status, payload, 'Unable to propose breakdown'),
+    };
+  }
+
+  if (!isRecord(payload) || !isRecord(payload.story) || !Array.isArray(payload.tasks)) {
+    return { ok: false, status: 500, message: 'Unable to propose breakdown (malformed response).' };
+  }
+
+  return {
+    ok: true,
+    story: payload.story as DashboardWorkItemSnapshot,
+    tasks: payload.tasks as DashboardWorkItemSnapshot[],
+  };
+}
+
+function buildAutoBreakdownProposal(story: DashboardWorkItemSnapshot): StoryBreakdownProposalDraft {
+  const storyTitle = story.title.trim().length > 0 ? story.title.trim() : `Story #${story.id}`;
+  const sharedTags = story.tags && story.tags.length > 0 ? story.tags : undefined;
+  const sharedPlannedFiles = story.plannedFiles && story.plannedFiles.length > 0 ? story.plannedFiles : undefined;
+  const sharedAssignees = story.assignees && story.assignees.length > 0 ? story.assignees : undefined;
+  const storyDescription = story.description?.trim();
+
+  const tasks: DashboardWorkItemProposedBreakdownTask[] = [
+    {
+      title: `Plan ${storyTitle}`,
+      description:
+        storyDescription && storyDescription.length > 0
+          ? `Clarify scope and acceptance criteria. Context: ${storyDescription}`
+          : 'Clarify scope and acceptance criteria.',
+      tags: sharedTags,
+      plannedFiles: sharedPlannedFiles,
+      assignees: sharedAssignees,
+    },
+    {
+      title: `Implement ${storyTitle}`,
+      description: 'Build the core code changes for this story.',
+      tags: sharedTags,
+      plannedFiles: sharedPlannedFiles,
+      assignees: sharedAssignees,
+    },
+    {
+      title: `Validate ${storyTitle}`,
+      description: 'Run tests and verify behavior before review.',
+      tags: sharedTags,
+      plannedFiles: sharedPlannedFiles,
+      assignees: sharedAssignees,
+    },
+  ];
+
+  return {
+    tags: sharedTags,
+    plannedFiles: sharedPlannedFiles,
+    tasks,
+  };
+}
+
+const plannerActor: WorkItemActor = {
+  actorType: 'agent',
+  actorLabel: 'alphred-breakdown-planner',
+};
+
 function renderStringList(values: string[] | null): ReactNode {
   if (!values || values.length === 0) {
     return <p className="meta-text">None</p>;
@@ -142,6 +239,7 @@ export function StoryDetailPageContent(props: Readonly<{
   const [connectionState, setConnectionState] = useState<BoardConnectionState>('connecting');
   const [connectionError, setConnectionError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [actionNotice, setActionNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [newTaskTitle, setNewTaskTitle] = useState('');
   const [creatingTask, setCreatingTask] = useState(false);
@@ -294,6 +392,7 @@ export function StoryDetailPageContent(props: Readonly<{
   const refreshAll = async (options?: { bannerMessage?: string | null }) => {
     setBusy(true);
     setActionError(options?.bannerMessage ?? null);
+    setActionNotice(null);
     try {
       const [workItems, latestProposal, latestStory] = await Promise.all([
         fetchRepositoryWorkItems({ repositoryId: repository.id }),
@@ -314,6 +413,7 @@ export function StoryDetailPageContent(props: Readonly<{
     if (!story) return;
     setBusy(true);
     setActionError(null);
+    setActionNotice(null);
     const moveResult = await moveWorkItemStatus({
       repositoryId: repository.id,
       workItemId: story.id,
@@ -324,6 +424,7 @@ export function StoryDetailPageContent(props: Readonly<{
     });
     if (moveResult.ok) {
       setWorkItemsById(previous => ({ ...previous, [moveResult.workItem.id]: moveResult.workItem }));
+      setActionNotice('Story moved to Needs breakdown.');
     } else if (moveResult.status === 409) {
       await refreshAll({ bannerMessage: `Revision conflict: ${moveResult.message}` });
     } else {
@@ -336,6 +437,7 @@ export function StoryDetailPageContent(props: Readonly<{
     if (!story) return;
     setBusy(true);
     setActionError(null);
+    setActionNotice(null);
     const moveResult = await moveWorkItemStatus({
       repositoryId: repository.id,
       workItemId: story.id,
@@ -347,6 +449,7 @@ export function StoryDetailPageContent(props: Readonly<{
     if (moveResult.ok) {
       setProposal(null);
       setWorkItemsById(previous => ({ ...previous, [moveResult.workItem.id]: moveResult.workItem }));
+      setActionNotice('Requested changes to the breakdown proposal.');
     } else if (moveResult.status === 409) {
       await refreshAll({ bannerMessage: `Revision conflict: ${moveResult.message}` });
     } else {
@@ -359,6 +462,7 @@ export function StoryDetailPageContent(props: Readonly<{
     if (!story) return;
     setBusy(true);
     setActionError(null);
+    setActionNotice(null);
     const approveResult = await approveStoryBreakdown({
       repositoryId: repository.id,
       storyId,
@@ -376,10 +480,144 @@ export function StoryDetailPageContent(props: Readonly<{
         }
         return next;
       });
+      setActionNotice('Breakdown approved. Child tasks moved to Ready.');
     } else if (approveResult.status === 409) {
       await refreshAll({ bannerMessage: `Revision conflict: ${approveResult.message}` });
     } else {
       setActionError(approveResult.message);
+    }
+
+    setBusy(false);
+  };
+
+  const handleGenerateBreakdownDraft = async () => {
+    if (!story) return;
+    if (childTasks.length > 0) {
+      setActionError('Auto breakdown is only available before child tasks are created.');
+      return;
+    }
+
+    setBusy(true);
+    setActionError(null);
+    setActionNotice(null);
+
+    const proposeResult = await proposeStoryBreakdown({
+      repositoryId: repository.id,
+      storyId,
+      expectedRevision: story.revision,
+      actor: plannerActor,
+      proposed: buildAutoBreakdownProposal(story),
+    });
+
+    if (proposeResult.ok) {
+      setWorkItemsById(previous => {
+        const next: Record<number, DashboardWorkItemSnapshot> = { ...previous };
+        next[proposeResult.story.id] = proposeResult.story;
+        for (const task of proposeResult.tasks) {
+          next[task.id] = task;
+        }
+        return next;
+      });
+
+      try {
+        const latestProposal = await fetchBreakdownProposal({ repositoryId: repository.id, storyId });
+        setProposal(latestProposal);
+      } catch (error) {
+        setActionError(error instanceof Error ? error.message : 'Unable to refresh breakdown proposal.');
+      }
+
+      setActionNotice(`Generated a breakdown draft with ${proposeResult.tasks.length} tasks.`);
+    } else if (proposeResult.status === 409) {
+      await refreshAll({ bannerMessage: `Revision conflict: ${proposeResult.message}` });
+    } else {
+      setActionError(proposeResult.message);
+    }
+
+    setBusy(false);
+  };
+
+  const handleApproveAndStartTasks = async () => {
+    if (!story) return;
+    setBusy(true);
+    setActionError(null);
+    setActionNotice(null);
+
+    const approveResult = await approveStoryBreakdown({
+      repositoryId: repository.id,
+      storyId,
+      expectedRevision: story.revision,
+      actor,
+    });
+
+    if (!approveResult.ok) {
+      if (approveResult.status === 409) {
+        await refreshAll({ bannerMessage: `Revision conflict: ${approveResult.message}` });
+      } else {
+        setActionError(approveResult.message);
+      }
+      setBusy(false);
+      return;
+    }
+
+    setProposal(null);
+    setWorkItemsById(previous => {
+      const next: Record<number, DashboardWorkItemSnapshot> = { ...previous };
+      next[approveResult.story.id] = approveResult.story;
+      for (const task of approveResult.tasks) {
+        next[task.id] = task;
+      }
+      return next;
+    });
+
+    let startedCount = 0;
+    const startedTasks: DashboardWorkItemSnapshot[] = [];
+    const startErrors: string[] = [];
+
+    for (const task of approveResult.tasks) {
+      if (task.type !== 'task' || task.status !== 'Ready') {
+        continue;
+      }
+
+      const moveResult = await moveWorkItemStatus({
+        repositoryId: repository.id,
+        workItemId: task.id,
+        expectedRevision: task.revision,
+        toStatus: 'InProgress',
+        actor,
+        errorPrefix: `Unable to start task #${task.id}`,
+      });
+
+      if (moveResult.ok) {
+        startedCount += 1;
+        startedTasks.push(moveResult.workItem);
+        continue;
+      }
+
+      if (moveResult.status === 409) {
+        await refreshAll({ bannerMessage: `Revision conflict: ${moveResult.message}` });
+        setBusy(false);
+        return;
+      }
+
+      startErrors.push(moveResult.message);
+    }
+
+    if (startedTasks.length > 0) {
+      setWorkItemsById(previous => {
+        const next: Record<number, DashboardWorkItemSnapshot> = { ...previous };
+        for (const task of startedTasks) {
+          next[task.id] = task;
+        }
+        return next;
+      });
+    }
+
+    if (startErrors.length > 0) {
+      setActionError(startErrors.join(' '));
+    } else if (startedCount === 0) {
+      setActionNotice('Breakdown approved. No Ready tasks were started.');
+    } else {
+      setActionNotice(`Breakdown approved and ${startedCount} task${startedCount === 1 ? '' : 's'} started.`);
     }
 
     setBusy(false);
@@ -399,6 +637,7 @@ export function StoryDetailPageContent(props: Readonly<{
 
     setCreatingTask(true);
     setActionError(null);
+    setActionNotice(null);
     try {
       const createResult = await createWorkItem({
         repositoryId: repository.id,
@@ -414,6 +653,7 @@ export function StoryDetailPageContent(props: Readonly<{
           [createResult.workItem.id]: createResult.workItem,
         }));
         setNewTaskTitle('');
+        setActionNotice(`Created task #${createResult.workItem.id}.`);
       } else {
         setActionError(createResult.message);
       }
@@ -469,6 +709,12 @@ export function StoryDetailPageContent(props: Readonly<{
         </p>
       ) : null}
 
+      {actionNotice ? (
+        <output className="repo-banner repo-banner--success" aria-live="polite">
+          {actionNotice}
+        </output>
+      ) : null}
+
       <section className="surface surface-card surface--default">
         <header className="surface-header">
           <h3>Story</h3>
@@ -502,9 +748,18 @@ export function StoryDetailPageContent(props: Readonly<{
               </ActionButton>
             ) : null}
 
+            {story.status === 'NeedsBreakdown' ? (
+              <ActionButton tone="primary" onClick={() => void handleGenerateBreakdownDraft()} disabled={busy}>
+                Generate breakdown draft
+              </ActionButton>
+            ) : null}
+
             {story.status === 'BreakdownProposed' ? (
               <>
-                <ActionButton tone="primary" onClick={() => void handleApproveBreakdown()} disabled={busy}>
+                <ActionButton tone="primary" onClick={() => void handleApproveAndStartTasks()} disabled={busy}>
+                  Approve and start tasks
+                </ActionButton>
+                <ActionButton tone="secondary" onClick={() => void handleApproveBreakdown()} disabled={busy}>
                   Approve breakdown
                 </ActionButton>
                 <ActionButton tone="secondary" onClick={() => void handleRequestChanges()} disabled={busy}>
@@ -513,9 +768,9 @@ export function StoryDetailPageContent(props: Readonly<{
               </>
             ) : null}
 
-              <ActionButton tone="secondary" onClick={() => void refreshAll()} disabled={busy}>
-                Refresh
-              </ActionButton>
+            <ActionButton tone="secondary" onClick={() => void refreshAll()} disabled={busy}>
+              Refresh
+            </ActionButton>
           </div>
 
           <form className="board-inline-editor" onSubmit={(event) => void handleCreateTask(event)}>
@@ -541,7 +796,8 @@ export function StoryDetailPageContent(props: Readonly<{
 
           {story.status === 'NeedsBreakdown' ? (
             <p className="meta-text">
-              Waiting for an agent to propose a breakdown. Once proposed, review the plan here and approve to move tasks from Draft to Ready.
+              Use Generate breakdown draft to create an initial agent plan. Then review and approve to move child tasks from Draft to
+              Ready.
             </p>
           ) : null}
         </div>

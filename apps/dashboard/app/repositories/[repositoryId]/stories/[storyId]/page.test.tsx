@@ -190,6 +190,87 @@ describe('StoryDetailPageContent', () => {
     expect(screen.getByText('Needs breakdown')).toBeInTheDocument();
   });
 
+  it('generates a breakdown draft from NeedsBreakdown using the planner actor', async () => {
+    const user = userEvent.setup();
+    const fetchMock = vi.mocked(global.fetch);
+
+    fetchMock
+      .mockResolvedValueOnce(
+        createJsonResponse({
+          story: createWorkItem({
+            id: 3,
+            type: 'story',
+            title: 'Story title',
+            status: 'BreakdownProposed',
+            revision: 3,
+            tags: ['frontend'],
+            plannedFiles: ['app/story.tsx'],
+            assignees: ['octocat'],
+          }),
+          tasks: [
+            createWorkItem({ id: 20, type: 'task', title: 'Plan Story title', parentId: 3, status: 'Draft', revision: 0 }),
+            createWorkItem({ id: 21, type: 'task', title: 'Implement Story title', parentId: 3, status: 'Draft', revision: 0 }),
+            createWorkItem({ id: 22, type: 'task', title: 'Validate Story title', parentId: 3, status: 'Draft', revision: 0 }),
+          ],
+        }),
+      )
+      .mockResolvedValueOnce(
+        createJsonResponse({
+          proposal: createProposal({
+            eventId: 120,
+            proposed: {
+              tags: ['frontend'],
+              plannedFiles: ['app/story.tsx'],
+              links: null,
+              tasks: [
+                { title: 'Plan Story title', plannedFiles: ['app/story.tsx'] },
+                { title: 'Implement Story title', plannedFiles: ['app/story.tsx'] },
+                { title: 'Validate Story title', plannedFiles: ['app/story.tsx'] },
+              ],
+            },
+          }),
+        }),
+      );
+
+    render(
+      <StoryDetailPageContent
+        repository={createRepository({ id: 1, name: 'demo-repo' })}
+        actor={{ actorType: 'human', actorLabel: 'octocat' }}
+        storyId={3}
+        initialLatestEventId={0}
+        initialProposal={null}
+        initialWorkItems={[
+          createWorkItem({
+            id: 3,
+            type: 'story',
+            title: 'Story title',
+            description: 'Build the new workflow setup.',
+            status: 'NeedsBreakdown',
+            revision: 2,
+            tags: ['frontend'],
+            plannedFiles: ['app/story.tsx'],
+            assignees: ['octocat'],
+          }),
+        ]}
+      />,
+    );
+
+    await user.click(screen.getByRole('button', { name: 'Generate breakdown draft' }));
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/dashboard/work-items/3/actions/propose-breakdown', expect.anything());
+    const proposeCall = fetchMock.mock.calls[0];
+    const proposeRequest = JSON.parse(String((proposeCall[1] as RequestInit).body));
+    expect(proposeRequest.actorType).toBe('agent');
+    expect(proposeRequest.actorLabel).toBe('alphred-breakdown-planner');
+    expect(proposeRequest.proposed.tasks).toHaveLength(3);
+    expect(proposeRequest.proposed.tasks[0].title).toBe('Plan Story title');
+    expect(proposeRequest.proposed.tasks[1].title).toBe('Implement Story title');
+    expect(proposeRequest.proposed.tasks[2].title).toBe('Validate Story title');
+
+    expect(screen.getByText('Breakdown proposed')).toBeInTheDocument();
+    expect(await screen.findByText('Generated a breakdown draft with 3 tasks.')).toBeInTheDocument();
+  });
+
   it('creates a child task from the story detail actions', async () => {
     const user = userEvent.setup();
     const fetchMock = vi.mocked(global.fetch);
@@ -281,6 +362,62 @@ describe('StoryDetailPageContent', () => {
     expect(screen.getByText('Approved')).toBeInTheDocument();
     const childTasksSection = screen.getByText('Child tasks').closest('div') as HTMLElement;
     expect(within(childTasksSection).getAllByText('Ready')).toHaveLength(2);
+  });
+
+  it('approves and starts tasks from a proposed breakdown', async () => {
+    const user = userEvent.setup();
+    const fetchMock = vi.mocked(global.fetch);
+
+    fetchMock
+      .mockResolvedValueOnce(
+        createJsonResponse({
+          story: createWorkItem({ id: 3, type: 'story', title: 'Story title', status: 'Approved', revision: 2 }),
+          tasks: [
+            createWorkItem({ id: 20, type: 'task', title: 'Task A', parentId: 3, status: 'Ready', revision: 1 }),
+            createWorkItem({ id: 21, type: 'task', title: 'Task B', parentId: 3, status: 'Ready', revision: 1 }),
+          ],
+        }),
+      )
+      .mockResolvedValueOnce(
+        createJsonResponse({
+          workItem: createWorkItem({ id: 20, type: 'task', title: 'Task A', parentId: 3, status: 'InProgress', revision: 2 }),
+        }),
+      )
+      .mockResolvedValueOnce(
+        createJsonResponse({
+          workItem: createWorkItem({ id: 21, type: 'task', title: 'Task B', parentId: 3, status: 'InProgress', revision: 2 }),
+        }),
+      );
+
+    render(
+      <StoryDetailPageContent
+        repository={createRepository({ id: 1, name: 'demo-repo' })}
+        actor={{ actorType: 'human', actorLabel: 'octocat' }}
+        storyId={3}
+        initialLatestEventId={0}
+        initialProposal={createProposal()}
+        initialWorkItems={[
+          createWorkItem({ id: 3, type: 'story', title: 'Story title', status: 'BreakdownProposed', revision: 1 }),
+          createWorkItem({ id: 20, type: 'task', title: 'Task A', parentId: 3, status: 'Draft', revision: 0 }),
+          createWorkItem({ id: 21, type: 'task', title: 'Task B', parentId: 3, status: 'Draft', revision: 0 }),
+        ]}
+      />,
+    );
+
+    await user.click(screen.getByRole('button', { name: 'Approve and start tasks' }));
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/dashboard/work-items/3/actions/approve-breakdown', expect.anything());
+    expect(fetchMock).toHaveBeenCalledWith('/api/dashboard/work-items/20/actions/move', expect.anything());
+    expect(fetchMock).toHaveBeenCalledWith('/api/dashboard/work-items/21/actions/move', expect.anything());
+
+    const firstMove = JSON.parse(String((fetchMock.mock.calls[1][1] as RequestInit).body));
+    const secondMove = JSON.parse(String((fetchMock.mock.calls[2][1] as RequestInit).body));
+    expect(firstMove.toStatus).toBe('InProgress');
+    expect(secondMove.toStatus).toBe('InProgress');
+
+    const childTasksSection = screen.getByText('Child tasks').closest('div') as HTMLElement;
+    expect(within(childTasksSection).getAllByText('In progress')).toHaveLength(2);
+    expect(await screen.findByText('Breakdown approved and 2 tasks started.')).toBeInTheDocument();
   });
 
   it('supports request-changes by moving the story back to NeedsBreakdown', async () => {
