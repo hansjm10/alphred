@@ -101,6 +101,16 @@ type PersistedPlannerRunContext = {
   nodeKey: string | null;
 };
 
+const STORY_BREAKDOWN_LAUNCH_CONTEXT_ARTIFACT_KIND = 'story_breakdown_launch_context_v1';
+
+type StoryBreakdownLaunchContext = {
+  storyId: number;
+  title: string;
+  description: string | null;
+  tags: string[] | null;
+  plannedFiles: string[] | null;
+};
+
 function requirePositiveInteger(value: number, fieldName: string): number {
   if (!Number.isInteger(value) || value < 1) {
     throw new DashboardIntegrationError('invalid_request', `${fieldName} must be a positive integer.`, {
@@ -172,6 +182,106 @@ function toOptionalFiniteNumber(value: unknown, fieldPath: string, validationErr
   }
 
   return value;
+}
+
+function toStoredStringArrayOrNull(value: unknown): string[] | null {
+  if (value === null) {
+    return null;
+  }
+
+  if (!Array.isArray(value) || value.some(entry => typeof entry !== 'string')) {
+    return null;
+  }
+
+  return [...value];
+}
+
+function buildStoryBreakdownPromptContextJson(context: StoryBreakdownLaunchContext): string {
+  return JSON.stringify(
+    {
+      storyId: context.storyId,
+      title: context.title,
+      description: context.description,
+      tags: context.tags,
+      plannedFiles: context.plannedFiles,
+    },
+    null,
+    2,
+  );
+}
+
+function appendStoryBreakdownPromptContext(prompt: string, context: StoryBreakdownLaunchContext): string {
+  return [
+    prompt.trimEnd(),
+    '',
+    'STORY_CONTEXT_JSON:',
+    buildStoryBreakdownPromptContextJson(context),
+    '',
+    'Use STORY_CONTEXT_JSON as the source of truth for the proposed breakdown.',
+  ].join('\n');
+}
+
+function persistStoryBreakdownLaunchContext(params: {
+  db: AlphredDatabase;
+  workflowRunId: number;
+  plannerNodeKey: string;
+  context: StoryBreakdownLaunchContext;
+}): void {
+  const plannerNode = params.db
+    .select({
+      runNodeId: runNodes.id,
+      prompt: runNodes.prompt,
+    })
+    .from(runNodes)
+    .where(and(eq(runNodes.workflowRunId, params.workflowRunId), eq(runNodes.nodeKey, params.plannerNodeKey)))
+    .orderBy(desc(runNodes.attempt), desc(runNodes.id))
+    .get();
+
+  if (!plannerNode || plannerNode.prompt === null || plannerNode.prompt.trim().length === 0) {
+    throw new DashboardIntegrationError(
+      'internal_error',
+      `Story breakdown planner node "${params.plannerNodeKey}" is missing prompt context for run id=${params.workflowRunId}.`,
+      {
+        status: 500,
+      },
+    );
+  }
+
+  params.db
+    .update(runNodes)
+    .set({
+      prompt: appendStoryBreakdownPromptContext(plannerNode.prompt, params.context),
+    })
+    .where(eq(runNodes.id, plannerNode.runNodeId))
+    .run();
+
+  params.db.insert(phaseArtifacts)
+    .values({
+      workflowRunId: params.workflowRunId,
+      runNodeId: plannerNode.runNodeId,
+      artifactType: 'note',
+      contentType: 'json',
+      content: JSON.stringify(
+        {
+          schemaVersion: 1,
+          kind: STORY_BREAKDOWN_LAUNCH_CONTEXT_ARTIFACT_KIND,
+          story: {
+            id: params.context.storyId,
+            title: params.context.title,
+            description: params.context.description,
+            tags: params.context.tags,
+            plannedFiles: params.context.plannedFiles,
+          },
+        },
+        null,
+        2,
+      ),
+      metadata: {
+        kind: STORY_BREAKDOWN_LAUNCH_CONTEXT_ARTIFACT_KIND,
+        storyId: params.context.storyId,
+      },
+    })
+    .run();
 }
 
 function normalizeBreakdownTask(
@@ -634,6 +744,10 @@ export function createStoryBreakdownRunOperations(params: {
               repositoryName: repositories.name,
               type: workItems.type,
               revision: workItems.revision,
+              title: workItems.title,
+              description: workItems.description,
+              tags: workItems.tags,
+              plannedFiles: workItems.plannedFiles,
             })
             .from(workItems)
             .innerJoin(repositories, eq(workItems.repositoryId, repositories.id))
@@ -698,7 +812,7 @@ export function createStoryBreakdownRunOperations(params: {
             });
           }
 
-          return dependencies.prepareWorkflowRunLaunch(db, {
+          const preparedLaunch = dependencies.prepareWorkflowRunLaunch(db, {
             treeKey: plannerConfig.treeKey,
             repositoryName: story.repositoryName,
             workItemId: storyId,
@@ -709,6 +823,21 @@ export function createStoryBreakdownRunOperations(params: {
               nodeKey: plannerConfig.nodeKey,
             },
           });
+
+          persistStoryBreakdownLaunchContext({
+            db,
+            workflowRunId: preparedLaunch.workflowRunId,
+            plannerNodeKey: plannerConfig.nodeKey,
+            context: {
+              storyId,
+              title: story.title,
+              description: story.description,
+              tags: toStoredStringArrayOrNull(story.tags),
+              plannedFiles: toStoredStringArrayOrNull(story.plannedFiles),
+            },
+          });
+
+          return preparedLaunch;
         }),
       );
 
@@ -755,6 +884,27 @@ export function createStoryBreakdownRunOperations(params: {
         }
 
         if (run.associationRepositoryId !== repositoryId || run.associationWorkItemId !== storyId) {
+          throw new DashboardIntegrationError(
+            'not_found',
+            `Story breakdown run id=${workflowRunId} was not found for story id=${storyId}.`,
+            {
+              status: 404,
+            },
+          );
+        }
+
+        const launchContextArtifact = db
+          .select({ id: phaseArtifacts.id })
+          .from(phaseArtifacts)
+          .where(
+            and(
+              eq(phaseArtifacts.workflowRunId, workflowRunId),
+              sql`coalesce(json_extract(${phaseArtifacts.metadata}, '$.kind'), '') = ${STORY_BREAKDOWN_LAUNCH_CONTEXT_ARTIFACT_KIND}`,
+            ),
+          )
+          .orderBy(desc(phaseArtifacts.createdAt), desc(phaseArtifacts.id))
+          .get();
+        if (!launchContextArtifact) {
           throw new DashboardIntegrationError(
             'not_found',
             `Story breakdown run id=${workflowRunId} was not found for story id=${storyId}.`,

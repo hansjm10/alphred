@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
+  and,
   createDatabase,
   eq,
   migrateDatabase,
@@ -19,6 +20,8 @@ import {
 import { createStoryBreakdownRunOperations } from './story-breakdown-run-operations';
 import type { PreparedWorkflowRunLaunch } from './run-operations';
 
+const STORY_BREAKDOWN_LAUNCH_CONTEXT_ARTIFACT_KIND = 'story_breakdown_launch_context_v1';
+
 function createHarness(environment: Partial<NodeJS.ProcessEnv> = {}): {
   db: AlphredDatabase;
   prepareWorkflowRunLaunchMock: ReturnType<typeof vi.fn>;
@@ -30,7 +33,7 @@ function createHarness(environment: Partial<NodeJS.ProcessEnv> = {}): {
 
   const prepareWorkflowRunLaunchMock = vi.fn(
     (
-      _launchDb: AlphredDatabase,
+      launchDb: AlphredDatabase,
       request: {
         treeKey: string;
         repositoryName: string;
@@ -42,9 +45,95 @@ function createHarness(environment: Partial<NodeJS.ProcessEnv> = {}): {
           nodeKey: string;
         };
       },
-    ) =>
-      ({
-        workflowRunId: 91,
+    ) => {
+      const repository = launchDb
+        .select({
+          id: repositories.id,
+        })
+        .from(repositories)
+        .where(eq(repositories.name, request.repositoryName))
+        .get();
+
+      const existingTree = launchDb
+        .select({
+          id: workflowTrees.id,
+        })
+        .from(workflowTrees)
+        .where(eq(workflowTrees.treeKey, request.treeKey))
+        .get();
+      const treeId = existingTree?.id ?? seedPlannerTree(launchDb, { treeKey: request.treeKey, nodeKey: request.nodeSelector.nodeKey }).treeId;
+      const existingNode = launchDb
+        .select({
+          id: treeNodes.id,
+        })
+        .from(treeNodes)
+        .where(and(eq(treeNodes.workflowTreeId, treeId), eq(treeNodes.nodeKey, request.nodeSelector.nodeKey)))
+        .get();
+      const treeNodeId = existingNode?.id
+        ?? Number(
+          launchDb.insert(treeNodes)
+            .values({
+              workflowTreeId: treeId,
+              nodeKey: request.nodeSelector.nodeKey,
+              nodeRole: 'standard',
+              nodeType: 'agent',
+              provider: 'codex',
+              model: 'gpt-5.3-codex',
+              promptTemplateId: null,
+              maxRetries: 0,
+              sequenceIndex: 0,
+              createdAt: '2026-03-05T17:02:00.000Z',
+              updatedAt: '2026-03-05T17:02:00.000Z',
+            })
+            .run().lastInsertRowid,
+        );
+
+      const workflowRunId = Number(
+        launchDb.insert(workflowRuns)
+          .values({
+            workflowTreeId: treeId,
+            status: 'pending',
+            startedAt: null,
+            completedAt: null,
+            createdAt: '2026-03-05T17:03:00.000Z',
+            updatedAt: '2026-03-05T17:03:00.000Z',
+          })
+          .run().lastInsertRowid,
+      );
+
+      launchDb.insert(workflowRunAssociations)
+        .values({
+          workflowRunId,
+          repositoryId: repository?.id ?? null,
+          workItemId: request.workItemId,
+          createdAt: '2026-03-05T17:03:00.000Z',
+        })
+        .run();
+
+      launchDb.insert(runNodes)
+        .values({
+          workflowRunId,
+          treeNodeId,
+          nodeKey: request.nodeSelector.nodeKey,
+          nodeRole: 'standard',
+          nodeType: 'agent',
+          provider: 'codex',
+          model: 'gpt-5.3-codex',
+          prompt: 'Return a story breakdown result.',
+          promptContentType: 'markdown',
+          maxRetries: 0,
+          sequenceIndex: 0,
+          attempt: 1,
+          status: 'pending',
+          startedAt: null,
+          completedAt: null,
+          createdAt: '2026-03-05T17:03:00.000Z',
+          updatedAt: '2026-03-05T17:03:00.000Z',
+        })
+        .run();
+
+      return {
+        workflowRunId,
         treeKey: request.treeKey,
         repository: null,
         issueId: undefined,
@@ -55,7 +144,8 @@ function createHarness(environment: Partial<NodeJS.ProcessEnv> = {}): {
         branch: undefined,
         cleanupWorktree: false,
         policyConstraints: undefined,
-      }) as PreparedWorkflowRunLaunch,
+      } satisfies PreparedWorkflowRunLaunch;
+    },
   );
   const completeWorkflowRunLaunchMock = vi.fn(
     async (_launchDb: AlphredDatabase, preparedLaunch: PreparedWorkflowRunLaunch) => ({
@@ -224,6 +314,8 @@ function seedPlannerRun(
       .run().lastInsertRowid,
   );
 
+  insertLaunchContextArtifact(db, runId, runNodeId, params.storyId);
+
   if (nodeStatus !== 'pending') {
     transitionRunNodeStatus(db, {
       runNodeId,
@@ -267,6 +359,31 @@ function seedPlannerRun(
   }
 
   return { runId, runNodeId };
+}
+
+function insertLaunchContextArtifact(db: AlphredDatabase, runId: number, runNodeId: number, storyId: number): number {
+  return Number(
+    db.insert(phaseArtifacts)
+      .values({
+        workflowRunId: runId,
+        runNodeId,
+        artifactType: 'note',
+        contentType: 'json',
+        content: JSON.stringify({
+          schemaVersion: 1,
+          kind: STORY_BREAKDOWN_LAUNCH_CONTEXT_ARTIFACT_KIND,
+          story: {
+            id: storyId,
+          },
+        }),
+        metadata: {
+          kind: STORY_BREAKDOWN_LAUNCH_CONTEXT_ARTIFACT_KIND,
+          storyId,
+        },
+        createdAt: '2026-03-05T17:03:05.000Z',
+      })
+      .run().lastInsertRowid,
+  );
 }
 
 function insertPlannerReportArtifact(db: AlphredDatabase, runId: number, runNodeId: number, content: string): number {
@@ -356,6 +473,15 @@ describe('story-breakdown-run-operations', () => {
     const { db, prepareWorkflowRunLaunchMock, completeWorkflowRunLaunchMock, operations } = createHarness();
     const repositoryId = seedRepository(db, 'planner-launch');
     const storyId = seedStory(db, repositoryId, 7);
+    db.update(workItems)
+      .set({
+        title: 'Structured story',
+        description: 'Break the dashboard update into concrete tasks.',
+        tags: ['dashboard', 'planner'],
+        plannedFiles: ['apps/dashboard/src/server/story-breakdown-run-operations.ts'],
+      })
+      .where(eq(workItems.id, storyId))
+      .run();
 
     const result = await operations.launchStoryBreakdownRun({
       repositoryId,
@@ -378,18 +504,49 @@ describe('story-breakdown-run-operations', () => {
     expect(completeWorkflowRunLaunchMock).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({
-        workflowRunId: 91,
+        workflowRunId: result.workflowRunId,
         treeKey: 'story-breakdown-planner',
       }),
     );
     expect(result).toEqual({
-      workflowRunId: 91,
+      workflowRunId: expect.any(Number),
       mode: 'async',
       status: 'accepted',
       runStatus: 'pending',
       result: null,
       error: null,
     });
+
+    const plannerNode = db
+      .select({
+        prompt: runNodes.prompt,
+      })
+      .from(runNodes)
+      .where(eq(runNodes.workflowRunId, result.workflowRunId))
+      .get();
+    expect(plannerNode?.prompt).toContain('STORY_CONTEXT_JSON:');
+    expect(plannerNode?.prompt).toContain('"title": "Structured story"');
+    expect(plannerNode?.prompt).toContain('"description": "Break the dashboard update into concrete tasks."');
+    expect(plannerNode?.prompt).toContain('"tags": [');
+    expect(plannerNode?.prompt).toContain('"dashboard"');
+    expect(plannerNode?.prompt).toContain('"plannedFiles": [');
+
+    const launchArtifacts = db
+      .select({
+        artifactType: phaseArtifacts.artifactType,
+        contentType: phaseArtifacts.contentType,
+        content: phaseArtifacts.content,
+      })
+      .from(phaseArtifacts)
+      .where(eq(phaseArtifacts.workflowRunId, result.workflowRunId))
+      .all();
+    const launchContextArtifact = launchArtifacts.find(artifact => artifact.artifactType === 'note') ?? null;
+    expect(launchContextArtifact).toMatchObject({
+      artifactType: 'note',
+      contentType: 'json',
+    });
+    expect(launchContextArtifact?.content).toContain(STORY_BREAKDOWN_LAUNCH_CONTEXT_ARTIFACT_KIND);
+    expect(launchContextArtifact?.content).toContain('"title": "Structured story"');
   });
 
   it('rejects launching a second active breakdown run for the same story', async () => {
@@ -425,7 +582,7 @@ describe('story-breakdown-run-operations', () => {
     const { db, prepareWorkflowRunLaunchMock, completeWorkflowRunLaunchMock, operations } = createHarness();
     const repositoryId = seedRepository(db, 'planner-inflight');
     const storyId = seedStory(db, repositoryId, 3);
-    const { treeId } = seedPlannerTree(db);
+    const { treeId, treeNodeId } = seedPlannerTree(db);
 
     prepareWorkflowRunLaunchMock.mockImplementation((
       launchDb: AlphredDatabase,
@@ -468,6 +625,28 @@ describe('story-breakdown-run-operations', () => {
           repositoryId: repository?.id ?? null,
           workItemId: request.workItemId,
           createdAt: '2026-03-05T17:03:00.000Z',
+        })
+        .run();
+
+      launchDb.insert(runNodes)
+        .values({
+          workflowRunId: runId,
+          treeNodeId,
+          nodeKey: request.nodeSelector.nodeKey,
+          nodeRole: 'standard',
+          nodeType: 'agent',
+          provider: 'codex',
+          model: 'gpt-5.3-codex',
+          prompt: 'Return a story breakdown result.',
+          promptContentType: 'markdown',
+          maxRetries: 0,
+          sequenceIndex: 0,
+          attempt: 1,
+          status: 'pending',
+          startedAt: null,
+          completedAt: null,
+          createdAt: '2026-03-05T17:03:00.000Z',
+          updatedAt: '2026-03-05T17:03:00.000Z',
         })
         .run();
 
@@ -623,6 +802,70 @@ describe('story-breakdown-run-operations', () => {
         resultType: 'story_breakdown_result',
       }),
       error: null,
+    });
+  });
+
+  it('rejects story-scoped workflow runs that were not launched via the breakdown planner route', async () => {
+    const { db, operations } = createHarness();
+    const repositoryId = seedRepository(db, 'planner-non-breakdown');
+    const storyId = seedStory(db, repositoryId);
+    const { treeId, treeNodeId } = seedPlannerTree(db, {
+      treeKey: 'generic-story-workflow',
+      nodeKey: 'implement',
+    });
+
+    const runId = Number(
+      db.insert(workflowRuns)
+        .values({
+          workflowTreeId: treeId,
+          status: 'pending',
+          startedAt: null,
+          completedAt: null,
+          createdAt: '2026-03-05T17:03:00.000Z',
+          updatedAt: '2026-03-05T17:03:00.000Z',
+        })
+        .run().lastInsertRowid,
+    );
+    db.insert(workflowRunAssociations)
+      .values({
+        workflowRunId: runId,
+        repositoryId,
+        workItemId: storyId,
+        createdAt: '2026-03-05T17:03:00.000Z',
+      })
+      .run();
+    db.insert(runNodes)
+      .values({
+        workflowRunId: runId,
+        treeNodeId,
+        nodeKey: 'implement',
+        nodeRole: 'standard',
+        nodeType: 'agent',
+        provider: 'codex',
+        model: 'gpt-5.3-codex',
+        prompt: 'Implement the story.',
+        promptContentType: 'markdown',
+        maxRetries: 0,
+        sequenceIndex: 0,
+        attempt: 1,
+        status: 'pending',
+        startedAt: null,
+        completedAt: null,
+        createdAt: '2026-03-05T17:03:00.000Z',
+        updatedAt: '2026-03-05T17:03:00.000Z',
+      })
+      .run();
+
+    await expect(
+      operations.getStoryBreakdownRun({
+        repositoryId,
+        storyId,
+        workflowRunId: runId,
+      }),
+    ).rejects.toMatchObject({
+      code: 'not_found',
+      status: 404,
+      message: `Story breakdown run id=${runId} was not found for story id=${storyId}.`,
     });
   });
 

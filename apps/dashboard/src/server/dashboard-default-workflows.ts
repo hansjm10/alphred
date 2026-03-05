@@ -21,6 +21,7 @@ type WorkflowSeedExecutor = Pick<AlphredDatabase, 'select' | 'insert'>;
 
 const DEFAULT_STORY_BREAKDOWN_PROMPT = [
   'You are the story breakdown planner for a single story.',
+  'You will receive a STORY_CONTEXT_JSON block describing the selected story; use it as the source of truth.',
   'Return exactly one JSON object and no markdown fences or extra prose.',
   'Return a JSON object that follows this example structure:',
   '{',

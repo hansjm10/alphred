@@ -878,7 +878,16 @@ export function createWorkflowRunLaunchCoordinator(params: {
       };
     } catch (error) {
       runPolicyConstraintsByRunId.delete(runId);
-      await backgroundExecution.markPendingRunCancelled(db, runId);
+      try {
+        const executor = dependencies.createSqlWorkflowExecutor(db, {
+          resolveProvider: dependencies.resolveProvider,
+        });
+        await executor.cancelRun({ workflowRunId: runId });
+      } catch (cancelError) {
+        if (!(cancelError instanceof WorkflowRunControlError)) {
+          throw cancelError;
+        }
+      }
       if (error instanceof WorkflowRunExecutionValidationError) {
         throw new DashboardIntegrationError('invalid_request', error.message, {
           status: 400,
