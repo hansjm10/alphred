@@ -168,17 +168,43 @@ function rebaseTaskFlyoutDraft(
   nextSnapshotDraft: TaskFlyoutDraft,
 ): TaskFlyoutDraft {
   const statusWasEdited = previousDraft.status !== baselineDraft.status;
-  const plannedFilesWereEdited = !areSortedStringArraysEqual(previousDraft.plannedFiles, baselineDraft.plannedFiles);
-  const assigneesWereEdited = !areSortedStringArraysEqual(previousDraft.assignees, baselineDraft.assignees);
 
   return {
     ...nextSnapshotDraft,
     status: statusWasEdited ? previousDraft.status : nextSnapshotDraft.status,
-    plannedFiles: plannedFilesWereEdited ? [...previousDraft.plannedFiles] : nextSnapshotDraft.plannedFiles,
+    plannedFiles: rebaseEditedSortedStringArray(previousDraft.plannedFiles, baselineDraft.plannedFiles, nextSnapshotDraft.plannedFiles),
     plannedFileInput: previousDraft.plannedFileInput,
-    assignees: assigneesWereEdited ? [...previousDraft.assignees] : nextSnapshotDraft.assignees,
+    assignees: rebaseEditedSortedStringArray(previousDraft.assignees, baselineDraft.assignees, nextSnapshotDraft.assignees),
     assigneeInput: previousDraft.assigneeInput,
   };
+}
+
+function rebaseEditedSortedStringArray(
+  previousValues: readonly string[],
+  baselineValues: readonly string[],
+  nextSnapshotValues: readonly string[],
+): string[] {
+  if (areSortedStringArraysEqual(previousValues, baselineValues)) {
+    return [...nextSnapshotValues];
+  }
+
+  const baselineSet = new Set(baselineValues);
+  const previousSet = new Set(previousValues);
+  const rebasedValues = new Set(nextSnapshotValues);
+
+  for (const baselineValue of baselineSet) {
+    if (!previousSet.has(baselineValue)) {
+      rebasedValues.delete(baselineValue);
+    }
+  }
+
+  for (const previousValue of previousSet) {
+    if (!baselineSet.has(previousValue)) {
+      rebasedValues.add(previousValue);
+    }
+  }
+
+  return toUniqueSortedStrings([...rebasedValues]);
 }
 
 function areSortedStringArraysEqual(left: readonly string[], right: readonly string[]): boolean {

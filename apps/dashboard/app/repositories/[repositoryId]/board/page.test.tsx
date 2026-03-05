@@ -726,6 +726,88 @@ describe('RepositoryBoardPageContent', () => {
     expect(await screen.findByText('Saved updates for "Write tests".')).toBeInTheDocument();
   });
 
+  it('merges concurrent board updates into dirty planned files and assignees before save', async () => {
+    const user = userEvent.setup();
+    const fetchMock = vi.mocked(global.fetch);
+
+    fetchMock.mockResolvedValueOnce(
+      createJsonResponse({
+        workItem: createWorkItem({
+          id: 10,
+          status: 'Draft',
+          revision: 2,
+          title: 'Write tests',
+          plannedFiles: ['src/base.ts', 'src/local.ts', 'src/server.ts'],
+          assignees: ['alice', 'bob', 'octocat'],
+        }),
+      }),
+    );
+
+    render(
+      <RepositoryBoardPageContent
+        repository={createRepository({ id: 1, name: 'demo-repo' })}
+        actor={{ actorType: 'human', actorLabel: 'octocat' }}
+        initialLatestEventId={0}
+        initialWorkItems={[
+          createWorkItem({
+            id: 10,
+            status: 'Draft',
+            revision: 0,
+            title: 'Write tests',
+            plannedFiles: ['src/base.ts'],
+            assignees: ['octocat'],
+          }),
+        ]}
+      />,
+    );
+
+    expect(MockEventSource.instances).toHaveLength(1);
+    MockEventSource.instances[0]?.emitOpen();
+
+    await user.click(screen.getByRole('button', { name: /Write tests/ }));
+    await user.type(screen.getByRole('textbox', { name: 'Add planned file path' }), 'src/local.ts');
+    await user.click(screen.getByRole('button', { name: 'Add file' }));
+    await user.type(screen.getByRole('combobox', { name: 'Add assignee' }), 'alice');
+    await user.click(screen.getByRole('button', { name: 'Add assignee' }));
+
+    act(() => {
+      MockEventSource.instances[0]?.emit('board_event', {
+        id: 6,
+        repositoryId: 1,
+        workItemId: 10,
+        eventType: 'updated',
+        payload: {
+          changes: {
+            plannedFiles: ['src/base.ts', 'src/server.ts'],
+            assignees: ['bob', 'octocat'],
+          },
+          revision: 1,
+        },
+        createdAt: new Date('2026-03-02T01:05:00.000Z').toISOString(),
+      });
+    });
+
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+
+    const [url, init] = fetchMock.mock.calls[0] ?? [];
+    expect(url).toBe('/api/dashboard/work-items/10');
+    expect(init).toMatchObject({
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        repositoryId: 1,
+        expectedRevision: 1,
+        actorType: 'human',
+        actorLabel: 'octocat',
+        plannedFiles: ['src/base.ts', 'src/local.ts', 'src/server.ts'],
+        assignees: ['alice', 'bob', 'octocat'],
+      }),
+    });
+    expect(fetchMock.mock.calls.some(([requestUrl]) => requestUrl === '/api/dashboard/work-items/10/actions/move')).toBe(false);
+
+    expect(await screen.findByText('Saved updates for "Write tests".')).toBeInTheDocument();
+  });
+
   it('handles 409 conflicts by refreshing the task from the server', async () => {
     const user = userEvent.setup();
     const fetchMock = vi.mocked(global.fetch);
