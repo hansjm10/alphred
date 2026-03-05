@@ -50,6 +50,9 @@ const TASK_WORK_REVIEW_LOOP_FIX_PROMPT_TEMPLATE_KEY = `${TASK_WORK_REVIEW_LOOP_T
 const TASK_WORK_REVIEW_LOOP_APPROVED_PROMPT_TEMPLATE_KEY = `${TASK_WORK_REVIEW_LOOP_TREE_KEY}/v1/approved/prompt`;
 const TASK_WORK_REVIEW_LOOP_REVIEW_TO_FIX_GUARD_KEY = `${TASK_WORK_REVIEW_LOOP_TREE_KEY}/v1/review->fix/changes-requested`;
 const TASK_WORK_REVIEW_LOOP_REVIEW_TO_APPROVED_GUARD_KEY = `${TASK_WORK_REVIEW_LOOP_TREE_KEY}/v1/review->approved/approved`;
+const TASK_WORK_REVIEW_LOOP_EXECUTION_PERMISSIONS = JSON.stringify({
+  sandboxMode: 'danger-full-access',
+});
 const TASK_WORK_REVIEW_LOOP_WORK_PROMPT_CONTENT = [
   'You are the task execution phase.',
   'Implement the assigned task with concrete code changes.',
@@ -1642,7 +1645,7 @@ export function migrateDatabase(db: AlphredDatabase): void {
       'standard',
       'codex',
       'gpt-5-codex',
-      NULL,
+      ${TASK_WORK_REVIEW_LOOP_EXECUTION_PERMISSIONS},
       NULL,
       prompts.id,
       12,
@@ -1688,7 +1691,7 @@ export function migrateDatabase(db: AlphredDatabase): void {
       'standard',
       'codex',
       'gpt-5-codex',
-      NULL,
+      ${TASK_WORK_REVIEW_LOOP_EXECUTION_PERMISSIONS},
       NULL,
       prompts.id,
       12,
@@ -1734,7 +1737,7 @@ export function migrateDatabase(db: AlphredDatabase): void {
       'standard',
       'codex',
       'gpt-5-codex',
-      NULL,
+      ${TASK_WORK_REVIEW_LOOP_EXECUTION_PERMISSIONS},
       NULL,
       prompts.id,
       12,
@@ -1780,7 +1783,7 @@ export function migrateDatabase(db: AlphredDatabase): void {
       'standard',
       'codex',
       'gpt-5-codex',
-      NULL,
+      ${TASK_WORK_REVIEW_LOOP_EXECUTION_PERMISSIONS},
       NULL,
       prompts.id,
       12,
@@ -1800,6 +1803,17 @@ export function migrateDatabase(db: AlphredDatabase): void {
         WHERE workflow_tree_id = trees.id
           AND node_key = 'approved'
       )`);
+
+  tx.run(sql`UPDATE tree_nodes
+    SET execution_permissions = ${TASK_WORK_REVIEW_LOOP_EXECUTION_PERMISSIONS}
+    WHERE workflow_tree_id IN (
+      SELECT id
+      FROM workflow_trees
+      WHERE tree_key = ${TASK_WORK_REVIEW_LOOP_TREE_KEY}
+        AND version = 1
+    )
+      AND node_key IN ('work', 'review', 'fix', 'approved')
+      AND COALESCE(execution_permissions, '') <> ${TASK_WORK_REVIEW_LOOP_EXECUTION_PERMISSIONS}`);
 
   tx.run(sql`INSERT INTO tree_edges (
       workflow_tree_id,

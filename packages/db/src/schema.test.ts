@@ -939,6 +939,14 @@ describe('database schema hardening', () => {
       .map(row => row.nodeKey);
     expect(nodeKeys).toEqual(expect.arrayContaining(['work', 'review', 'fix', 'approved']));
 
+    const taskNodePermissionsCount =
+      db.get<{ count: number }>(sql`SELECT COUNT(*) AS count
+        FROM tree_nodes
+        WHERE workflow_tree_id = ${tree?.id ?? -1}
+          AND node_key IN ('work', 'review', 'fix', 'approved')
+          AND execution_permissions = '{"sandboxMode":"danger-full-access"}'`)?.count ?? 0;
+    expect(taskNodePermissionsCount).toBe(4);
+
     const workToReviewEdgeCount =
       db.get<{ count: number }>(sql`SELECT COUNT(*) AS count
         FROM tree_edges AS edges
