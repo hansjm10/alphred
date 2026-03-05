@@ -27,6 +27,7 @@ import { DashboardIntegrationError, toDashboardIntegrationError } from './dashbo
 import { createRepositoryOperations } from './repository-operations';
 import { createRunOperations } from './run-operations';
 import { resolveDatabasePath } from './dashboard-utils';
+import { createStoryBreakdownRunOperations } from './story-breakdown-run-operations';
 import { runStoryWorkflowOrchestration } from './story-workflow-orchestration';
 import { createWorkItemOperations, validateMoveWorkItemStatusRequest } from './work-item-operations';
 import { createWorkflowDraftOperations } from './workflow-draft-operations';
@@ -140,6 +141,13 @@ export function createDashboardService(options: {
     },
     backgroundExecution,
   });
+  const storyBreakdownRunOperations = createStoryBreakdownRunOperations({
+    withDatabase,
+    dependencies: {
+      launchWorkflowRun: runOperations.launchWorkflowRun,
+    },
+    environment,
+  });
 
   const taskRunAutolaunchEnabled = environment.ALPHRED_DASHBOARD_TASK_RUN_AUTOLAUNCH === '1';
   const configuredTaskRunTreeKey = (environment.ALPHRED_DASHBOARD_TASK_RUN_TREE_KEY ?? 'design-implement-review').trim();
@@ -238,6 +246,7 @@ export function createDashboardService(options: {
     ...workflowDraftOperations,
     ...repositoryOperations,
     ...workItemOperations,
+    ...storyBreakdownRunOperations,
     runStoryWorkflow,
     moveWorkItemStatus: moveWorkItemStatusWithTaskRunOrchestration,
     ...runOperations,

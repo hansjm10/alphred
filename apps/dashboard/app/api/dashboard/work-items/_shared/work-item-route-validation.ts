@@ -3,6 +3,7 @@ import { workItemStatusesByType, workItemTypes, type WorkItemStatus, type WorkIt
 import type {
   DashboardApproveStoryBreakdownRequest,
   DashboardCreateWorkItemRequest,
+  DashboardLaunchStoryBreakdownRunRequest,
   DashboardMoveWorkItemStatusRequest,
   DashboardProposeStoryBreakdownRequest,
   DashboardRunStoryWorkflowRequest,
@@ -176,6 +177,10 @@ export function parseRepositoryIdFromPathSegment(value: string): number {
 
 export function parseWorkItemIdFromPathSegment(value: string): number {
   return parsePositiveIntegerFromString(value, 'workItemId must be a positive integer.');
+}
+
+export function parseRunIdFromPathSegment(value: string): number {
+  return parsePositiveIntegerFromString(value, 'runId must be a positive integer.');
 }
 
 export function parseRepositoryIdFromQuery(request: Request): number {
@@ -490,6 +495,23 @@ export function parseApproveStoryBreakdownRequest(
     expectedRevision,
     actorType,
     actorLabel,
+  };
+}
+
+export function parseLaunchStoryBreakdownRunRequest(
+  payload: Record<string, unknown>,
+  storyId: number,
+): DashboardLaunchStoryBreakdownRunRequest {
+  const repositoryId = parsePositiveInteger(payload.repositoryId, 'Field "repositoryId" must be a positive integer.');
+  const expectedRevision = parseNonNegativeInteger(
+    payload.expectedRevision,
+    'Field "expectedRevision" must be a non-negative integer.',
+  );
+
+  return {
+    repositoryId,
+    storyId,
+    expectedRevision,
   };
 }
 

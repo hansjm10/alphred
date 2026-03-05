@@ -1,0 +1,733 @@
+import {
+  and,
+  desc,
+  eq,
+  phaseArtifacts,
+  repositories,
+  runNodeDiagnostics,
+  runNodes,
+  sql,
+  workflowRunAssociations,
+  workflowRuns,
+  workflowTrees,
+  workItems,
+  type AlphredDatabase,
+} from '@alphred/db';
+import type {
+  DashboardGetStoryBreakdownRunResult,
+  DashboardLaunchStoryBreakdownRunRequest,
+  DashboardLaunchStoryBreakdownRunResult,
+  DashboardRunLaunchResult,
+  DashboardStoryBreakdownPlannerResult,
+  DashboardStoryBreakdownRunError,
+  DashboardWorkItemProposedBreakdownTask,
+} from './dashboard-contracts';
+import { DashboardIntegrationError } from './dashboard-errors';
+
+const DEFAULT_STORY_BREAKDOWN_TREE_KEY = 'story-breakdown-planner';
+const DEFAULT_STORY_BREAKDOWN_NODE_KEY = 'breakdown';
+const STORY_BREAKDOWN_RESULT_SCHEMA_VERSION = 1;
+const STORY_BREAKDOWN_RESULT_TYPE = 'story_breakdown_result';
+
+type WithDatabase = <T>(operation: (db: AlphredDatabase) => Promise<T> | T) => Promise<T>;
+
+export type StoryBreakdownRunOperationsDependencies = {
+  launchWorkflowRun: (request: {
+    treeKey: string;
+    repositoryName: string;
+    workItemId: number;
+    executionMode: 'async';
+    executionScope: 'single_node';
+    nodeSelector: {
+      type: 'node_key';
+      nodeKey: string;
+    };
+  }) => Promise<DashboardRunLaunchResult>;
+};
+
+export type StoryBreakdownRunOperations = {
+  launchStoryBreakdownRun: (request: DashboardLaunchStoryBreakdownRunRequest) => Promise<DashboardLaunchStoryBreakdownRunResult>;
+  getStoryBreakdownRun: (params: {
+    repositoryId: number;
+    storyId: number;
+    workflowRunId: number;
+  }) => Promise<DashboardGetStoryBreakdownRunResult>;
+};
+
+type StoryBreakdownPlannerConfig = {
+  treeKey: string;
+  nodeKey: string;
+};
+
+type PlannerNodeExecutionContext = {
+  runNodeId: number;
+  attempt: number;
+  reportArtifact: {
+    id: number;
+    contentType: string;
+    content: string;
+  } | null;
+  failureArtifact: {
+    id: number;
+    content: string;
+  } | null;
+  diagnostics: {
+    id: number;
+    payload: unknown;
+  } | null;
+};
+
+type ValidationFailure = {
+  message: string;
+  details: Record<string, unknown>;
+};
+
+function requirePositiveInteger(value: number, fieldName: string): number {
+  if (!Number.isInteger(value) || value < 1) {
+    throw new DashboardIntegrationError('invalid_request', `${fieldName} must be a positive integer.`, {
+      status: 400,
+    });
+  }
+
+  return value;
+}
+
+function requireNonNegativeInteger(value: number, fieldName: string): number {
+  if (!Number.isInteger(value) || value < 0) {
+    throw new DashboardIntegrationError('invalid_request', `${fieldName} must be a non-negative integer.`, {
+      status: 400,
+    });
+  }
+
+  return value;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function normalizeConfiguredValue(value: string | undefined, fallback: string): string {
+  const trimmed = value?.trim();
+  return trimmed && trimmed.length > 0 ? trimmed : fallback;
+}
+
+function resolvePlannerConfig(environment: NodeJS.ProcessEnv): StoryBreakdownPlannerConfig {
+  return {
+    treeKey: normalizeConfiguredValue(
+      environment.ALPHRED_DASHBOARD_STORY_BREAKDOWN_TREE_KEY,
+      DEFAULT_STORY_BREAKDOWN_TREE_KEY,
+    ),
+    nodeKey: normalizeConfiguredValue(
+      environment.ALPHRED_DASHBOARD_STORY_BREAKDOWN_NODE_KEY,
+      DEFAULT_STORY_BREAKDOWN_NODE_KEY,
+    ),
+  };
+}
+
+function toOptionalStringArray(value: unknown, fieldPath: string, validationErrors: string[]): string[] | null {
+  if (value === null) {
+    return null;
+  }
+
+  if (!Array.isArray(value) || value.some(entry => typeof entry !== 'string')) {
+    validationErrors.push(`${fieldPath} must be an array of strings or null.`);
+    return null;
+  }
+
+  return [...value];
+}
+
+function toOptionalFiniteNumber(value: unknown, fieldPath: string, validationErrors: string[]): number | null {
+  if (value === null) {
+    return null;
+  }
+
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    validationErrors.push(`${fieldPath} must be a finite number or null.`);
+    return null;
+  }
+
+  return value;
+}
+
+function normalizeBreakdownTask(
+  value: unknown,
+  fieldPath: string,
+  validationErrors: string[],
+): DashboardWorkItemProposedBreakdownTask | null {
+  if (!isRecord(value)) {
+    validationErrors.push(`${fieldPath} must be an object.`);
+    return null;
+  }
+
+  const rawTitle = value.title;
+  if (typeof rawTitle !== 'string' || rawTitle.trim().length === 0) {
+    validationErrors.push(`${fieldPath}.title must be a non-empty string.`);
+    return null;
+  }
+
+  const task: DashboardWorkItemProposedBreakdownTask = {
+    title: rawTitle.trim(),
+  };
+
+  if ('description' in value) {
+    if (value.description !== null && typeof value.description !== 'string') {
+      validationErrors.push(`${fieldPath}.description must be a string or null.`);
+    } else {
+      task.description = value.description as string | null;
+    }
+  }
+
+  if ('tags' in value) {
+    task.tags = toOptionalStringArray(value.tags, `${fieldPath}.tags`, validationErrors);
+  }
+
+  if ('plannedFiles' in value) {
+    task.plannedFiles = toOptionalStringArray(value.plannedFiles, `${fieldPath}.plannedFiles`, validationErrors);
+  }
+
+  if ('assignees' in value) {
+    task.assignees = toOptionalStringArray(value.assignees, `${fieldPath}.assignees`, validationErrors);
+  }
+
+  if ('priority' in value) {
+    task.priority = toOptionalFiniteNumber(value.priority, `${fieldPath}.priority`, validationErrors);
+  }
+
+  if ('estimate' in value) {
+    task.estimate = toOptionalFiniteNumber(value.estimate, `${fieldPath}.estimate`, validationErrors);
+  }
+
+  if ('links' in value) {
+    task.links = toOptionalStringArray(value.links, `${fieldPath}.links`, validationErrors);
+  }
+
+  return task;
+}
+
+function validatePlannerResult(content: string): { ok: true; value: DashboardStoryBreakdownPlannerResult } | { ok: false; error: ValidationFailure } {
+  let payload: unknown;
+  try {
+    payload = JSON.parse(content) as unknown;
+  } catch (error) {
+    return {
+      ok: false,
+      error: {
+        message: 'Planner report must be valid JSON.',
+        details: {
+          reason: 'invalid_json',
+          cause: error instanceof Error ? error.message : String(error),
+        },
+      },
+    };
+  }
+
+  if (!isRecord(payload)) {
+    return {
+      ok: false,
+      error: {
+        message: 'Planner report must be a JSON object.',
+        details: {
+          reason: 'non_object_payload',
+        },
+      },
+    };
+  }
+
+  const validationErrors: string[] = [];
+
+  if (payload.schemaVersion !== STORY_BREAKDOWN_RESULT_SCHEMA_VERSION) {
+    validationErrors.push(`schemaVersion must equal ${String(STORY_BREAKDOWN_RESULT_SCHEMA_VERSION)}.`);
+  }
+
+  if (payload.resultType !== STORY_BREAKDOWN_RESULT_TYPE) {
+    validationErrors.push(`resultType must equal "${STORY_BREAKDOWN_RESULT_TYPE}".`);
+  }
+
+  const proposed = payload.proposed;
+  if (!isRecord(proposed)) {
+    validationErrors.push('proposed must be an object.');
+  }
+
+  const normalizedProposed = isRecord(proposed) ? proposed : {};
+  const tags = 'tags' in normalizedProposed
+    ? toOptionalStringArray(normalizedProposed.tags, 'proposed.tags', validationErrors)
+    : (validationErrors.push('proposed.tags is required.'), null);
+  const plannedFiles = 'plannedFiles' in normalizedProposed
+    ? toOptionalStringArray(normalizedProposed.plannedFiles, 'proposed.plannedFiles', validationErrors)
+    : (validationErrors.push('proposed.plannedFiles is required.'), null);
+  const links = 'links' in normalizedProposed
+    ? toOptionalStringArray(normalizedProposed.links, 'proposed.links', validationErrors)
+    : (validationErrors.push('proposed.links is required.'), null);
+
+  let tasks: DashboardWorkItemProposedBreakdownTask[] = [];
+  if (!('tasks' in normalizedProposed)) {
+    validationErrors.push('proposed.tasks is required.');
+  } else if (!Array.isArray(normalizedProposed.tasks)) {
+    validationErrors.push('proposed.tasks must be an array.');
+  } else if (normalizedProposed.tasks.length === 0) {
+    validationErrors.push('proposed.tasks must contain at least one task.');
+  } else {
+    tasks = normalizedProposed.tasks
+      .map((task, index) => normalizeBreakdownTask(task, `proposed.tasks[${String(index)}]`, validationErrors))
+      .filter((task): task is DashboardWorkItemProposedBreakdownTask => task !== null);
+  }
+
+  if (validationErrors.length > 0) {
+    return {
+      ok: false,
+      error: {
+        message: 'Planner output does not match the story_breakdown_result schema.',
+        details: {
+          reason: 'schema_validation_failed',
+          validationErrors,
+        },
+      },
+    };
+  }
+
+  return {
+    ok: true,
+    value: {
+      schemaVersion: STORY_BREAKDOWN_RESULT_SCHEMA_VERSION,
+      resultType: STORY_BREAKDOWN_RESULT_TYPE,
+      proposed: {
+        tags,
+        plannedFiles,
+        links,
+        tasks,
+      },
+    },
+  };
+}
+
+function createLifecycleError(
+  code: DashboardStoryBreakdownRunError['code'],
+  message: string,
+  retryable: boolean,
+  details: Record<string, unknown>,
+): DashboardStoryBreakdownRunError {
+  return {
+    code,
+    message,
+    retryable,
+    details,
+  };
+}
+
+function readDiagnosticError(payload: unknown): {
+  classification: string | null;
+  message: string | null;
+  name: string | null;
+} | null {
+  if (!isRecord(payload) || !isRecord(payload.error)) {
+    return null;
+  }
+
+  return {
+    classification: typeof payload.error.classification === 'string' ? payload.error.classification : null,
+    message: typeof payload.error.message === 'string' ? payload.error.message : null,
+    name: typeof payload.error.name === 'string' ? payload.error.name : null,
+  };
+}
+
+function classifyTerminalFailure(params: {
+  runStatus: DashboardGetStoryBreakdownRunResult['runStatus'];
+  plannerConfig: StoryBreakdownPlannerConfig;
+  execution: PlannerNodeExecutionContext | null;
+}): DashboardStoryBreakdownRunError {
+  const diagnosticError = readDiagnosticError(params.execution?.diagnostics?.payload ?? null);
+  const sourceMessages = [
+    diagnosticError?.message ?? null,
+    params.execution?.failureArtifact?.content ?? null,
+  ].filter((value): value is string => typeof value === 'string' && value.length > 0);
+  const message = sourceMessages[0]
+    ?? (params.runStatus === 'cancelled'
+      ? 'Planner run was cancelled before producing a story breakdown result.'
+      : 'Planner run failed before producing a valid story breakdown result.');
+  const corpus = sourceMessages.join('\n').toLowerCase();
+  const details: Record<string, unknown> = {
+    kind: 'planner_run_failure',
+    nodeKey: params.plannerConfig.nodeKey,
+    runStatus: params.runStatus,
+    runNodeId: params.execution?.runNodeId ?? null,
+    attempt: params.execution?.attempt ?? null,
+    diagnosticId: params.execution?.diagnostics?.id ?? null,
+    failureArtifactId: params.execution?.failureArtifact?.id ?? null,
+    diagnosticClassification: diagnosticError?.classification ?? null,
+    diagnosticName: diagnosticError?.name ?? null,
+  };
+
+  if (
+    params.runStatus === 'cancelled'
+    || diagnosticError?.classification === 'aborted'
+    || /\b(cancelled|canceled|aborted)\b/.test(corpus)
+  ) {
+    return createLifecycleError('conflict', message, true, {
+      ...details,
+      kind: 'planner_run_cancelled',
+    });
+  }
+
+  if (/\b(authentication|auth|unauthorized|forbidden|not logged in|permission denied)\b/.test(corpus)) {
+    return createLifecycleError('auth', message, false, {
+      ...details,
+      kind: 'planner_auth_failure',
+    });
+  }
+
+  if (
+    corpus.includes('spawner_output_invalid')
+    || corpus.includes('story_breakdown_result')
+    || corpus.includes('schema validation')
+    || corpus.includes('must be valid json')
+    || corpus.includes('must be a json object')
+  ) {
+    return createLifecycleError('invalid_output', message, false, {
+      ...details,
+      kind: 'planner_invalid_output',
+    });
+  }
+
+  if (/\b(conflict|precondition failed|already exists|revision conflict)\b/.test(corpus)) {
+    return createLifecycleError('conflict', message, false, {
+      ...details,
+      kind: 'planner_conflict',
+    });
+  }
+
+  const isTransientFailure =
+    diagnosticError?.classification === 'timeout'
+    || /\b(timeout|timed out|rate limit|rate-limited|too many requests|quota|throttle|network|socket|econnreset|transport)\b/.test(
+      corpus,
+    );
+
+  return createLifecycleError('transient', message, isTransientFailure, {
+    ...details,
+    kind: isTransientFailure ? 'planner_transient_failure' : 'planner_runtime_failure',
+  });
+}
+
+function loadPlannerNodeExecutionContext(
+  db: AlphredDatabase,
+  workflowRunId: number,
+  plannerConfig: StoryBreakdownPlannerConfig,
+): PlannerNodeExecutionContext | null {
+  const plannerNode = db
+    .select({
+      id: runNodes.id,
+      attempt: runNodes.attempt,
+    })
+    .from(runNodes)
+    .where(and(eq(runNodes.workflowRunId, workflowRunId), eq(runNodes.nodeKey, plannerConfig.nodeKey)))
+    .orderBy(desc(runNodes.attempt), desc(runNodes.id))
+    .get();
+
+  if (!plannerNode) {
+    return null;
+  }
+
+  const reportArtifact = db
+    .select({
+      id: phaseArtifacts.id,
+      contentType: phaseArtifacts.contentType,
+      content: phaseArtifacts.content,
+    })
+    .from(phaseArtifacts)
+    .where(
+      and(
+        eq(phaseArtifacts.workflowRunId, workflowRunId),
+        eq(phaseArtifacts.runNodeId, plannerNode.id),
+        eq(phaseArtifacts.artifactType, 'report'),
+      ),
+    )
+    .orderBy(desc(phaseArtifacts.createdAt), desc(phaseArtifacts.id))
+    .get();
+
+  const failureArtifact = db
+    .select({
+      id: phaseArtifacts.id,
+      content: phaseArtifacts.content,
+    })
+    .from(phaseArtifacts)
+    .where(
+      and(
+        eq(phaseArtifacts.workflowRunId, workflowRunId),
+        eq(phaseArtifacts.runNodeId, plannerNode.id),
+        eq(phaseArtifacts.artifactType, 'log'),
+      ),
+    )
+    .orderBy(desc(phaseArtifacts.createdAt), desc(phaseArtifacts.id))
+    .get();
+
+  const diagnostics = db
+    .select({
+      id: runNodeDiagnostics.id,
+      diagnostics: runNodeDiagnostics.diagnostics,
+    })
+    .from(runNodeDiagnostics)
+    .where(and(eq(runNodeDiagnostics.workflowRunId, workflowRunId), eq(runNodeDiagnostics.runNodeId, plannerNode.id)))
+    .orderBy(desc(runNodeDiagnostics.attempt), desc(runNodeDiagnostics.id))
+    .get();
+
+  return {
+    runNodeId: plannerNode.id,
+    attempt: plannerNode.attempt,
+    reportArtifact: reportArtifact
+      ? {
+          id: reportArtifact.id,
+          contentType: reportArtifact.contentType,
+          content: reportArtifact.content,
+        }
+      : null,
+    failureArtifact: failureArtifact
+      ? {
+          id: failureArtifact.id,
+          content: failureArtifact.content,
+        }
+      : null,
+    diagnostics: diagnostics
+      ? {
+          id: diagnostics.id,
+          payload: diagnostics.diagnostics,
+        }
+      : null,
+  };
+}
+
+function createCompletedInvalidOutputResult(params: {
+  workflowRunId: number;
+  execution: PlannerNodeExecutionContext | null;
+  plannerConfig: StoryBreakdownPlannerConfig;
+  validationFailure: ValidationFailure;
+}): DashboardGetStoryBreakdownRunResult {
+  return {
+    workflowRunId: params.workflowRunId,
+    runStatus: 'completed',
+    result: null,
+    error: createLifecycleError('invalid_output', params.validationFailure.message, false, {
+      ...params.validationFailure.details,
+      nodeKey: params.plannerConfig.nodeKey,
+      runNodeId: params.execution?.runNodeId ?? null,
+      attempt: params.execution?.attempt ?? null,
+      reportArtifactId: params.execution?.reportArtifact?.id ?? null,
+      artifactContentType: params.execution?.reportArtifact?.contentType ?? null,
+    }),
+  };
+}
+
+export function createStoryBreakdownRunOperations(params: {
+  withDatabase: WithDatabase;
+  dependencies: StoryBreakdownRunOperationsDependencies;
+  environment: NodeJS.ProcessEnv;
+}): StoryBreakdownRunOperations {
+  const { withDatabase, dependencies, environment } = params;
+
+  return {
+    async launchStoryBreakdownRun(
+      request: DashboardLaunchStoryBreakdownRunRequest,
+    ): Promise<DashboardLaunchStoryBreakdownRunResult> {
+      const repositoryId = requirePositiveInteger(request.repositoryId, 'repositoryId');
+      const storyId = requirePositiveInteger(request.storyId, 'storyId');
+      const expectedRevision = requireNonNegativeInteger(request.expectedRevision, 'expectedRevision');
+      const plannerConfig = resolvePlannerConfig(environment);
+
+      const repositoryName = await withDatabase(db => {
+        const story = db
+          .select({
+            repositoryName: repositories.name,
+            type: workItems.type,
+            revision: workItems.revision,
+          })
+          .from(workItems)
+          .innerJoin(repositories, eq(workItems.repositoryId, repositories.id))
+          .where(and(eq(workItems.repositoryId, repositoryId), eq(workItems.id, storyId)))
+          .get();
+
+        if (!story) {
+          throw new DashboardIntegrationError('not_found', `Story id=${storyId} was not found.`, {
+            status: 404,
+          });
+        }
+
+        if (story.type !== 'story') {
+          throw new DashboardIntegrationError('invalid_request', `Work item id=${storyId} is not a story.`, {
+            status: 400,
+          });
+        }
+
+        if (story.revision !== expectedRevision) {
+          throw new DashboardIntegrationError(
+            'conflict',
+            `Work item id=${storyId} revision conflict (expected ${String(expectedRevision)}).`,
+            {
+              status: 409,
+              details: {
+                workItemId: storyId,
+                expectedRevision,
+                currentRevision: story.revision,
+              },
+            },
+          );
+        }
+
+        const activeRun = db
+          .select({
+            workflowRunId: workflowRuns.id,
+            runStatus: workflowRuns.status,
+          })
+          .from(workflowRunAssociations)
+          .innerJoin(workflowRuns, eq(workflowRunAssociations.workflowRunId, workflowRuns.id))
+          .innerJoin(workflowTrees, eq(workflowRuns.workflowTreeId, workflowTrees.id))
+          .where(
+            and(
+              eq(workflowRunAssociations.repositoryId, repositoryId),
+              eq(workflowRunAssociations.workItemId, storyId),
+              eq(workflowTrees.treeKey, plannerConfig.treeKey),
+              sql`${workflowRuns.status} in ('pending', 'running', 'paused')`,
+            ),
+          )
+          .orderBy(desc(workflowRuns.id))
+          .get();
+
+        if (activeRun) {
+          throw new DashboardIntegrationError('conflict', 'Story breakdown planner run is already active for this story.', {
+            status: 409,
+            details: {
+              workflowRunId: activeRun.workflowRunId,
+              runStatus: activeRun.runStatus,
+              treeKey: plannerConfig.treeKey,
+              nodeKey: plannerConfig.nodeKey,
+            },
+          });
+        }
+
+        return story.repositoryName;
+      });
+
+      const launch = await dependencies.launchWorkflowRun({
+        treeKey: plannerConfig.treeKey,
+        repositoryName,
+        workItemId: storyId,
+        executionMode: 'async',
+        executionScope: 'single_node',
+        nodeSelector: {
+          type: 'node_key',
+          nodeKey: plannerConfig.nodeKey,
+        },
+      });
+
+      return {
+        workflowRunId: launch.workflowRunId,
+        mode: 'async',
+        status: 'accepted',
+        runStatus: launch.runStatus,
+        result: null,
+        error: null,
+      };
+    },
+
+    getStoryBreakdownRun(paramsRaw: {
+      repositoryId: number;
+      storyId: number;
+      workflowRunId: number;
+    }): Promise<DashboardGetStoryBreakdownRunResult> {
+      const repositoryId = requirePositiveInteger(paramsRaw.repositoryId, 'repositoryId');
+      const storyId = requirePositiveInteger(paramsRaw.storyId, 'storyId');
+      const workflowRunId = requirePositiveInteger(paramsRaw.workflowRunId, 'workflowRunId');
+      const plannerConfig = resolvePlannerConfig(environment);
+
+      return withDatabase(db => {
+        const run = db
+          .select({
+            workflowRunId: workflowRuns.id,
+            runStatus: workflowRuns.status,
+            treeKey: workflowTrees.treeKey,
+            associationRepositoryId: workflowRunAssociations.repositoryId,
+            associationWorkItemId: workflowRunAssociations.workItemId,
+          })
+          .from(workflowRuns)
+          .innerJoin(workflowTrees, eq(workflowRuns.workflowTreeId, workflowTrees.id))
+          .leftJoin(workflowRunAssociations, eq(workflowRunAssociations.workflowRunId, workflowRuns.id))
+          .where(eq(workflowRuns.id, workflowRunId))
+          .get();
+
+        if (!run) {
+          throw new DashboardIntegrationError('not_found', `Workflow run id=${workflowRunId} was not found.`, {
+            status: 404,
+          });
+        }
+
+        if (
+          run.treeKey !== plannerConfig.treeKey
+          || run.associationRepositoryId !== repositoryId
+          || run.associationWorkItemId !== storyId
+        ) {
+          throw new DashboardIntegrationError(
+            'not_found',
+            `Story breakdown run id=${workflowRunId} was not found for story id=${storyId}.`,
+            {
+              status: 404,
+            },
+          );
+        }
+
+        const runStatus = run.runStatus as DashboardGetStoryBreakdownRunResult['runStatus'];
+        if (runStatus === 'pending' || runStatus === 'running' || runStatus === 'paused') {
+          return {
+            workflowRunId,
+            runStatus,
+            result: null,
+            error: null,
+          };
+        }
+
+        const execution = loadPlannerNodeExecutionContext(db, workflowRunId, plannerConfig);
+
+        if (runStatus === 'completed') {
+          if (!execution?.reportArtifact) {
+            return createCompletedInvalidOutputResult({
+              workflowRunId,
+              execution,
+              plannerConfig,
+              validationFailure: {
+                message: 'Planner report artifact is missing for the completed breakdown run.',
+                details: {
+                  reason: 'missing_report_artifact',
+                },
+              },
+            });
+          }
+
+          const validation = validatePlannerResult(execution.reportArtifact.content);
+          if (!validation.ok) {
+            return createCompletedInvalidOutputResult({
+              workflowRunId,
+              execution,
+              plannerConfig,
+              validationFailure: validation.error,
+            });
+          }
+
+          return {
+            workflowRunId,
+            runStatus,
+            result: validation.value,
+            error: null,
+          };
+        }
+
+        return {
+          workflowRunId,
+          runStatus,
+          result: null,
+          error: classifyTerminalFailure({
+            runStatus,
+            plannerConfig,
+            execution,
+          }),
+        };
+      });
+    },
+  };
+}

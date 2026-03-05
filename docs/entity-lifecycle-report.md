@@ -119,8 +119,11 @@ Hierarchy constraints:
   - UI uses this stream to update board state by applying `work_item_events`.
 - **Story breakdown**
   - `GET /api/dashboard/work-items/[id]/breakdown?repositoryId=...`
+  - `POST /api/dashboard/work-items/[id]/breakdown/runs`
+  - `GET /api/dashboard/work-items/[id]/breakdown/runs/[runId]?repositoryId=...`
   - `POST /api/dashboard/work-items/[id]/actions/propose-breakdown`
   - `POST /api/dashboard/work-items/[id]/actions/approve-breakdown`
+  - Async planner launch/result retrieval is contract-focused; orchestration consumption is tracked separately in `#289`.
 
 ### Natural end / terminal state
 - “Natural end” is currently modeled as status `Done` for all work item types.
@@ -297,4 +300,3 @@ The list below is intended to be copy-pastable into GitHub issues. Each item cal
 8. **Dashboard: Worktree cleanup option at launch + post-run**
    - UI: toggle “Auto-clean worktree on completion” in run launch form; add “Clean up worktree” on completed run detail.
    - API: reuse existing `cleanupWorktree` launch flag; add explicit cleanup action for existing worktrees.
-

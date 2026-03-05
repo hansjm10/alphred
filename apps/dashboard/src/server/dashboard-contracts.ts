@@ -690,6 +690,44 @@ export type DashboardGetStoryBreakdownProposalResult = {
   proposal: DashboardStoryBreakdownProposalSnapshot | null;
 };
 
+export type DashboardStoryBreakdownPlannerResult = {
+  schemaVersion: 1;
+  resultType: 'story_breakdown_result';
+  proposed: {
+    tags: string[] | null;
+    plannedFiles: string[] | null;
+    links: string[] | null;
+    tasks: DashboardWorkItemProposedBreakdownTask[];
+  };
+};
+
+export type DashboardLaunchStoryBreakdownRunRequest = {
+  repositoryId: number;
+  storyId: number;
+  expectedRevision: number;
+};
+
+export type DashboardStoryBreakdownRunError = {
+  code: 'auth' | 'transient' | 'invalid_output' | 'conflict';
+  message: string;
+  retryable: boolean;
+  details: Record<string, unknown> | null;
+};
+
+export type DashboardStoryBreakdownRunSnapshot = {
+  workflowRunId: number;
+  runStatus: DashboardRunSummary['status'];
+  result: DashboardStoryBreakdownPlannerResult | null;
+  error: DashboardStoryBreakdownRunError | null;
+};
+
+export type DashboardLaunchStoryBreakdownRunResult = DashboardStoryBreakdownRunSnapshot & {
+  mode: 'async';
+  status: 'accepted';
+};
+
+export type DashboardGetStoryBreakdownRunResult = DashboardStoryBreakdownRunSnapshot;
+
 export type DashboardProposeStoryBreakdownRequest = {
   repositoryId: number;
   storyId: number;

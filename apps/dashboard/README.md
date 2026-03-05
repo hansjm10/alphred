@@ -622,6 +622,57 @@ SSE transport events (`transport=sse`):
 - `heartbeat`: periodic keepalive containing the latest delivered board event id.
 - `board_error`: stream-channel failure details.
 
+### `POST /work-items/[workItemId]/breakdown/runs`
+
+Launches an async story-breakdown planner run for a specific story.
+
+Path parameters:
+- `workItemId`: positive integer story id.
+
+Request body:
+
+```json
+{
+  "repositoryId": 4,
+  "expectedRevision": 2
+}
+```
+
+Response `202`: `DashboardLaunchStoryBreakdownRunResult`.
+
+Behavior notes:
+- Launches the configured planner as a `single_node` async workflow run tied to the story.
+- The planner tree/node are configured via:
+  - `ALPHRED_DASHBOARD_STORY_BREAKDOWN_TREE_KEY`
+  - `ALPHRED_DASHBOARD_STORY_BREAKDOWN_NODE_KEY`
+- When unset, the defaults are `story-breakdown-planner` and `breakdown`.
+- If another planner run for the same story is still `pending`, `running`, or `paused`, the launch is rejected with `409 conflict`.
+
+Scope note:
+- This endpoint only establishes the planner contract + async lifecycle.
+- Consumption of planner results from `run-story-workflow` remains tracked separately in issue `#289`.
+
+### `GET /work-items/[workItemId]/breakdown/runs/[runId]?repositoryId=<id>`
+
+Gets the async story-breakdown planner state and validated result for a specific run.
+
+Path parameters:
+- `workItemId`: positive integer story id.
+- `runId`: positive integer workflow run id.
+
+Query parameters:
+- `repositoryId` (required): positive integer repository id.
+
+Response `200`: `DashboardGetStoryBreakdownRunResult`.
+
+Lifecycle semantics:
+- `pending`, `running`, `paused`: `result = null`, `error = null`
+- `completed`: `result` contains a validated `story_breakdown_result`, or `error.code = "invalid_output"` when the planner artifact fails contract validation
+- `failed` / `cancelled`: `error` is classified into one of `auth`, `transient`, `invalid_output`, or `conflict`
+
+Validation note:
+- The planner result contract is intentionally shaped for downstream breakdown proposal consumption and replaces heuristic free-form parsing on the consumer side.
+
 ### `POST /repositories/[repositoryId]/work-items/[workItemId]/actions/request-replan`
 
 Appends an audit event requesting replanning for a task based on planned-vs-actual file deltas.
