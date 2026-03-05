@@ -612,6 +612,52 @@ describe('RepositoryBoardPageContent', () => {
     expect(await screen.findByText('Saved updates for "Write tests".')).toBeInTheDocument();
   });
 
+  it('keeps the current task draft when an earlier task save resolves later', async () => {
+    const user = userEvent.setup();
+    const fetchMock = vi.mocked(global.fetch);
+
+    let resolveMove!: (response: Response) => void;
+    fetchMock.mockReturnValueOnce(
+      new Promise<Response>((resolve) => {
+        resolveMove = resolve;
+      }),
+    );
+
+    render(
+      <RepositoryBoardPageContent
+        repository={createRepository({ id: 1, name: 'demo-repo' })}
+        actor={{ actorType: 'human', actorLabel: 'octocat' }}
+        initialLatestEventId={0}
+        initialWorkItems={[
+          createWorkItem({ id: 10, status: 'Draft', revision: 0, title: 'Task A' }),
+          createWorkItem({ id: 11, status: 'Draft', revision: 0, title: 'Task B' }),
+        ]}
+      />,
+    );
+
+    await user.click(screen.getByRole('button', { name: /Task A/ }));
+    await user.selectOptions(screen.getByRole('combobox', { name: 'Status' }), 'Done');
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+
+    await user.click(screen.getByRole('button', { name: /Task B/ }));
+    await user.type(screen.getByRole('textbox', { name: 'Add planned file path' }), 'src/task-b.ts');
+    await user.click(screen.getByRole('button', { name: 'Add file' }));
+    expect(screen.getByRole('button', { name: 'Save' })).toBeEnabled();
+
+    await act(async () => {
+      resolveMove(
+        createJsonResponse({
+          workItem: createWorkItem({ id: 10, status: 'Done', revision: 1, title: 'Task A' }),
+        }),
+      );
+    });
+
+    expect(await screen.findByText('Saved updates for "Task A".')).toBeInTheDocument();
+    expect(screen.getByRole('dialog', { name: 'Task B' })).toBeInTheDocument();
+    expect(screen.getByRole('combobox', { name: 'Status' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Save' })).toBeEnabled();
+  });
+
   it('rebases dirty draft fields when board events update the selected task', async () => {
     const user = userEvent.setup();
     const fetchMock = vi.mocked(global.fetch);

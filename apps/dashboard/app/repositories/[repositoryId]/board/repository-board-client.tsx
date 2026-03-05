@@ -623,8 +623,11 @@ export function RepositoryBoardPageContent({
   const [taskDraft, setTaskDraft] = useState<TaskFlyoutDraft | null>(null);
 
   const lastEventIdRef = useRef<number>(initialLatestEventId);
+  const selectedWorkItemIdRef = useRef<number | null>(selectedWorkItemId);
   const taskDraftDirtyRef = useRef<boolean>(false);
   const taskDraftBaselineRef = useRef<TaskFlyoutDraft | null>(null);
+
+  selectedWorkItemIdRef.current = selectedWorkItemId;
 
   const tasksByStatus = useMemo(() => {
     const grouped: Record<TaskWorkItemStatus, DashboardWorkItemSnapshot[]> = {
@@ -892,6 +895,9 @@ export function RepositoryBoardPageContent({
 
   const resetTaskDraftFromSnapshot = (workItem: DashboardWorkItemSnapshot): void => {
     if (workItem.type !== 'task' || !isTaskStatus(workItem.status)) {
+      return;
+    }
+    if (selectedWorkItemIdRef.current !== workItem.id) {
       return;
     }
     const nextDraft = createTaskFlyoutDraft(workItem, workItem.status);
