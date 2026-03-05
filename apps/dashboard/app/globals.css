@@ -1355,6 +1355,13 @@ output {
   min-width: 0;
 }
 
+.stories-list__actions {
+  align-items: flex-end;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
 .stories-list__content a {
   overflow-wrap: anywhere;
   text-decoration: none;

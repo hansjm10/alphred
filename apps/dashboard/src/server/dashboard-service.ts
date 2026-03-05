@@ -150,8 +150,8 @@ export function createDashboardService(options: {
   });
 
   const taskRunAutolaunchEnabled = environment.ALPHRED_DASHBOARD_TASK_RUN_AUTOLAUNCH === '1';
-  const configuredTaskRunTreeKey = (environment.ALPHRED_DASHBOARD_TASK_RUN_TREE_KEY ?? 'design-implement-review').trim();
-  const taskRunTreeKey = configuredTaskRunTreeKey.length > 0 ? configuredTaskRunTreeKey : 'design-implement-review';
+  const configuredTaskRunTreeKey = (environment.ALPHRED_DASHBOARD_TASK_RUN_TREE_KEY ?? 'task-work-review-loop').trim();
+  const taskRunTreeKey = configuredTaskRunTreeKey.length > 0 ? configuredTaskRunTreeKey : 'task-work-review-loop';
   const configuredBreakdownTreeKey = (environment.ALPHRED_DASHBOARD_BREAKDOWN_TREE_KEY ?? 'story-breakdown').trim();
   const breakdownTreeKey = configuredBreakdownTreeKey.length > 0 ? configuredBreakdownTreeKey : 'story-breakdown';
   const breakdownPlannerActorLabel = (environment.ALPHRED_DASHBOARD_BREAKDOWN_PLANNER_LABEL ?? 'codex-breakdown-planner').trim();

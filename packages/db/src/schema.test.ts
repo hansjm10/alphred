@@ -705,6 +705,7 @@ describe('database schema hardening', () => {
     expect(trees).toEqual(
       expect.arrayContaining([
         { treeKey: 'persisted_tree', version: 1 },
+        { treeKey: 'task-work-review-loop', version: 1 },
         { treeKey: 'story-breakdown', version: 1 },
       ]),
     );
@@ -906,6 +907,82 @@ describe('database schema hardening', () => {
       templateKey: 'story-breakdown/v1/breakdown/prompt',
     });
     expect(promptTemplate?.content).toContain('Return only JSON');
+  });
+
+  it('seeds the task-work-review-loop workflow tree with work/review/approved routing', () => {
+    const db = createDatabase(':memory:');
+    migrateDatabase(db);
+
+    const tree = db
+      .select({
+        id: workflowTrees.id,
+        status: workflowTrees.status,
+        name: workflowTrees.name,
+      })
+      .from(workflowTrees)
+      .where(eq(workflowTrees.treeKey, 'task-work-review-loop'))
+      .get();
+
+    expect(tree).toMatchObject({
+      status: 'published',
+      name: 'Task Work Review Loop',
+    });
+
+    const nodeKeys = db
+      .select({
+        nodeKey: treeNodes.nodeKey,
+      })
+      .from(treeNodes)
+      .where(eq(treeNodes.workflowTreeId, tree?.id ?? -1))
+      .all()
+      .map(row => row.nodeKey);
+    expect(nodeKeys).toEqual(expect.arrayContaining(['work', 'review', 'approved']));
+
+    const workToReviewEdgeCount =
+      db.get<{ count: number }>(sql`SELECT COUNT(*) AS count
+        FROM tree_edges AS edges
+        INNER JOIN tree_nodes AS source_node
+          ON source_node.id = edges.source_node_id
+        INNER JOIN tree_nodes AS target_node
+          ON target_node.id = edges.target_node_id
+        WHERE edges.workflow_tree_id = ${tree?.id ?? -1}
+          AND source_node.node_key = 'work'
+          AND target_node.node_key = 'review'
+          AND edges.auto = 1
+          AND edges.priority = 100`)?.count ?? 0;
+    expect(workToReviewEdgeCount).toBe(1);
+
+    const reviewToWorkGuardedEdgeCount =
+      db.get<{ count: number }>(sql`SELECT COUNT(*) AS count
+        FROM tree_edges AS edges
+        INNER JOIN tree_nodes AS source_node
+          ON source_node.id = edges.source_node_id
+        INNER JOIN tree_nodes AS target_node
+          ON target_node.id = edges.target_node_id
+        INNER JOIN guard_definitions AS guards
+          ON guards.id = edges.guard_definition_id
+        WHERE edges.workflow_tree_id = ${tree?.id ?? -1}
+          AND source_node.node_key = 'review'
+          AND target_node.node_key = 'work'
+          AND edges.auto = 0
+          AND guards.guard_key = 'task-work-review-loop/v1/review->work/changes-requested'`)?.count ?? 0;
+    expect(reviewToWorkGuardedEdgeCount).toBe(1);
+
+    const reviewToApprovedGuardedEdgeCount =
+      db.get<{ count: number }>(sql`SELECT COUNT(*) AS count
+        FROM tree_edges AS edges
+        INNER JOIN tree_nodes AS source_node
+          ON source_node.id = edges.source_node_id
+        INNER JOIN tree_nodes AS target_node
+          ON target_node.id = edges.target_node_id
+        INNER JOIN guard_definitions AS guards
+          ON guards.id = edges.guard_definition_id
+        WHERE edges.workflow_tree_id = ${tree?.id ?? -1}
+          AND source_node.node_key = 'review'
+          AND target_node.node_key = 'approved'
+          AND edges.auto = 0
+          AND guards.guard_key = 'task-work-review-loop/v1/review->approved/approved'`)?.count ?? 0;
+    expect(reviewToApprovedGuardedEdgeCount).toBe(1);
   });
 
   it('refreshes run-node transition trigger definitions on migration reruns', () => {

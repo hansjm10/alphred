@@ -81,6 +81,8 @@ function templatePrompt(template: DashboardCreateWorkflowRequest['template'], no
         'You are the review phase. Audit changes for correctness, risks, and edge cases.',
         seededReviewRoutingContract,
       ].join('\n\n');
+    case 'approved':
+      return 'You are the approval phase. Summarize what is complete and note any follow-up items.';
     default:
       return 'Describe what to do for this workflow phase.';
   }
@@ -267,6 +269,7 @@ export function createWorkflowDraftOperations(params: {
               { nodeKey: 'design', displayName: 'Design', position: { x: 0, y: 0 }, sequenceIndex: 10 },
               { nodeKey: 'implement', displayName: 'Implement', position: { x: 320, y: 0 }, sequenceIndex: 20 },
               { nodeKey: 'review', displayName: 'Review', position: { x: 640, y: 0 }, sequenceIndex: 30 },
+              { nodeKey: 'approved', displayName: 'Approved', position: { x: 960, y: 0 }, sequenceIndex: 40 },
             ];
 
             const promptTemplateIdByNodeKey = new Map<string, number>();
@@ -312,7 +315,8 @@ export function createWorkflowDraftOperations(params: {
             const designId = nodeIdByKey.get('design');
             const implementId = nodeIdByKey.get('implement');
             const reviewId = nodeIdByKey.get('review');
-            if (!designId || !implementId || !reviewId) {
+            const approvedId = nodeIdByKey.get('approved');
+            if (!designId || !implementId || !reviewId || !approvedId) {
               throw new DashboardIntegrationError('internal_error', 'Failed to seed template node IDs.', { status: 500 });
             }
 
@@ -323,6 +327,16 @@ export function createWorkflowDraftOperations(params: {
                 version: 1,
                 expression: { field: 'decision', operator: '==', value: 'changes_requested' },
                 description: 'Loop back when changes are requested.',
+              })
+              .returning({ id: guardDefinitions.id })
+              .get();
+            const approveGuard = tx
+              .insert(guardDefinitions)
+              .values({
+                guardKey: `${treeKey}/v1/review->approved/priority-20`,
+                version: 1,
+                expression: { field: 'decision', operator: '==', value: 'approved' },
+                description: 'Route to approved when review passes.',
               })
               .returning({ id: guardDefinitions.id })
               .get();
@@ -346,6 +360,17 @@ export function createWorkflowDraftOperations(params: {
                 priority: 10,
                 auto: 0,
                 guardDefinitionId: reviseGuard.id,
+              })
+              .run();
+
+            tx.insert(treeEdges)
+              .values({
+                workflowTreeId: tree.id,
+                sourceNodeId: reviewId,
+                targetNodeId: approvedId,
+                priority: 20,
+                auto: 0,
+                guardDefinitionId: approveGuard.id,
               })
               .run();
 

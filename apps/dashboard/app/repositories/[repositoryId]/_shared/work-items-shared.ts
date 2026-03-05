@@ -528,6 +528,85 @@ export async function createWorkItem(params: {
   return { ok: true, workItem: payload.workItem as DashboardWorkItemSnapshot };
 }
 
+type StoryBreakdownMutationResult =
+  | { ok: true; story: DashboardWorkItemSnapshot; tasks: DashboardWorkItemSnapshot[] }
+  | { ok: false; status: number; message: string };
+
+export async function generateStoryBreakdownDraft(params: {
+  repositoryId: number;
+  storyId: number;
+  expectedRevision: number;
+  errorPrefix?: string;
+}): Promise<StoryBreakdownMutationResult> {
+  const errorPrefix = params.errorPrefix ?? 'Unable to generate breakdown';
+  const response = await fetch(`/api/dashboard/work-items/${params.storyId}/actions/generate-breakdown`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      repositoryId: params.repositoryId,
+      expectedRevision: params.expectedRevision,
+    }),
+  });
+  const payload = parseJsonSafely(await response.text());
+
+  if (!response.ok) {
+    return {
+      ok: false,
+      status: response.status,
+      message: resolveApiErrorMessage(response.status, payload, errorPrefix),
+    };
+  }
+
+  if (!isRecord(payload) || !isRecord(payload.story) || !Array.isArray(payload.tasks)) {
+    return { ok: false, status: 500, message: `${errorPrefix} (malformed response).` };
+  }
+
+  return {
+    ok: true,
+    story: payload.story as DashboardWorkItemSnapshot,
+    tasks: payload.tasks as DashboardWorkItemSnapshot[],
+  };
+}
+
+export async function approveStoryBreakdown(params: {
+  repositoryId: number;
+  storyId: number;
+  expectedRevision: number;
+  actor: WorkItemActor;
+  errorPrefix?: string;
+}): Promise<StoryBreakdownMutationResult> {
+  const errorPrefix = params.errorPrefix ?? 'Unable to approve breakdown';
+  const response = await fetch(`/api/dashboard/work-items/${params.storyId}/actions/approve-breakdown`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      repositoryId: params.repositoryId,
+      expectedRevision: params.expectedRevision,
+      actorType: params.actor.actorType,
+      actorLabel: params.actor.actorLabel,
+    }),
+  });
+  const payload = parseJsonSafely(await response.text());
+
+  if (!response.ok) {
+    return {
+      ok: false,
+      status: response.status,
+      message: resolveApiErrorMessage(response.status, payload, errorPrefix),
+    };
+  }
+
+  if (!isRecord(payload) || !isRecord(payload.story) || !Array.isArray(payload.tasks)) {
+    return { ok: false, status: 500, message: `${errorPrefix} (malformed response).` };
+  }
+
+  return {
+    ok: true,
+    story: payload.story as DashboardWorkItemSnapshot,
+    tasks: payload.tasks as DashboardWorkItemSnapshot[],
+  };
+}
+
 export async function moveWorkItemStatus<TStatus extends string>(params: {
   repositoryId: number;
   workItemId: number;

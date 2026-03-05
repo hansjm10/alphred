@@ -1113,8 +1113,7 @@ describe('createDashboardService', () => {
     expect(repositoriesResponse[0]?.name).toBe('demo-repo');
 
     const workflowTreesResponse = await service.listWorkflowTrees();
-    expect(workflowTreesResponse).toHaveLength(1);
-    expect(workflowTreesResponse[0]?.treeKey).toBe('demo-tree');
+    expect(workflowTreesResponse.map(tree => tree.treeKey)).toEqual(expect.arrayContaining(['demo-tree']));
 
     const runsResponse = await service.listWorkflowRuns();
     expect(runsResponse).toHaveLength(1);
@@ -1720,7 +1719,9 @@ describe('createDashboardService', () => {
     const draft = await service.getOrCreateWorkflowDraft('demo-tree-copy');
     expect(draft.version).toBe(1);
     expect(draft.treeKey).toBe('demo-tree-copy');
-    expect(draft.nodes.map(node => node.nodeKey)).toEqual(expect.arrayContaining(['design', 'implement', 'review']));
+    expect(draft.nodes.map(node => node.nodeKey)).toEqual(
+      expect.arrayContaining(['design', 'implement', 'review', 'approved']),
+    );
     expect(draft.edges.length).toBeGreaterThan(0);
   });
 
@@ -1840,6 +1841,12 @@ describe('createDashboardService', () => {
           targetNodeKey: 'implement',
           auto: false,
           guardExpression: { field: 'decision', operator: '==', value: 'changes_requested' },
+        }),
+        expect.objectContaining({
+          sourceNodeKey: 'review',
+          targetNodeKey: 'approved',
+          auto: false,
+          guardExpression: { field: 'decision', operator: '==', value: 'approved' },
         }),
       ]),
     );

@@ -11,10 +11,12 @@ import type {
 import { ActionButton, ButtonLink } from '../../../../ui/primitives';
 import type { BoardConnectionState, WorkItemActor } from '../../_shared/work-items-shared';
 import {
+  approveStoryBreakdown,
   applyBoardEventToWorkItems,
   buildParentChain,
   createWorkItem,
   fetchWorkItem,
+  generateStoryBreakdownDraft,
   isRecord,
   moveWorkItemStatus,
   parseBoardEventSnapshot,
@@ -53,85 +55,6 @@ async function fetchBreakdownProposal(params: { repositoryId: number; storyId: n
   }
 
   return (payload.proposal ?? null) as DashboardStoryBreakdownProposalSnapshot | null;
-}
-
-async function approveStoryBreakdown(params: {
-  repositoryId: number;
-  storyId: number;
-  expectedRevision: number;
-  actor: WorkItemActor;
-}): Promise<
-  | { ok: true; story: DashboardWorkItemSnapshot; tasks: DashboardWorkItemSnapshot[] }
-  | { ok: false; status: number; message: string }
-> {
-  const response = await fetch(`/api/dashboard/work-items/${params.storyId}/actions/approve-breakdown`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({
-      repositoryId: params.repositoryId,
-      expectedRevision: params.expectedRevision,
-      actorType: params.actor.actorType,
-      actorLabel: params.actor.actorLabel,
-    }),
-  });
-
-  const payload = parseJsonSafely(await response.text());
-
-  if (!response.ok) {
-    return {
-      ok: false,
-      status: response.status,
-      message: resolveApiErrorMessage(response.status, payload, 'Unable to approve breakdown'),
-    };
-  }
-
-  if (!isRecord(payload) || !isRecord(payload.story) || !Array.isArray(payload.tasks)) {
-    return { ok: false, status: 500, message: 'Unable to approve breakdown (malformed response).' };
-  }
-
-  return {
-    ok: true,
-    story: payload.story as DashboardWorkItemSnapshot,
-    tasks: payload.tasks as DashboardWorkItemSnapshot[],
-  };
-}
-
-async function generateStoryBreakdownDraft(params: {
-  repositoryId: number;
-  storyId: number;
-  expectedRevision: number;
-}): Promise<
-  | { ok: true; story: DashboardWorkItemSnapshot; tasks: DashboardWorkItemSnapshot[] }
-  | { ok: false; status: number; message: string }
-> {
-  const response = await fetch(`/api/dashboard/work-items/${params.storyId}/actions/generate-breakdown`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({
-      repositoryId: params.repositoryId,
-      expectedRevision: params.expectedRevision,
-    }),
-  });
-
-  const payload = parseJsonSafely(await response.text());
-
-  if (!response.ok) {
-    return {
-      ok: false,
-      status: response.status,
-      message: resolveApiErrorMessage(response.status, payload, 'Unable to generate breakdown'),
-    };
-  }
-
-  if (!isRecord(payload) || !isRecord(payload.story) || !Array.isArray(payload.tasks)) {
-    return { ok: false, status: 500, message: 'Unable to generate breakdown (malformed response).' };
-  }
-
-  return {
-    ok: true,
-    story: payload.story as DashboardWorkItemSnapshot,
-    tasks: payload.tasks as DashboardWorkItemSnapshot[],
-  };
 }
 
 function renderStringList(values: string[] | null): ReactNode {
