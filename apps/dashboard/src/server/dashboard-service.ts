@@ -8,10 +8,16 @@ import {
 import {
   and,
   createDatabase,
+  desc,
   eq,
   migrateDatabase,
+  phaseArtifacts,
   repositories as repositoriesTable,
+  runNodeDiagnostics,
+  workItemWorkflowRuns,
   workItems as workItemsTable,
+  workflowRunAssociations,
+  WorkflowTreeNotFoundError,
   type AlphredDatabase,
 } from '@alphred/db';
 import {
@@ -146,9 +152,9 @@ export function createDashboardService(options: {
   const taskRunAutolaunchEnabled = environment.ALPHRED_DASHBOARD_TASK_RUN_AUTOLAUNCH === '1';
   const configuredTaskRunTreeKey = (environment.ALPHRED_DASHBOARD_TASK_RUN_TREE_KEY ?? 'design-implement-review').trim();
   const taskRunTreeKey = configuredTaskRunTreeKey.length > 0 ? configuredTaskRunTreeKey : 'design-implement-review';
+  const configuredBreakdownTreeKey = (environment.ALPHRED_DASHBOARD_BREAKDOWN_TREE_KEY ?? 'story-breakdown').trim();
+  const breakdownTreeKey = configuredBreakdownTreeKey.length > 0 ? configuredBreakdownTreeKey : 'story-breakdown';
   const breakdownPlannerActorLabel = (environment.ALPHRED_DASHBOARD_BREAKDOWN_PLANNER_LABEL ?? 'codex-breakdown-planner').trim();
-  const breakdownPlannerModelRaw = (environment.ALPHRED_DASHBOARD_BREAKDOWN_MODEL ?? '').trim();
-  const breakdownPlannerModel = breakdownPlannerModelRaw.length > 0 ? breakdownPlannerModelRaw : undefined;
   const breakdownPlannerTimeoutMsRaw = Number.parseInt(
     environment.ALPHRED_DASHBOARD_BREAKDOWN_TIMEOUT_MS ?? '',
     10,
@@ -167,6 +173,23 @@ export function createDashboardService(options: {
 
   function isRecord(value: unknown): value is Record<string, unknown> {
     return typeof value === 'object' && value !== null && !Array.isArray(value);
+  }
+
+  function toJsonRecord(value: unknown): Record<string, unknown> | null {
+    if (isRecord(value)) {
+      return value;
+    }
+
+    if (typeof value !== 'string') {
+      return null;
+    }
+
+    try {
+      const parsed = JSON.parse(value) as unknown;
+      return isRecord(parsed) ? parsed : null;
+    } catch {
+      return null;
+    }
   }
 
   function toTrimmedString(value: unknown): string | null {
@@ -417,6 +440,26 @@ export function createDashboardService(options: {
 
   function mapCodexBreakdownError(error: unknown): DashboardIntegrationError {
     if (error instanceof DashboardIntegrationError) {
+      if (error.code === 'internal_error') {
+        const causeDetail = typeof error.details?.cause === 'string'
+          ? error.details.cause
+          : null;
+        const errorMessageDetail = typeof error.details?.errorMessage === 'string'
+          ? error.details.errorMessage
+          : null;
+        const candidateMessage = errorMessageDetail ?? causeDetail ?? error.message;
+        const classified = classifyBreakdownFailureFromMessage(candidateMessage);
+        if (classified.code === 'auth_required' || classified.status === 503) {
+          return new DashboardIntegrationError(classified.code, classified.message, {
+            status: classified.status,
+            details: {
+              ...error.details,
+              cause: candidateMessage.slice(0, 1_000),
+            },
+            cause: error,
+          });
+        }
+      }
       return error;
     }
 
@@ -462,6 +505,58 @@ export function createDashboardService(options: {
     }
 
     return toDashboardIntegrationError(error, 'Codex breakdown generation failed.');
+  }
+
+  function classifyBreakdownFailureFromMessage(errorMessage: string): {
+    code: DashboardIntegrationError['code'];
+    status: number;
+    message: string;
+  } {
+    const normalized = errorMessage.toLowerCase();
+    if (
+      normalized.includes('not logged in')
+      || normalized.includes('authentication')
+      || normalized.includes('unauthorized')
+      || normalized.includes('forbidden')
+      || normalized.includes('invalid api key')
+      || normalized.includes('api key')
+      || normalized.includes('permission denied')
+      || normalized.includes('missing auth')
+      || /\bmissing\b[\w\s_-]*\bauth\b/.test(normalized)
+    ) {
+      return {
+        code: 'auth_required',
+        status: 401,
+        message: 'Codex authentication is required to generate a breakdown draft.',
+      };
+    }
+
+    if (
+      normalized.includes('timeout')
+      || normalized.includes('timed out')
+      || normalized.includes('rate limit')
+      || normalized.includes('too many requests')
+      || normalized.includes('quota')
+      || normalized.includes('throttl')
+      || normalized.includes('transport')
+      || normalized.includes('network')
+      || normalized.includes('connection')
+      || normalized.includes('econn')
+      || normalized.includes('enotfound')
+      || normalized.includes('eai_again')
+    ) {
+      return {
+        code: 'internal_error',
+        status: 503,
+        message: 'Codex is temporarily unavailable for breakdown planning. Retry in a moment.',
+      };
+    }
+
+    return {
+      code: 'internal_error',
+      status: 500,
+      message: 'Codex breakdown generation failed.',
+    };
   }
 
   async function resolveRepositoryNameById(repositoryId: number): Promise<string> {
@@ -602,42 +697,164 @@ export function createDashboardService(options: {
     }
 
     const repositoryContext = await resolveRepositoryBreakdownContext(request.repositoryId);
+    const breakdownContext = [
+      `repository_name=${repositoryContext.name}`,
+      `repository_id=${String(request.repositoryId)}`,
+      `story_id=${String(request.storyId)}`,
+      `story_breakdown_request:\n${buildStoryBreakdownPrompt(story)}`,
+    ];
 
-    let rawCodexResult = '';
+    let breakdownRunResult: {
+      workflowRunId: number;
+      runStatus: string;
+      finalStepOutcome: string;
+      report: string;
+      failureMessage: string | null;
+    };
     try {
-      const provider = dependencies.resolveProvider('codex');
-      const prompt = buildStoryBreakdownPrompt(story);
-      let lastAssistantMessage = '';
-      for await (const event of provider.run(prompt, {
-        workingDirectory: repositoryContext.localPath,
-        timeout: breakdownPlannerTimeoutMs,
-        model: breakdownPlannerModel,
-        systemPrompt: breakdownPlannerSystemPrompt,
-        context: [
-          `repository_name=${repositoryContext.name}`,
-          `repository_id=${String(request.repositoryId)}`,
-          `story_id=${String(request.storyId)}`,
-        ],
-      })) {
-        if (event.type === 'assistant' && event.content.trim().length > 0) {
-          lastAssistantMessage = event.content;
+      breakdownRunResult = await withDatabase(async db => {
+        const planner = dependencies.createSqlWorkflowPlanner(db);
+        let materializedRun: ReturnType<typeof planner.materializeRun>;
+        try {
+          materializedRun = planner.materializeRun({ treeKey: breakdownTreeKey });
+        } catch (error) {
+          if (error instanceof WorkflowTreeNotFoundError) {
+            throw new DashboardIntegrationError(
+              'conflict',
+              `Breakdown workflow tree "${breakdownTreeKey}" is not available. Run migrations to seed it.`,
+              {
+                status: 409,
+                details: {
+                  treeKey: breakdownTreeKey,
+                },
+                cause: error,
+              },
+            );
+          }
+          throw error;
         }
-        if (event.type === 'result' && event.content.trim().length > 0) {
-          rawCodexResult = event.content;
-        }
-      }
 
-      if (rawCodexResult.trim().length === 0) {
-        rawCodexResult = lastAssistantMessage;
-      }
+        const workflowRunId = materializedRun.run.id;
+        const linkedAt = new Date().toISOString();
+        db.insert(workflowRunAssociations)
+          .values({
+            workflowRunId,
+            repositoryId: request.repositoryId,
+            workItemId: request.storyId,
+            issueId: null,
+          })
+          .onConflictDoNothing()
+          .run();
+        db.insert(workItemWorkflowRuns)
+          .values({
+            repositoryId: request.repositoryId,
+            workItemId: request.storyId,
+            workflowRunId,
+            linkedAt,
+          })
+          .onConflictDoNothing()
+          .run();
+
+        const executor = dependencies.createSqlWorkflowExecutor(db, {
+          resolveProvider: dependencies.resolveProvider,
+        });
+        const execution = await executor.executeRun({
+          workflowRunId,
+          options: {
+            workingDirectory: repositoryContext.localPath,
+            timeout: breakdownPlannerTimeoutMs,
+            systemPrompt: breakdownPlannerSystemPrompt,
+            context: breakdownContext,
+          },
+        });
+
+        const reportArtifact = db
+          .select({
+            content: phaseArtifacts.content,
+          })
+          .from(phaseArtifacts)
+          .where(
+            and(
+              eq(phaseArtifacts.workflowRunId, workflowRunId),
+              eq(phaseArtifacts.artifactType, 'report'),
+            ),
+          )
+          .orderBy(desc(phaseArtifacts.createdAt), desc(phaseArtifacts.id))
+          .limit(1)
+          .get();
+        const failureArtifact = db
+          .select({
+            content: phaseArtifacts.content,
+          })
+          .from(phaseArtifacts)
+          .where(
+            and(
+              eq(phaseArtifacts.workflowRunId, workflowRunId),
+              eq(phaseArtifacts.artifactType, 'log'),
+            ),
+          )
+          .orderBy(desc(phaseArtifacts.createdAt), desc(phaseArtifacts.id))
+          .limit(1)
+          .get();
+        const failureDiagnostics = db
+          .select({
+            diagnostics: runNodeDiagnostics.diagnostics,
+          })
+          .from(runNodeDiagnostics)
+          .where(eq(runNodeDiagnostics.workflowRunId, workflowRunId))
+          .orderBy(desc(runNodeDiagnostics.createdAt), desc(runNodeDiagnostics.id))
+          .limit(1)
+          .get();
+        const diagnosticsPayload = toJsonRecord(failureDiagnostics?.diagnostics);
+        const diagnosticsError = diagnosticsPayload && isRecord(diagnosticsPayload.error)
+          ? diagnosticsPayload.error
+          : null;
+        const diagnosticsErrorMessage = diagnosticsError && typeof diagnosticsError.message === 'string'
+          ? diagnosticsError.message
+          : null;
+
+        return {
+          workflowRunId,
+          runStatus: execution.finalStep.runStatus,
+          finalStepOutcome: execution.finalStep.outcome,
+          report: reportArtifact?.content ?? '',
+          failureMessage: failureArtifact?.content ?? diagnosticsErrorMessage,
+        };
+      });
     } catch (error) {
       throw mapCodexBreakdownError(error);
     }
 
-    if (rawCodexResult.trim().length === 0) {
-      throw new DashboardIntegrationError('conflict', 'Codex returned an empty breakdown payload.', {
-        status: 409,
+    if (breakdownRunResult.runStatus !== 'completed') {
+      const failureMessage = (breakdownRunResult.failureMessage ?? '').trim();
+      const normalizedFailureMessage = failureMessage.length > 0
+        ? failureMessage
+        : `Breakdown workflow run ${String(breakdownRunResult.workflowRunId)} ended with status "${breakdownRunResult.runStatus}".`;
+      const classified = classifyBreakdownFailureFromMessage(normalizedFailureMessage);
+      throw new DashboardIntegrationError(classified.code, classified.message, {
+        status: classified.status,
+        details: {
+          workflowRunId: breakdownRunResult.workflowRunId,
+          runStatus: breakdownRunResult.runStatus,
+          finalStepOutcome: breakdownRunResult.finalStepOutcome,
+          errorMessage: normalizedFailureMessage.slice(0, 1_000),
+        },
       });
+    }
+
+    const rawCodexResult = breakdownRunResult.report.trim();
+    if (rawCodexResult.length === 0) {
+      throw new DashboardIntegrationError(
+        'internal_error',
+        `Breakdown workflow run ${String(breakdownRunResult.workflowRunId)} completed without a report artifact.`,
+        {
+          status: 500,
+          details: {
+            workflowRunId: breakdownRunResult.workflowRunId,
+            runStatus: breakdownRunResult.runStatus,
+          },
+        },
+      );
     }
 
     const proposed = parseProposedBreakdownFromCodexResult(rawCodexResult);

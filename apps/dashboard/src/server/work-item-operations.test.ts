@@ -18,6 +18,7 @@ import {
   workItemWorkflowRuns,
   workItems,
   runWorktrees,
+  workflowRunAssociations,
   workflowRuns,
   workflowTrees,
   treeNodes,
@@ -2151,6 +2152,7 @@ describe('work-item-operations', () => {
   it('generates a story breakdown draft with Codex and persists proposed child tasks', async () => {
     let capturedPrompt = '';
     let capturedWorkingDirectory = '';
+    let capturedContext: string[] = [];
 
     const { db, service } = createHarness({
       dependencies: {
@@ -2160,6 +2162,7 @@ describe('work-item-operations', () => {
             async *run(prompt, options) {
               capturedPrompt = prompt;
               capturedWorkingDirectory = options.workingDirectory;
+              capturedContext = options.context ?? [];
               yield {
                 type: 'result',
                 content: JSON.stringify({
@@ -2214,8 +2217,10 @@ describe('work-item-operations', () => {
       expectedRevision: 0,
     });
 
-    expect(capturedPrompt).toContain('Create a practical engineering breakdown for this story.');
+    expect(capturedPrompt).toContain('Create a practical engineering breakdown for a story.');
     expect(capturedWorkingDirectory).toBe('/tmp/repos/repo');
+    expect(capturedContext).toContain(`story_id=${String(storyId)}`);
+    expect(capturedContext.some(entry => entry.startsWith('story_breakdown_request:\n'))).toBe(true);
     expect(generated.story.status).toBe('BreakdownProposed');
     expect(generated.tasks).toHaveLength(2);
     expect(generated.tasks[0]?.title).toBe('Implement route');
@@ -2240,6 +2245,21 @@ describe('work-item-operations', () => {
       actorType: 'agent',
       actorLabel: 'codex-breakdown-planner',
     });
+
+    const associatedRun = db
+      .select({
+        workflowRunId: workflowRunAssociations.workflowRunId,
+      })
+      .from(workflowRunAssociations)
+      .where(
+        and(
+          eq(workflowRunAssociations.repositoryId, repository.id),
+          eq(workflowRunAssociations.workItemId, storyId),
+        ),
+      )
+      .get();
+
+    expect(associatedRun).toBeDefined();
   });
 
   it('returns auth_required when codex is not authenticated for breakdown generation', async () => {

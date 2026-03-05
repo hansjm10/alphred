@@ -13,6 +13,36 @@ import {
 
 type MigrationExecutor = Pick<AlphredDatabase, 'get' | 'run'>;
 
+const STORY_BREAKDOWN_TREE_KEY = 'story-breakdown';
+const STORY_BREAKDOWN_PROMPT_TEMPLATE_KEY = `${STORY_BREAKDOWN_TREE_KEY}/v1/breakdown/prompt`;
+const STORY_BREAKDOWN_PROMPT_CONTENT = [
+  'Create a practical engineering breakdown for a story.',
+  'Return only JSON (no markdown fences, no prose) with this shape:',
+  '{',
+  '  "tags": string[] (optional),',
+  '  "plannedFiles": string[] (optional, repo-relative paths),',
+  '  "links": string[] (optional),',
+  '  "tasks": [',
+  '    {',
+  '      "title": string,',
+  '      "description": string (optional),',
+  '      "tags": string[] (optional),',
+  '      "plannedFiles": string[] (optional, repo-relative paths),',
+  '      "assignees": string[] (optional),',
+  '      "priority": number (optional),',
+  '      "estimate": number (optional),',
+  '      "links": string[] (optional)',
+  '    }',
+  '  ]',
+  '}',
+  'Rules:',
+  '- Provide 2 to 6 tasks.',
+  '- Tasks should be implementation-ready and non-overlapping.',
+  '- Use concise, specific titles.',
+  '- plannedFiles must be repository-relative paths.',
+  '- Use context entry prefixed with "story_breakdown_request:" for story-specific inputs.',
+].join('\n');
+
 function addColumnIfMissing(
   tx: MigrationExecutor,
   params: {
@@ -1390,5 +1420,93 @@ export function migrateDatabase(db: AlphredDatabase): void {
     ON run_node_stream_events(run_node_id, created_at)`);
   tx.run(sql`CREATE INDEX IF NOT EXISTS run_node_stream_events_created_at_idx
     ON run_node_stream_events(created_at)`);
+
+  tx.run(sql`INSERT INTO workflow_trees (
+      tree_key,
+      version,
+      status,
+      name,
+      description,
+      version_notes,
+      draft_revision
+    )
+    SELECT
+      ${STORY_BREAKDOWN_TREE_KEY},
+      1,
+      'published',
+      'Story Breakdown Planner',
+      'Generates story breakdown drafts through a dedicated Codex workflow run.',
+      'Seeded default workflow for story-to-task breakdown generation.',
+      0
+    WHERE NOT EXISTS (
+      SELECT 1
+      FROM workflow_trees
+      WHERE tree_key = ${STORY_BREAKDOWN_TREE_KEY}
+        AND version = 1
+    )`);
+
+  tx.run(sql`INSERT INTO prompt_templates (
+      template_key,
+      version,
+      content,
+      content_type
+    )
+    SELECT
+      ${STORY_BREAKDOWN_PROMPT_TEMPLATE_KEY},
+      1,
+      ${STORY_BREAKDOWN_PROMPT_CONTENT},
+      'markdown'
+    WHERE NOT EXISTS (
+      SELECT 1
+      FROM prompt_templates
+      WHERE template_key = ${STORY_BREAKDOWN_PROMPT_TEMPLATE_KEY}
+        AND version = 1
+    )`);
+
+  tx.run(sql`INSERT INTO tree_nodes (
+      workflow_tree_id,
+      node_key,
+      display_name,
+      node_type,
+      node_role,
+      provider,
+      model,
+      execution_permissions,
+      error_handler_config,
+      prompt_template_id,
+      max_children,
+      max_retries,
+      sequence_index,
+      position_x,
+      position_y
+    )
+    SELECT
+      trees.id,
+      'breakdown',
+      'Breakdown',
+      'agent',
+      'standard',
+      'codex',
+      'gpt-5-codex',
+      NULL,
+      NULL,
+      prompts.id,
+      12,
+      0,
+      10,
+      0,
+      0
+    FROM workflow_trees AS trees
+    INNER JOIN prompt_templates AS prompts
+      ON prompts.template_key = ${STORY_BREAKDOWN_PROMPT_TEMPLATE_KEY}
+      AND prompts.version = 1
+    WHERE trees.tree_key = ${STORY_BREAKDOWN_TREE_KEY}
+      AND trees.version = 1
+      AND NOT EXISTS (
+        SELECT 1
+        FROM tree_nodes
+        WHERE workflow_tree_id = trees.id
+          AND node_key = 'breakdown'
+      )`);
   });
 }

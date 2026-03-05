@@ -695,8 +695,19 @@ describe('database schema hardening', () => {
 
     expect(() => migrateDatabase(db)).not.toThrow();
 
-    const trees = db.select({ id: workflowTrees.id }).from(workflowTrees).all();
-    expect(trees).toHaveLength(1);
+    const trees = db
+      .select({
+        treeKey: workflowTrees.treeKey,
+        version: workflowTrees.version,
+      })
+      .from(workflowTrees)
+      .all();
+    expect(trees).toEqual(
+      expect.arrayContaining([
+        { treeKey: 'persisted_tree', version: 1 },
+        { treeKey: 'story-breakdown', version: 1 },
+      ]),
+    );
   });
 
   it('drops legacy work_items tables that are missing the type/status checks', () => {
@@ -843,6 +854,58 @@ describe('database schema hardening', () => {
         },
       ]),
     );
+  });
+
+  it('seeds the story-breakdown workflow tree with a codex breakdown node', () => {
+    const db = createDatabase(':memory:');
+    migrateDatabase(db);
+
+    const tree = db
+      .select({
+        id: workflowTrees.id,
+        status: workflowTrees.status,
+        name: workflowTrees.name,
+      })
+      .from(workflowTrees)
+      .where(eq(workflowTrees.treeKey, 'story-breakdown'))
+      .get();
+
+    expect(tree).toMatchObject({
+      status: 'published',
+      name: 'Story Breakdown Planner',
+    });
+
+    const breakdownNode = db
+      .select({
+        nodeKey: treeNodes.nodeKey,
+        provider: treeNodes.provider,
+        model: treeNodes.model,
+        promptTemplateId: treeNodes.promptTemplateId,
+      })
+      .from(treeNodes)
+      .where(eq(treeNodes.workflowTreeId, tree?.id ?? -1))
+      .get();
+
+    expect(breakdownNode).toMatchObject({
+      nodeKey: 'breakdown',
+      provider: 'codex',
+      model: 'gpt-5-codex',
+    });
+    expect(breakdownNode?.promptTemplateId).not.toBeNull();
+
+    const promptTemplate = db
+      .select({
+        templateKey: promptTemplates.templateKey,
+        content: promptTemplates.content,
+      })
+      .from(promptTemplates)
+      .where(eq(promptTemplates.id, breakdownNode?.promptTemplateId ?? -1))
+      .get();
+
+    expect(promptTemplate).toMatchObject({
+      templateKey: 'story-breakdown/v1/breakdown/prompt',
+    });
+    expect(promptTemplate?.content).toContain('Return only JSON');
   });
 
   it('refreshes run-node transition trigger definitions on migration reruns', () => {
