@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   createDatabase,
+  eq,
   migrateDatabase,
   phaseArtifacts,
   repositories,
@@ -16,31 +17,66 @@ import {
   type AlphredDatabase,
 } from '@alphred/db';
 import { createStoryBreakdownRunOperations } from './story-breakdown-run-operations';
+import type { PreparedWorkflowRunLaunch } from './run-operations';
 
 function createHarness(environment: Partial<NodeJS.ProcessEnv> = {}): {
   db: AlphredDatabase;
-  launchWorkflowRunMock: ReturnType<typeof vi.fn>;
+  prepareWorkflowRunLaunchMock: ReturnType<typeof vi.fn>;
+  completeWorkflowRunLaunchMock: ReturnType<typeof vi.fn>;
   operations: ReturnType<typeof createStoryBreakdownRunOperations>;
 } {
   const db = createDatabase(':memory:');
   migrateDatabase(db);
 
-  const launchWorkflowRunMock = vi.fn(async () => ({
-    workflowRunId: 91,
-    mode: 'async' as const,
-    status: 'accepted' as const,
-    runStatus: 'pending' as const,
-    executionOutcome: null,
-    executedNodes: null,
-  }));
+  const prepareWorkflowRunLaunchMock = vi.fn(
+    (
+      _launchDb: AlphredDatabase,
+      request: {
+        treeKey: string;
+        repositoryName: string;
+        workItemId: number;
+        executionMode: 'async';
+        executionScope: 'single_node';
+        nodeSelector: {
+          type: 'node_key';
+          nodeKey: string;
+        };
+      },
+    ) =>
+      ({
+        workflowRunId: 91,
+        treeKey: request.treeKey,
+        repository: null,
+        issueId: undefined,
+        workItemId: request.workItemId,
+        executionMode: 'async',
+        executionScope: 'single_node',
+        nodeSelector: request.nodeSelector,
+        branch: undefined,
+        cleanupWorktree: false,
+        policyConstraints: undefined,
+      }) as PreparedWorkflowRunLaunch,
+  );
+  const completeWorkflowRunLaunchMock = vi.fn(
+    async (_launchDb: AlphredDatabase, preparedLaunch: PreparedWorkflowRunLaunch) => ({
+      workflowRunId: preparedLaunch.workflowRunId,
+      mode: 'async' as const,
+      status: 'accepted' as const,
+      runStatus: 'pending' as const,
+      executionOutcome: null,
+      executedNodes: null,
+    }),
+  );
 
   return {
     db,
-    launchWorkflowRunMock,
+    prepareWorkflowRunLaunchMock,
+    completeWorkflowRunLaunchMock,
     operations: createStoryBreakdownRunOperations({
       withDatabase: async operation => operation(db),
       dependencies: {
-        launchWorkflowRun: launchWorkflowRunMock,
+        prepareWorkflowRunLaunch: prepareWorkflowRunLaunchMock,
+        completeWorkflowRunLaunch: completeWorkflowRunLaunchMock,
       },
       environment: {
         ...process.env,
@@ -317,7 +353,7 @@ function validPlannerResultJson(): string {
 
 describe('story-breakdown-run-operations', () => {
   it('launches a story breakdown run as an async single-node workflow run', async () => {
-    const { db, launchWorkflowRunMock, operations } = createHarness();
+    const { db, prepareWorkflowRunLaunchMock, completeWorkflowRunLaunchMock, operations } = createHarness();
     const repositoryId = seedRepository(db, 'planner-launch');
     const storyId = seedStory(db, repositoryId, 7);
 
@@ -327,7 +363,8 @@ describe('story-breakdown-run-operations', () => {
       expectedRevision: 7,
     });
 
-    expect(launchWorkflowRunMock).toHaveBeenCalledWith({
+    expect(prepareWorkflowRunLaunchMock).toHaveBeenCalledTimes(1);
+    expect(prepareWorkflowRunLaunchMock.mock.calls[0]?.[1]).toEqual({
       treeKey: 'story-breakdown-planner',
       repositoryName: 'planner-launch',
       workItemId: storyId,
@@ -338,6 +375,13 @@ describe('story-breakdown-run-operations', () => {
         nodeKey: 'breakdown',
       },
     });
+    expect(completeWorkflowRunLaunchMock).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        workflowRunId: 91,
+        treeKey: 'story-breakdown-planner',
+      }),
+    );
     expect(result).toEqual({
       workflowRunId: 91,
       mode: 'async',
@@ -349,7 +393,7 @@ describe('story-breakdown-run-operations', () => {
   });
 
   it('rejects launching a second active breakdown run for the same story', async () => {
-    const { db, launchWorkflowRunMock, operations } = createHarness();
+    const { db, prepareWorkflowRunLaunchMock, completeWorkflowRunLaunchMock, operations } = createHarness();
     const repositoryId = seedRepository(db, 'planner-conflict');
     const storyId = seedStory(db, repositoryId, 2);
     const { treeId, treeNodeId } = seedPlannerTree(db);
@@ -373,7 +417,125 @@ describe('story-breakdown-run-operations', () => {
       status: 409,
       message: 'Story breakdown planner run is already active for this story.',
     });
-    expect(launchWorkflowRunMock).not.toHaveBeenCalled();
+    expect(prepareWorkflowRunLaunchMock).not.toHaveBeenCalled();
+    expect(completeWorkflowRunLaunchMock).not.toHaveBeenCalled();
+  });
+
+  it('persists the active-run check before async launch completion settles', async () => {
+    const { db, prepareWorkflowRunLaunchMock, completeWorkflowRunLaunchMock, operations } = createHarness();
+    const repositoryId = seedRepository(db, 'planner-inflight');
+    const storyId = seedStory(db, repositoryId, 3);
+    const { treeId } = seedPlannerTree(db);
+
+    prepareWorkflowRunLaunchMock.mockImplementation((
+      launchDb: AlphredDatabase,
+      request: {
+        treeKey: string;
+        repositoryName: string;
+        workItemId: number;
+        executionMode: 'async';
+        executionScope: 'single_node';
+        nodeSelector: {
+          type: 'node_key';
+          nodeKey: string;
+        };
+      },
+    ) => {
+      const repository = launchDb
+        .select({
+          id: repositories.id,
+        })
+        .from(repositories)
+        .where(eq(repositories.name, request.repositoryName))
+        .get();
+
+      const runId = Number(
+        launchDb.insert(workflowRuns)
+          .values({
+            workflowTreeId: treeId,
+            status: 'pending',
+            startedAt: null,
+            completedAt: null,
+            createdAt: '2026-03-05T17:03:00.000Z',
+            updatedAt: '2026-03-05T17:03:00.000Z',
+          })
+          .run().lastInsertRowid,
+      );
+
+      launchDb.insert(workflowRunAssociations)
+        .values({
+          workflowRunId: runId,
+          repositoryId: repository?.id ?? null,
+          workItemId: request.workItemId,
+          createdAt: '2026-03-05T17:03:00.000Z',
+        })
+        .run();
+
+      return {
+        workflowRunId: runId,
+        treeKey: request.treeKey,
+        repository: null,
+        issueId: undefined,
+        workItemId: request.workItemId,
+        executionMode: 'async',
+        executionScope: 'single_node',
+        nodeSelector: request.nodeSelector,
+        branch: undefined,
+        cleanupWorktree: false,
+        policyConstraints: undefined,
+      } satisfies PreparedWorkflowRunLaunch;
+    });
+
+    let resolveCompletion: (() => void) | null = null;
+    completeWorkflowRunLaunchMock.mockImplementation(
+      (_launchDb: AlphredDatabase, preparedLaunch: PreparedWorkflowRunLaunch) =>
+        new Promise(resolve => {
+          resolveCompletion = () =>
+            resolve({
+              workflowRunId: preparedLaunch.workflowRunId,
+              mode: 'async',
+              status: 'accepted',
+              runStatus: 'pending',
+            });
+        }),
+    );
+
+    const firstLaunch = operations.launchStoryBreakdownRun({
+      repositoryId,
+      storyId,
+      expectedRevision: 3,
+    });
+
+    await vi.waitFor(() => {
+      expect(completeWorkflowRunLaunchMock).toHaveBeenCalledTimes(1);
+    });
+
+    await expect(
+      operations.launchStoryBreakdownRun({
+        repositoryId,
+        storyId,
+        expectedRevision: 3,
+      }),
+    ).rejects.toMatchObject({
+      code: 'conflict',
+      status: 409,
+      message: 'Story breakdown planner run is already active for this story.',
+    });
+
+    const finishLaunchCompletion = resolveCompletion as (() => void) | null;
+    if (typeof finishLaunchCompletion !== 'function') {
+      throw new Error('Expected launch completion resolver to be registered.');
+    }
+    finishLaunchCompletion();
+
+    await expect(firstLaunch).resolves.toEqual({
+      workflowRunId: expect.any(Number),
+      mode: 'async',
+      status: 'accepted',
+      runStatus: 'pending',
+      result: null,
+      error: null,
+    });
   });
 
   it('returns a validated story_breakdown_result for completed runs', async () => {
@@ -421,6 +583,45 @@ describe('story-breakdown-run-operations', () => {
           ],
         },
       },
+      error: null,
+    });
+  });
+
+  it('loads completed run state from persisted tree and node keys when config changes', async () => {
+    const { db, operations } = createHarness({
+      ALPHRED_DASHBOARD_STORY_BREAKDOWN_TREE_KEY: 'next-story-breakdown-planner',
+      ALPHRED_DASHBOARD_STORY_BREAKDOWN_NODE_KEY: 'next-breakdown',
+    });
+    const repositoryId = seedRepository(db, 'planner-persisted-config');
+    const storyId = seedStory(db, repositoryId);
+    const { treeId, treeNodeId } = seedPlannerTree(db, {
+      treeKey: 'legacy-story-breakdown-planner',
+      nodeKey: 'legacy-breakdown',
+    });
+    const { runId, runNodeId } = seedPlannerRun(db, {
+      treeId,
+      treeNodeId,
+      repositoryId,
+      storyId,
+      runStatus: 'completed',
+      nodeStatus: 'completed',
+      nodeKey: 'legacy-breakdown',
+    });
+    insertPlannerReportArtifact(db, runId, runNodeId, validPlannerResultJson());
+
+    const result = await operations.getStoryBreakdownRun({
+      repositoryId,
+      storyId,
+      workflowRunId: runId,
+    });
+
+    expect(result).toEqual({
+      workflowRunId: runId,
+      runStatus: 'completed',
+      result: expect.objectContaining({
+        schemaVersion: 1,
+        resultType: 'story_breakdown_result',
+      }),
       error: null,
     });
   });

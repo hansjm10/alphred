@@ -17,7 +17,6 @@ import type {
   DashboardGetStoryBreakdownRunResult,
   DashboardLaunchStoryBreakdownRunRequest,
   DashboardLaunchStoryBreakdownRunResult,
-  DashboardRunLaunchResult,
   DashboardStoryBreakdownPlannerResult,
   DashboardStoryBreakdownRunError,
   DashboardWorkItemProposedBreakdownTask,
@@ -27,23 +26,36 @@ import {
   DEFAULT_STORY_BREAKDOWN_TREE_KEY,
 } from './dashboard-default-workflows';
 import { DashboardIntegrationError } from './dashboard-errors';
+import type { PreparedWorkflowRunLaunch } from './run-operations';
 const STORY_BREAKDOWN_RESULT_SCHEMA_VERSION = 1;
 const STORY_BREAKDOWN_RESULT_TYPE = 'story_breakdown_result';
 
 type WithDatabase = <T>(operation: (db: AlphredDatabase) => Promise<T> | T) => Promise<T>;
 
 export type StoryBreakdownRunOperationsDependencies = {
-  launchWorkflowRun: (request: {
-    treeKey: string;
-    repositoryName: string;
-    workItemId: number;
-    executionMode: 'async';
-    executionScope: 'single_node';
-    nodeSelector: {
-      type: 'node_key';
-      nodeKey: string;
-    };
-  }) => Promise<DashboardRunLaunchResult>;
+  prepareWorkflowRunLaunch: (
+    db: AlphredDatabase,
+    request: {
+      treeKey: string;
+      repositoryName: string;
+      workItemId: number;
+      executionMode: 'async';
+      executionScope: 'single_node';
+      nodeSelector: {
+        type: 'node_key';
+        nodeKey: string;
+      };
+    },
+  ) => PreparedWorkflowRunLaunch;
+  completeWorkflowRunLaunch: (
+    db: AlphredDatabase,
+    prepared: PreparedWorkflowRunLaunch,
+  ) => Promise<{
+    workflowRunId: number;
+    mode: 'async' | 'sync';
+    status: 'accepted' | 'completed';
+    runStatus: DashboardGetStoryBreakdownRunResult['runStatus'];
+  }>;
 };
 
 export type StoryBreakdownRunOperations = {
@@ -61,6 +73,7 @@ type StoryBreakdownPlannerConfig = {
 };
 
 type PlannerNodeExecutionContext = {
+  nodeKey: string;
   runNodeId: number;
   attempt: number;
   reportArtifact: {
@@ -81,6 +94,11 @@ type PlannerNodeExecutionContext = {
 type ValidationFailure = {
   message: string;
   details: Record<string, unknown>;
+};
+
+type PersistedPlannerRunContext = {
+  treeKey: string;
+  nodeKey: string | null;
 };
 
 function requirePositiveInteger(value: number, fieldName: string): number {
@@ -123,6 +141,11 @@ function resolvePlannerConfig(environment: NodeJS.ProcessEnv): StoryBreakdownPla
       DEFAULT_STORY_BREAKDOWN_NODE_KEY,
     ),
   };
+}
+
+function runInImmediateTransaction<T>(db: AlphredDatabase, operation: () => T): T {
+  const transaction = db.$client.transaction(operation);
+  return transaction.immediate();
 }
 
 function toOptionalStringArray(value: unknown, fieldPath: string, validationErrors: string[]): string[] | null {
@@ -334,7 +357,7 @@ function readDiagnosticError(payload: unknown): {
 
 function classifyTerminalFailure(params: {
   runStatus: DashboardGetStoryBreakdownRunResult['runStatus'];
-  plannerConfig: StoryBreakdownPlannerConfig;
+  plannerRunContext: PersistedPlannerRunContext;
   execution: PlannerNodeExecutionContext | null;
 }): DashboardStoryBreakdownRunError {
   const diagnosticError = readDiagnosticError(params.execution?.diagnostics?.payload ?? null);
@@ -349,7 +372,8 @@ function classifyTerminalFailure(params: {
   const corpus = sourceMessages.join('\n').toLowerCase();
   const details: Record<string, unknown> = {
     kind: 'planner_run_failure',
-    nodeKey: params.plannerConfig.nodeKey,
+    treeKey: params.plannerRunContext.treeKey,
+    nodeKey: params.plannerRunContext.nodeKey,
     runStatus: params.runStatus,
     runNodeId: params.execution?.runNodeId ?? null,
     attempt: params.execution?.attempt ?? null,
@@ -409,20 +433,86 @@ function classifyTerminalFailure(params: {
   });
 }
 
-function loadPlannerNodeExecutionContext(
+function findPlannerNodeExecutionTarget(
   db: AlphredDatabase,
   workflowRunId: number,
-  plannerConfig: StoryBreakdownPlannerConfig,
-): PlannerNodeExecutionContext | null {
-  const plannerNode = db
+): Pick<PlannerNodeExecutionContext, 'nodeKey' | 'runNodeId' | 'attempt'> | null {
+  const reportNode = db
     .select({
-      id: runNodes.id,
+      nodeKey: runNodes.nodeKey,
+      runNodeId: runNodes.id,
+      attempt: runNodes.attempt,
+    })
+    .from(phaseArtifacts)
+    .innerJoin(runNodes, eq(phaseArtifacts.runNodeId, runNodes.id))
+    .where(and(eq(phaseArtifacts.workflowRunId, workflowRunId), eq(phaseArtifacts.artifactType, 'report')))
+    .orderBy(desc(phaseArtifacts.createdAt), desc(phaseArtifacts.id))
+    .get();
+  if (reportNode) {
+    return reportNode;
+  }
+
+  const failureNode = db
+    .select({
+      nodeKey: runNodes.nodeKey,
+      runNodeId: runNodes.id,
+      attempt: runNodes.attempt,
+    })
+    .from(phaseArtifacts)
+    .innerJoin(runNodes, eq(phaseArtifacts.runNodeId, runNodes.id))
+    .where(and(eq(phaseArtifacts.workflowRunId, workflowRunId), eq(phaseArtifacts.artifactType, 'log')))
+    .orderBy(desc(phaseArtifacts.createdAt), desc(phaseArtifacts.id))
+    .get();
+  if (failureNode) {
+    return failureNode;
+  }
+
+  const diagnosticNode = db
+    .select({
+      nodeKey: runNodes.nodeKey,
+      runNodeId: runNodes.id,
+      attempt: runNodes.attempt,
+    })
+    .from(runNodeDiagnostics)
+    .innerJoin(runNodes, eq(runNodeDiagnostics.runNodeId, runNodes.id))
+    .where(eq(runNodeDiagnostics.workflowRunId, workflowRunId))
+    .orderBy(desc(runNodeDiagnostics.attempt), desc(runNodeDiagnostics.id))
+    .get();
+  if (diagnosticNode) {
+    return diagnosticNode;
+  }
+
+  const activeNode = db
+    .select({
+      nodeKey: runNodes.nodeKey,
+      runNodeId: runNodes.id,
       attempt: runNodes.attempt,
     })
     .from(runNodes)
-    .where(and(eq(runNodes.workflowRunId, workflowRunId), eq(runNodes.nodeKey, plannerConfig.nodeKey)))
+    .where(and(eq(runNodes.workflowRunId, workflowRunId), sql`${runNodes.status} <> 'pending'`))
     .orderBy(desc(runNodes.attempt), desc(runNodes.id))
     .get();
+  if (activeNode) {
+    return activeNode;
+  }
+
+  return db
+    .select({
+      nodeKey: runNodes.nodeKey,
+      runNodeId: runNodes.id,
+      attempt: runNodes.attempt,
+    })
+    .from(runNodes)
+    .where(eq(runNodes.workflowRunId, workflowRunId))
+    .orderBy(desc(runNodes.attempt), desc(runNodes.id))
+    .get() ?? null;
+}
+
+function loadPlannerNodeExecutionContext(
+  db: AlphredDatabase,
+  workflowRunId: number,
+): PlannerNodeExecutionContext | null {
+  const plannerNode = findPlannerNodeExecutionTarget(db, workflowRunId);
 
   if (!plannerNode) {
     return null;
@@ -438,7 +528,7 @@ function loadPlannerNodeExecutionContext(
     .where(
       and(
         eq(phaseArtifacts.workflowRunId, workflowRunId),
-        eq(phaseArtifacts.runNodeId, plannerNode.id),
+        eq(phaseArtifacts.runNodeId, plannerNode.runNodeId),
         eq(phaseArtifacts.artifactType, 'report'),
       ),
     )
@@ -454,7 +544,7 @@ function loadPlannerNodeExecutionContext(
     .where(
       and(
         eq(phaseArtifacts.workflowRunId, workflowRunId),
-        eq(phaseArtifacts.runNodeId, plannerNode.id),
+        eq(phaseArtifacts.runNodeId, plannerNode.runNodeId),
         eq(phaseArtifacts.artifactType, 'log'),
       ),
     )
@@ -467,12 +557,15 @@ function loadPlannerNodeExecutionContext(
       diagnostics: runNodeDiagnostics.diagnostics,
     })
     .from(runNodeDiagnostics)
-    .where(and(eq(runNodeDiagnostics.workflowRunId, workflowRunId), eq(runNodeDiagnostics.runNodeId, plannerNode.id)))
+    .where(
+      and(eq(runNodeDiagnostics.workflowRunId, workflowRunId), eq(runNodeDiagnostics.runNodeId, plannerNode.runNodeId)),
+    )
     .orderBy(desc(runNodeDiagnostics.attempt), desc(runNodeDiagnostics.id))
     .get();
 
   return {
-    runNodeId: plannerNode.id,
+    nodeKey: plannerNode.nodeKey,
+    runNodeId: plannerNode.runNodeId,
     attempt: plannerNode.attempt,
     reportArtifact: reportArtifact
       ? {
@@ -499,7 +592,7 @@ function loadPlannerNodeExecutionContext(
 function createCompletedInvalidOutputResult(params: {
   workflowRunId: number;
   execution: PlannerNodeExecutionContext | null;
-  plannerConfig: StoryBreakdownPlannerConfig;
+  plannerRunContext: PersistedPlannerRunContext;
   validationFailure: ValidationFailure;
 }): DashboardGetStoryBreakdownRunResult {
   return {
@@ -508,7 +601,8 @@ function createCompletedInvalidOutputResult(params: {
     result: null,
     error: createLifecycleError('invalid_output', params.validationFailure.message, false, {
       ...params.validationFailure.details,
-      nodeKey: params.plannerConfig.nodeKey,
+      treeKey: params.plannerRunContext.treeKey,
+      nodeKey: params.plannerRunContext.nodeKey,
       runNodeId: params.execution?.runNodeId ?? null,
       attempt: params.execution?.attempt ?? null,
       reportArtifactId: params.execution?.reportArtifact?.id ?? null,
@@ -533,90 +627,92 @@ export function createStoryBreakdownRunOperations(params: {
       const expectedRevision = requireNonNegativeInteger(request.expectedRevision, 'expectedRevision');
       const plannerConfig = resolvePlannerConfig(environment);
 
-      const repositoryName = await withDatabase(db => {
-        const story = db
-          .select({
-            repositoryName: repositories.name,
-            type: workItems.type,
-            revision: workItems.revision,
-          })
-          .from(workItems)
-          .innerJoin(repositories, eq(workItems.repositoryId, repositories.id))
-          .where(and(eq(workItems.repositoryId, repositoryId), eq(workItems.id, storyId)))
-          .get();
+      const preparedLaunch = await withDatabase(db =>
+        runInImmediateTransaction(db, () => {
+          const story = db
+            .select({
+              repositoryName: repositories.name,
+              type: workItems.type,
+              revision: workItems.revision,
+            })
+            .from(workItems)
+            .innerJoin(repositories, eq(workItems.repositoryId, repositories.id))
+            .where(and(eq(workItems.repositoryId, repositoryId), eq(workItems.id, storyId)))
+            .get();
 
-        if (!story) {
-          throw new DashboardIntegrationError('not_found', `Story id=${storyId} was not found.`, {
-            status: 404,
-          });
-        }
+          if (!story) {
+            throw new DashboardIntegrationError('not_found', `Story id=${storyId} was not found.`, {
+              status: 404,
+            });
+          }
 
-        if (story.type !== 'story') {
-          throw new DashboardIntegrationError('invalid_request', `Work item id=${storyId} is not a story.`, {
-            status: 400,
-          });
-        }
+          if (story.type !== 'story') {
+            throw new DashboardIntegrationError('invalid_request', `Work item id=${storyId} is not a story.`, {
+              status: 400,
+            });
+          }
 
-        if (story.revision !== expectedRevision) {
-          throw new DashboardIntegrationError(
-            'conflict',
-            `Work item id=${storyId} revision conflict (expected ${String(expectedRevision)}).`,
-            {
+          if (story.revision !== expectedRevision) {
+            throw new DashboardIntegrationError(
+              'conflict',
+              `Work item id=${storyId} revision conflict (expected ${String(expectedRevision)}).`,
+              {
+                status: 409,
+                details: {
+                  workItemId: storyId,
+                  expectedRevision,
+                  currentRevision: story.revision,
+                },
+              },
+            );
+          }
+
+          const activeRun = db
+            .select({
+              workflowRunId: workflowRuns.id,
+              runStatus: workflowRuns.status,
+            })
+            .from(workflowRunAssociations)
+            .innerJoin(workflowRuns, eq(workflowRunAssociations.workflowRunId, workflowRuns.id))
+            .innerJoin(workflowTrees, eq(workflowRuns.workflowTreeId, workflowTrees.id))
+            .where(
+              and(
+                eq(workflowRunAssociations.repositoryId, repositoryId),
+                eq(workflowRunAssociations.workItemId, storyId),
+                eq(workflowTrees.treeKey, plannerConfig.treeKey),
+                sql`${workflowRuns.status} in ('pending', 'running', 'paused')`,
+              ),
+            )
+            .orderBy(desc(workflowRuns.id))
+            .get();
+
+          if (activeRun) {
+            throw new DashboardIntegrationError('conflict', 'Story breakdown planner run is already active for this story.', {
               status: 409,
               details: {
-                workItemId: storyId,
-                expectedRevision,
-                currentRevision: story.revision,
+                workflowRunId: activeRun.workflowRunId,
+                runStatus: activeRun.runStatus,
+                treeKey: plannerConfig.treeKey,
+                nodeKey: plannerConfig.nodeKey,
               },
-            },
-          );
-        }
+            });
+          }
 
-        const activeRun = db
-          .select({
-            workflowRunId: workflowRuns.id,
-            runStatus: workflowRuns.status,
-          })
-          .from(workflowRunAssociations)
-          .innerJoin(workflowRuns, eq(workflowRunAssociations.workflowRunId, workflowRuns.id))
-          .innerJoin(workflowTrees, eq(workflowRuns.workflowTreeId, workflowTrees.id))
-          .where(
-            and(
-              eq(workflowRunAssociations.repositoryId, repositoryId),
-              eq(workflowRunAssociations.workItemId, storyId),
-              eq(workflowTrees.treeKey, plannerConfig.treeKey),
-              sql`${workflowRuns.status} in ('pending', 'running', 'paused')`,
-            ),
-          )
-          .orderBy(desc(workflowRuns.id))
-          .get();
-
-        if (activeRun) {
-          throw new DashboardIntegrationError('conflict', 'Story breakdown planner run is already active for this story.', {
-            status: 409,
-            details: {
-              workflowRunId: activeRun.workflowRunId,
-              runStatus: activeRun.runStatus,
-              treeKey: plannerConfig.treeKey,
+          return dependencies.prepareWorkflowRunLaunch(db, {
+            treeKey: plannerConfig.treeKey,
+            repositoryName: story.repositoryName,
+            workItemId: storyId,
+            executionMode: 'async',
+            executionScope: 'single_node',
+            nodeSelector: {
+              type: 'node_key',
               nodeKey: plannerConfig.nodeKey,
             },
           });
-        }
+        }),
+      );
 
-        return story.repositoryName;
-      });
-
-      const launch = await dependencies.launchWorkflowRun({
-        treeKey: plannerConfig.treeKey,
-        repositoryName,
-        workItemId: storyId,
-        executionMode: 'async',
-        executionScope: 'single_node',
-        nodeSelector: {
-          type: 'node_key',
-          nodeKey: plannerConfig.nodeKey,
-        },
-      });
+      const launch = await withDatabase(db => dependencies.completeWorkflowRunLaunch(db, preparedLaunch));
 
       return {
         workflowRunId: launch.workflowRunId,
@@ -636,7 +732,6 @@ export function createStoryBreakdownRunOperations(params: {
       const repositoryId = requirePositiveInteger(paramsRaw.repositoryId, 'repositoryId');
       const storyId = requirePositiveInteger(paramsRaw.storyId, 'storyId');
       const workflowRunId = requirePositiveInteger(paramsRaw.workflowRunId, 'workflowRunId');
-      const plannerConfig = resolvePlannerConfig(environment);
 
       return withDatabase(db => {
         const run = db
@@ -659,11 +754,7 @@ export function createStoryBreakdownRunOperations(params: {
           });
         }
 
-        if (
-          run.treeKey !== plannerConfig.treeKey
-          || run.associationRepositoryId !== repositoryId
-          || run.associationWorkItemId !== storyId
-        ) {
+        if (run.associationRepositoryId !== repositoryId || run.associationWorkItemId !== storyId) {
           throw new DashboardIntegrationError(
             'not_found',
             `Story breakdown run id=${workflowRunId} was not found for story id=${storyId}.`,
@@ -683,14 +774,18 @@ export function createStoryBreakdownRunOperations(params: {
           };
         }
 
-        const execution = loadPlannerNodeExecutionContext(db, workflowRunId, plannerConfig);
+        const execution = loadPlannerNodeExecutionContext(db, workflowRunId);
+        const plannerRunContext: PersistedPlannerRunContext = {
+          treeKey: run.treeKey,
+          nodeKey: execution?.nodeKey ?? null,
+        };
 
         if (runStatus === 'completed') {
           if (!execution?.reportArtifact) {
             return createCompletedInvalidOutputResult({
               workflowRunId,
               execution,
-              plannerConfig,
+              plannerRunContext,
               validationFailure: {
                 message: 'Planner report artifact is missing for the completed breakdown run.',
                 details: {
@@ -705,7 +800,7 @@ export function createStoryBreakdownRunOperations(params: {
             return createCompletedInvalidOutputResult({
               workflowRunId,
               execution,
-              plannerConfig,
+              plannerRunContext,
               validationFailure: validation.error,
             });
           }
@@ -724,7 +819,7 @@ export function createStoryBreakdownRunOperations(params: {
           result: null,
           error: classifyTerminalFailure({
             runStatus,
-            plannerConfig,
+            plannerRunContext,
             execution,
           }),
         };

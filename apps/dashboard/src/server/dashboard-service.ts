@@ -26,7 +26,7 @@ import { createBackgroundExecutionManager } from './background-execution';
 import { ensureDashboardDefaultWorkflows } from './dashboard-default-workflows';
 import { DashboardIntegrationError, toDashboardIntegrationError } from './dashboard-errors';
 import { createRepositoryOperations } from './repository-operations';
-import { createRunOperations } from './run-operations';
+import { createRunOperations, createWorkflowRunLaunchCoordinator } from './run-operations';
 import { resolveDatabasePath } from './dashboard-utils';
 import { createStoryBreakdownRunOperations } from './story-breakdown-run-operations';
 import { runStoryWorkflowOrchestration } from './story-workflow-orchestration';
@@ -143,10 +143,25 @@ export function createDashboardService(options: {
     },
     backgroundExecution,
   });
+  const workflowRunLaunchCoordinator = createWorkflowRunLaunchCoordinator({
+    dependencies: {
+      createSqlWorkflowPlanner: dependencies.createSqlWorkflowPlanner,
+      createSqlWorkflowExecutor: dependencies.createSqlWorkflowExecutor,
+      resolveProvider: dependencies.resolveProvider,
+      createWorktreeManager: dependencies.createWorktreeManager,
+    },
+    backgroundExecution,
+    environment,
+    cwd,
+    repositoryAuthDependencies: {
+      createScmProvider: dependencies.createScmProvider,
+    },
+  });
   const storyBreakdownRunOperations = createStoryBreakdownRunOperations({
     withDatabase,
     dependencies: {
-      launchWorkflowRun: runOperations.launchWorkflowRun,
+      prepareWorkflowRunLaunch: workflowRunLaunchCoordinator.prepareWorkflowRunLaunch,
+      completeWorkflowRunLaunch: workflowRunLaunchCoordinator.completeWorkflowRunLaunch,
     },
     environment,
   });
