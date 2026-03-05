@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import type {
   DashboardRepositoryState,
+  DashboardRunStoryWorkflowResult,
   DashboardStoryBreakdownProposalSnapshot,
   DashboardWorkItemSnapshot,
 } from '@dashboard/server/dashboard-contracts';
@@ -82,6 +83,18 @@ function formatWorkItemStatusLabel(status: WorkItemStatus): string {
     default:
       return status;
   }
+}
+
+function mergeStoryWorkflowWorkItems(
+  previous: Readonly<Record<number, DashboardWorkItemSnapshot>>,
+  result: DashboardRunStoryWorkflowResult,
+): Record<number, DashboardWorkItemSnapshot> {
+  const next: Record<number, DashboardWorkItemSnapshot> = { ...previous };
+  next[result.story.id] = result.story;
+  for (const task of result.updatedTasks) {
+    next[task.id] = task;
+  }
+  return next;
 }
 
 export function StoryDetailPageContent(props: Readonly<{
@@ -280,14 +293,7 @@ export function StoryDetailPageContent(props: Readonly<{
       errorPrefix: 'Unable to run story workflow',
     });
     if (workflowResult.ok) {
-      setWorkItemsById(previous => {
-        const next: Record<number, DashboardWorkItemSnapshot> = { ...previous };
-        next[workflowResult.result.story.id] = workflowResult.result.story;
-        for (const task of workflowResult.result.updatedTasks) {
-          next[task.id] = task;
-        }
-        return next;
-      });
+      setWorkItemsById(previous => mergeStoryWorkflowWorkItems(previous, workflowResult.result));
     } else if (workflowResult.status === 409) {
       await refreshAll({ bannerMessage: `Revision conflict: ${workflowResult.message}` });
     } else {
@@ -334,14 +340,7 @@ export function StoryDetailPageContent(props: Readonly<{
 
     if (workflowResult.ok) {
       setProposal(null);
-      setWorkItemsById(previous => {
-        const next: Record<number, DashboardWorkItemSnapshot> = { ...previous };
-        next[workflowResult.result.story.id] = workflowResult.result.story;
-        for (const task of workflowResult.result.updatedTasks) {
-          next[task.id] = task;
-        }
-        return next;
-      });
+      setWorkItemsById(previous => mergeStoryWorkflowWorkItems(previous, workflowResult.result));
     } else if (workflowResult.status === 409) {
       await refreshAll({ bannerMessage: `Revision conflict: ${workflowResult.message}` });
     } else {

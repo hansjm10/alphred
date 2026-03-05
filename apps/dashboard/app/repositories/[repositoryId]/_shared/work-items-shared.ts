@@ -495,7 +495,7 @@ export async function runStoryWorkflow(params: {
   errorPrefix?: string;
 }): Promise<{ ok: true; result: DashboardRunStoryWorkflowResult } | { ok: false; status: number; message: string }> {
   const errorPrefix = params.errorPrefix ?? 'Unable to run story workflow';
-  const requestBody: {
+  type StoryWorkflowRequestBody = {
     repositoryId: number;
     expectedRevision: number;
     actorType: WorkItemActor['actorType'];
@@ -503,21 +503,25 @@ export async function runStoryWorkflow(params: {
     generateOnly?: boolean;
     approveOnly?: boolean;
     approveAndStart?: boolean;
-  } = {
+  };
+  const requestBody: StoryWorkflowRequestBody = {
     repositoryId: params.repositoryId,
     expectedRevision: params.expectedRevision,
     actorType: params.actor.actorType,
     actorLabel: params.actor.actorLabel,
   };
-  if (params.generateOnly !== undefined) {
-    requestBody.generateOnly = params.generateOnly;
-  }
-  if (params.approveOnly !== undefined) {
-    requestBody.approveOnly = params.approveOnly;
-  }
-  if (params.approveAndStart !== undefined) {
-    requestBody.approveAndStart = params.approveAndStart;
-  }
+  const assignOptionalFlag = <TKey extends 'generateOnly' | 'approveOnly' | 'approveAndStart'>(
+    key: TKey,
+    value: StoryWorkflowRequestBody[TKey],
+  ) => {
+    if (value === undefined) {
+      return;
+    }
+    requestBody[key] = value;
+  };
+  assignOptionalFlag('generateOnly', params.generateOnly);
+  assignOptionalFlag('approveOnly', params.approveOnly);
+  assignOptionalFlag('approveAndStart', params.approveAndStart);
   const response = await fetch(`/api/dashboard/work-items/${params.storyId}/actions/run-story-workflow`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },

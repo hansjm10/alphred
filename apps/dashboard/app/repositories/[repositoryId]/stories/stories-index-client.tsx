@@ -68,6 +68,90 @@ function resolveWorkflowFeedback(params: {
   return { notice: `Story #${storyId} workflow completed with no task starts.` };
 }
 
+type StoryWorkflowRunResult = Awaited<ReturnType<typeof runStoryWorkflow>>;
+
+type StoryWorkflowDisplayState = Readonly<{
+  upsertedItems: readonly DashboardWorkItemSnapshot[];
+  error: string | null;
+  notice: string | null;
+}>;
+
+function resolveSuccessfulWorkflowRun(params: {
+  storyId: number;
+  runResult: Extract<StoryWorkflowRunResult, { ok: true }>;
+}): StoryWorkflowDisplayState {
+  const workflowFeedback = resolveWorkflowFeedback({
+    storyId: params.storyId,
+    result: params.runResult.result,
+  });
+
+  return {
+    upsertedItems: [params.runResult.result.story, ...params.runResult.result.updatedTasks],
+    error: workflowFeedback.error ?? null,
+    notice: workflowFeedback.error ? null : (workflowFeedback.notice ?? null),
+  };
+}
+
+async function resolveFailedWorkflowRun(params: {
+  repositoryId: number;
+  storyId: number;
+  runResult: Extract<StoryWorkflowRunResult, { ok: false }>;
+}): Promise<StoryWorkflowDisplayState> {
+  if (params.runResult.status !== 409) {
+    return {
+      upsertedItems: [],
+      error: params.runResult.message,
+      notice: null,
+    };
+  }
+
+  const refreshedStoryResult = await refreshStoryAfterConflict({
+    repositoryId: params.repositoryId,
+    storyId: params.storyId,
+  });
+  if (!refreshedStoryResult.ok) {
+    return {
+      upsertedItems: [],
+      error: refreshedStoryResult.message,
+      notice: null,
+    };
+  }
+
+  return {
+    upsertedItems: [refreshedStoryResult.story],
+    error: params.runResult.message,
+    notice: null,
+  };
+}
+
+async function runStoryWorkflowAndResolveDisplayState(params: {
+  repositoryId: number;
+  storyId: number;
+  expectedRevision: number;
+  actor: WorkItemActor;
+}): Promise<StoryWorkflowDisplayState> {
+  const runResult = await runStoryWorkflow({
+    repositoryId: params.repositoryId,
+    storyId: params.storyId,
+    expectedRevision: params.expectedRevision,
+    actor: params.actor,
+    errorPrefix: `Unable to run story workflow for story #${params.storyId}`,
+  });
+
+  if (runResult.ok) {
+    return resolveSuccessfulWorkflowRun({
+      storyId: params.storyId,
+      runResult,
+    });
+  }
+
+  return resolveFailedWorkflowRun({
+    repositoryId: params.repositoryId,
+    storyId: params.storyId,
+    runResult,
+  });
+}
+
 export function StoriesIndexPageContent(props: Readonly<{
   repository: DashboardRepositoryState;
   actor: WorkItemActor;
@@ -119,40 +203,17 @@ export function StoriesIndexPageContent(props: Readonly<{
     setActionError(null);
     setActionNotice(null);
     try {
-      const runResult = await runStoryWorkflow({
+      const displayState = await runStoryWorkflowAndResolveDisplayState({
         repositoryId: repository.id,
         storyId: story.id,
         expectedRevision: story.revision,
         actor,
-        errorPrefix: `Unable to run story workflow for story #${story.id}`,
       });
-
-      if (!runResult.ok) {
-        if (runResult.status === 409) {
-          const refreshedStoryResult = await refreshStoryAfterConflict({
-            repositoryId: repository.id,
-            storyId: story.id,
-          });
-          if (!refreshedStoryResult.ok) {
-            setActionError(refreshedStoryResult.message);
-            return;
-          }
-          upsertWorkItems(refreshedStoryResult.story);
-        }
-        setActionError(runResult.message);
-        return;
+      if (displayState.upsertedItems.length > 0) {
+        upsertWorkItems(...displayState.upsertedItems);
       }
-
-      upsertWorkItems(runResult.result.story, ...runResult.result.updatedTasks);
-      const workflowFeedback = resolveWorkflowFeedback({
-        storyId: story.id,
-        result: runResult.result,
-      });
-      if (workflowFeedback.error) {
-        setActionError(workflowFeedback.error);
-        return;
-      }
-      setActionNotice(workflowFeedback.notice ?? null);
+      setActionError(displayState.error);
+      setActionNotice(displayState.notice);
     } catch (error) {
       setActionError(error instanceof Error ? error.message : String(error));
     } finally {
