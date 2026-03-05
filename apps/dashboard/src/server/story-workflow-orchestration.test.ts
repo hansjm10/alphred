@@ -161,6 +161,52 @@ describe('runStoryWorkflowOrchestration', () => {
     );
   });
 
+  it('omits conflicted tasks from updatedTasks after breakdown approval partially starts tasks', async () => {
+    const story = createWorkItem({ id: 3, type: 'story', status: 'BreakdownProposed', revision: 4 });
+    const approvedStory = createWorkItem({ id: 3, type: 'story', status: 'Approved', revision: 5 });
+    const readyTaskA = createWorkItem({ id: 20, type: 'task', parentId: 3, status: 'Ready', revision: 1 });
+    const readyTaskB = createWorkItem({ id: 21, type: 'task', parentId: 3, status: 'Ready', revision: 2 });
+    const startedTaskA = createWorkItem({ ...readyTaskA, status: 'InProgress', revision: 2 });
+
+    const operations = createOperations({
+      getWorkItem: vi.fn().mockResolvedValue({ workItem: story }),
+      approveStoryBreakdown: vi.fn().mockResolvedValue({
+        story: approvedStory,
+        tasks: [readyTaskA, readyTaskB],
+      }),
+      moveWorkItemStatus: vi
+        .fn()
+        .mockResolvedValueOnce({ workItem: startedTaskA })
+        .mockRejectedValueOnce(
+          new DashboardIntegrationError('conflict', 'Task revision conflict.', { status: 409 }),
+        ),
+      listWorkItems: vi.fn().mockResolvedValue({ workItems: [] }),
+    });
+
+    const result = await runStoryWorkflowOrchestration({
+      request: {
+        repositoryId: 1,
+        storyId: 3,
+        expectedRevision: 4,
+        actorType: 'human',
+        actorLabel: 'alice',
+        approveAndStart: true,
+      },
+      operations,
+    });
+
+    expect(result.updatedTasks).toEqual([startedTaskA]);
+    expect(result.startedTasks).toEqual([startedTaskA]);
+    expect(result.steps.at(-1)).toEqual(
+      expect.objectContaining({
+        step: 'start_ready_tasks',
+        outcome: 'partial_failure',
+        startedTaskIds: [20],
+        failedTaskIds: [21],
+      }),
+    );
+  });
+
   it('rethrows non-conflict task start failures', async () => {
     const story = createWorkItem({ id: 3, type: 'story', status: 'Approved', revision: 2 });
     const readyTask = createWorkItem({ id: 20, type: 'task', parentId: 3, status: 'Ready', revision: 1 });

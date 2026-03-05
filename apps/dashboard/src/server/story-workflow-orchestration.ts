@@ -297,6 +297,13 @@ export async function runStoryWorkflowOrchestration(params: {
   }
 
   if (failures.length > 0) {
+    const conflictedTaskIds = new Set(
+      failures.filter(failure => failure.status === 409).map(failure => failure.taskId),
+    );
+    if (conflictedTaskIds.size > 0) {
+      updatedTasks = updatedTasks.filter(task => !conflictedTaskIds.has(task.id));
+    }
+
     if (startedTasks.length > 0) {
       const startedById = new Map(startedTasks.map(task => [task.id, task]));
       updatedTasks = updatedTasks.map(task => startedById.get(task.id) ?? task);

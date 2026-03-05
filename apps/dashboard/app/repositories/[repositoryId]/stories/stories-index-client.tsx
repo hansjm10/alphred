@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import type { WorkItemStatus } from '@alphred/shared';
 import type {
   DashboardRepositoryState,
@@ -174,6 +174,13 @@ export function StoriesIndexPageContent(props: Readonly<{
   const [runningStoryId, setRunningStoryId] = useState<number | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [actionNotice, setActionNotice] = useState<string | null>(null);
+
+  useEffect(() => {
+    setWorkItemsById(toWorkItemsById(initialWorkItems));
+    setRunningStoryId(null);
+    setActionError(null);
+    setActionNotice(null);
+  }, [repository.id, initialWorkItems]);
 
   const allWorkItems = useMemo(() => Object.values(workItemsById), [workItemsById]);
   const stories = useMemo(
