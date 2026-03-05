@@ -717,6 +717,46 @@ describe('story-breakdown-run-operations', () => {
     });
   });
 
+  it('rejects launching a new breakdown run when a legacy tree run is still active after config changes', async () => {
+    const { db, prepareWorkflowRunLaunchMock, completeWorkflowRunLaunchMock, operations } = createHarness({
+      ALPHRED_DASHBOARD_STORY_BREAKDOWN_TREE_KEY: 'next-story-breakdown-planner',
+      ALPHRED_DASHBOARD_STORY_BREAKDOWN_NODE_KEY: 'next-breakdown',
+    });
+    const repositoryId = seedRepository(db, 'planner-legacy-conflict');
+    const storyId = seedStory(db, repositoryId, 5);
+    const { treeId, treeNodeId } = seedPlannerTree(db, {
+      treeKey: 'legacy-story-breakdown-planner',
+      nodeKey: 'legacy-breakdown',
+    });
+    seedPlannerRun(db, {
+      treeId,
+      treeNodeId,
+      repositoryId,
+      storyId,
+      runStatus: 'running',
+      nodeStatus: 'running',
+      nodeKey: 'legacy-breakdown',
+    });
+
+    await expect(
+      operations.launchStoryBreakdownRun({
+        repositoryId,
+        storyId,
+        expectedRevision: 5,
+      }),
+    ).rejects.toMatchObject({
+      code: 'conflict',
+      status: 409,
+      message: 'Story breakdown planner run is already active for this story.',
+      details: expect.objectContaining({
+        treeKey: 'legacy-story-breakdown-planner',
+        nodeKey: 'next-breakdown',
+      }),
+    });
+    expect(prepareWorkflowRunLaunchMock).not.toHaveBeenCalled();
+    expect(completeWorkflowRunLaunchMock).not.toHaveBeenCalled();
+  });
+
   it('returns a validated story_breakdown_result for completed runs', async () => {
     const { db, operations } = createHarness();
     const repositoryId = seedRepository(db, 'planner-complete');
@@ -758,6 +798,68 @@ describe('story-breakdown-run-operations', () => {
               priority: 1,
               estimate: 3,
               links: ['https://example.com/design'],
+            },
+          ],
+        },
+      },
+      error: null,
+    });
+  });
+
+  it('normalizes planner plannedFiles with proposal-compatible repo-relative rules', async () => {
+    const { db, operations } = createHarness();
+    const repositoryId = seedRepository(db, 'planner-normalized-paths');
+    const storyId = seedStory(db, repositoryId);
+    const { treeId, treeNodeId } = seedPlannerTree(db);
+    const { runId, runNodeId } = seedPlannerRun(db, {
+      treeId,
+      treeNodeId,
+      repositoryId,
+      storyId,
+      runStatus: 'completed',
+      nodeStatus: 'completed',
+    });
+    insertPlannerReportArtifact(
+      db,
+      runId,
+      runNodeId,
+      JSON.stringify({
+        schemaVersion: 1,
+        resultType: 'story_breakdown_result',
+        proposed: {
+          tags: ['story'],
+          plannedFiles: ['./src/a.ts', 'src\\b.ts', 'src/a.ts'],
+          links: ['https://example.com/spec'],
+          tasks: [
+            {
+              title: 'Normalize task files',
+              plannedFiles: ['tasks\\b.ts', './tasks/a.ts', 'tasks/a.ts'],
+            },
+          ],
+        },
+      }),
+    );
+
+    const result = await operations.getStoryBreakdownRun({
+      repositoryId,
+      storyId,
+      workflowRunId: runId,
+    });
+
+    expect(result).toEqual({
+      workflowRunId: runId,
+      runStatus: 'completed',
+      result: {
+        schemaVersion: 1,
+        resultType: 'story_breakdown_result',
+        proposed: {
+          tags: ['story'],
+          plannedFiles: ['src/a.ts', 'src/b.ts'],
+          links: ['https://example.com/spec'],
+          tasks: [
+            {
+              title: 'Normalize task files',
+              plannedFiles: ['tasks/a.ts', 'tasks/b.ts'],
             },
           ],
         },
@@ -916,6 +1018,66 @@ describe('story-breakdown-run-operations', () => {
           reason: 'schema_validation_failed',
           reportArtifactId,
           validationErrors: expect.arrayContaining(['schemaVersion must equal 1.']),
+        }),
+      },
+    });
+  });
+
+  it('surfaces invalid_output when planner plannedFiles are not repo-relative', async () => {
+    const { db, operations } = createHarness();
+    const repositoryId = seedRepository(db, 'planner-invalid-paths');
+    const storyId = seedStory(db, repositoryId);
+    const { treeId, treeNodeId } = seedPlannerTree(db);
+    const { runId, runNodeId } = seedPlannerRun(db, {
+      treeId,
+      treeNodeId,
+      repositoryId,
+      storyId,
+      runStatus: 'completed',
+      nodeStatus: 'completed',
+    });
+    const reportArtifactId = insertPlannerReportArtifact(
+      db,
+      runId,
+      runNodeId,
+      JSON.stringify({
+        schemaVersion: 1,
+        resultType: 'story_breakdown_result',
+        proposed: {
+          tags: ['story'],
+          plannedFiles: ['/tmp/escape.ts'],
+          links: [],
+          tasks: [
+            {
+              title: 'Reject invalid task files',
+              plannedFiles: ['../outside.ts'],
+            },
+          ],
+        },
+      }),
+    );
+
+    const result = await operations.getStoryBreakdownRun({
+      repositoryId,
+      storyId,
+      workflowRunId: runId,
+    });
+
+    expect(result).toEqual({
+      workflowRunId: runId,
+      runStatus: 'completed',
+      result: null,
+      error: {
+        code: 'invalid_output',
+        message: 'Planner output does not match the story_breakdown_result schema.',
+        retryable: false,
+        details: expect.objectContaining({
+          reason: 'schema_validation_failed',
+          reportArtifactId,
+          validationErrors: expect.arrayContaining([
+            'proposed.plannedFiles must be an array of repo-relative file paths or null.',
+            'proposed.tasks[0].plannedFiles must be an array of repo-relative file paths or null.',
+          ]),
         }),
       },
     });

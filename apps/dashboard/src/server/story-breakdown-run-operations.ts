@@ -1,3 +1,4 @@
+import { posix } from 'node:path';
 import {
   and,
   desc,
@@ -171,6 +172,56 @@ function toOptionalStringArray(value: unknown, fieldPath: string, validationErro
   return [...value];
 }
 
+function toUniqueSortedStrings(values: readonly string[]): string[] {
+  return [...new Set(values)].sort((left, right) => left.localeCompare(right));
+}
+
+function normalizeRepoRelativePath(path: string): string | null {
+  const trimmed = path.trim();
+  if (trimmed.length === 0) {
+    return null;
+  }
+
+  const slashNormalized = trimmed.replaceAll('\\', '/');
+  if (slashNormalized.startsWith('/')) {
+    return null;
+  }
+
+  if (/^[A-Za-z]:\//.test(slashNormalized)) {
+    return null;
+  }
+
+  const normalized = posix.normalize(slashNormalized).replace(/^(\.\/)+/, '');
+  if (normalized.length === 0 || normalized === '.' || normalized === '..' || normalized.startsWith('../')) {
+    return null;
+  }
+
+  return normalized;
+}
+
+function toOptionalRepoRelativePathArray(value: unknown, fieldPath: string, validationErrors: string[]): string[] | null {
+  if (value === null) {
+    return null;
+  }
+
+  if (!Array.isArray(value) || value.some(entry => typeof entry !== 'string')) {
+    validationErrors.push(`${fieldPath} must be an array of repo-relative file paths or null.`);
+    return null;
+  }
+
+  const normalized: string[] = [];
+  for (const entry of value) {
+    const normalizedPath = normalizeRepoRelativePath(entry);
+    if (normalizedPath === null) {
+      validationErrors.push(`${fieldPath} must be an array of repo-relative file paths or null.`);
+      return null;
+    }
+    normalized.push(normalizedPath);
+  }
+
+  return toUniqueSortedStrings(normalized);
+}
+
 function toOptionalFiniteNumber(value: unknown, fieldPath: string, validationErrors: string[]): number | null {
   if (value === null) {
     return null;
@@ -317,7 +368,7 @@ function normalizeBreakdownTask(
   }
 
   if ('plannedFiles' in value) {
-    task.plannedFiles = toOptionalStringArray(value.plannedFiles, `${fieldPath}.plannedFiles`, validationErrors);
+    task.plannedFiles = toOptionalRepoRelativePathArray(value.plannedFiles, `${fieldPath}.plannedFiles`, validationErrors);
   }
 
   if ('assignees' in value) {
@@ -388,7 +439,7 @@ function validatePlannerResult(content: string): { ok: true; value: DashboardSto
     ? toOptionalStringArray(normalizedProposed.tags, 'proposed.tags', validationErrors)
     : (validationErrors.push('proposed.tags is required.'), null);
   const plannedFiles = 'plannedFiles' in normalizedProposed
-    ? toOptionalStringArray(normalizedProposed.plannedFiles, 'proposed.plannedFiles', validationErrors)
+    ? toOptionalRepoRelativePathArray(normalizedProposed.plannedFiles, 'proposed.plannedFiles', validationErrors)
     : (validationErrors.push('proposed.plannedFiles is required.'), null);
   const links = 'links' in normalizedProposed
     ? toOptionalStringArray(normalizedProposed.links, 'proposed.links', validationErrors)
@@ -785,6 +836,7 @@ export function createStoryBreakdownRunOperations(params: {
             .select({
               workflowRunId: workflowRuns.id,
               runStatus: workflowRuns.status,
+              treeKey: workflowTrees.treeKey,
             })
             .from(workflowRunAssociations)
             .innerJoin(workflowRuns, eq(workflowRunAssociations.workflowRunId, workflowRuns.id))
@@ -793,7 +845,6 @@ export function createStoryBreakdownRunOperations(params: {
               and(
                 eq(workflowRunAssociations.repositoryId, repositoryId),
                 eq(workflowRunAssociations.workItemId, storyId),
-                eq(workflowTrees.treeKey, plannerConfig.treeKey),
                 sql`${workflowRuns.status} in ('pending', 'running', 'paused')`,
               ),
             )
@@ -806,7 +857,7 @@ export function createStoryBreakdownRunOperations(params: {
               details: {
                 workflowRunId: activeRun.workflowRunId,
                 runStatus: activeRun.runStatus,
-                treeKey: plannerConfig.treeKey,
+                treeKey: activeRun.treeKey,
                 nodeKey: plannerConfig.nodeKey,
               },
             });
