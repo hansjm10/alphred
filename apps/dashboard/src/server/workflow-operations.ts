@@ -24,6 +24,7 @@ import type {
   DashboardWorkflowTreeSnapshot,
   DashboardWorkflowTreeSummary,
 } from './dashboard-contracts';
+import { DEFAULT_STORY_BREAKDOWN_TREE_KEY } from './dashboard-default-workflows';
 import { DashboardIntegrationError } from './dashboard-errors';
 import { loadDraftTopologyByTreeId } from './workflow-draft-operations';
 import {
@@ -34,6 +35,7 @@ import {
 } from './workflow-validation';
 
 const utcNow = sql`(strftime('%Y-%m-%dT%H:%M:%fZ','now'))`;
+const hiddenWorkflowTreeKeys = new Set([DEFAULT_STORY_BREAKDOWN_TREE_KEY]);
 
 type WithDatabase = <T>(operation: (db: AlphredDatabase) => Promise<T> | T) => Promise<T>;
 
@@ -81,7 +83,7 @@ export function createWorkflowOperations(params: {
         const seen = new Set<string>();
         const workflows: DashboardWorkflowTreeSummary[] = [];
         for (const row of rows) {
-          if (seen.has(row.treeKey)) {
+          if (seen.has(row.treeKey) || hiddenWorkflowTreeKeys.has(row.treeKey)) {
             continue;
           }
           seen.add(row.treeKey);

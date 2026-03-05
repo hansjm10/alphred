@@ -423,13 +423,14 @@ function insertDiagnostics(
   runId: number,
   runNodeId: number,
   diagnostics: Record<string, unknown>,
+  attempt = 1,
 ): number {
   return Number(
     db.insert(runNodeDiagnostics)
       .values({
         workflowRunId: runId,
         runNodeId,
-        attempt: 1,
+        attempt,
         outcome: 'failed',
         eventCount: 1,
         retainedEventCount: 1,
@@ -1191,6 +1192,105 @@ describe('story-breakdown-run-operations', () => {
         retryable: true,
         details: expect.objectContaining({
           kind: 'planner_transient_failure',
+          diagnosticId,
+          failureArtifactId,
+          diagnosticClassification: 'timeout',
+        }),
+      },
+    });
+  });
+
+  it('uses the latest planner attempt when a retried run fails after an earlier report artifact', async () => {
+    const { db, operations } = createHarness();
+    const repositoryId = seedRepository(db, 'planner-retried-timeout');
+    const storyId = seedStory(db, repositoryId);
+    const { treeId, treeNodeId } = seedPlannerTree(db);
+    const { runId, runNodeId: firstAttemptRunNodeId } = seedPlannerRun(db, {
+      treeId,
+      treeNodeId,
+      repositoryId,
+      storyId,
+      runStatus: 'failed',
+      nodeStatus: 'completed',
+      attempt: 1,
+    });
+    insertPlannerReportArtifact(db, runId, firstAttemptRunNodeId, validPlannerResultJson());
+
+    const secondAttemptRunNodeId = Number(
+      db.insert(runNodes)
+        .values({
+          workflowRunId: runId,
+          treeNodeId,
+          nodeKey: 'breakdown',
+          nodeRole: 'standard',
+          nodeType: 'agent',
+          provider: 'codex',
+          model: 'gpt-5.3-codex',
+          prompt: 'Return a story breakdown result.',
+          promptContentType: 'markdown',
+          maxRetries: 0,
+          sequenceIndex: 1,
+          attempt: 2,
+          status: 'pending',
+          startedAt: null,
+          completedAt: null,
+          createdAt: '2026-03-05T17:04:30.000Z',
+          updatedAt: '2026-03-05T17:04:30.000Z',
+        })
+        .run().lastInsertRowid,
+    );
+    transitionRunNodeStatus(db, {
+      runNodeId: secondAttemptRunNodeId,
+      expectedFrom: 'pending',
+      to: 'running',
+      occurredAt: '2026-03-05T17:04:35.000Z',
+    });
+    transitionRunNodeStatus(db, {
+      runNodeId: secondAttemptRunNodeId,
+      expectedFrom: 'running',
+      to: 'failed',
+      occurredAt: '2026-03-05T17:05:00.000Z',
+    });
+
+    const failureArtifactId = insertFailureArtifact(
+      db,
+      runId,
+      secondAttemptRunNodeId,
+      'Request timed out while waiting for model response.',
+    );
+    const diagnosticId = insertDiagnostics(
+      db,
+      runId,
+      secondAttemptRunNodeId,
+      {
+        error: {
+          name: 'TimeoutError',
+          message: 'Request timed out while waiting for model response.',
+          classification: 'timeout',
+          stackPreview: null,
+        },
+      },
+      2,
+    );
+
+    const result = await operations.getStoryBreakdownRun({
+      repositoryId,
+      storyId,
+      workflowRunId: runId,
+    });
+
+    expect(result).toEqual({
+      workflowRunId: runId,
+      runStatus: 'failed',
+      result: null,
+      error: {
+        code: 'transient',
+        message: 'Request timed out while waiting for model response.',
+        retryable: true,
+        details: expect.objectContaining({
+          kind: 'planner_transient_failure',
+          runNodeId: secondAttemptRunNodeId,
+          attempt: 2,
           diagnosticId,
           failureArtifactId,
           diagnosticClassification: 'timeout',

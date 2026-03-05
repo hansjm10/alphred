@@ -598,52 +598,7 @@ function findPlannerNodeExecutionTarget(
   db: AlphredDatabase,
   workflowRunId: number,
 ): Pick<PlannerNodeExecutionContext, 'nodeKey' | 'runNodeId' | 'attempt'> | null {
-  const reportNode = db
-    .select({
-      nodeKey: runNodes.nodeKey,
-      runNodeId: runNodes.id,
-      attempt: runNodes.attempt,
-    })
-    .from(phaseArtifacts)
-    .innerJoin(runNodes, eq(phaseArtifacts.runNodeId, runNodes.id))
-    .where(and(eq(phaseArtifacts.workflowRunId, workflowRunId), eq(phaseArtifacts.artifactType, 'report')))
-    .orderBy(desc(phaseArtifacts.createdAt), desc(phaseArtifacts.id))
-    .get();
-  if (reportNode) {
-    return reportNode;
-  }
-
-  const failureNode = db
-    .select({
-      nodeKey: runNodes.nodeKey,
-      runNodeId: runNodes.id,
-      attempt: runNodes.attempt,
-    })
-    .from(phaseArtifacts)
-    .innerJoin(runNodes, eq(phaseArtifacts.runNodeId, runNodes.id))
-    .where(and(eq(phaseArtifacts.workflowRunId, workflowRunId), eq(phaseArtifacts.artifactType, 'log')))
-    .orderBy(desc(phaseArtifacts.createdAt), desc(phaseArtifacts.id))
-    .get();
-  if (failureNode) {
-    return failureNode;
-  }
-
-  const diagnosticNode = db
-    .select({
-      nodeKey: runNodes.nodeKey,
-      runNodeId: runNodes.id,
-      attempt: runNodes.attempt,
-    })
-    .from(runNodeDiagnostics)
-    .innerJoin(runNodes, eq(runNodeDiagnostics.runNodeId, runNodes.id))
-    .where(eq(runNodeDiagnostics.workflowRunId, workflowRunId))
-    .orderBy(desc(runNodeDiagnostics.attempt), desc(runNodeDiagnostics.id))
-    .get();
-  if (diagnosticNode) {
-    return diagnosticNode;
-  }
-
-  const activeNode = db
+  const latestActiveNode = db
     .select({
       nodeKey: runNodes.nodeKey,
       runNodeId: runNodes.id,
@@ -653,8 +608,8 @@ function findPlannerNodeExecutionTarget(
     .where(and(eq(runNodes.workflowRunId, workflowRunId), sql`${runNodes.status} <> 'pending'`))
     .orderBy(desc(runNodes.attempt), desc(runNodes.id))
     .get();
-  if (activeNode) {
-    return activeNode;
+  if (latestActiveNode) {
+    return latestActiveNode;
   }
 
   return db

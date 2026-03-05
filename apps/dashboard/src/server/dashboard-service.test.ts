@@ -1117,12 +1117,7 @@ describe('createDashboardService', () => {
     expect(repositoriesResponse[0]?.name).toBe('demo-repo');
 
     const workflowTreesResponse = await service.listWorkflowTrees();
-    expect(workflowTreesResponse).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ treeKey: 'demo-tree' }),
-        expect.objectContaining({ treeKey: DEFAULT_STORY_BREAKDOWN_TREE_KEY }),
-      ]),
-    );
+    expect(workflowTreesResponse).toEqual([expect.objectContaining({ treeKey: 'demo-tree' })]);
 
     const runsResponse = await service.listWorkflowRuns();
     expect(runsResponse).toHaveLength(1);
@@ -1875,14 +1870,7 @@ describe('createDashboardService', () => {
     const service = createDashboardService({ dependencies });
 
     const workflows = await service.listWorkflowTrees();
-    expect(workflows).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          treeKey: DEFAULT_STORY_BREAKDOWN_TREE_KEY,
-          name: 'Story Breakdown Planner',
-        }),
-      ]),
-    );
+    expect(workflows).toEqual([]);
 
     const snapshot = await service.getWorkflowTreeSnapshot(DEFAULT_STORY_BREAKDOWN_TREE_KEY);
     expect(snapshot.status).toBe('published');
