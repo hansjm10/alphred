@@ -238,6 +238,106 @@ describe('RepositoryBoardPageContent', () => {
     );
   });
 
+  it('builds GitHub file links from scp-style remote URLs', async () => {
+    const user = userEvent.setup();
+
+    render(
+      <RepositoryBoardPageContent
+        repository={createRepository({
+          id: 1,
+          name: 'demo-repo',
+          remoteRef: 'ignored/for-scp',
+          remoteUrl: 'git@ghe.internal.example:octocat/demo-repo.git',
+        })}
+        actor={{ actorType: 'human', actorLabel: 'octocat' }}
+        initialLatestEventId={0}
+        initialWorkItems={[
+          createWorkItem({
+            id: 10,
+            type: 'task',
+            status: 'Ready',
+            title: 'Write tests',
+            plannedFiles: ['src/main.ts'],
+          }),
+        ]}
+      />,
+    );
+
+    await user.click(screen.getByRole('button', { name: /Write tests/ }));
+
+    expect(screen.getByRole('link', { name: 'Open src/main.ts in GitHub' })).toHaveAttribute(
+      'href',
+      'https://ghe.internal.example/octocat/demo-repo/blob/main/src/main.ts',
+    );
+  });
+
+  it('falls back to owner/repo remoteRef links when remoteUrl is invalid', async () => {
+    const user = userEvent.setup();
+
+    render(
+      <RepositoryBoardPageContent
+        repository={createRepository({
+          id: 1,
+          name: 'demo-repo',
+          remoteRef: 'octocat/demo-repo',
+          remoteUrl: 'not-a-valid-url',
+        })}
+        actor={{ actorType: 'human', actorLabel: 'octocat' }}
+        initialLatestEventId={0}
+        initialWorkItems={[
+          createWorkItem({
+            id: 10,
+            type: 'task',
+            status: 'Ready',
+            title: 'Write tests',
+            plannedFiles: ['src/main.ts'],
+          }),
+        ]}
+      />,
+    );
+
+    await user.click(screen.getByRole('button', { name: /Write tests/ }));
+
+    expect(screen.getByRole('link', { name: 'Open src/main.ts in GitHub' })).toHaveAttribute(
+      'href',
+      'https://github.com/octocat/demo-repo/blob/main/src/main.ts',
+    );
+  });
+
+  it('disables file links when repository web URL cannot be resolved', async () => {
+    const user = userEvent.setup();
+
+    render(
+      <RepositoryBoardPageContent
+        repository={createRepository({
+          id: 1,
+          name: 'demo-repo',
+          remoteRef: 'invalid-remote-ref',
+          remoteUrl: 'still-not-a-valid-url',
+        })}
+        actor={{ actorType: 'human', actorLabel: 'octocat' }}
+        initialLatestEventId={0}
+        initialWorkItems={[
+          createWorkItem({
+            id: 10,
+            type: 'task',
+            status: 'Ready',
+            title: 'Write tests',
+            plannedFiles: ['README.md'],
+          }),
+        ]}
+      />,
+    );
+
+    await user.click(screen.getByRole('button', { name: /Write tests/ }));
+    expect(screen.getByText('./')).toBeInTheDocument();
+
+    const fileItem = screen.getByText('README.md').closest('li');
+    expect(fileItem).not.toBeNull();
+    expect(within(fileItem ?? document.body).queryByRole('link', { name: /Open README\.md in GitHub/ })).not.toBeInTheDocument();
+    expect(within(fileItem ?? document.body).getByRole('button', { name: 'Open' })).toBeDisabled();
+  });
+
   it('shows linked run metadata in task details when available', async () => {
     const user = userEvent.setup();
 
@@ -1321,6 +1421,111 @@ describe('RepositoryBoardPageContent', () => {
       MockEventSource.instances[0]?.emitError();
     });
     expect(screen.getByLabelText('Connection status: Reconnecting')).toBeInTheDocument();
+  });
+
+  it('shows stale connection and error banner when EventSource is unavailable', () => {
+    vi.stubGlobal('EventSource', undefined as unknown as typeof EventSource);
+
+    render(
+      <RepositoryBoardPageContent
+        repository={createRepository({ id: 1, name: 'demo-repo' })}
+        actor={{ actorType: 'human', actorLabel: 'octocat' }}
+        initialLatestEventId={0}
+        initialWorkItems={[createWorkItem({ id: 10, status: 'Draft', revision: 0, title: 'Write tests' })]}
+      />,
+    );
+
+    expect(screen.getByLabelText('Connection status: Stale')).toBeInTheDocument();
+    expect(screen.getByRole('alert')).toHaveTextContent('Board live updates are unavailable in this environment.');
+  });
+
+  it('shows an error when copying planned file path fails', async () => {
+    const user = userEvent.setup();
+    const writeText = vi.fn().mockRejectedValue(new Error('clipboard blocked'));
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText },
+    });
+
+    render(
+      <RepositoryBoardPageContent
+        repository={createRepository({ id: 1, name: 'demo-repo' })}
+        actor={{ actorType: 'human', actorLabel: 'octocat' }}
+        initialLatestEventId={0}
+        initialWorkItems={[
+          createWorkItem({
+            id: 10,
+            type: 'task',
+            status: 'Ready',
+            title: 'Write tests',
+            plannedFiles: ['src/main.ts'],
+          }),
+        ]}
+      />,
+    );
+
+    await user.click(screen.getByRole('button', { name: /Write tests/ }));
+    await user.click(screen.getByRole('button', { name: 'Copy path src/main.ts' }));
+
+    expect(writeText).toHaveBeenCalledWith('src/main.ts');
+    expect(await screen.findByText('Unable to copy path in this environment.')).toBeInTheDocument();
+  });
+
+  it('shows move API errors when status save fails without conflict', async () => {
+    const user = userEvent.setup();
+    const fetchMock = vi.mocked(global.fetch);
+
+    fetchMock.mockResolvedValueOnce(
+      createJsonResponse(
+        { error: { code: 'bad_request', message: 'Move was rejected.' } },
+        { status: 400 },
+      ),
+    );
+
+    render(
+      <RepositoryBoardPageContent
+        repository={createRepository({ id: 1, name: 'demo-repo' })}
+        actor={{ actorType: 'human', actorLabel: 'octocat' }}
+        initialLatestEventId={0}
+        initialWorkItems={[createWorkItem({ id: 10, status: 'Draft', revision: 0, title: 'Write tests' })]}
+      />,
+    );
+
+    await user.click(screen.getByRole('button', { name: /Write tests/ }));
+    await user.selectOptions(screen.getByRole('combobox', { name: 'Status' }), 'Done');
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Move was rejected.');
+  });
+
+  it('shows patch API errors when draft field save fails without conflict', async () => {
+    const user = userEvent.setup();
+    const fetchMock = vi.mocked(global.fetch);
+
+    fetchMock.mockResolvedValueOnce(
+      createJsonResponse(
+        { error: { code: 'bad_request', message: 'Field update was rejected.' } },
+        { status: 400 },
+      ),
+    );
+
+    render(
+      <RepositoryBoardPageContent
+        repository={createRepository({ id: 1, name: 'demo-repo' })}
+        actor={{ actorType: 'human', actorLabel: 'octocat' }}
+        initialLatestEventId={0}
+        initialWorkItems={[
+          createWorkItem({ id: 10, status: 'Draft', revision: 0, title: 'Write tests', plannedFiles: null, assignees: ['octocat'] }),
+        ]}
+      />,
+    );
+
+    await user.click(screen.getByRole('button', { name: /Write tests/ }));
+    await user.type(screen.getByRole('textbox', { name: 'Add planned file path' }), 'src/new-file.ts');
+    await user.click(screen.getByRole('button', { name: 'Add file' }));
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Field update was rejected.');
   });
 });
 

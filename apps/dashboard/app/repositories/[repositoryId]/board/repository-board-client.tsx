@@ -245,8 +245,27 @@ function splitPath(path: string): { filename: string; directory: string } {
   };
 }
 
+function trimPathSlashes(value: string): string {
+  let start = 0;
+  let end = value.length;
+  while (start < end && value[start] === '/') {
+    start += 1;
+  }
+  while (end > start && value[end - 1] === '/') {
+    end -= 1;
+  }
+  return value.slice(start, end);
+}
+
+function trimGitSuffix(value: string): string {
+  if (value.toLowerCase().endsWith('.git')) {
+    return value.slice(0, -4);
+  }
+  return value;
+}
+
 function normalizeGitHubRepositoryPath(value: string): string | null {
-  const normalizedPath = value.trim().replace(/^\/+/, '').replace(/\/+$/, '').replace(/\.git$/i, '');
+  const normalizedPath = trimGitSuffix(trimPathSlashes(value.trim()));
   if (normalizedPath.length === 0) {
     return null;
   }
