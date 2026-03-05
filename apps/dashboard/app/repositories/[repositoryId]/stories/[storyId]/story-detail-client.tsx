@@ -2,7 +2,7 @@
 
 import type { WorkItemStatus } from '@alphred/shared';
 import Link from 'next/link';
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import type {
   DashboardRepositoryState,
   DashboardStoryBreakdownProposalSnapshot,
@@ -13,6 +13,7 @@ import type { BoardConnectionState, WorkItemActor } from '../../_shared/work-ite
 import {
   applyBoardEventToWorkItems,
   buildParentChain,
+  createWorkItem,
   fetchWorkItem,
   isRecord,
   moveWorkItemStatus,
@@ -142,6 +143,8 @@ export function StoryDetailPageContent(props: Readonly<{
   const [connectionError, setConnectionError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [newTaskTitle, setNewTaskTitle] = useState('');
+  const [creatingTask, setCreatingTask] = useState(false);
 
   const latestEventIdRef = useRef(initialLatestEventId);
   const eventSourceRef = useRef<EventSource | null>(null);
@@ -382,6 +385,44 @@ export function StoryDetailPageContent(props: Readonly<{
     setBusy(false);
   };
 
+  const handleCreateTask = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!story) {
+      return;
+    }
+
+    const title = newTaskTitle.trim();
+    if (title.length === 0) {
+      setActionError('Task title is required.');
+      return;
+    }
+
+    setCreatingTask(true);
+    setActionError(null);
+    try {
+      const createResult = await createWorkItem({
+        repositoryId: repository.id,
+        type: 'task',
+        title,
+        parentId: story.id,
+        actor,
+        errorPrefix: 'Unable to create task',
+      });
+      if (createResult.ok) {
+        setWorkItemsById(previous => ({
+          ...previous,
+          [createResult.workItem.id]: createResult.workItem,
+        }));
+        setNewTaskTitle('');
+      } else {
+        setActionError(createResult.message);
+      }
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : 'Unable to create task.');
+    }
+    setCreatingTask(false);
+  };
+
   if (story?.type !== 'story') {
     return (
       <div className="page-stack">
@@ -472,10 +513,32 @@ export function StoryDetailPageContent(props: Readonly<{
               </>
             ) : null}
 
-            <ActionButton tone="secondary" onClick={() => void refreshAll()} disabled={busy}>
-              Refresh
-            </ActionButton>
+              <ActionButton tone="secondary" onClick={() => void refreshAll()} disabled={busy}>
+                Refresh
+              </ActionButton>
           </div>
+
+          <form className="board-inline-editor" onSubmit={(event) => void handleCreateTask(event)}>
+            <input
+              type="text"
+              aria-label="Task title"
+              placeholder="Add child task title"
+              value={newTaskTitle}
+              onChange={(event) => {
+                setNewTaskTitle(event.currentTarget.value);
+              }}
+            />
+            <ActionButton
+              type="submit"
+              tone="secondary"
+              className="board-inline-action"
+              disabled={creatingTask || busy}
+              aria-disabled={creatingTask || busy}
+            >
+              {creatingTask ? 'Creating…' : 'Create task'}
+            </ActionButton>
+          </form>
+
           {story.status === 'NeedsBreakdown' ? (
             <p className="meta-text">
               Waiting for an agent to propose a breakdown. Once proposed, review the plan here and approve to move tasks from Draft to Ready.

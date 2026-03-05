@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 
 import { render, screen, within } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import userEvent from '@testing-library/user-event';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { DashboardRepositoryState, DashboardWorkItemSnapshot } from '@dashboard/server/dashboard-contracts';
 import StoriesIndexPage from './page';
 
@@ -64,11 +65,19 @@ function createWorkItem(overrides: Partial<DashboardWorkItemSnapshot> = {}): Das
   };
 }
 
+function createJsonResponse(payload: unknown, init?: ResponseInit): Response {
+  return new Response(JSON.stringify(payload), init);
+}
+
 describe('StoriesIndexPage', () => {
   beforeEach(() => {
     createDashboardServiceMock.mockReset();
     loadDashboardRepositoriesMock.mockReset();
     notFoundMock.mockClear();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
   });
 
   it('renders stories with status and child task counts', async () => {
@@ -115,6 +124,46 @@ describe('StoriesIndexPage', () => {
     render(root);
 
     expect(screen.getByText('None')).toBeInTheDocument();
+  });
+
+  it('creates a story from the inline form', async () => {
+    const user = userEvent.setup();
+    const fetchMock = vi.fn();
+    fetchMock.mockResolvedValueOnce(
+      createJsonResponse(
+        {
+          workItem: createWorkItem({ id: 8, type: 'story', title: 'Created from UI', status: 'Draft', parentId: null }),
+        },
+        { status: 201 },
+      ),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const repository = createRepository({ id: 1, name: 'demo-repo' });
+    const service = {
+      getRepositoryBoardBootstrap: vi.fn().mockResolvedValue({ repositoryId: 1, latestEventId: 0, workItems: [] }),
+    };
+
+    createDashboardServiceMock.mockReturnValue(service);
+    loadDashboardRepositoriesMock.mockResolvedValue([repository]);
+
+    const root = await StoriesIndexPage({ params: Promise.resolve({ repositoryId: '1' }) });
+    render(root);
+
+    await user.type(screen.getByRole('textbox', { name: 'Story title' }), 'Created from UI');
+    await user.click(screen.getByRole('button', { name: 'Create story' }));
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/dashboard/repositories/1/work-items', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        type: 'story',
+        title: 'Created from UI',
+        actorType: 'human',
+        actorLabel: 'dashboard',
+      }),
+    });
+    expect(await screen.findByRole('link', { name: 'Created from UI' })).toHaveAttribute('href', '/repositories/1/stories/8');
   });
 
   it('calls notFound when repository id is invalid', async () => {

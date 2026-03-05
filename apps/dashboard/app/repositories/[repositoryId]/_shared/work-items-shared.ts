@@ -445,6 +445,89 @@ export async function fetchWorkItem(params: {
   return payload.workItem as DashboardWorkItemSnapshot;
 }
 
+export async function createWorkItem(params: {
+  repositoryId: number;
+  type: WorkItemType;
+  title: string;
+  actor: WorkItemActor;
+  status?: WorkItemStatus;
+  description?: string | null;
+  parentId?: number | null;
+  tags?: string[] | null;
+  plannedFiles?: string[] | null;
+  assignees?: string[] | null;
+  priority?: number | null;
+  estimate?: number | null;
+  errorPrefix?: string;
+}): Promise<{ ok: true; workItem: DashboardWorkItemSnapshot } | { ok: false; status: number; message: string }> {
+  const errorPrefix = params.errorPrefix ?? 'Unable to create work item';
+  const requestBody: {
+    type: WorkItemType;
+    title: string;
+    actorType: WorkItemActor['actorType'];
+    actorLabel: WorkItemActor['actorLabel'];
+    status?: WorkItemStatus;
+    description?: string | null;
+    parentId?: number | null;
+    tags?: string[] | null;
+    plannedFiles?: string[] | null;
+    assignees?: string[] | null;
+    priority?: number | null;
+    estimate?: number | null;
+  } = {
+    type: params.type,
+    title: params.title,
+    actorType: params.actor.actorType,
+    actorLabel: params.actor.actorLabel,
+  };
+
+  if (params.status !== undefined) {
+    requestBody.status = params.status;
+  }
+  if (params.description !== undefined) {
+    requestBody.description = params.description;
+  }
+  if (params.parentId !== undefined) {
+    requestBody.parentId = params.parentId;
+  }
+  if (params.tags !== undefined) {
+    requestBody.tags = params.tags;
+  }
+  if (params.plannedFiles !== undefined) {
+    requestBody.plannedFiles = params.plannedFiles;
+  }
+  if (params.assignees !== undefined) {
+    requestBody.assignees = params.assignees;
+  }
+  if (params.priority !== undefined) {
+    requestBody.priority = params.priority;
+  }
+  if (params.estimate !== undefined) {
+    requestBody.estimate = params.estimate;
+  }
+
+  const response = await fetch(`/api/dashboard/repositories/${params.repositoryId}/work-items`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(requestBody),
+  });
+  const payload = parseJsonSafely(await response.text());
+
+  if (!response.ok) {
+    return {
+      ok: false,
+      status: response.status,
+      message: resolveApiErrorMessage(response.status, payload, errorPrefix),
+    };
+  }
+
+  if (!isRecord(payload) || !isRecord(payload.workItem)) {
+    return { ok: false, status: 500, message: `${errorPrefix} (malformed response).` };
+  }
+
+  return { ok: true, workItem: payload.workItem as DashboardWorkItemSnapshot };
+}
+
 export async function moveWorkItemStatus<TStatus extends string>(params: {
   repositoryId: number;
   workItemId: number;

@@ -1891,6 +1891,7 @@ export function RepositoryBoardPageContent({
 
       <section className="board-kanban" aria-label="Task board">
         <DndContext
+          id={`repository-board-${repository.id}`}
           sensors={sensors}
           collisionDetection={rectIntersection}
           onDragStart={handleDragStart}

@@ -190,6 +190,54 @@ describe('StoryDetailPageContent', () => {
     expect(screen.getByText('Needs breakdown')).toBeInTheDocument();
   });
 
+  it('creates a child task from the story detail actions', async () => {
+    const user = userEvent.setup();
+    const fetchMock = vi.mocked(global.fetch);
+
+    fetchMock.mockResolvedValueOnce(
+      createJsonResponse(
+        {
+          workItem: createWorkItem({
+            id: 24,
+            type: 'task',
+            parentId: 3,
+            title: 'Follow-up task',
+            status: 'Draft',
+            revision: 0,
+          }),
+        },
+        { status: 201 },
+      ),
+    );
+
+    render(
+      <StoryDetailPageContent
+        repository={createRepository({ id: 1, name: 'demo-repo' })}
+        actor={{ actorType: 'human', actorLabel: 'octocat' }}
+        storyId={3}
+        initialLatestEventId={0}
+        initialProposal={null}
+        initialWorkItems={[createWorkItem({ id: 3, type: 'story', title: 'Story title', status: 'Approved', revision: 1 })]}
+      />,
+    );
+
+    await user.type(screen.getByRole('textbox', { name: 'Task title' }), 'Follow-up task');
+    await user.click(screen.getByRole('button', { name: 'Create task' }));
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/dashboard/repositories/1/work-items', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        type: 'task',
+        title: 'Follow-up task',
+        actorType: 'human',
+        actorLabel: 'octocat',
+        parentId: 3,
+      }),
+    });
+    expect(await screen.findByText('Follow-up task')).toBeInTheDocument();
+  });
+
   it('shows proposed plan in BreakdownProposed and supports approval', async () => {
     const user = userEvent.setup();
     const fetchMock = vi.mocked(global.fetch);
