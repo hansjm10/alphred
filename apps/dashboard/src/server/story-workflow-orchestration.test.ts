@@ -118,6 +118,49 @@ describe('runStoryWorkflowOrchestration', () => {
     );
   });
 
+  it('returns partial workflow state when task start fails after breakdown approval commits', async () => {
+    const story = createWorkItem({ id: 3, type: 'story', status: 'BreakdownProposed', revision: 4 });
+    const approvedStory = createWorkItem({ id: 3, type: 'story', status: 'Approved', revision: 5 });
+    const readyTaskA = createWorkItem({ id: 20, type: 'task', parentId: 3, status: 'Ready', revision: 1 });
+    const readyTaskB = createWorkItem({ id: 21, type: 'task', parentId: 3, status: 'Ready', revision: 2 });
+
+    const operations = createOperations({
+      getWorkItem: vi.fn().mockResolvedValue({ workItem: story }),
+      approveStoryBreakdown: vi.fn().mockResolvedValue({
+        story: approvedStory,
+        tasks: [readyTaskA, readyTaskB],
+      }),
+      moveWorkItemStatus: vi
+        .fn()
+        .mockRejectedValueOnce(new DashboardIntegrationError('internal_error', 'Task launch failed.', { status: 500 })),
+      listWorkItems: vi.fn().mockResolvedValue({ workItems: [] }),
+    });
+
+    const result = await runStoryWorkflowOrchestration({
+      request: {
+        repositoryId: 1,
+        storyId: 3,
+        expectedRevision: 4,
+        actorType: 'human',
+        actorLabel: 'alice',
+        approveAndStart: true,
+      },
+      operations,
+    });
+
+    expect(result.story).toEqual(approvedStory);
+    expect(result.updatedTasks).toEqual([readyTaskA, readyTaskB]);
+    expect(result.startedTasks).toEqual([]);
+    expect(result.steps.at(-1)).toEqual(
+      expect.objectContaining({
+        step: 'start_ready_tasks',
+        outcome: 'partial_failure',
+        failedTaskIds: [20],
+        message: expect.stringContaining('Task launch failed.'),
+      }),
+    );
+  });
+
   it('rethrows non-conflict task start failures', async () => {
     const story = createWorkItem({ id: 3, type: 'story', status: 'Approved', revision: 2 });
     const readyTask = createWorkItem({ id: 20, type: 'task', parentId: 3, status: 'Ready', revision: 1 });

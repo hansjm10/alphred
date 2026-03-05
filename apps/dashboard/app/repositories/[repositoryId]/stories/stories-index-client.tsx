@@ -9,7 +9,14 @@ import type {
   DashboardWorkItemSnapshot,
 } from '@dashboard/server/dashboard-contracts';
 import { ActionButton, ButtonLink } from '../../../ui/primitives';
-import { fetchWorkItem, runStoryWorkflow, toWorkItemsById, type WorkItemActor } from '../_shared/work-items-shared';
+import {
+  isRecord,
+  parseJsonSafely,
+  resolveApiErrorMessage,
+  runStoryWorkflow,
+  toWorkItemsById,
+  type WorkItemActor,
+} from '../_shared/work-items-shared';
 
 function formatWorkItemStatusLabel(status: WorkItemStatus): string {
   switch (status) {
@@ -26,16 +33,22 @@ function canRunStoryWorkflow(status: WorkItemStatus): boolean {
   return status === 'Draft' || status === 'NeedsBreakdown' || status === 'BreakdownProposed' || status === 'Approved';
 }
 
-async function refreshStoryAfterConflict(params: {
+async function refreshRepositoryWorkItemsAfterConflict(params: {
   repositoryId: number;
-  storyId: number;
-}): Promise<{ ok: true; story: DashboardWorkItemSnapshot } | { ok: false; message: string }> {
+}): Promise<{ ok: true; workItems: DashboardWorkItemSnapshot[] } | { ok: false; message: string }> {
   try {
-    const story = await fetchWorkItem({
-      repositoryId: params.repositoryId,
-      workItemId: params.storyId,
-    });
-    return { ok: true, story };
+    const response = await fetch(`/api/dashboard/repositories/${params.repositoryId}/work-items`, { method: 'GET' });
+    const payload = parseJsonSafely(await response.text());
+
+    if (!response.ok) {
+      throw new Error(resolveApiErrorMessage(response.status, payload, 'Unable to refresh work items'));
+    }
+
+    if (!isRecord(payload) || !Array.isArray(payload.workItems)) {
+      throw new Error('Unable to refresh work items (malformed response).');
+    }
+
+    return { ok: true, workItems: payload.workItems as DashboardWorkItemSnapshot[] };
   } catch (error) {
     return {
       ok: false,
@@ -94,7 +107,6 @@ function resolveSuccessfulWorkflowRun(params: {
 
 async function resolveFailedWorkflowRun(params: {
   repositoryId: number;
-  storyId: number;
   runResult: Extract<StoryWorkflowRunResult, { ok: false }>;
 }): Promise<StoryWorkflowDisplayState> {
   if (params.runResult.status !== 409) {
@@ -105,20 +117,19 @@ async function resolveFailedWorkflowRun(params: {
     };
   }
 
-  const refreshedStoryResult = await refreshStoryAfterConflict({
+  const refreshedWorkItemsResult = await refreshRepositoryWorkItemsAfterConflict({
     repositoryId: params.repositoryId,
-    storyId: params.storyId,
   });
-  if (!refreshedStoryResult.ok) {
+  if (!refreshedWorkItemsResult.ok) {
     return {
       upsertedItems: [],
-      error: refreshedStoryResult.message,
+      error: refreshedWorkItemsResult.message,
       notice: null,
     };
   }
 
   return {
-    upsertedItems: [refreshedStoryResult.story],
+    upsertedItems: refreshedWorkItemsResult.workItems,
     error: params.runResult.message,
     notice: null,
   };
@@ -147,7 +158,6 @@ async function runStoryWorkflowAndResolveDisplayState(params: {
 
   return resolveFailedWorkflowRun({
     repositoryId: params.repositoryId,
-    storyId: params.storyId,
     runResult,
   });
 }

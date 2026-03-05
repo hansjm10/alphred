@@ -27,19 +27,6 @@ type TaskStartFailure = {
   message: string;
 };
 
-function resolveMode(request: DashboardRunStoryWorkflowRequest): StoryWorkflowMode {
-  if (request.approveOnly === true) {
-    return 'approve_only';
-  }
-  if (request.approveAndStart === true) {
-    return 'approve_and_start';
-  }
-  if (request.generateOnly === true) {
-    return 'generate_only';
-  }
-  return 'default';
-}
-
 function requirePositiveInteger(value: number, fieldName: string): number {
   if (!Number.isInteger(value) || value < 1) {
     throw new DashboardIntegrationError('invalid_request', `${fieldName} must be a positive integer.`, {
@@ -87,16 +74,17 @@ function ensureStoryWorkItem(story: DashboardWorkItemSnapshot, storyId: number):
   });
 }
 
-function mapTaskStartFailure(taskId: number, error: unknown): TaskStartFailure {
-  if (error instanceof DashboardIntegrationError && error.code === 'conflict') {
-    return {
-      taskId,
-      status: error.status,
-      message: error.message,
-    };
+function resolveMode(request: DashboardRunStoryWorkflowRequest): StoryWorkflowMode {
+  if (request.approveOnly === true) {
+    return 'approve_only';
   }
-
-  throw error;
+  if (request.approveAndStart === true) {
+    return 'approve_and_start';
+  }
+  if (request.generateOnly === true) {
+    return 'generate_only';
+  }
+  return 'default';
 }
 
 function createStep(step: DashboardRunStoryWorkflowStepResult['step'], outcome: DashboardRunStoryWorkflowStepResult['outcome'], message: string): DashboardRunStoryWorkflowStepResult {
@@ -132,6 +120,7 @@ export async function runStoryWorkflowOrchestration(params: {
   let updatedTasks: DashboardWorkItemSnapshot[] = [];
   const startedTasks: DashboardWorkItemSnapshot[] = [];
   let approvedTasks: DashboardWorkItemSnapshot[] = [];
+  let didApproveBreakdown = false;
 
   const initialStory = await params.operations.getWorkItem({
     repositoryId,
@@ -219,6 +208,7 @@ export async function runStoryWorkflowOrchestration(params: {
     story = approved.story;
     approvedTasks = approved.tasks;
     updatedTasks = approved.tasks;
+    didApproveBreakdown = true;
     steps.push(createStep('approve_breakdown', 'applied', 'Approved breakdown and moved child tasks to Ready.'));
   } else {
     steps.push(
@@ -271,6 +261,7 @@ export async function runStoryWorkflowOrchestration(params: {
   }
 
   const failures: TaskStartFailure[] = [];
+  let fatalStartError: { error: unknown; message: string } | null = null;
   for (const task of readyTasks) {
     try {
       const startedTask = await params.operations.moveWorkItemStatus({
@@ -283,7 +274,25 @@ export async function runStoryWorkflowOrchestration(params: {
       });
       startedTasks.push(startedTask.workItem);
     } catch (error) {
-      failures.push(mapTaskStartFailure(task.id, error));
+      if (error instanceof DashboardIntegrationError && error.code === 'conflict') {
+        failures.push({
+          taskId: task.id,
+          status: error.status,
+          message: error.message,
+        });
+        continue;
+      }
+
+      fatalStartError = {
+        error,
+        message: error instanceof Error ? error.message : String(error),
+      };
+      failures.push({
+        taskId: task.id,
+        status: error instanceof DashboardIntegrationError ? error.status : 500,
+        message: fatalStartError.message,
+      });
+      break;
     }
   }
 
@@ -297,10 +306,18 @@ export async function runStoryWorkflowOrchestration(params: {
         }
       }
     }
+
+    if (fatalStartError !== null && !didApproveBreakdown && startedTasks.length === 0) {
+      throw fatalStartError.error;
+    }
+
     steps.push({
       step: 'start_ready_tasks',
       outcome: 'partial_failure',
-      message: `Started ${startedTasks.length} task(s); failed to start ${failures.length} task(s).`,
+      message:
+        fatalStartError === null
+          ? `Started ${startedTasks.length} task(s); failed to start ${failures.length} task(s).`
+          : `Started ${startedTasks.length} task(s); failed to start ${failures.length} task(s) before aborting remaining starts: ${fatalStartError.message}`,
       startedTaskIds: startedTasks.map(task => task.id),
       failedTaskIds: failures.map(failure => failure.taskId),
     });

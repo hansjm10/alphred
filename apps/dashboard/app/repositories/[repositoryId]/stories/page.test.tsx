@@ -181,14 +181,18 @@ describe('StoriesIndexPage', () => {
     expect(screen.getByText('Approved')).toBeInTheDocument();
   });
 
-  it('refreshes story revision on workflow conflict so retry uses latest revision', async () => {
+  it('refreshes repository work items on workflow conflict so retry uses latest revision and child task counts', async () => {
     const user = userEvent.setup();
     const fetchMock = vi.fn();
     fetchMock
       .mockResolvedValueOnce(createJsonResponse({ error: { message: 'Story revision conflict.' } }, { status: 409 }))
       .mockResolvedValueOnce(
         createJsonResponse({
-          workItem: createWorkItem({ id: 3, type: 'story', title: 'Story A', status: 'BreakdownProposed', revision: 7 }),
+          workItems: [
+            createWorkItem({ id: 3, type: 'story', title: 'Story A', status: 'BreakdownProposed', revision: 7 }),
+            createWorkItem({ id: 20, type: 'task', title: 'Task A', parentId: 3, status: 'Draft', revision: 1 }),
+            createWorkItem({ id: 21, type: 'task', title: 'Task B', parentId: 3, status: 'Draft', revision: 0 }),
+          ],
         }),
       )
       .mockResolvedValueOnce(
@@ -209,10 +213,7 @@ describe('StoriesIndexPage', () => {
     vi.stubGlobal('fetch', fetchMock);
 
     const repository = createRepository({ id: 1, name: 'demo-repo' });
-    const workItems = [
-      createWorkItem({ id: 3, type: 'story', title: 'Story A', status: 'BreakdownProposed', revision: 4 }),
-      createWorkItem({ id: 20, type: 'task', title: 'Task A', parentId: 3, status: 'Ready', revision: 1 }),
-    ];
+    const workItems = [createWorkItem({ id: 3, type: 'story', title: 'Story A', status: 'NeedsBreakdown', revision: 4 })];
     const service = {
       getRepositoryBoardBootstrap: vi.fn().mockResolvedValue({ repositoryId: 1, latestEventId: 0, workItems }),
     };
@@ -224,6 +225,8 @@ describe('StoriesIndexPage', () => {
 
     await user.click(screen.getByRole('button', { name: 'Run workflow' }));
     expect(await screen.findByRole('alert')).toHaveTextContent('Story revision conflict.');
+    expect(screen.getByText('Breakdown proposed')).toBeInTheDocument();
+    expect(screen.getByText('2 tasks')).toBeInTheDocument();
 
     expect(fetchMock).toHaveBeenNthCalledWith(1, '/api/dashboard/work-items/3/actions/run-story-workflow', {
       method: 'POST',
@@ -235,7 +238,7 @@ describe('StoriesIndexPage', () => {
         actorLabel: 'octocat',
       }),
     });
-    expect(fetchMock).toHaveBeenNthCalledWith(2, '/api/dashboard/work-items/3?repositoryId=1', {
+    expect(fetchMock).toHaveBeenNthCalledWith(2, '/api/dashboard/repositories/1/work-items', {
       method: 'GET',
     });
 
