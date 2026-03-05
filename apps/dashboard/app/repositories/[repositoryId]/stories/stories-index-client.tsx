@@ -84,7 +84,8 @@ function resolveWorkflowFeedback(params: {
 type StoryWorkflowRunResult = Awaited<ReturnType<typeof runStoryWorkflow>>;
 
 type StoryWorkflowDisplayState = Readonly<{
-  upsertedItems: readonly DashboardWorkItemSnapshot[];
+  workItems: readonly DashboardWorkItemSnapshot[];
+  workItemsMode: 'replace' | 'upsert';
   error: string | null;
   notice: string | null;
 }>;
@@ -99,7 +100,8 @@ function resolveSuccessfulWorkflowRun(params: {
   });
 
   return {
-    upsertedItems: [params.runResult.result.story, ...params.runResult.result.updatedTasks],
+    workItems: [params.runResult.result.story, ...params.runResult.result.updatedTasks],
+    workItemsMode: 'upsert',
     error: workflowFeedback.error ?? null,
     notice: workflowFeedback.error ? null : (workflowFeedback.notice ?? null),
   };
@@ -111,7 +113,8 @@ async function resolveFailedWorkflowRun(params: {
 }): Promise<StoryWorkflowDisplayState> {
   if (params.runResult.status !== 409) {
     return {
-      upsertedItems: [],
+      workItems: [],
+      workItemsMode: 'upsert',
       error: params.runResult.message,
       notice: null,
     };
@@ -122,14 +125,16 @@ async function resolveFailedWorkflowRun(params: {
   });
   if (!refreshedWorkItemsResult.ok) {
     return {
-      upsertedItems: [],
+      workItems: [],
+      workItemsMode: 'upsert',
       error: refreshedWorkItemsResult.message,
       notice: null,
     };
   }
 
   return {
-    upsertedItems: refreshedWorkItemsResult.workItems,
+    workItems: refreshedWorkItemsResult.workItems,
+    workItemsMode: 'replace',
     error: params.runResult.message,
     notice: null,
   };
@@ -213,6 +218,10 @@ export function StoriesIndexPageContent(props: Readonly<{
     });
   };
 
+  const replaceWorkItems = (items: readonly DashboardWorkItemSnapshot[]) => {
+    setWorkItemsById(toWorkItemsById(items));
+  };
+
   const handleRunStoryWorkflow = async (story: DashboardWorkItemSnapshot) => {
     if (runningStoryId !== null) {
       return;
@@ -233,8 +242,10 @@ export function StoriesIndexPageContent(props: Readonly<{
       if (workflowRequestSequenceRef.current !== requestSequence) {
         return;
       }
-      if (displayState.upsertedItems.length > 0) {
-        upsertWorkItems(...displayState.upsertedItems);
+      if (displayState.workItemsMode === 'replace') {
+        replaceWorkItems(displayState.workItems);
+      } else if (displayState.workItems.length > 0) {
+        upsertWorkItems(...displayState.workItems);
       }
       setActionError(displayState.error);
       setActionNotice(displayState.notice);

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type {
@@ -160,6 +160,56 @@ describe('StoriesIndexPageContent', () => {
       expect(screen.queryByRole('alert')).not.toBeInTheDocument();
       expect(screen.getByText('0 tasks')).toBeInTheDocument();
       expect(screen.getByRole('button', { name: 'Run workflow' })).toBeEnabled();
+    });
+  });
+
+  it('replaces local child task state with the refreshed snapshot after a workflow conflict', async () => {
+    const user = userEvent.setup();
+    const fetchMock = vi.fn();
+    fetchMock
+      .mockResolvedValueOnce(new Response(JSON.stringify({ error: { message: 'Story revision conflict.' } }), { status: 409 }))
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            workItems: [
+              createWorkItem({ id: 3, type: 'story', repositoryId: 1, title: 'Story A', status: 'Approved', revision: 7 }),
+              createWorkItem({ id: 4, type: 'story', repositoryId: 1, title: 'Story B', status: 'Draft', revision: 1 }),
+              createWorkItem({ id: 20, type: 'task', repositoryId: 1, parentId: 4, title: 'Task A', status: 'Draft', revision: 2 }),
+            ],
+          }),
+        ),
+      );
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(
+      <StoriesIndexPageContent
+        repository={createRepository({ id: 1, name: 'demo-repo' })}
+        actor={{ actorType: 'human', actorLabel: 'octocat' }}
+        initialWorkItems={[
+          createWorkItem({ id: 3, type: 'story', repositoryId: 1, title: 'Story A', status: 'NeedsBreakdown', revision: 4 }),
+          createWorkItem({ id: 20, type: 'task', repositoryId: 1, parentId: 3, title: 'Task A', status: 'Draft', revision: 1 }),
+          createWorkItem({ id: 21, type: 'task', repositoryId: 1, parentId: 3, title: 'Task B', status: 'Draft', revision: 1 }),
+        ]}
+      />,
+    );
+
+    const storyABeforeConflict = screen.getByRole('link', { name: 'Story A' }).closest('li');
+    expect(storyABeforeConflict).not.toBeNull();
+    expect(within(storyABeforeConflict!).getByText('2 tasks')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Run workflow' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Story revision conflict.');
+
+    const storyAAfterConflict = screen.getByRole('link', { name: 'Story A' }).closest('li');
+    const storyBAfterConflict = screen.getByRole('link', { name: 'Story B' }).closest('li');
+    expect(storyAAfterConflict).not.toBeNull();
+    expect(storyBAfterConflict).not.toBeNull();
+    expect(within(storyAAfterConflict!).getByText('0 tasks')).toBeInTheDocument();
+    expect(within(storyBAfterConflict!).getByText('1 tasks')).toBeInTheDocument();
+
+    expect(fetchMock).toHaveBeenNthCalledWith(2, '/api/dashboard/repositories/1/work-items', {
+      method: 'GET',
     });
   });
 });
