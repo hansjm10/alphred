@@ -645,7 +645,7 @@ describe('RepositoryBoardPageContent', () => {
     expect(await screen.findByText('Saved updates for "Write tests".')).toBeInTheDocument();
   });
 
-  it('rejects parent-directory segments in planned file paths', async () => {
+  it('rejects invalid planned file paths that are not repo-relative file paths', async () => {
     const user = userEvent.setup();
 
     render(
@@ -670,6 +670,27 @@ describe('RepositoryBoardPageContent', () => {
 
     await user.clear(plannedFileInput);
     await user.type(plannedFileInput, 'src/..');
+    await user.click(screen.getByRole('button', { name: 'Add file' }));
+
+    expect(screen.getByText('Enter a repo-relative path (for example: app/page.tsx).')).toBeInTheDocument();
+    expect(screen.getByText('No files linked yet.')).toBeInTheDocument();
+
+    await user.clear(plannedFileInput);
+    await user.type(plannedFileInput, '.');
+    await user.click(screen.getByRole('button', { name: 'Add file' }));
+
+    expect(screen.getByText('Enter a repo-relative path (for example: app/page.tsx).')).toBeInTheDocument();
+    expect(screen.getByText('No files linked yet.')).toBeInTheDocument();
+
+    await user.clear(plannedFileInput);
+    await user.type(plannedFileInput, 'src/');
+    await user.click(screen.getByRole('button', { name: 'Add file' }));
+
+    expect(screen.getByText('Enter a repo-relative path (for example: app/page.tsx).')).toBeInTheDocument();
+    expect(screen.getByText('No files linked yet.')).toBeInTheDocument();
+
+    await user.clear(plannedFileInput);
+    await user.type(plannedFileInput, 'src//new-file.ts');
     await user.click(screen.getByRole('button', { name: 'Add file' }));
 
     expect(screen.getByText('Enter a repo-relative path (for example: app/page.tsx).')).toBeInTheDocument();
