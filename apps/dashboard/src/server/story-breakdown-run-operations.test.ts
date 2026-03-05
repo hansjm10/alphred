@@ -717,6 +717,75 @@ describe('story-breakdown-run-operations', () => {
     });
   });
 
+  it('ignores active story-scoped runs that were not launched by the breakdown planner route', async () => {
+    const { db, prepareWorkflowRunLaunchMock, completeWorkflowRunLaunchMock, operations } = createHarness();
+    const repositoryId = seedRepository(db, 'planner-non-breakdown-conflict');
+    const storyId = seedStory(db, repositoryId, 4);
+    const { treeId, treeNodeId } = seedPlannerTree(db, {
+      treeKey: 'generic-story-workflow',
+      nodeKey: 'implement',
+    });
+
+    const runId = Number(
+      db.insert(workflowRuns)
+        .values({
+          workflowTreeId: treeId,
+          status: 'pending',
+          startedAt: null,
+          completedAt: null,
+          createdAt: '2026-03-05T17:03:00.000Z',
+          updatedAt: '2026-03-05T17:03:00.000Z',
+        })
+        .run().lastInsertRowid,
+    );
+    db.insert(workflowRunAssociations)
+      .values({
+        workflowRunId: runId,
+        repositoryId,
+        workItemId: storyId,
+        createdAt: '2026-03-05T17:03:00.000Z',
+      })
+      .run();
+    db.insert(runNodes)
+      .values({
+        workflowRunId: runId,
+        treeNodeId,
+        nodeKey: 'implement',
+        nodeRole: 'standard',
+        nodeType: 'agent',
+        provider: 'codex',
+        model: 'gpt-5.3-codex',
+        prompt: 'Implement the story.',
+        promptContentType: 'markdown',
+        maxRetries: 0,
+        sequenceIndex: 0,
+        attempt: 1,
+        status: 'pending',
+        startedAt: null,
+        completedAt: null,
+        createdAt: '2026-03-05T17:03:00.000Z',
+        updatedAt: '2026-03-05T17:03:00.000Z',
+      })
+      .run();
+
+    await expect(
+      operations.launchStoryBreakdownRun({
+        repositoryId,
+        storyId,
+        expectedRevision: 4,
+      }),
+    ).resolves.toEqual({
+      workflowRunId: expect.any(Number),
+      mode: 'async',
+      status: 'accepted',
+      runStatus: 'pending',
+      result: null,
+      error: null,
+    });
+    expect(prepareWorkflowRunLaunchMock).toHaveBeenCalledTimes(1);
+    expect(completeWorkflowRunLaunchMock).toHaveBeenCalledTimes(1);
+  });
+
   it('rejects launching a new breakdown run when a legacy tree run is still active after config changes', async () => {
     const { db, prepareWorkflowRunLaunchMock, completeWorkflowRunLaunchMock, operations } = createHarness({
       ALPHRED_DASHBOARD_STORY_BREAKDOWN_TREE_KEY: 'next-story-breakdown-planner',

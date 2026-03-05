@@ -841,6 +841,14 @@ export function createStoryBreakdownRunOperations(params: {
             .from(workflowRunAssociations)
             .innerJoin(workflowRuns, eq(workflowRunAssociations.workflowRunId, workflowRuns.id))
             .innerJoin(workflowTrees, eq(workflowRuns.workflowTreeId, workflowTrees.id))
+            .innerJoin(
+              phaseArtifacts,
+              and(
+                eq(phaseArtifacts.workflowRunId, workflowRuns.id),
+                eq(phaseArtifacts.artifactType, 'note'),
+                sql`coalesce(json_extract(${phaseArtifacts.metadata}, '$.kind'), '') = ${STORY_BREAKDOWN_LAUNCH_CONTEXT_ARTIFACT_KIND}`,
+              ),
+            )
             .where(
               and(
                 eq(workflowRunAssociations.repositoryId, repositoryId),
