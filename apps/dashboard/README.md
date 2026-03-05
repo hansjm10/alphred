@@ -642,10 +642,12 @@ Response `202`: `DashboardLaunchStoryBreakdownRunResult`.
 
 Behavior notes:
 - Launches the configured planner as a `single_node` async workflow run tied to the story.
+- The dashboard bootstraps a published default planner workflow with tree key `story-breakdown-planner`
+  and node key `breakdown` on first use.
 - The planner tree/node are configured via:
   - `ALPHRED_DASHBOARD_STORY_BREAKDOWN_TREE_KEY`
   - `ALPHRED_DASHBOARD_STORY_BREAKDOWN_NODE_KEY`
-- When unset, the defaults are `story-breakdown-planner` and `breakdown`.
+- When unset, the default launch path uses the seeded `story-breakdown-planner` / `breakdown` pair.
 - If another planner run for the same story is still `pending`, `running`, or `paused`, the launch is rejected with `409 conflict`.
 
 Scope note:

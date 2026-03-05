@@ -123,6 +123,7 @@ Hierarchy constraints:
   - `GET /api/dashboard/work-items/[id]/breakdown/runs/[runId]?repositoryId=...`
   - `POST /api/dashboard/work-items/[id]/actions/propose-breakdown`
   - `POST /api/dashboard/work-items/[id]/actions/approve-breakdown`
+  - Dashboard bootstrap seeds a published `story-breakdown-planner` workflow with a single `breakdown` node for the default launch path.
   - Async planner launch/result retrieval is contract-focused; orchestration consumption is tracked separately in `#289`.
 
 ### Natural end / terminal state

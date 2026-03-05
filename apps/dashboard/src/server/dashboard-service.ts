@@ -23,6 +23,7 @@ import type {
   AuthStatus,
 } from '@alphred/shared';
 import { createBackgroundExecutionManager } from './background-execution';
+import { ensureDashboardDefaultWorkflows } from './dashboard-default-workflows';
 import { DashboardIntegrationError, toDashboardIntegrationError } from './dashboard-errors';
 import { createRepositoryOperations } from './repository-operations';
 import { createRunOperations } from './run-operations';
@@ -84,6 +85,7 @@ export function createDashboardService(options: {
 
     try {
       dependencies.migrateDatabase(db);
+      ensureDashboardDefaultWorkflows(db);
       result = await operation(db);
     } catch (error) {
       caughtError = toDashboardIntegrationError(error);

@@ -22,10 +22,11 @@ import type {
   DashboardStoryBreakdownRunError,
   DashboardWorkItemProposedBreakdownTask,
 } from './dashboard-contracts';
+import {
+  DEFAULT_STORY_BREAKDOWN_NODE_KEY,
+  DEFAULT_STORY_BREAKDOWN_TREE_KEY,
+} from './dashboard-default-workflows';
 import { DashboardIntegrationError } from './dashboard-errors';
-
-const DEFAULT_STORY_BREAKDOWN_TREE_KEY = 'story-breakdown-planner';
-const DEFAULT_STORY_BREAKDOWN_NODE_KEY = 'breakdown';
 const STORY_BREAKDOWN_RESULT_SCHEMA_VERSION = 1;
 const STORY_BREAKDOWN_RESULT_TYPE = 'story_breakdown_result';
 

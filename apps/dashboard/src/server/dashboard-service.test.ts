@@ -28,6 +28,10 @@ import {
   type AlphredDatabase,
 } from '@alphred/db';
 import type { AuthStatus, ProviderExecutionPermissions, RepositoryConfig } from '@alphred/shared';
+import {
+  DEFAULT_STORY_BREAKDOWN_NODE_KEY,
+  DEFAULT_STORY_BREAKDOWN_TREE_KEY,
+} from './dashboard-default-workflows';
 import { createDashboardService, type DashboardServiceDependencies } from './dashboard-service';
 
 function createHarness(overrides: Partial<DashboardServiceDependencies> = {}): {
@@ -1113,8 +1117,12 @@ describe('createDashboardService', () => {
     expect(repositoriesResponse[0]?.name).toBe('demo-repo');
 
     const workflowTreesResponse = await service.listWorkflowTrees();
-    expect(workflowTreesResponse).toHaveLength(1);
-    expect(workflowTreesResponse[0]?.treeKey).toBe('demo-tree');
+    expect(workflowTreesResponse).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ treeKey: 'demo-tree' }),
+        expect.objectContaining({ treeKey: DEFAULT_STORY_BREAKDOWN_TREE_KEY }),
+      ]),
+    );
 
     const runsResponse = await service.listWorkflowRuns();
     expect(runsResponse).toHaveLength(1);
@@ -1728,6 +1736,9 @@ describe('createDashboardService', () => {
     const { db, dependencies } = createHarness();
     migrateDatabase(db);
 
+    const bootstrapService = createDashboardService({ dependencies });
+    await bootstrapService.listWorkflowTrees();
+
     const { proxiedDatabase, wasInjected } = createDatabaseWithWorkflowTreeInsertUniqueRace(db);
     const raceService = createDashboardService({
       dependencies: {
@@ -1857,6 +1868,77 @@ describe('createDashboardService', () => {
     expect(validation.errors).not.toEqual(
       expect.arrayContaining([expect.objectContaining({ code: 'no_initial_nodes' })]),
     );
+  });
+
+  it('bootstraps a published story-breakdown planner with a runnable breakdown node', async () => {
+    const { db, dependencies } = createHarness();
+    const service = createDashboardService({ dependencies });
+
+    const workflows = await service.listWorkflowTrees();
+    expect(workflows).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          treeKey: DEFAULT_STORY_BREAKDOWN_TREE_KEY,
+          name: 'Story Breakdown Planner',
+        }),
+      ]),
+    );
+
+    const snapshot = await service.getWorkflowTreeSnapshot(DEFAULT_STORY_BREAKDOWN_TREE_KEY);
+    expect(snapshot.status).toBe('published');
+    expect(snapshot.initialRunnableNodeKeys).toEqual([DEFAULT_STORY_BREAKDOWN_NODE_KEY]);
+    expect(snapshot.edges).toEqual([]);
+    expect(snapshot.nodes).toEqual([
+      expect.objectContaining({
+        nodeKey: DEFAULT_STORY_BREAKDOWN_NODE_KEY,
+        displayName: 'Breakdown',
+        nodeType: 'agent',
+        provider: 'codex',
+      }),
+    ]);
+    expect(snapshot.nodes[0]?.promptTemplate?.content).toContain('"resultType": "story_breakdown_result"');
+    expect(snapshot.nodes[0]?.promptTemplate?.content).toContain('Return exactly one JSON object');
+
+    const storedTrees = db
+      .select({
+        version: workflowTrees.version,
+        status: workflowTrees.status,
+      })
+      .from(workflowTrees)
+      .where(eq(workflowTrees.treeKey, DEFAULT_STORY_BREAKDOWN_TREE_KEY))
+      .all();
+    expect(storedTrees).toEqual([
+      expect.objectContaining({
+        version: 1,
+        status: 'published',
+      }),
+    ]);
+  });
+
+  it('keeps the bootstrapped story-breakdown planner idempotent across repeated service operations', async () => {
+    const { db, dependencies } = createHarness();
+    const service = createDashboardService({ dependencies });
+
+    await service.listWorkflowTrees();
+    await service.listWorkflowTrees();
+    await service.getWorkflowTreeSnapshot(DEFAULT_STORY_BREAKDOWN_TREE_KEY);
+
+    const storedTrees = db
+      .select({
+        id: workflowTrees.id,
+        version: workflowTrees.version,
+        status: workflowTrees.status,
+      })
+      .from(workflowTrees)
+      .where(eq(workflowTrees.treeKey, DEFAULT_STORY_BREAKDOWN_TREE_KEY))
+      .all();
+
+    expect(storedTrees).toEqual([
+      expect.objectContaining({
+        version: 1,
+        status: 'published',
+      }),
+    ]);
   });
 
   it('returns concurrent draft when bootstrap hits single-draft unique constraint', async () => {
