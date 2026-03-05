@@ -702,10 +702,16 @@ function mapSdkStreamEvent(
 
 function toThreadOptions(bootstrap: CodexSdkBootstrap, request: CodexRunRequest): ThreadOptions {
   const executionPermissions = request.executionPermissions;
+  const model = request.model ?? bootstrap.model;
   const options: ThreadOptions = {
-    model: request.model ?? bootstrap.model,
+    model,
     workingDirectory: request.workingDirectory,
   };
+
+  // gpt-5-codex rejects xhigh; set an explicit supported effort to avoid inheriting unsupported local CLI config.
+  if (/^gpt-5-codex(?:$|-)/.test(model)) {
+    options.modelReasoningEffort = 'high';
+  }
 
   if (executionPermissions?.approvalPolicy !== undefined) {
     options.approvalPolicy = executionPermissions.approvalPolicy;

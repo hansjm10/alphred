@@ -257,15 +257,13 @@ describe('StoryDetailPageContent', () => {
 
     await user.click(screen.getByRole('button', { name: 'Generate breakdown draft' }));
 
-    expect(fetchMock).toHaveBeenCalledWith('/api/dashboard/work-items/3/actions/propose-breakdown', expect.anything());
+    expect(fetchMock).toHaveBeenCalledWith('/api/dashboard/work-items/3/actions/generate-breakdown', expect.anything());
     const proposeCall = fetchMock.mock.calls[0];
     const proposeRequest = JSON.parse(String((proposeCall[1] as RequestInit).body));
-    expect(proposeRequest.actorType).toBe('agent');
-    expect(proposeRequest.actorLabel).toBe('alphred-breakdown-planner');
-    expect(proposeRequest.proposed.tasks).toHaveLength(3);
-    expect(proposeRequest.proposed.tasks[0].title).toBe('Plan Story title');
-    expect(proposeRequest.proposed.tasks[1].title).toBe('Implement Story title');
-    expect(proposeRequest.proposed.tasks[2].title).toBe('Validate Story title');
+    expect(proposeRequest).toEqual({
+      repositoryId: 1,
+      expectedRevision: 2,
+    });
 
     expect(screen.getByText('Breakdown proposed')).toBeInTheDocument();
     expect(await screen.findByText('Generated a breakdown draft with 3 tasks.')).toBeInTheDocument();

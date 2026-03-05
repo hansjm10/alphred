@@ -709,6 +709,14 @@ export type DashboardProposeStoryBreakdownResult = {
   tasks: DashboardWorkItemSnapshot[];
 };
 
+export type DashboardGenerateStoryBreakdownDraftRequest = {
+  repositoryId: number;
+  storyId: number;
+  expectedRevision: number;
+};
+
+export type DashboardGenerateStoryBreakdownDraftResult = DashboardProposeStoryBreakdownResult;
+
 export type DashboardApproveStoryBreakdownRequest = {
   repositoryId: number;
   storyId: number;

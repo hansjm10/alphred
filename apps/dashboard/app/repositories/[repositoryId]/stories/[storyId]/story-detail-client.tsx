@@ -5,7 +5,6 @@ import Link from 'next/link';
 import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import type {
   DashboardRepositoryState,
-  DashboardWorkItemProposedBreakdownTask,
   DashboardStoryBreakdownProposalSnapshot,
   DashboardWorkItemSnapshot,
 } from '@dashboard/server/dashboard-contracts';
@@ -97,32 +96,20 @@ async function approveStoryBreakdown(params: {
   };
 }
 
-type StoryBreakdownProposalDraft = Readonly<{
-  tags?: string[] | null;
-  plannedFiles?: string[] | null;
-  links?: string[] | null;
-  tasks: DashboardWorkItemProposedBreakdownTask[];
-}>;
-
-async function proposeStoryBreakdown(params: {
+async function generateStoryBreakdownDraft(params: {
   repositoryId: number;
   storyId: number;
   expectedRevision: number;
-  actor: WorkItemActor;
-  proposed: StoryBreakdownProposalDraft;
 }): Promise<
   | { ok: true; story: DashboardWorkItemSnapshot; tasks: DashboardWorkItemSnapshot[] }
   | { ok: false; status: number; message: string }
 > {
-  const response = await fetch(`/api/dashboard/work-items/${params.storyId}/actions/propose-breakdown`, {
+  const response = await fetch(`/api/dashboard/work-items/${params.storyId}/actions/generate-breakdown`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
       repositoryId: params.repositoryId,
       expectedRevision: params.expectedRevision,
-      actorType: params.actor.actorType,
-      actorLabel: params.actor.actorLabel,
-      proposed: params.proposed,
     }),
   });
 
@@ -132,12 +119,12 @@ async function proposeStoryBreakdown(params: {
     return {
       ok: false,
       status: response.status,
-      message: resolveApiErrorMessage(response.status, payload, 'Unable to propose breakdown'),
+      message: resolveApiErrorMessage(response.status, payload, 'Unable to generate breakdown'),
     };
   }
 
   if (!isRecord(payload) || !isRecord(payload.story) || !Array.isArray(payload.tasks)) {
-    return { ok: false, status: 500, message: 'Unable to propose breakdown (malformed response).' };
+    return { ok: false, status: 500, message: 'Unable to generate breakdown (malformed response).' };
   }
 
   return {
@@ -146,52 +133,6 @@ async function proposeStoryBreakdown(params: {
     tasks: payload.tasks as DashboardWorkItemSnapshot[],
   };
 }
-
-function buildAutoBreakdownProposal(story: DashboardWorkItemSnapshot): StoryBreakdownProposalDraft {
-  const storyTitle = story.title.trim().length > 0 ? story.title.trim() : `Story #${story.id}`;
-  const sharedTags = story.tags && story.tags.length > 0 ? story.tags : undefined;
-  const sharedPlannedFiles = story.plannedFiles && story.plannedFiles.length > 0 ? story.plannedFiles : undefined;
-  const sharedAssignees = story.assignees && story.assignees.length > 0 ? story.assignees : undefined;
-  const storyDescription = story.description?.trim();
-
-  const tasks: DashboardWorkItemProposedBreakdownTask[] = [
-    {
-      title: `Plan ${storyTitle}`,
-      description:
-        storyDescription && storyDescription.length > 0
-          ? `Clarify scope and acceptance criteria. Context: ${storyDescription}`
-          : 'Clarify scope and acceptance criteria.',
-      tags: sharedTags,
-      plannedFiles: sharedPlannedFiles,
-      assignees: sharedAssignees,
-    },
-    {
-      title: `Implement ${storyTitle}`,
-      description: 'Build the core code changes for this story.',
-      tags: sharedTags,
-      plannedFiles: sharedPlannedFiles,
-      assignees: sharedAssignees,
-    },
-    {
-      title: `Validate ${storyTitle}`,
-      description: 'Run tests and verify behavior before review.',
-      tags: sharedTags,
-      plannedFiles: sharedPlannedFiles,
-      assignees: sharedAssignees,
-    },
-  ];
-
-  return {
-    tags: sharedTags,
-    plannedFiles: sharedPlannedFiles,
-    tasks,
-  };
-}
-
-const plannerActor: WorkItemActor = {
-  actorType: 'agent',
-  actorLabel: 'alphred-breakdown-planner',
-};
 
 function renderStringList(values: string[] | null): ReactNode {
   if (!values || values.length === 0) {
@@ -501,12 +442,10 @@ export function StoryDetailPageContent(props: Readonly<{
     setActionError(null);
     setActionNotice(null);
 
-    const proposeResult = await proposeStoryBreakdown({
+    const proposeResult = await generateStoryBreakdownDraft({
       repositoryId: repository.id,
       storyId,
       expectedRevision: story.revision,
-      actor: plannerActor,
-      proposed: buildAutoBreakdownProposal(story),
     });
 
     if (proposeResult.ok) {

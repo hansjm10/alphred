@@ -3,6 +3,7 @@ import { DashboardIntegrationError } from '@dashboard/server/dashboard-errors';
 import {
   parseApproveStoryBreakdownRequest,
   parseCreateWorkItemRequest,
+  parseGenerateStoryBreakdownDraftRequest,
   parseJsonObjectBody,
   parseMoveWorkItemStatusRequest,
   parseProposeStoryBreakdownRequest,
@@ -648,6 +649,46 @@ describe('work item route validation', () => {
             expectedRevision: 1,
             actorType: 'human',
             actorLabel: null,
+          },
+          20,
+        ),
+      ).toThrowError(DashboardIntegrationError);
+    });
+  });
+
+  describe('parseGenerateStoryBreakdownDraftRequest', () => {
+    it('parses generate breakdown payloads', () => {
+      expect(
+        parseGenerateStoryBreakdownDraftRequest(
+          {
+            repositoryId: 3,
+            expectedRevision: 1,
+          },
+          20,
+        ),
+      ).toEqual({
+        repositoryId: 3,
+        storyId: 20,
+        expectedRevision: 1,
+      });
+    });
+
+    it('rejects invalid generate breakdown payloads', () => {
+      expect(() =>
+        parseGenerateStoryBreakdownDraftRequest(
+          {
+            repositoryId: '3',
+            expectedRevision: 1,
+          },
+          20,
+        ),
+      ).toThrowError(DashboardIntegrationError);
+
+      expect(() =>
+        parseGenerateStoryBreakdownDraftRequest(
+          {
+            repositoryId: 3,
+            expectedRevision: '1',
           },
           20,
         ),

@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { describe, expect, it } from 'vitest';
+import { CodexProviderError } from '@alphred/agents';
 import {
   and,
   createDatabase,
@@ -11,6 +12,7 @@ import {
   eq,
   insertRepository,
   migrateDatabase,
+  repositories,
   workItemEvents,
   workItemPolicies,
   workItemWorkflowRuns,
@@ -2143,6 +2145,150 @@ describe('work-item-operations', () => {
       code: 'conflict',
       status: 409,
       message: 'Cannot approve breakdown without child tasks.',
+    });
+  });
+
+  it('generates a story breakdown draft with Codex and persists proposed child tasks', async () => {
+    let capturedPrompt = '';
+    let capturedWorkingDirectory = '';
+
+    const { db, service } = createHarness({
+      dependencies: {
+        resolveProvider: providerName => {
+          expect(providerName).toBe('codex');
+          return {
+            async *run(prompt, options) {
+              capturedPrompt = prompt;
+              capturedWorkingDirectory = options.workingDirectory;
+              yield {
+                type: 'result',
+                content: JSON.stringify({
+                  tasks: [
+                    {
+                      title: 'Implement route',
+                      plannedFiles: ['app/api/dashboard/work-items/[id]/route.ts'],
+                    },
+                    {
+                      title: 'Add tests',
+                      plannedFiles: ['apps/dashboard/app/repositories/[repositoryId]/stories/[storyId]/page.test.tsx'],
+                    },
+                  ],
+                }),
+                timestamp: 1,
+              };
+            },
+          };
+        },
+      },
+    });
+
+    const repository = insertRepository(db, {
+      name: 'repo',
+      provider: 'github',
+      remoteUrl: 'https://example.com/repo.git',
+      remoteRef: 'acme/repo',
+    });
+    db.update(repositories)
+      .set({
+        cloneStatus: 'cloned',
+        localPath: '/tmp/repos/repo',
+      })
+      .where(eq(repositories.id, repository.id))
+      .run();
+
+    const insertStory = db
+      .insert(workItems)
+      .values({
+        repositoryId: repository.id,
+        type: 'story',
+        status: 'NeedsBreakdown',
+        title: 'Story',
+        revision: 0,
+      })
+      .run();
+    const storyId = Number(insertStory.lastInsertRowid);
+
+    const generated = await service.generateStoryBreakdownDraft({
+      repositoryId: repository.id,
+      storyId,
+      expectedRevision: 0,
+    });
+
+    expect(capturedPrompt).toContain('Create a practical engineering breakdown for this story.');
+    expect(capturedWorkingDirectory).toBe('/tmp/repos/repo');
+    expect(generated.story.status).toBe('BreakdownProposed');
+    expect(generated.tasks).toHaveLength(2);
+    expect(generated.tasks[0]?.title).toBe('Implement route');
+    expect(generated.tasks[1]?.title).toBe('Add tests');
+
+    const breakdownEvent = db
+      .select({
+        actorType: workItemEvents.actorType,
+        actorLabel: workItemEvents.actorLabel,
+      })
+      .from(workItemEvents)
+      .where(
+        and(
+          eq(workItemEvents.repositoryId, repository.id),
+          eq(workItemEvents.workItemId, storyId),
+          eq(workItemEvents.eventType, 'breakdown_proposed'),
+        ),
+      )
+      .get();
+
+    expect(breakdownEvent).toMatchObject({
+      actorType: 'agent',
+      actorLabel: 'codex-breakdown-planner',
+    });
+  });
+
+  it('returns auth_required when codex is not authenticated for breakdown generation', async () => {
+    const { db, service } = createHarness({
+      dependencies: {
+        resolveProvider: () => ({
+          async *run() {
+            yield* [];
+            throw new CodexProviderError('CODEX_AUTH_ERROR', 'Missing Codex auth');
+          },
+        }),
+      },
+    });
+
+    const repository = insertRepository(db, {
+      name: 'repo',
+      provider: 'github',
+      remoteUrl: 'https://example.com/repo.git',
+      remoteRef: 'acme/repo',
+    });
+    db.update(repositories)
+      .set({
+        cloneStatus: 'cloned',
+        localPath: '/tmp/repos/repo',
+      })
+      .where(eq(repositories.id, repository.id))
+      .run();
+
+    const insertStory = db
+      .insert(workItems)
+      .values({
+        repositoryId: repository.id,
+        type: 'story',
+        status: 'NeedsBreakdown',
+        title: 'Story',
+        revision: 0,
+      })
+      .run();
+    const storyId = Number(insertStory.lastInsertRowid);
+
+    await expect(
+      service.generateStoryBreakdownDraft({
+        repositoryId: repository.id,
+        storyId,
+        expectedRevision: 0,
+      }),
+    ).rejects.toMatchObject({
+      code: 'auth_required',
+      status: 401,
     });
   });
 });

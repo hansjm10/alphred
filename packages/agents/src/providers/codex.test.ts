@@ -417,6 +417,7 @@ describe('codex provider', () => {
     expect(capture.threadOptions).toEqual({
       model: 'gpt-5-codex',
       workingDirectory: '/work/alphred',
+      modelReasoningEffort: 'high',
     });
     expect(capture.input).toBe('Implement adapter v2.');
     expect(capture.turnOptions).toMatchObject({
@@ -464,11 +465,51 @@ describe('codex provider', () => {
     expect(capture.threadOptions).toEqual({
       model: 'gpt-5-codex',
       workingDirectory: '/work/alphred',
+      modelReasoningEffort: 'high',
       approvalPolicy: 'on-failure',
       sandboxMode: 'danger-full-access',
       networkAccessEnabled: true,
       additionalDirectories: ['/tmp/a', '/tmp/b'],
       webSearchMode: 'live',
+    });
+  });
+
+  it('does not force model reasoning effort for non gpt-5-codex models', async () => {
+    const capture: CapturedSdkInvocation = {};
+    const provider = new CodexProvider(
+      undefined,
+      () => ({
+        ...createStreamingBootstrap([
+          { type: 'thread.started', thread_id: 'thread-other-model' },
+          { type: 'turn.started' },
+          {
+            type: 'item.completed',
+            item: {
+              id: 'msg-1',
+              type: 'agent_message',
+              text: 'done',
+            },
+          },
+          {
+            type: 'turn.completed',
+            usage: {
+              input_tokens: 2,
+              cached_input_tokens: 0,
+              output_tokens: 1,
+            },
+          },
+        ], capture),
+        model: 'gpt-4.1',
+      }),
+    );
+
+    await collectEvents(provider, 'Run without codex model defaults.', {
+      workingDirectory: '/work/alphred',
+    });
+
+    expect(capture.threadOptions).toEqual({
+      model: 'gpt-4.1',
+      workingDirectory: '/work/alphred',
     });
   });
 

@@ -3,6 +3,7 @@ import { workItemStatusesByType, workItemTypes, type WorkItemStatus, type WorkIt
 import type {
   DashboardApproveStoryBreakdownRequest,
   DashboardCreateWorkItemRequest,
+  DashboardGenerateStoryBreakdownDraftRequest,
   DashboardMoveWorkItemStatusRequest,
   DashboardProposeStoryBreakdownRequest,
   DashboardRequestWorkItemReplanRequest,
@@ -481,5 +482,22 @@ export function parseApproveStoryBreakdownRequest(
     expectedRevision,
     actorType,
     actorLabel,
+  };
+}
+
+export function parseGenerateStoryBreakdownDraftRequest(
+  payload: Record<string, unknown>,
+  storyId: number,
+): DashboardGenerateStoryBreakdownDraftRequest {
+  const repositoryId = parsePositiveInteger(payload.repositoryId, 'Field "repositoryId" must be a positive integer.');
+  const expectedRevision = parseNonNegativeInteger(
+    payload.expectedRevision,
+    'Field "expectedRevision" must be a non-negative integer.',
+  );
+
+  return {
+    repositoryId,
+    storyId,
+    expectedRevision,
   };
 }
