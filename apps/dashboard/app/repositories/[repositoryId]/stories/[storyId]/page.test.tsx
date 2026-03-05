@@ -83,6 +83,8 @@ function createWorkItem(overrides: Partial<DashboardWorkItemSnapshot> = {}): Das
     revision: overrides.revision ?? 0,
     createdAt: overrides.createdAt ?? new Date('2026-03-02T00:00:00.000Z').toISOString(),
     updatedAt: overrides.updatedAt ?? new Date('2026-03-02T00:00:00.000Z').toISOString(),
+    effectivePolicy: overrides.effectivePolicy ?? null,
+    linkedWorkflowRun: overrides.linkedWorkflowRun ?? null,
   };
 }
 
@@ -363,6 +365,61 @@ describe('StoryDetailPageContent', () => {
     expect(await screen.findByText('Story workspace ready on branch alphred/story/3-a1b2c3.')).toBeInTheDocument();
     expect(screen.getByText('alphred/story/3-a1b2c3')).toBeInTheDocument();
     expect(screen.getByText('/tmp/alphred/worktrees/alphred-story-3-a1b2c3')).toBeInTheDocument();
+  });
+
+  it('runs workflow for a ready child task from the task row', async () => {
+    const user = userEvent.setup();
+    const fetchMock = vi.mocked(global.fetch);
+
+    fetchMock.mockResolvedValueOnce(
+      createJsonResponse({
+        workItem: createWorkItem({
+          id: 20,
+          type: 'task',
+          parentId: 3,
+          title: 'Task A',
+          status: 'InProgress',
+          revision: 2,
+          linkedWorkflowRun: {
+            workflowRunId: 55,
+            runStatus: 'running',
+            linkedAt: '2026-03-05T12:00:00.000Z',
+          },
+        }),
+      }),
+    );
+
+    render(
+      <StoryDetailPageContent
+        repository={createRepository({ id: 1, name: 'demo-repo' })}
+        actor={{ actorType: 'human', actorLabel: 'octocat' }}
+        storyId={3}
+        initialLatestEventId={0}
+        initialProposal={null}
+        initialWorkItems={[
+          createWorkItem({ id: 3, type: 'story', title: 'Story title', status: 'Approved', revision: 1 }),
+          createWorkItem({ id: 20, type: 'task', parentId: 3, title: 'Task A', status: 'Ready', revision: 1 }),
+        ]}
+      />,
+    );
+
+    await user.click(screen.getByRole('button', { name: 'Run task workflow' }));
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/dashboard/work-items/20/actions/move', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        repositoryId: 1,
+        expectedRevision: 1,
+        toStatus: 'InProgress',
+        actorType: 'human',
+        actorLabel: 'octocat',
+      }),
+    });
+
+    expect(await screen.findByText('Started task workflow for task #20 (run #55).')).toBeInTheDocument();
+    expect(screen.getByText('Run #55')).toBeInTheDocument();
+    expect(screen.getByText('In progress')).toBeInTheDocument();
   });
 
   it('shows proposed plan in BreakdownProposed and supports approval', async () => {

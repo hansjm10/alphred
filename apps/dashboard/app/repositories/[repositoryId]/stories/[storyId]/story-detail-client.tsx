@@ -145,6 +145,7 @@ export function StoryDetailPageContent(props: Readonly<{
   const [actionError, setActionError] = useState<string | null>(null);
   const [actionNotice, setActionNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [runningTaskId, setRunningTaskId] = useState<number | null>(null);
   const [newTaskTitle, setNewTaskTitle] = useState('');
   const [creatingTask, setCreatingTask] = useState(false);
 
@@ -592,6 +593,50 @@ export function StoryDetailPageContent(props: Readonly<{
     }
   };
 
+  const handleRunTaskWorkflow = async (task: DashboardWorkItemSnapshot) => {
+    if (task.type !== 'task') {
+      return;
+    }
+    if (task.status !== 'Ready') {
+      setActionError(`Task #${task.id} must be Ready before running its workflow.`);
+      setActionNotice(null);
+      return;
+    }
+
+    setRunningTaskId(task.id);
+    setActionError(null);
+    setActionNotice(null);
+    try {
+      const moveResult = await moveWorkItemStatus({
+        repositoryId: repository.id,
+        workItemId: task.id,
+        expectedRevision: task.revision,
+        toStatus: 'InProgress',
+        actor,
+        errorPrefix: `Unable to run task workflow for task #${task.id}`,
+      });
+
+      if (moveResult.ok) {
+        setWorkItemsById(previous => ({
+          ...previous,
+          [moveResult.workItem.id]: moveResult.workItem,
+        }));
+        const linkedRunId = moveResult.workItem.linkedWorkflowRun?.workflowRunId ?? null;
+        setActionNotice(
+          linkedRunId === null
+            ? `Task #${task.id} moved to In progress.`
+            : `Started task workflow for task #${task.id} (run #${linkedRunId}).`,
+        );
+      } else if (moveResult.status === 409) {
+        await refreshAll({ bannerMessage: `Revision conflict: ${moveResult.message}` });
+      } else {
+        setActionError(moveResult.message);
+      }
+    } finally {
+      setRunningTaskId(null);
+    }
+  };
+
   if (story?.type !== 'story') {
     return (
       <div className="page-stack">
@@ -791,8 +836,28 @@ export function StoryDetailPageContent(props: Readonly<{
                   <span>
                     {task.title} <span className="meta-text">#{task.id}</span>
                   </span>
+                  {task.linkedWorkflowRun ? (
+                    <div className="meta-text">
+                      Linked run:{' '}
+                      <Link href={`/runs/${task.linkedWorkflowRun.workflowRunId}`}>
+                        Run #{task.linkedWorkflowRun.workflowRunId}
+                      </Link>
+                    </div>
+                  ) : null}
                   {task.plannedFiles && task.plannedFiles.length > 0 ? (
                     <div className="meta-text">Planned files: {task.plannedFiles.join(', ')}</div>
+                  ) : null}
+                  {task.status === 'Ready' ? (
+                    <div className="board-action-row">
+                      <ActionButton
+                        tone="secondary"
+                        onClick={() => void handleRunTaskWorkflow(task)}
+                        disabled={busy || creatingTask || runningTaskId !== null}
+                        aria-disabled={busy || creatingTask || runningTaskId !== null}
+                      >
+                        {runningTaskId === task.id ? 'Running…' : 'Run task workflow'}
+                      </ActionButton>
+                    </div>
                   ) : null}
                 </li>
               ))}
