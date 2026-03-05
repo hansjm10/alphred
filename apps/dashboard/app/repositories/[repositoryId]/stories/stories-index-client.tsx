@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { WorkItemStatus } from '@alphred/shared';
 import type {
   DashboardRepositoryState,
@@ -168,6 +168,7 @@ export function StoriesIndexPageContent(props: Readonly<{
   initialWorkItems: readonly DashboardWorkItemSnapshot[];
 }>) {
   const { repository, actor, initialWorkItems } = props;
+  const workflowRequestSequenceRef = useRef(0);
   const [workItemsById, setWorkItemsById] = useState<Readonly<Record<number, DashboardWorkItemSnapshot>>>(() =>
     toWorkItemsById(initialWorkItems),
   );
@@ -176,6 +177,7 @@ export function StoriesIndexPageContent(props: Readonly<{
   const [actionNotice, setActionNotice] = useState<string | null>(null);
 
   useEffect(() => {
+    workflowRequestSequenceRef.current += 1;
     setWorkItemsById(toWorkItemsById(initialWorkItems));
     setRunningStoryId(null);
     setActionError(null);
@@ -216,6 +218,8 @@ export function StoriesIndexPageContent(props: Readonly<{
       return;
     }
 
+    const requestSequence = workflowRequestSequenceRef.current + 1;
+    workflowRequestSequenceRef.current = requestSequence;
     setRunningStoryId(story.id);
     setActionError(null);
     setActionNotice(null);
@@ -226,15 +230,23 @@ export function StoriesIndexPageContent(props: Readonly<{
         expectedRevision: story.revision,
         actor,
       });
+      if (workflowRequestSequenceRef.current !== requestSequence) {
+        return;
+      }
       if (displayState.upsertedItems.length > 0) {
         upsertWorkItems(...displayState.upsertedItems);
       }
       setActionError(displayState.error);
       setActionNotice(displayState.notice);
     } catch (error) {
+      if (workflowRequestSequenceRef.current !== requestSequence) {
+        return;
+      }
       setActionError(error instanceof Error ? error.message : String(error));
     } finally {
-      setRunningStoryId(null);
+      if (workflowRequestSequenceRef.current === requestSequence) {
+        setRunningStoryId(null);
+      }
     }
   };
 

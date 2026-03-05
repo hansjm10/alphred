@@ -161,15 +161,19 @@ describe('runStoryWorkflowOrchestration', () => {
     );
   });
 
-  it('omits conflicted tasks from updatedTasks after breakdown approval partially starts tasks', async () => {
+  it('returns refreshed conflicted tasks after breakdown approval partially starts tasks', async () => {
     const story = createWorkItem({ id: 3, type: 'story', status: 'BreakdownProposed', revision: 4 });
     const approvedStory = createWorkItem({ id: 3, type: 'story', status: 'Approved', revision: 5 });
     const readyTaskA = createWorkItem({ id: 20, type: 'task', parentId: 3, status: 'Ready', revision: 1 });
     const readyTaskB = createWorkItem({ id: 21, type: 'task', parentId: 3, status: 'Ready', revision: 2 });
     const startedTaskA = createWorkItem({ ...readyTaskA, status: 'InProgress', revision: 2 });
+    const refreshedTaskB = createWorkItem({ ...readyTaskB, parentId: 9, status: 'Draft', revision: 9 });
 
     const operations = createOperations({
-      getWorkItem: vi.fn().mockResolvedValue({ workItem: story }),
+      getWorkItem: vi
+        .fn()
+        .mockResolvedValueOnce({ workItem: story })
+        .mockResolvedValueOnce({ workItem: refreshedTaskB }),
       approveStoryBreakdown: vi.fn().mockResolvedValue({
         story: approvedStory,
         tasks: [readyTaskA, readyTaskB],
@@ -195,7 +199,7 @@ describe('runStoryWorkflowOrchestration', () => {
       operations,
     });
 
-    expect(result.updatedTasks).toEqual([startedTaskA]);
+    expect(result.updatedTasks).toEqual([startedTaskA, refreshedTaskB]);
     expect(result.startedTasks).toEqual([startedTaskA]);
     expect(result.steps.at(-1)).toEqual(
       expect.objectContaining({
@@ -205,6 +209,7 @@ describe('runStoryWorkflowOrchestration', () => {
         failedTaskIds: [21],
       }),
     );
+    expect(operations.getWorkItem).toHaveBeenNthCalledWith(2, { repositoryId: 1, workItemId: 21 });
   });
 
   it('rethrows non-conflict task start failures', async () => {

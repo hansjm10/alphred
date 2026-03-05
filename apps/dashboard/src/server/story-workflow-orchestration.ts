@@ -100,6 +100,28 @@ async function loadReadyChildTasks(params: {
   return allWorkItems.workItems.filter(item => item.type === 'task' && item.parentId === params.storyId && item.status === 'Ready');
 }
 
+async function loadCurrentTasks(params: {
+  repositoryId: number;
+  taskIds: ReadonlySet<number>;
+  operations: StoryWorkflowOrchestrationOperations;
+}): Promise<DashboardWorkItemSnapshot[]> {
+  const results = await Promise.allSettled(
+    [...params.taskIds].map(async taskId =>
+      params.operations.getWorkItem({
+        repositoryId: params.repositoryId,
+        workItemId: taskId,
+      }),
+    ),
+  );
+
+  return results.flatMap(result => {
+    if (result.status !== 'fulfilled' || result.value.workItem.type !== 'task') {
+      return [];
+    }
+    return [result.value.workItem];
+  });
+}
+
 export async function runStoryWorkflowOrchestration(params: {
   request: DashboardRunStoryWorkflowRequest;
   operations: StoryWorkflowOrchestrationOperations;
@@ -301,7 +323,24 @@ export async function runStoryWorkflowOrchestration(params: {
       failures.filter(failure => failure.status === 409).map(failure => failure.taskId),
     );
     if (conflictedTaskIds.size > 0) {
-      updatedTasks = updatedTasks.filter(task => !conflictedTaskIds.has(task.id));
+      const refreshedConflictedTasks = await loadCurrentTasks({
+        repositoryId,
+        taskIds: conflictedTaskIds,
+        operations: params.operations,
+      });
+      const refreshedConflictedTasksById = new Map(refreshedConflictedTasks.map(task => [task.id, task]));
+      updatedTasks = updatedTasks.flatMap(task => {
+        if (!conflictedTaskIds.has(task.id)) {
+          return [task];
+        }
+        const refreshedTask = refreshedConflictedTasksById.get(task.id);
+        return refreshedTask === undefined ? [] : [refreshedTask];
+      });
+      for (const refreshedTask of refreshedConflictedTasks) {
+        if (!updatedTasks.some(task => task.id === refreshedTask.id)) {
+          updatedTasks.push(refreshedTask);
+        }
+      }
     }
 
     if (startedTasks.length > 0) {

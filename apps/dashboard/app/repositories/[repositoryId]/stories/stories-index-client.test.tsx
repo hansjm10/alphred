@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type {
@@ -98,5 +98,68 @@ describe('StoriesIndexPageContent', () => {
     expect(screen.queryByRole('link', { name: 'Story A' })).not.toBeInTheDocument();
     expect(screen.getByText('0 tasks')).toBeInTheDocument();
     expect(screen.queryByText('Story #3 workflow completed with no task starts.')).not.toBeInTheDocument();
+  });
+
+  it('ignores stale workflow responses after repository props change', async () => {
+    const user = userEvent.setup();
+    let resolveWorkflowResponse!: (value: Response) => void;
+    const fetchMock = vi.fn().mockReturnValue(
+      new Promise<Response>(resolve => {
+        resolveWorkflowResponse = resolve;
+      }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const actor = { actorType: 'human' as const, actorLabel: 'octocat' };
+    const repositoryA = createRepository({ id: 1, name: 'demo-repo' });
+    const repositoryB = createRepository({ id: 2, name: 'other-repo', remoteRef: 'octocat/other-repo' });
+
+    const { rerender } = render(
+      <StoriesIndexPageContent
+        repository={repositoryA}
+        actor={actor}
+        initialWorkItems={[
+          createWorkItem({ id: 3, type: 'story', repositoryId: 1, title: 'Story A', status: 'Draft', revision: 1 }),
+        ]}
+      />,
+    );
+
+    await user.click(screen.getByRole('button', { name: 'Run workflow' }));
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    rerender(
+      <StoriesIndexPageContent
+        repository={repositoryB}
+        actor={actor}
+        initialWorkItems={[
+          createWorkItem({ id: 8, type: 'story', repositoryId: 2, title: 'Story B', status: 'Approved', revision: 4 }),
+        ]}
+      />,
+    );
+
+    resolveWorkflowResponse(
+      new Response(
+        JSON.stringify({
+          story: createWorkItem({ id: 3, type: 'story', repositoryId: 1, title: 'Story A', status: 'Approved', revision: 2 }),
+          updatedTasks: [
+            createWorkItem({ id: 20, type: 'task', repositoryId: 1, parentId: 3, title: 'Task A', status: 'InProgress', revision: 2 }),
+          ],
+          startedTasks: [
+            createWorkItem({ id: 20, type: 'task', repositoryId: 1, parentId: 3, title: 'Task A', status: 'InProgress', revision: 2 }),
+          ],
+          steps: [{ step: 'start_ready_tasks', outcome: 'applied', message: 'Started 1 task(s).', startedTaskIds: [20] }],
+        }),
+      ),
+    );
+
+    await waitFor(() => {
+      expect(screen.getByRole('heading', { name: 'other-repo / Stories' })).toBeInTheDocument();
+      expect(screen.getByRole('link', { name: 'Story B' })).toHaveAttribute('href', '/repositories/2/stories/8');
+      expect(screen.queryByRole('link', { name: 'Story A' })).not.toBeInTheDocument();
+      expect(screen.queryByText('Story #3 workflow ran and 1 task started.')).not.toBeInTheDocument();
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+      expect(screen.getByText('0 tasks')).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Run workflow' })).toBeEnabled();
+    });
   });
 });
