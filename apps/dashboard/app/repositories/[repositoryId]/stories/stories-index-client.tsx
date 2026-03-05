@@ -4,7 +4,7 @@ import Link from 'next/link';
 import { useMemo, useState, type FormEvent } from 'react';
 import type { WorkItemStatus } from '@alphred/shared';
 import type { DashboardRepositoryState, DashboardWorkItemSnapshot } from '@dashboard/server/dashboard-contracts';
-import { ActionButton, ButtonLink } from '../../../ui/primitives';
+import { ActionButton, ButtonLink, StatusBadge } from '../../../ui/primitives';
 import {
   approveStoryBreakdown,
   createWorkItem,
@@ -57,6 +57,35 @@ export function StoriesIndexPageContent(props: Readonly<{
       counts.set(item.parentId, (counts.get(item.parentId) ?? 0) + 1);
     }
     return counts;
+  }, [allWorkItems]);
+  const taskRunSummariesByStoryId = useMemo(() => {
+    const runsByStoryId = new Map<number, Map<number, NonNullable<DashboardWorkItemSnapshot['linkedWorkflowRun']>>>();
+    for (const item of allWorkItems) {
+      if (item.type !== 'task' || item.parentId === null || item.linkedWorkflowRun == null) {
+        continue;
+      }
+
+      const storyRuns = runsByStoryId.get(item.parentId) ?? new Map<number, NonNullable<DashboardWorkItemSnapshot['linkedWorkflowRun']>>();
+      const existing = storyRuns.get(item.linkedWorkflowRun.workflowRunId);
+      if (!existing || Date.parse(item.linkedWorkflowRun.linkedAt) > Date.parse(existing.linkedAt)) {
+        storyRuns.set(item.linkedWorkflowRun.workflowRunId, item.linkedWorkflowRun);
+      }
+      runsByStoryId.set(item.parentId, storyRuns);
+    }
+
+    const orderedByStoryId = new Map<number, NonNullable<DashboardWorkItemSnapshot['linkedWorkflowRun']>[]>();
+    for (const [storyId, runMap] of runsByStoryId.entries()) {
+      const orderedRuns = [...runMap.values()].sort((left, right) => {
+        const linkedAtDelta = Date.parse(right.linkedAt) - Date.parse(left.linkedAt);
+        if (linkedAtDelta !== 0) {
+          return linkedAtDelta;
+        }
+        return right.workflowRunId - left.workflowRunId;
+      });
+      orderedByStoryId.set(storyId, orderedRuns);
+    }
+
+    return orderedByStoryId;
   }, [allWorkItems]);
 
   const upsertWorkItems = (...items: readonly DashboardWorkItemSnapshot[]) => {
@@ -279,43 +308,59 @@ export function StoriesIndexPageContent(props: Readonly<{
             <p className="meta-text">None</p>
           ) : (
             <ol className="stories-list">
-              {stories.map(story => (
-                <li key={story.id} className="stories-list__item">
-                  <div className="stories-list__content">
-                    <div className="stories-list__meta">
-                      <span className="board-pill">#{story.id}</span>
-                      <span className="board-pill">{formatWorkItemStatusLabel(story.status)}</span>
-                      <span className="meta-text">{taskCountByStoryId.get(story.id) ?? 0} tasks</span>
+              {stories.map(story => {
+                const storyTaskCount = taskCountByStoryId.get(story.id) ?? 0;
+                const storyTaskRuns = taskRunSummariesByStoryId.get(story.id) ?? [];
+                const runCount = storyTaskRuns.length;
+                const runLabel = runCount === 1 ? 'run' : 'runs';
+                const blockedAutoRun = story.status === 'NeedsBreakdown' && storyTaskCount > 0;
+
+                return (
+                  <li key={story.id} className="stories-list__item">
+                    <div className="stories-list__content">
+                      <div className="stories-list__meta">
+                        <span className="board-pill">#{story.id}</span>
+                        <span className="board-pill">{formatWorkItemStatusLabel(story.status)}</span>
+                        <span className="meta-text">{storyTaskCount} tasks</span>
+                        {runCount > 0 ? (
+                          <span className="meta-text">{runCount} {runLabel}</span>
+                        ) : null}
+                      </div>
+                      <Link href={`/repositories/${repository.id}/stories/${story.id}`}>{story.title}</Link>
+                      {runCount > 0 ? (
+                        <div className="stories-list__runs" aria-label={`Story #${story.id} linked runs`}>
+                          {storyTaskRuns.slice(0, 3).map(run => (
+                            <span key={run.workflowRunId} className="stories-list__run-chip">
+                              <Link href={`/runs/${run.workflowRunId}`}>Run #{run.workflowRunId}</Link>
+                              <StatusBadge status={run.runStatus} />
+                            </span>
+                          ))}
+                          {runCount > 3 ? (
+                            <span className="meta-text">+{runCount - 3} more</span>
+                          ) : null}
+                        </div>
+                      ) : null}
                     </div>
-                    <Link href={`/repositories/${repository.id}/stories/${story.id}`}>{story.title}</Link>
-                  </div>
-                  <div className="stories-list__actions">
-                    {story.status === 'Draft'
-                    || story.status === 'NeedsBreakdown'
-                    || story.status === 'BreakdownProposed' ? (
-                      <ActionButton
-                        tone="primary"
-                        onClick={() => void handleRunStoryWorkflow(story)}
-                        disabled={
-                          creatingStory
-                          || runningStoryId !== null
-                          || (story.status === 'NeedsBreakdown' && (taskCountByStoryId.get(story.id) ?? 0) > 0)
-                        }
-                        aria-disabled={
-                          creatingStory
-                          || runningStoryId !== null
-                          || (story.status === 'NeedsBreakdown' && (taskCountByStoryId.get(story.id) ?? 0) > 0)
-                        }
-                      >
-                        {runningStoryId === story.id ? 'Running…' : 'Run workflow'}
-                      </ActionButton>
-                    ) : null}
-                    <ButtonLink href={`/repositories/${repository.id}/stories/${story.id}`} tone="secondary">
-                      Open
-                    </ButtonLink>
-                  </div>
-                </li>
-              ))}
+                    <div className="stories-list__actions">
+                      {story.status === 'Draft'
+                      || story.status === 'NeedsBreakdown'
+                      || story.status === 'BreakdownProposed' ? (
+                        <ActionButton
+                          tone="primary"
+                          onClick={() => void handleRunStoryWorkflow(story)}
+                          disabled={creatingStory || runningStoryId !== null || blockedAutoRun}
+                          aria-disabled={creatingStory || runningStoryId !== null || blockedAutoRun}
+                        >
+                          {runningStoryId === story.id ? 'Running…' : 'Run workflow'}
+                        </ActionButton>
+                      ) : null}
+                      <ButtonLink href={`/repositories/${repository.id}/stories/${story.id}`} tone="secondary">
+                        Open
+                      </ButtonLink>
+                    </div>
+                  </li>
+                );
+              })}
             </ol>
           )}
         </div>

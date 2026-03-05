@@ -1362,6 +1362,19 @@ output {
   gap: var(--space-1);
 }
 
+.stories-list__runs {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+}
+
+.stories-list__run-chip {
+  align-items: center;
+  display: inline-flex;
+  gap: 6px;
+}
+
 .stories-list__content a {
   overflow-wrap: anywhere;
   text-decoration: none;

@@ -62,6 +62,7 @@ function createWorkItem(overrides: Partial<DashboardWorkItemSnapshot> = {}): Das
     revision: overrides.revision ?? 0,
     createdAt: overrides.createdAt ?? new Date('2026-03-02T00:00:00.000Z').toISOString(),
     updatedAt: overrides.updatedAt ?? new Date('2026-03-02T00:00:00.000Z').toISOString(),
+    linkedWorkflowRun: overrides.linkedWorkflowRun ?? null,
   };
 }
 
@@ -109,6 +110,51 @@ describe('StoriesIndexPage', () => {
     expect(screen.getByRole('link', { name: 'Story A' })).toHaveAttribute('href', '/repositories/1/stories/3');
     expect(screen.getByText('Needs breakdown')).toBeInTheDocument();
     expect(screen.getByText('2 tasks')).toBeInTheDocument();
+  });
+
+  it('renders linked workflow run status chips for story child tasks', async () => {
+    const repository = createRepository({ id: 1, name: 'demo-repo' });
+    const workItems = [
+      createWorkItem({ id: 3, type: 'story', title: 'Story A', status: 'Approved' }),
+      createWorkItem({
+        id: 20,
+        type: 'task',
+        title: 'Task 1',
+        parentId: 3,
+        status: 'InProgress',
+        linkedWorkflowRun: {
+          workflowRunId: 9001,
+          runStatus: 'running',
+          linkedAt: '2026-03-05T00:01:00.000Z',
+        },
+      }),
+      createWorkItem({
+        id: 21,
+        type: 'task',
+        title: 'Task 2',
+        parentId: 3,
+        status: 'InReview',
+        linkedWorkflowRun: {
+          workflowRunId: 9002,
+          runStatus: 'failed',
+          linkedAt: '2026-03-05T00:02:00.000Z',
+        },
+      }),
+    ];
+
+    const service = {
+      getRepositoryBoardBootstrap: vi.fn().mockResolvedValue({ repositoryId: 1, latestEventId: 0, workItems }),
+    };
+
+    createDashboardServiceMock.mockReturnValue(service);
+    loadDashboardRepositoriesMock.mockResolvedValue([repository]);
+
+    const root = await StoriesIndexPage({ params: Promise.resolve({ repositoryId: '1' }) });
+    render(root);
+
+    expect(screen.getByText('2 runs')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Run #9001' })).toHaveAttribute('href', '/runs/9001');
+    expect(screen.getByRole('link', { name: 'Run #9002' })).toHaveAttribute('href', '/runs/9002');
   });
 
   it('shows an empty state when no stories exist', async () => {
@@ -206,6 +252,11 @@ describe('StoriesIndexPage', () => {
               parentId: 3,
               status: 'InProgress',
               revision: 2,
+              linkedWorkflowRun: {
+                workflowRunId: 9100,
+                runStatus: 'running',
+                linkedAt: '2026-03-05T00:10:00.000Z',
+              },
             }),
           },
           { status: 200 },
@@ -221,6 +272,11 @@ describe('StoriesIndexPage', () => {
               parentId: 3,
               status: 'InProgress',
               revision: 3,
+              linkedWorkflowRun: {
+                workflowRunId: 9101,
+                runStatus: 'running',
+                linkedAt: '2026-03-05T00:11:00.000Z',
+              },
             }),
           },
           { status: 200 },
@@ -276,6 +332,8 @@ describe('StoriesIndexPage', () => {
     });
 
     expect(await screen.findByText('Story #3 approved and 2 tasks started.')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Run #9100' })).toHaveAttribute('href', '/runs/9100');
+    expect(screen.getByRole('link', { name: 'Run #9101' })).toHaveAttribute('href', '/runs/9101');
   });
 
   it('calls notFound when repository id is invalid', async () => {
