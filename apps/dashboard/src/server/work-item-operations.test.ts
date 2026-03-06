@@ -1078,8 +1078,7 @@ describe('work-item-operations', () => {
     expect(linkedRows).toHaveLength(0);
 
     const runRows = db.select().from(workflowRuns).orderBy(desc(workflowRuns.id)).all();
-    expect(runRows).toHaveLength(1);
-    expect(runRows[0]?.status).toBe('cancelled');
+    expect(runRows).toHaveLength(0);
   });
 
   it('rejects invalid autolaunch move requests before creating workflow runs', async () => {
@@ -1224,8 +1223,7 @@ describe('work-item-operations', () => {
     expect(linkedRows).toHaveLength(0);
 
     const runRows = db.select().from(workflowRuns).orderBy(desc(workflowRuns.id)).all();
-    expect(runRows).toHaveLength(1);
-    expect(runRows[0]?.status).toBe('cancelled');
+    expect(runRows).toHaveLength(0);
   });
 
   it('requires non-empty actorLabel', async () => {
