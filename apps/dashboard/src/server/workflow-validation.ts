@@ -8,6 +8,7 @@ import {
 } from '@alphred/shared';
 import type { AgentCatalog } from './agent-catalog';
 import type {
+  DashboardWorkflowDraftNode,
   DashboardWorkflowDraftTopology,
   DashboardWorkflowValidationIssue,
   DashboardWorkflowValidationResult,
@@ -22,6 +23,7 @@ const executionApprovalPolicies = new Set(providerApprovalPolicies);
 const executionSandboxModes = new Set(providerSandboxModes);
 const executionWebSearchModes = new Set(providerWebSearchModes);
 const defaultWorkflowNodeRole = 'standard';
+const reportArtifactContentTypes = new Set(['text', 'markdown', 'json', 'diff']);
 
 export function isGuardExpression(value: unknown): value is GuardExpression {
   if (!isRecord(value)) {
@@ -99,6 +101,12 @@ function normalizeDraftNodeRole(value: unknown): 'standard' | 'spawner' | 'join'
   }
 
   return defaultWorkflowNodeRole;
+}
+
+function isDraftNodeReportArtifactContentType(
+  value: unknown,
+): value is NonNullable<DashboardWorkflowDraftNode['reportArtifactContentType']> {
+  return typeof value === 'string' && reportArtifactContentTypes.has(value);
 }
 
 export function normalizeWorkflowTreeKey(rawValue: unknown): string {
@@ -289,6 +297,17 @@ export function validateDraftTopology(
       errors.push({
         code: 'max_children_invalid',
         message: `Node "${trimmedKey}" must set maxChildren as a non-negative integer.`,
+      });
+    }
+
+    if (
+      node.reportArtifactContentType !== undefined
+      && node.reportArtifactContentType !== null
+      && !isDraftNodeReportArtifactContentType(node.reportArtifactContentType)
+    ) {
+      errors.push({
+        code: 'report_artifact_content_type_invalid',
+        message: `Node "${trimmedKey}" has unsupported report artifact content type "${String(node.reportArtifactContentType)}".`,
       });
     }
 

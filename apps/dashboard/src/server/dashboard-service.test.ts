@@ -2798,6 +2798,69 @@ describe('createDashboardService', () => {
     });
   });
 
+  it('persists report artifact content type across save, duplicate, publish, and draft bootstrap', async () => {
+    const { db, dependencies } = createHarness();
+    migrateDatabase(db);
+
+    const service = createDashboardService({ dependencies });
+
+    await service.createWorkflowDraft({
+      template: 'blank',
+      name: 'Report Artifact Persist Tree',
+      treeKey: 'report-artifact-persist-tree',
+    });
+
+    const savedDraft = await service.saveWorkflowDraft('report-artifact-persist-tree', 1, {
+      draftRevision: 1,
+      name: 'Report Artifact Persist Tree',
+      nodes: [
+        {
+          nodeKey: 'agent-node',
+          displayName: 'Agent Node',
+          nodeType: 'agent',
+          provider: 'codex',
+          model: 'gpt-5.3-codex',
+          reportArtifactContentType: 'json',
+          maxRetries: 0,
+          sequenceIndex: 10,
+          position: null,
+          promptTemplate: { content: 'Return JSON only.', contentType: 'markdown' },
+        },
+      ],
+      edges: [],
+    });
+
+    expect(savedDraft.nodes).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        nodeKey: 'agent-node',
+        reportArtifactContentType: 'json',
+      }),
+    ]));
+
+    await service.publishWorkflowDraft('report-artifact-persist-tree', 1, {});
+
+    await service.duplicateWorkflowTree('report-artifact-persist-tree', {
+      name: 'Report Artifact Persist Tree Copy',
+      treeKey: 'report-artifact-persist-tree-copy',
+    });
+
+    const duplicatedDraft = await service.getOrCreateWorkflowDraft('report-artifact-persist-tree-copy');
+    expect(duplicatedDraft.nodes).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        nodeKey: 'agent-node',
+        reportArtifactContentType: 'json',
+      }),
+    ]));
+
+    const bootstrappedDraft = await service.getOrCreateWorkflowDraft('report-artifact-persist-tree');
+    expect(bootstrappedDraft.nodes).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        nodeKey: 'agent-node',
+        reportArtifactContentType: 'json',
+      }),
+    ]));
+  });
+
   it('persists node role and maxChildren across save, publish, and draft bootstrap', async () => {
     const { db, dependencies } = createHarness();
     migrateDatabase(db);
@@ -2946,6 +3009,47 @@ describe('createDashboardService', () => {
       status: 400,
       details: expect.objectContaining({
         errors: expect.arrayContaining([expect.objectContaining({ code: 'max_children_invalid' })]),
+      }),
+    });
+  });
+
+  it('rejects unsupported report artifact content type values on save', async () => {
+    const { db, dependencies } = createHarness();
+    migrateDatabase(db);
+
+    const service = createDashboardService({ dependencies });
+
+    await service.createWorkflowDraft({
+      template: 'blank',
+      name: 'Report Artifact Content Type Invalid Tree',
+      treeKey: 'report-artifact-content-type-invalid-tree',
+    });
+
+    await expect(
+      service.saveWorkflowDraft('report-artifact-content-type-invalid-tree', 1, {
+        draftRevision: 1,
+        name: 'Report Artifact Content Type Invalid Tree',
+        nodes: [
+          {
+            nodeKey: 'agent-node',
+            displayName: 'Agent Node',
+            nodeType: 'agent',
+            provider: 'codex',
+            model: 'gpt-5.3-codex',
+            reportArtifactContentType: 'yaml' as unknown as 'json',
+            maxRetries: 0,
+            sequenceIndex: 10,
+            position: null,
+            promptTemplate: { content: 'Agent prompt', contentType: 'markdown' },
+          },
+        ],
+        edges: [],
+      }),
+    ).rejects.toMatchObject({
+      code: 'invalid_request',
+      status: 400,
+      details: expect.objectContaining({
+        errors: expect.arrayContaining([expect.objectContaining({ code: 'report_artifact_content_type_invalid' })]),
       }),
     });
   });

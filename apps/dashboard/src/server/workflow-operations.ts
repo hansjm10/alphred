@@ -426,6 +426,7 @@ export function createWorkflowOperations(params: {
                 provider: node.provider,
                 model: node.model,
                 executionPermissions: normalizeExecutionPermissions(node.executionPermissions),
+                reportArtifactContentType: node.reportArtifactContentType ?? null,
                 promptTemplateId: promptTemplateIdByNodeKey.get(node.nodeKey) ?? null,
                 maxChildren: node.maxChildren ?? 12,
                 maxRetries: node.maxRetries,

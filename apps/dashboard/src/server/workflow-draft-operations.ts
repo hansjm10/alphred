@@ -17,6 +17,7 @@ import { loadAgentCatalog, resolveDefaultModelForProvider, type AgentCatalog } f
 import type {
   DashboardCreateWorkflowRequest,
   DashboardCreateWorkflowResult,
+  DashboardReportArtifactContentType,
   DashboardWorkflowDraftEdge,
   DashboardWorkflowDraftTopology,
   DashboardWorkflowValidationResult,
@@ -117,6 +118,7 @@ export function loadDraftTopologyByTreeId(
       provider: treeNodes.provider,
       model: treeNodes.model,
       executionPermissions: treeNodes.executionPermissions,
+      reportArtifactContentType: treeNodes.reportArtifactContentType,
       maxChildren: treeNodes.maxChildren,
       maxRetries: treeNodes.maxRetries,
       sequenceIndex: treeNodes.sequenceIndex,
@@ -153,6 +155,11 @@ export function loadDraftTopologyByTreeId(
             ? (row.model ?? resolveDefaultModelForProvider(row.provider, catalog))
             : null,
         ...(executionPermissions === null ? {} : { executionPermissions }),
+        ...(row.reportArtifactContentType === null
+          ? {}
+          : {
+              reportArtifactContentType: row.reportArtifactContentType as DashboardReportArtifactContentType,
+            }),
         maxRetries: row.maxRetries,
         sequenceIndex: row.sequenceIndex,
         position:
@@ -459,6 +466,7 @@ export function createWorkflowDraftOperations(params: {
                 provider: treeNodes.provider,
                 model: treeNodes.model,
                 executionPermissions: treeNodes.executionPermissions,
+                reportArtifactContentType: treeNodes.reportArtifactContentType,
                 maxChildren: treeNodes.maxChildren,
                 maxRetries: treeNodes.maxRetries,
                 sequenceIndex: treeNodes.sequenceIndex,
@@ -531,6 +539,7 @@ export function createWorkflowDraftOperations(params: {
                       | null
                       | undefined,
                   ),
+                  reportArtifactContentType: node.reportArtifactContentType,
                   promptTemplateId:
                     node.promptTemplateId === null ? null : (promptTemplateCloneById.get(node.promptTemplateId) ?? null),
                   maxChildren: normalizeDraftNodeMaxChildren(node.maxChildren),
@@ -830,6 +839,7 @@ export function createWorkflowDraftOperations(params: {
                 provider: node.provider,
                 model: nodeModel,
                 executionPermissions: normalizeExecutionPermissions(node.executionPermissions),
+                reportArtifactContentType: node.reportArtifactContentType ?? null,
                 promptTemplateId: promptTemplateIdByNodeKey.get(node.nodeKey) ?? null,
                 maxChildren: normalizeDraftNodeMaxChildren(node.maxChildren),
                 maxRetries: node.maxRetries,

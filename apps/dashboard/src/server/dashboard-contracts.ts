@@ -77,6 +77,8 @@ export type DashboardDuplicateWorkflowRequest = {
 
 export type DashboardDuplicateWorkflowResult = DashboardCreateWorkflowResult;
 
+export type DashboardReportArtifactContentType = 'text' | 'markdown' | 'json' | 'diff';
+
 export type DashboardWorkflowDraftNode = {
   nodeKey: string;
   displayName: string;
@@ -86,6 +88,7 @@ export type DashboardWorkflowDraftNode = {
   provider: string | null;
   model?: string | null;
   executionPermissions?: ProviderExecutionPermissions | null;
+  reportArtifactContentType?: DashboardReportArtifactContentType | null;
   maxRetries: number;
   sequenceIndex: number;
   position: { x: number; y: number } | null;
