@@ -95,6 +95,7 @@ function assertKnownStoryWorkspaceStatusReason(
     && reason !== 'branch_mismatch'
     && reason !== 'repository_clone_missing'
     && reason !== 'reconcile_failed'
+    && reason !== 'removed_state_drift'
     && reason !== 'cleanup_requested'
   ) {
     throw new Error(`Unknown story workspace status reason: ${reason}`);
@@ -236,6 +237,37 @@ function toCleanupConflict(message: string, details: Record<string, unknown>, ca
   });
 }
 
+function toRecreateConflict(workspace: StoryWorkspaceRecord): DashboardIntegrationError {
+  return new DashboardIntegrationError(
+    'conflict',
+    `Story workspace for story id=${workspace.storyWorkItemId} must be removed before it can be recreated.`,
+    {
+      status: 409,
+      details: {
+        storyWorkspaceId: workspace.id,
+        storyId: workspace.storyWorkItemId,
+        currentStatus: workspace.status,
+        allowedStatuses: ['removed'],
+      },
+    },
+  );
+}
+
+function markWorkspaceRemovedStateDrift(
+  db: AlphredDatabase,
+  workspace: StoryWorkspaceRecord,
+  occurredAt: string,
+): StoryWorkspaceRecord {
+  return updateStoryWorkspace(db, {
+    storyWorkspaceId: workspace.id,
+    status: 'stale',
+    statusReason: 'removed_state_drift',
+    lastReconciledAt: occurredAt,
+    removedAt: null,
+    occurredAt,
+  });
+}
+
 function createFreshStoryWorkspace(
   params: {
     db: AlphredDatabase;
@@ -341,12 +373,30 @@ async function reconcileWorkspaceRecord(
     repositoryLocalPath: string | null;
     workspace: StoryWorkspaceRecord;
     listRepositoryWorktrees: NonNullable<StoryWorkspaceOperationsDependencies['listWorktrees']>;
+    removeRepositoryWorktree: NonNullable<StoryWorkspaceOperationsDependencies['removeWorktree']>;
+    deleteRepositoryBranch: NonNullable<StoryWorkspaceOperationsDependencies['deleteBranch']>;
     pathExists: NonNullable<StoryWorkspaceOperationsDependencies['pathExists']>;
+    removePath: NonNullable<StoryWorkspaceOperationsDependencies['removePath']>;
     occurredAt: string;
   },
 ): Promise<StoryWorkspaceRecord> {
   if (params.workspace.status === 'removed') {
-    return params.workspace;
+    try {
+      return await cleanupWorkspaceRecord(db, {
+        repositoryLocalPath: params.repositoryLocalPath,
+        workspace: params.workspace,
+        listRepositoryWorktrees: params.listRepositoryWorktrees,
+        removeRepositoryWorktree: params.removeRepositoryWorktree,
+        deleteRepositoryBranch: params.deleteRepositoryBranch,
+        pathExists: params.pathExists,
+        removePath: params.removePath,
+        occurredAt: params.occurredAt,
+        allowRemovedWorkspaceRepair: true,
+        removedAtOnSuccess: params.workspace.removedAt ?? params.occurredAt,
+      });
+    } catch {
+      return markWorkspaceRemovedStateDrift(db, params.workspace, params.occurredAt);
+    }
   }
 
   if (!params.repositoryLocalPath) {
@@ -433,9 +483,11 @@ async function cleanupWorkspaceRecord(
     pathExists: NonNullable<StoryWorkspaceOperationsDependencies['pathExists']>;
     removePath: NonNullable<StoryWorkspaceOperationsDependencies['removePath']>;
     occurredAt: string;
+    allowRemovedWorkspaceRepair?: boolean;
+    removedAtOnSuccess?: string | null;
   },
 ): Promise<StoryWorkspaceRecord> {
-  if (params.workspace.status === 'removed') {
+  if (params.workspace.status === 'removed' && params.allowRemovedWorkspaceRepair !== true) {
     return params.workspace;
   }
 
@@ -507,7 +559,7 @@ async function cleanupWorkspaceRecord(
     status: 'removed',
     statusReason: 'cleanup_requested',
     lastReconciledAt: params.occurredAt,
-    removedAt: params.occurredAt,
+    removedAt: params.removedAtOnSuccess ?? params.occurredAt,
     occurredAt: params.occurredAt,
   });
 }
@@ -546,7 +598,10 @@ export function createStoryWorkspaceOperations(params: {
           repositoryLocalPath: repository.localPath,
           workspace,
           listRepositoryWorktrees,
+          removeRepositoryWorktree,
+          deleteRepositoryBranch,
           pathExists,
+          removePath,
           occurredAt: now(),
         });
         return {
@@ -571,7 +626,10 @@ export function createStoryWorkspaceOperations(params: {
             repositoryLocalPath: repository.localPath,
             workspace: existingWorkspace,
             listRepositoryWorktrees,
+            removeRepositoryWorktree,
+            deleteRepositoryBranch,
             pathExists,
+            removePath,
             occurredAt: now(),
           });
           return {
@@ -623,7 +681,10 @@ export function createStoryWorkspaceOperations(params: {
           repositoryLocalPath: repository.localPath,
           workspace,
           listRepositoryWorktrees,
+          removeRepositoryWorktree,
+          deleteRepositoryBranch,
           pathExists,
+          removePath,
           occurredAt: now(),
         });
         return {
@@ -639,9 +700,36 @@ export function createStoryWorkspaceOperations(params: {
       return withDatabase(async db => {
         requireStoryWorkItem(db, { repositoryId, storyId });
         const repository = requireRepository(db, repositoryId);
+        const workspace = requireStoryWorkspace(db, storyId);
+        if (workspace.status === 'removed') {
+          const repaired = await reconcileWorkspaceRecord(db, {
+            repositoryLocalPath: repository.localPath,
+            workspace,
+            listRepositoryWorktrees,
+            removeRepositoryWorktree,
+            deleteRepositoryBranch,
+            pathExists,
+            removePath,
+            occurredAt: now(),
+          });
+          if (repaired.status !== 'removed') {
+            throw toCleanupConflict(
+              `Unable to clean up story workspace for story id=${workspace.storyWorkItemId}.`,
+              {
+                storyWorkspaceId: workspace.id,
+                storyId: workspace.storyWorkItemId,
+                worktreePath: workspace.worktreePath,
+              },
+            );
+          }
+          return {
+            workspace: toStoryWorkspaceSnapshot(repaired),
+          };
+        }
+
         const cleaned = await cleanupWorkspaceRecord(db, {
           repositoryLocalPath: repository.localPath,
-          workspace: requireStoryWorkspace(db, storyId),
+          workspace,
           listRepositoryWorktrees,
           removeRepositoryWorktree,
           deleteRepositoryBranch,
@@ -671,7 +759,7 @@ export function createStoryWorkspaceOperations(params: {
 
         const existingWorkspace = requireStoryWorkspace(db, storyId);
         const occurredAt = now();
-        const cleaned = await cleanupWorkspaceRecord(db, {
+        const reconciled = await reconcileWorkspaceRecord(db, {
           repositoryLocalPath: repository.localPath,
           workspace: existingWorkspace,
           listRepositoryWorktrees,
@@ -681,6 +769,9 @@ export function createStoryWorkspaceOperations(params: {
           removePath,
           occurredAt,
         });
+        if (reconciled.status !== 'removed') {
+          throw toRecreateConflict(reconciled);
+        }
         const recreated = await createFreshStoryWorkspace({
           db,
           repositoryId,
@@ -694,7 +785,7 @@ export function createStoryWorkspaceOperations(params: {
           worktreeBase,
           ensureRepositoryClone: dependencies.ensureRepositoryClone,
           createStoryWorktree,
-          existingWorkspace: cleaned,
+          existingWorkspace: reconciled,
           occurredAt,
         });
 

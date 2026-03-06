@@ -669,6 +669,7 @@ Current `statusReason` values:
 - `branch_mismatch`: Git reports a different branch than the persisted story workspace branch.
 - `repository_clone_missing`: the repository clone is unavailable, so reconciliation cannot fully verify the workspace.
 - `reconcile_failed`: worktree inspection failed unexpectedly during reconciliation.
+- `removed_state_drift`: a workspace marked removed still exists locally or could not be fully retired during repair.
 - `cleanup_requested`: the workspace was explicitly cleaned up.
 
 Archived repository behavior:
@@ -718,6 +719,8 @@ Response `200`: `DashboardReconcileStoryWorkspaceResult`.
 
 Behavior notes:
 - Updates `status`, `statusReason`, and `lastReconciledAt` based on clone availability, Git worktree registration, branch agreement, and on-disk path existence.
+- When reconciling a `removed` workspace, attempts to auto-clean leaked worktree/path state before deciding whether the row can remain `removed`.
+- Returns a `stale` workspace with `statusReason = "removed_state_drift"` when removed-state repair cannot be fully verified.
 - Returns `404 not_found` when no story workspace exists yet for the story.
 
 ### `POST /work-items/[workItemId]/actions/cleanup-workspace`
@@ -740,6 +743,7 @@ Response `200`: `DashboardCleanupStoryWorkspaceResult`.
 Behavior notes:
 - Marks the workspace `removed` with `statusReason = "cleanup_requested"` when cleanup succeeds.
 - Leaves the row in place so the lifecycle remains inspectable and the workspace can be recreated later if the story is still active.
+- Cleanup of an already removed workspace is an idempotent repair path: it verifies no leaked local worktree state remains and surfaces drift if retirement cannot be confirmed.
 
 ### `POST /work-items/[workItemId]/actions/recreate-workspace`
 
@@ -760,6 +764,7 @@ Response `200`: `DashboardRecreateStoryWorkspaceResult`.
 
 Behavior notes:
 - Reuses the existing story workspace row and updates its path/branch/base commit fields.
+- Only succeeds when the current workspace row is already `removed`; active and stale rows must be reconciled/cleaned up first.
 - Returns `409 conflict` when the repository is archived or the story is already `Done`.
 
 ### `POST /work-items/[workItemId]/breakdown/runs`

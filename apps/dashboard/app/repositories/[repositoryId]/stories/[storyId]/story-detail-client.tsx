@@ -41,6 +41,7 @@ const storyWorkspaceStatusReasons = new Set<NonNullable<DashboardStoryWorkspaceS
   'branch_mismatch',
   'repository_clone_missing',
   'reconcile_failed',
+  'removed_state_drift',
   'cleanup_requested',
 ]);
 
@@ -265,6 +266,8 @@ function formatStoryWorkspaceReason(reason: string | null): string | null {
       return 'The repository clone is unavailable, so the workspace cannot be fully reconciled.';
     case 'reconcile_failed':
       return 'Workspace reconciliation could not inspect the repository state.';
+    case 'removed_state_drift':
+      return 'The workspace was marked removed, but local worktree state still exists and must be retired before recreation.';
     case 'cleanup_requested':
       return 'The workspace was explicitly cleaned up.';
     default:
@@ -828,7 +831,7 @@ export function StoryDetailPageContent(props: Readonly<{
               </ActionButton>
             ) : null}
 
-            {workspace !== null && canCreateOrRecreateWorkspace ? (
+            {workspace?.status === 'removed' && canCreateOrRecreateWorkspace ? (
               <ActionButton tone="secondary" onClick={() => void handleRecreateStoryWorkspace()} disabled={busy}>
                 Recreate workspace
               </ActionButton>

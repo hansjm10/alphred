@@ -218,6 +218,44 @@ describe('StoryDetailPageContent', () => {
     expect(screen.getByRole('button', { name: 'Cleanup workspace' })).toBeInTheDocument();
   });
 
+  it('hides recreate while active or stale workspaces still need manual action', () => {
+    const { rerender } = render(
+      <StoryDetailPageContent
+        repository={createRepository({ id: 1, name: 'demo-repo' })}
+        actor={{ actorType: 'human', actorLabel: 'octocat' }}
+        storyId={3}
+        initialLatestEventId={0}
+        initialProposal={null}
+        initialWorkspace={createWorkspace()}
+        initialWorkItems={[createWorkItem({ id: 3, type: 'story', title: 'Story title', status: 'Approved', revision: 1 })]}
+      />,
+    );
+
+    expect(screen.queryByRole('button', { name: 'Recreate workspace' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Reconcile workspace' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Cleanup workspace' })).toBeInTheDocument();
+
+    rerender(
+      <StoryDetailPageContent
+        repository={createRepository({ id: 1, name: 'demo-repo' })}
+        actor={{ actorType: 'human', actorLabel: 'octocat' }}
+        storyId={3}
+        initialLatestEventId={0}
+        initialProposal={null}
+        initialWorkspace={createWorkspace({
+          status: 'stale',
+          statusReason: 'missing_path',
+          removedAt: null,
+        })}
+        initialWorkItems={[createWorkItem({ id: 3, type: 'story', title: 'Story title', status: 'Approved', revision: 1 })]}
+      />,
+    );
+
+    expect(screen.queryByRole('button', { name: 'Recreate workspace' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Reconcile workspace' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Cleanup workspace' })).toBeInTheDocument();
+  });
+
   it('requests breakdown by moving the story to NeedsBreakdown', async () => {
     const user = userEvent.setup();
     const fetchMock = vi.mocked(global.fetch);
@@ -508,6 +546,67 @@ describe('StoryDetailPageContent', () => {
     );
     expect(screen.getByRole('button', { name: 'Recreate workspace' })).toBeInTheDocument();
     expect(screen.queryByText('Repository "demo-repo" is archived. Restore it before launching runs.')).toBeNull();
+  });
+
+  it('refresh turns a removed workspace stale when automatic cleanup cannot verify removal', async () => {
+    const user = userEvent.setup();
+    const fetchMock = vi.mocked(global.fetch);
+
+    fetchMock
+      .mockResolvedValueOnce(
+        createJsonResponse({
+          repository: createRepository({ id: 1, name: 'demo-repo' }),
+        }),
+      )
+      .mockResolvedValueOnce(
+        createJsonResponse({
+          workspace: createWorkspace({
+            status: 'stale',
+            statusReason: 'removed_state_drift',
+            removedAt: null,
+            updatedAt: '2026-03-06T01:07:00.000Z',
+          }),
+        }),
+      )
+      .mockResolvedValueOnce(
+        createJsonResponse({
+          workItems: [createWorkItem({ id: 3, type: 'story', title: 'Story title', status: 'Approved', revision: 2 })],
+        }),
+      )
+      .mockResolvedValueOnce(createJsonResponse({ proposal: null }))
+      .mockResolvedValueOnce(
+        createJsonResponse({ workItem: createWorkItem({ id: 3, type: 'story', title: 'Story title', status: 'Approved', revision: 2 }) }),
+      );
+
+    render(
+      <StoryDetailPageContent
+        repository={createRepository({ id: 1, name: 'demo-repo' })}
+        actor={{ actorType: 'human', actorLabel: 'octocat' }}
+        storyId={3}
+        initialLatestEventId={0}
+        initialProposal={null}
+        initialWorkspace={createWorkspace({
+          status: 'removed',
+          statusReason: 'cleanup_requested',
+          removedAt: '2026-03-06T01:05:00.000Z',
+        })}
+        initialWorkItems={[createWorkItem({ id: 3, type: 'story', title: 'Story title', status: 'Approved', revision: 1 })]}
+      />,
+    );
+
+    expect(screen.getByRole('button', { name: 'Recreate workspace' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Reconcile workspace' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Cleanup workspace' })).toBeNull();
+
+    await user.click(screen.getByRole('button', { name: 'Refresh' }));
+
+    expect(await screen.findByText('Stale')).toBeInTheDocument();
+    expect(
+      screen.getByText('The workspace was marked removed, but local worktree state still exists and must be retired before recreation.'),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Recreate workspace' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Reconcile workspace' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Cleanup workspace' })).toBeInTheDocument();
   });
 
   it('reconciles a stale story workspace and surfaces diagnostics', async () => {

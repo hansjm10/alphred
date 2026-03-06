@@ -579,6 +579,7 @@ export type DashboardStoryWorkspaceSnapshot = {
     | 'branch_mismatch'
     | 'repository_clone_missing'
     | 'reconcile_failed'
+    | 'removed_state_drift'
     | 'cleanup_requested'
     | null;
   lastReconciledAt: string | null;
