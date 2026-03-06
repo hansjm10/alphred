@@ -1,6 +1,10 @@
 'use client';
 
-import type { WorkItemStatus } from '@alphred/shared';
+import {
+  storyWorkspaceStatusReasons,
+  storyWorkspaceStatuses,
+  type WorkItemStatus,
+} from '@alphred/shared';
 import Link from 'next/link';
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import type {
@@ -29,21 +33,14 @@ type StoryWorkspaceAction = 'create-workspace' | 'reconcile-workspace' | 'cleanu
 
 type StoryWorkspaceActionResult = {
   workspace: DashboardStoryWorkspaceSnapshot;
-  created?: boolean;
 };
 
 const repositoryProviders = new Set<DashboardRepositoryState['provider']>(['github', 'azure-devops']);
 const repositoryCloneStatuses = new Set<DashboardRepositoryState['cloneStatus']>(['pending', 'cloned', 'error']);
-const storyWorkspaceStatuses = new Set<DashboardStoryWorkspaceSnapshot['status']>(['active', 'stale', 'removed']);
-const storyWorkspaceStatusReasons = new Set<NonNullable<DashboardStoryWorkspaceSnapshot['statusReason']>>([
-  'missing_path',
-  'worktree_not_registered',
-  'branch_mismatch',
-  'repository_clone_missing',
-  'reconcile_failed',
-  'removed_state_drift',
-  'cleanup_requested',
-]);
+const knownStoryWorkspaceStatuses = new Set<DashboardStoryWorkspaceSnapshot['status']>(storyWorkspaceStatuses);
+const knownStoryWorkspaceStatusReasons = new Set<NonNullable<DashboardStoryWorkspaceSnapshot['statusReason']>>(
+  storyWorkspaceStatusReasons,
+);
 
 function isNullableString(value: unknown): value is string | null {
   return value === null || typeof value === 'string';
@@ -52,7 +49,7 @@ function isNullableString(value: unknown): value is string | null {
 function isNullableStoryWorkspaceStatusReason(
   value: unknown,
 ): value is DashboardStoryWorkspaceSnapshot['statusReason'] {
-  return value === null || (typeof value === 'string' && storyWorkspaceStatusReasons.has(value as NonNullable<
+  return value === null || (typeof value === 'string' && knownStoryWorkspaceStatusReasons.has(value as NonNullable<
     DashboardStoryWorkspaceSnapshot['statusReason']
   >));
 }
@@ -92,7 +89,7 @@ function isStoryWorkspaceSnapshot(value: unknown): value is DashboardStoryWorksp
     && typeof value.baseBranch === 'string'
     && isNullableString(value.baseCommitHash)
     && typeof value.status === 'string'
-    && storyWorkspaceStatuses.has(value.status as DashboardStoryWorkspaceSnapshot['status'])
+    && knownStoryWorkspaceStatuses.has(value.status as DashboardStoryWorkspaceSnapshot['status'])
     && isNullableStoryWorkspaceStatusReason(value.statusReason)
     && isNullableString(value.lastReconciledAt)
     && isNullableString(value.removedAt)
@@ -178,8 +175,38 @@ async function runStoryWorkspaceAction(params: {
 
   return {
     workspace: payload.workspace,
-    created: typeof payload.created === 'boolean' ? payload.created : undefined,
   };
+}
+
+function formatWorkspaceCreateBlockedReason(params: {
+  repositoryArchivedAt: string | null;
+  storyStatus: WorkItemStatus | null;
+  workspaceStatus: DashboardStoryWorkspaceSnapshot['status'] | null;
+}): string | null {
+  const canReconcileOrCleanup = params.workspaceStatus !== null && params.workspaceStatus !== 'removed';
+
+  if (params.storyStatus !== 'Done') {
+    if (params.repositoryArchivedAt !== null) {
+      return 'Repository is archived. Restore it before creating or recreating a story workspace.';
+    }
+    return null;
+  }
+
+  if (params.repositoryArchivedAt !== null) {
+    return canReconcileOrCleanup
+      ? 'Repository is archived and the story is already Done. Only reconciliation and cleanup remain available.'
+      : 'Repository is archived and the story is already Done. No workspace actions remain available.';
+  }
+
+  if (canReconcileOrCleanup) {
+    return 'Story is Done. Clean up the existing workspace instead of creating or recreating a new one.';
+  }
+
+  if (params.workspaceStatus === 'removed') {
+    return 'Story is Done and the workspace is already removed. No further workspace actions are available.';
+  }
+
+  return 'Story is Done. New workspace creation is unavailable.';
 }
 
 async function refreshStoryWorkspace(params: {
@@ -337,17 +364,12 @@ export function StoryDetailPageContent(props: Readonly<{
   }, [workItemsById, story, storyId]);
 
   const workspaceCreateBlockedReason = useMemo(() => {
-    if (!story || story.status !== 'Done') {
-      if (repositoryState.archivedAt !== null) {
-        return 'Repository is archived. Restore it before creating or recreating a story workspace.';
-      }
-      return null;
-    }
-
-    return repositoryState.archivedAt !== null
-      ? 'Repository is archived and the story is already Done. Only reconciliation and cleanup remain available.'
-      : 'Story is Done. Clean up the existing workspace instead of creating or recreating a new one.';
-  }, [repositoryState.archivedAt, story]);
+    return formatWorkspaceCreateBlockedReason({
+      repositoryArchivedAt: repositoryState.archivedAt,
+      storyStatus: story?.status ?? null,
+      workspaceStatus: workspace?.status ?? null,
+    });
+  }, [repositoryState.archivedAt, story?.status, workspace?.status]);
 
   const connect = (sessionId: number) => {
     if (connectionSessionRef.current !== sessionId) {
@@ -593,11 +615,7 @@ export function StoryDetailPageContent(props: Readonly<{
         errorPrefix: 'Unable to create story workspace',
       });
       setWorkspace(result.workspace);
-      setActionNotice(
-        result.created === false
-          ? `Story workspace already exists on branch ${result.workspace.branch}.`
-          : `Story workspace ready on branch ${result.workspace.branch}.`,
-      );
+      setActionNotice(`Story workspace ready on branch ${result.workspace.branch}.`);
     } catch (error) {
       setActionError(error instanceof Error ? error.message : 'Unable to create story workspace.');
     } finally {

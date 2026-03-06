@@ -1,4 +1,11 @@
-import type { GuardExpression, ProviderExecutionPermissions, WorkItemStatus, WorkItemType } from '@alphred/shared';
+import type {
+  GuardExpression,
+  ProviderExecutionPermissions,
+  StoryWorkspaceStatus,
+  StoryWorkspaceStatusReason,
+  WorkItemStatus,
+  WorkItemType,
+} from '@alphred/shared';
 import type { WorkItemActorType, WorkItemEventType } from '@alphred/db';
 
 export type DashboardNodeStatus = 'pending' | 'running' | 'completed' | 'failed' | 'skipped' | 'cancelled';
@@ -572,16 +579,8 @@ export type DashboardStoryWorkspaceSnapshot = {
   branch: string;
   baseBranch: string;
   baseCommitHash: string | null;
-  status: 'active' | 'stale' | 'removed';
-  statusReason:
-    | 'missing_path'
-    | 'worktree_not_registered'
-    | 'branch_mismatch'
-    | 'repository_clone_missing'
-    | 'reconcile_failed'
-    | 'removed_state_drift'
-    | 'cleanup_requested'
-    | null;
+  status: StoryWorkspaceStatus;
+  statusReason: StoryWorkspaceStatusReason | null;
   lastReconciledAt: string | null;
   removedAt: string | null;
   createdAt: string;
@@ -809,7 +808,6 @@ export type DashboardCreateStoryWorkspaceRequest = DashboardGetStoryWorkspaceReq
 
 export type DashboardCreateStoryWorkspaceResult = {
   workspace: DashboardStoryWorkspaceSnapshot;
-  created: boolean;
 };
 
 export type DashboardReconcileStoryWorkspaceRequest = DashboardGetStoryWorkspaceRequest;

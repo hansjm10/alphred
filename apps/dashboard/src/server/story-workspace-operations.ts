@@ -32,7 +32,6 @@ import type {
   DashboardReconcileStoryWorkspaceResult,
   DashboardRecreateStoryWorkspaceRequest,
   DashboardRecreateStoryWorkspaceResult,
-  DashboardStoryWorkspaceSnapshot,
 } from './dashboard-contracts';
 import { DashboardIntegrationError } from './dashboard-errors';
 
@@ -85,26 +84,7 @@ function normalizeFsPath(path: string): string {
   return resolve(path);
 }
 
-function assertKnownStoryWorkspaceStatusReason(
-  reason: string | null,
-): asserts reason is DashboardStoryWorkspaceSnapshot['statusReason'] {
-  if (
-    reason !== null
-    && reason !== 'missing_path'
-    && reason !== 'worktree_not_registered'
-    && reason !== 'branch_mismatch'
-    && reason !== 'repository_clone_missing'
-    && reason !== 'reconcile_failed'
-    && reason !== 'removed_state_drift'
-    && reason !== 'cleanup_requested'
-  ) {
-    throw new Error(`Unknown story workspace status reason: ${reason}`);
-  }
-}
-
-function toStoryWorkspaceSnapshot(record: StoryWorkspaceRecord): DashboardStoryWorkspaceSnapshot {
-  assertKnownStoryWorkspaceStatusReason(record.statusReason);
-
+function toStoryWorkspaceSnapshot(record: StoryWorkspaceRecord) {
   return {
     id: record.id,
     repositoryId: record.repositoryId,
@@ -214,6 +194,39 @@ function assertStoryWorkspaceCreatable(params: {
       },
     );
   }
+}
+
+function assertStoryWorkspaceDoesNotExistForCreate(params: {
+  storyId: number;
+  workspace: StoryWorkspaceRecord;
+}): never {
+  if (params.workspace.status === 'removed') {
+    throw new DashboardIntegrationError(
+      'conflict',
+      `Story workspace for story id=${params.storyId} already exists in removed state. Recreate it instead of creating a new one.`,
+      {
+        status: 409,
+        details: {
+          storyId: params.storyId,
+          currentStatus: params.workspace.status,
+          allowedActions: ['recreate'],
+        },
+      },
+    );
+  }
+
+  throw new DashboardIntegrationError(
+    'conflict',
+    `Story workspace for story id=${params.storyId} already exists. Reconcile or clean it up instead of creating a new one.`,
+    {
+      status: 409,
+      details: {
+        storyId: params.storyId,
+        currentStatus: params.workspace.status,
+        allowedActions: ['reconcile', 'cleanup'],
+      },
+    },
+  );
 }
 
 async function defaultPathExists(path: string): Promise<boolean> {
@@ -620,30 +633,20 @@ export function createStoryWorkspaceOperations(params: {
           storyId,
         });
         const repository = requireRepository(db, repositoryId);
-        const existingWorkspace = getStoryWorkspaceByStoryWorkItemId(db, story.id);
-        if (existingWorkspace) {
-          const reconciled = await reconcileWorkspaceRecord(db, {
-            repositoryLocalPath: repository.localPath,
-            workspace: existingWorkspace,
-            listRepositoryWorktrees,
-            removeRepositoryWorktree,
-            deleteRepositoryBranch,
-            pathExists,
-            removePath,
-            occurredAt: now(),
-          });
-          return {
-            workspace: toStoryWorkspaceSnapshot(reconciled),
-            created: false,
-          };
-        }
-
         assertStoryWorkspaceCreatable({
           repositoryName: repository.name,
           repositoryArchivedAt: repository.archivedAt,
           storyId: story.id,
           storyStatus: story.status,
         });
+
+        const existingWorkspace = getStoryWorkspaceByStoryWorkItemId(db, story.id);
+        if (existingWorkspace) {
+          assertStoryWorkspaceDoesNotExistForCreate({
+            storyId: story.id,
+            workspace: existingWorkspace,
+          });
+        }
 
         const created = await createFreshStoryWorkspace({
           db,
@@ -664,7 +667,6 @@ export function createStoryWorkspaceOperations(params: {
 
         return {
           workspace: toStoryWorkspaceSnapshot(created),
-          created: true,
         };
       });
     },

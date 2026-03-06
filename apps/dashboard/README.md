@@ -696,8 +696,8 @@ Request body:
 Response `200`: `DashboardCreateStoryWorkspaceResult`.
 
 Behavior notes:
-- Creates or reuses the single persisted workspace row for the story.
-- Returns `created: false` when the workspace already exists and is reused.
+- Creates the persisted workspace row for the story and returns the new workspace snapshot.
+- Returns `409 conflict` when a workspace row already exists for the story. Use reconcile, cleanup, or recreate instead, depending on the current workspace state.
 - Returns `409 conflict` when the repository is archived or the story is already `Done`.
 
 ### `POST /work-items/[workItemId]/actions/reconcile-workspace`

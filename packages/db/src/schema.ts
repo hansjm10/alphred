@@ -1,5 +1,6 @@
 import { sql } from 'drizzle-orm';
 import { check, foreignKey, index, integer, sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqlite-core';
+import { storyWorkspaceStatusReasons, storyWorkspaceStatuses } from '@alphred/shared';
 import {
   epicWorkItemStatuses,
   featureWorkItemStatuses,
@@ -412,10 +413,10 @@ export const storyWorkspaces = sqliteTable(
       foreignColumns: [workItems.repositoryId, workItems.id],
       name: 'story_workspaces_repository_id_story_work_item_id_fk',
     }).onDelete('cascade'),
-    statusCheck: check('story_workspaces_status_ck', sql`${table.status} in ('active', 'stale', 'removed')`),
-    reasonNotEmptyCheck: check(
-      'story_workspaces_status_reason_not_empty_ck',
-      sql`${table.statusReason} is null or ${table.statusReason} <> ''`,
+    statusCheck: check('story_workspaces_status_ck', sql`${table.status} in (${sqlEnumValues(storyWorkspaceStatuses)})`),
+    statusReasonCheck: check(
+      'story_workspaces_status_reason_ck',
+      sql`${table.statusReason} is null or ${table.statusReason} in (${sqlEnumValues(storyWorkspaceStatusReasons)})`,
     ),
     removalTimestampCheck: check(
       'story_workspaces_removal_timestamp_ck',

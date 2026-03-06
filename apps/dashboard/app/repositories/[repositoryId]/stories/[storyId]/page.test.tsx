@@ -314,7 +314,6 @@ describe('StoryDetailPageContent', () => {
     fetchMock.mockResolvedValueOnce(
       createJsonResponse({
         workspace: createWorkspace(),
-        created: true,
       }),
     );
 
@@ -893,7 +892,36 @@ describe('StoryDetailPageContent', () => {
 
     expect(screen.queryByRole('button', { name: 'Create story workspace' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Recreate workspace' })).toBeNull();
-    expect(screen.getByText('Story is Done. Clean up the existing workspace instead of creating or recreating a new one.')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Reconcile workspace' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Cleanup workspace' })).toBeNull();
+    expect(
+      screen.getByText('Story is Done and the workspace is already removed. No further workspace actions are available.'),
+    ).toBeInTheDocument();
+  });
+
+  it('does not advertise unavailable workspace actions for archived done stories with removed workspaces', () => {
+    render(
+      <StoryDetailPageContent
+        repository={createRepository({ id: 1, name: 'demo-repo', archivedAt: '2026-03-06T00:00:00.000Z' })}
+        actor={{ actorType: 'human', actorLabel: 'octocat' }}
+        storyId={3}
+        initialLatestEventId={0}
+        initialProposal={null}
+        initialWorkspace={createWorkspace({
+          status: 'removed',
+          statusReason: 'cleanup_requested',
+          removedAt: '2026-03-06T01:05:00.000Z',
+        })}
+        initialWorkItems={[createWorkItem({ id: 3, type: 'story', title: 'Story title', status: 'Done', revision: 4 })]}
+      />,
+    );
+
+    expect(screen.queryByRole('button', { name: 'Reconcile workspace' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Cleanup workspace' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Recreate workspace' })).toBeNull();
+    expect(
+      screen.getByText('Repository is archived and the story is already Done. No workspace actions remain available.'),
+    ).toBeInTheDocument();
   });
 
   it('shows a not-found state when the story is missing', () => {

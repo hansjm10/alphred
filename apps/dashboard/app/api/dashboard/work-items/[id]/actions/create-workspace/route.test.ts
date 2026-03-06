@@ -44,7 +44,6 @@ describe('POST /api/dashboard/work-items/[id]/actions/create-workspace', () => {
         createdAt: '2026-03-05T10:00:00.000Z',
         updatedAt: '2026-03-05T10:00:00.000Z',
       },
-      created: true,
     });
 
     const response = await POST(
@@ -66,7 +65,6 @@ describe('POST /api/dashboard/work-items/[id]/actions/create-workspace', () => {
     });
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toMatchObject({
-      created: true,
       workspace: {
         repositoryId: 5,
         storyId: 14,

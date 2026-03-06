@@ -1,10 +1,14 @@
 import { asc, eq } from 'drizzle-orm';
+import {
+  storyWorkspaceStatusReasons,
+  storyWorkspaceStatuses,
+  type StoryWorkspaceStatus,
+  type StoryWorkspaceStatusReason,
+} from '@alphred/shared';
 import type { AlphredDatabase } from './connection.js';
 import { storyWorkspaces } from './schema.js';
 
 type StoryWorkspaceRow = typeof storyWorkspaces.$inferSelect;
-
-export type StoryWorkspaceStatus = 'active' | 'stale' | 'removed';
 
 export type StoryWorkspaceRecord = {
   id: number;
@@ -15,7 +19,7 @@ export type StoryWorkspaceRecord = {
   baseBranch: string;
   baseCommitHash: string | null;
   status: StoryWorkspaceStatus;
-  statusReason: string | null;
+  statusReason: StoryWorkspaceStatusReason | null;
   lastReconciledAt: string | null;
   createdAt: string;
   updatedAt: string;
@@ -39,20 +43,27 @@ export type UpdateStoryWorkspaceParams = {
   baseBranch?: string;
   baseCommitHash?: string | null;
   status?: StoryWorkspaceStatus;
-  statusReason?: string | null;
+  statusReason?: StoryWorkspaceStatusReason | null;
   lastReconciledAt?: string | null;
   removedAt?: string | null;
   occurredAt?: string;
 };
 
 function assertKnownStoryWorkspaceStatus(status: string): asserts status is StoryWorkspaceStatus {
-  if (status !== 'active' && status !== 'stale' && status !== 'removed') {
+  if (!storyWorkspaceStatuses.includes(status as StoryWorkspaceStatus)) {
     throw new Error(`Unknown story-workspace status: ${status}`);
+  }
+}
+
+function assertKnownStoryWorkspaceStatusReason(reason: string | null): asserts reason is StoryWorkspaceStatusReason | null {
+  if (reason !== null && !storyWorkspaceStatusReasons.includes(reason as StoryWorkspaceStatusReason)) {
+    throw new Error(`Unknown story-workspace status reason: ${reason}`);
   }
 }
 
 function toStoryWorkspaceRecord(row: StoryWorkspaceRow): StoryWorkspaceRecord {
   assertKnownStoryWorkspaceStatus(row.status);
+  assertKnownStoryWorkspaceStatusReason(row.statusReason);
 
   return {
     id: row.id,
@@ -160,10 +171,12 @@ export function updateStoryWorkspace(db: AlphredDatabase, params: UpdateStoryWor
   if ('baseCommitHash' in params) {
     values.baseCommitHash = params.baseCommitHash ?? null;
   }
-  if ('status' in params) {
+  if (params.status !== undefined) {
+    assertKnownStoryWorkspaceStatus(params.status);
     values.status = params.status;
   }
-  if ('statusReason' in params) {
+  if (params.statusReason !== undefined) {
+    assertKnownStoryWorkspaceStatusReason(params.statusReason ?? null);
     values.statusReason = params.statusReason ?? null;
   }
   if ('lastReconciledAt' in params) {

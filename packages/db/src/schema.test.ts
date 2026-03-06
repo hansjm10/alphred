@@ -1481,6 +1481,20 @@ describe('database schema hardening', () => {
         removedAt: null,
       }).run(),
     ).toThrow();
+
+    expect(() =>
+      db.insert(storyWorkspaces).values({
+        repositoryId: repository.id,
+        storyWorkItemId: story.id,
+        worktreePath: '/tmp/alphred/worktrees/story-workspace-invalid-reason',
+        branch: 'alphred/story/invalid-reason',
+        baseBranch: 'main',
+        status: 'stale',
+        statusReason: 'invalid_reason',
+        lastReconciledAt: '2026-03-05T10:00:00.000Z',
+        removedAt: null,
+      }).run(),
+    ).toThrow();
   });
 
   it('enforces tree edge transition mode combinations', () => {

@@ -1,4 +1,5 @@
 import type { AlphredDatabase } from './connection.js';
+import { storyWorkspaceStatusReasons, storyWorkspaceStatuses } from '@alphred/shared';
 import { sql, type SQL } from 'drizzle-orm';
 import {
   epicWorkItemStatuses,
@@ -398,7 +399,11 @@ export function migrateDatabase(db: AlphredDatabase): void {
   const storyWorkspacesDefinition = tx.get<{ sql: string | null }>(
     sql`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'story_workspaces'`,
   )?.sql;
-  if (storyWorkspacesDefinition && !storyWorkspacesDefinition.includes('story_workspaces_status_ck')) {
+  if (
+    storyWorkspacesDefinition
+    && (!storyWorkspacesDefinition.includes('story_workspaces_status_ck')
+      || !storyWorkspacesDefinition.includes('story_workspaces_status_reason_ck'))
+  ) {
     tx.run(sql`DROP TABLE IF EXISTS story_workspaces`);
   }
 
@@ -421,9 +426,9 @@ export function migrateDatabase(db: AlphredDatabase): void {
       REFERENCES work_items(repository_id, id)
       ON DELETE CASCADE,
     CONSTRAINT story_workspaces_status_ck
-      CHECK (status IN ('active', 'stale', 'removed')),
-    CONSTRAINT story_workspaces_status_reason_not_empty_ck
-      CHECK (status_reason IS NULL OR status_reason <> ''),
+      CHECK (status IN (${sqlEnumValues(storyWorkspaceStatuses)})),
+    CONSTRAINT story_workspaces_status_reason_ck
+      CHECK (status_reason IS NULL OR status_reason IN (${sqlEnumValues(storyWorkspaceStatusReasons)})),
     CONSTRAINT story_workspaces_removal_timestamp_ck
       CHECK (
         (status IN ('active', 'stale') AND removed_at IS NULL)

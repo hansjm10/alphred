@@ -312,4 +312,27 @@ describe('story_workspaces lifecycle helpers', () => {
       }),
     ).toThrow('Story workspace disappeared after update');
   });
+
+  it('rejects unknown story workspace status reasons on update', () => {
+    const db = createMigratedDb();
+    const seed = seedStoryWorkItem(db, {
+      repositoryName: 'story-workspace-invalid-reason',
+      storyTitle: 'Invalid reason story workspace',
+    });
+
+    const inserted = insertStoryWorkspace(db, {
+      repositoryId: seed.repository.id,
+      storyWorkItemId: seed.storyId,
+      worktreePath: '/tmp/alphred/worktrees/story-invalid-reason',
+      branch: 'alphred/story/7-a1b2c3',
+      baseBranch: 'main',
+    });
+
+    expect(() =>
+      updateStoryWorkspace(db, {
+        storyWorkspaceId: inserted.id,
+        statusReason: 'invalid_reason' as never,
+      }),
+    ).toThrow('Unknown story-workspace status reason: invalid_reason');
+  });
 });
