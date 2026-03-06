@@ -4,6 +4,8 @@ import {
   providerApprovalPolicies,
   providerSandboxModes,
   providerWebSearchModes,
+  storyWorkspaceStatusReasons,
+  storyWorkspaceStatuses,
   type AuthStatus,
   type CloneStatus,
   type CreatePrParams,
@@ -75,6 +77,22 @@ describe('shared types', () => {
     expect(new Set(providerApprovalPolicies).size).toBe(providerApprovalPolicies.length);
     expect(new Set(providerSandboxModes).size).toBe(providerSandboxModes.length);
     expect(new Set(providerWebSearchModes).size).toBe(providerWebSearchModes.length);
+  });
+
+  it('exposes unique story workspace lifecycle literals', () => {
+    expect([...storyWorkspaceStatuses]).toEqual(['active', 'stale', 'removed']);
+    expect([...storyWorkspaceStatusReasons]).toEqual([
+      'missing_path',
+      'worktree_not_registered',
+      'branch_mismatch',
+      'repository_clone_missing',
+      'reconcile_failed',
+      'removed_state_drift',
+      'cleanup_requested',
+    ]);
+
+    expect(new Set(storyWorkspaceStatuses).size).toBe(storyWorkspaceStatuses.length);
+    expect(new Set(storyWorkspaceStatusReasons).size).toBe(storyWorkspaceStatusReasons.length);
   });
 
   it('should type-check normalized scm types', () => {
