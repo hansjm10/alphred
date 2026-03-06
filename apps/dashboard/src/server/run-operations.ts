@@ -63,6 +63,7 @@ import {
   findActiveStoryBreakdownRunForStory,
   loadStoryBreakdownRunIdentity,
 } from './story-breakdown-run-state';
+import { assertWorkflowTreeIsPublic } from './workflow-visibility';
 
 const BACKGROUND_RUN_STATUS: RunStatus = 'running';
 const RECENT_SNAPSHOT_LIMIT = 30;
@@ -484,6 +485,7 @@ function normalizeRunLaunchRequest(request: DashboardRunLaunchRequest): Normaliz
       status: 400,
     });
   }
+  assertWorkflowTreeIsPublic(treeKey);
 
   const repositoryName = request.repositoryName?.trim();
   if (request.repositoryName !== undefined && repositoryName?.length === 0) {

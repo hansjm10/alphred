@@ -3676,6 +3676,30 @@ describe('createDashboardService', () => {
     });
   });
 
+  it('rejects hidden workflow trees when launching runs through the generic service path', async () => {
+    const { db, dependencies } = createHarness();
+
+    const service = createDashboardService({ dependencies });
+
+    await expect(
+      service.launchWorkflowRun({
+        treeKey: DEFAULT_STORY_BREAKDOWN_TREE_KEY,
+        executionMode: 'sync',
+      }),
+    ).rejects.toMatchObject({
+      name: 'DashboardIntegrationError',
+      code: 'not_found',
+      status: 404,
+      message: `Workflow tree "${DEFAULT_STORY_BREAKDOWN_TREE_KEY}" was not found.`,
+    });
+
+    const persistedRuns = db
+      .select({ id: workflowRuns.id })
+      .from(workflowRuns)
+      .all();
+    expect(persistedRuns).toEqual([]);
+  });
+
   it.each([
     {
       repositoryName: '',
