@@ -12,6 +12,7 @@ import {
   parseRepositoryIdFromQuery,
   parseRunIdFromPathSegment,
   parseRunStoryWorkflowRequest,
+  parseStartTaskWorkflowRequest,
   parseUpdateWorkItemFieldsRequest,
   parseWorkItemIdFromPathSegment,
 } from './work-item-route-validation';
@@ -407,6 +408,45 @@ describe('work item route validation', () => {
           81,
         ),
       ).toThrowError(DashboardIntegrationError);
+    });
+  });
+
+  describe('parseStartTaskWorkflowRequest', () => {
+    it('parses valid task start payloads', () => {
+      expect(
+        parseStartTaskWorkflowRequest(
+          {
+            repositoryId: 9,
+            expectedRevision: 0,
+            actorType: 'system',
+            actorLabel: 'autobot',
+          },
+          81,
+        ),
+      ).toEqual({
+        repositoryId: 9,
+        workItemId: 81,
+        expectedRevision: 0,
+        actorType: 'system',
+        actorLabel: 'autobot',
+      });
+    });
+
+    it('rejects invalid task start payloads', () => {
+      try {
+        parseStartTaskWorkflowRequest(
+          {
+            repositoryId: 9,
+            expectedRevision: -1,
+            actorType: 'system',
+            actorLabel: 'autobot',
+          },
+          81,
+        );
+        throw new Error('Expected task start parser to throw');
+      } catch (error) {
+        expectInvalidRequest(error, 'Field "expectedRevision" must be a non-negative integer.');
+      }
     });
   });
 

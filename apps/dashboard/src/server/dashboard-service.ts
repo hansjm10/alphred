@@ -166,7 +166,6 @@ export function createDashboardService(options: {
     environment,
   });
 
-  const taskRunAutolaunchEnabled = environment.ALPHRED_DASHBOARD_TASK_RUN_AUTOLAUNCH === '1';
   const configuredTaskRunTreeKey = (environment.ALPHRED_DASHBOARD_TASK_RUN_TREE_KEY ?? 'design-implement-review').trim();
   const taskRunTreeKey = configuredTaskRunTreeKey.length > 0 ? configuredTaskRunTreeKey : 'design-implement-review';
 
@@ -188,27 +187,55 @@ export function createDashboardService(options: {
     });
   }
 
-  async function moveWorkItemStatusWithTaskRunOrchestration(
-    request: Parameters<typeof workItemOperations.moveWorkItemStatus>[0],
-  ): Promise<Awaited<ReturnType<typeof workItemOperations.moveWorkItemStatus>>> {
-    const shouldAttemptTaskRunAutolaunch =
-      taskRunAutolaunchEnabled && request.toStatus === 'InProgress' && request.linkedWorkflowRunId === undefined;
-    if (!shouldAttemptTaskRunAutolaunch) {
-      return workItemOperations.moveWorkItemStatus(request);
-    }
-
-    validateMoveWorkItemStatusRequest(request);
+  async function startTaskWorkflow(
+    request: {
+      repositoryId: number;
+      workItemId: number;
+      expectedRevision: number;
+      actorType: 'human' | 'agent' | 'system';
+      actorLabel: string;
+    },
+  ) {
+    validateMoveWorkItemStatusRequest({
+      ...request,
+      toStatus: 'InProgress',
+    });
 
     const existing = await workItemOperations.getWorkItem({
       repositoryId: request.repositoryId,
       workItemId: request.workItemId,
     });
-    if (
-      existing.workItem.type !== 'task'
-      || existing.workItem.status !== 'Ready'
-      || existing.workItem.revision !== request.expectedRevision
-    ) {
-      return workItemOperations.moveWorkItemStatus(request);
+    if (existing.workItem.type !== 'task') {
+      throw new DashboardIntegrationError('invalid_request', `Work item id=${request.workItemId} is not a task.`, {
+        status: 400,
+      });
+    }
+    if (existing.workItem.revision !== request.expectedRevision) {
+      throw new DashboardIntegrationError(
+        'conflict',
+        `Work item id=${request.workItemId} revision conflict (expected ${request.expectedRevision}).`,
+        {
+          status: 409,
+          details: {
+            workItemId: request.workItemId,
+            expectedRevision: request.expectedRevision,
+            currentRevision: existing.workItem.revision,
+          },
+        },
+      );
+    }
+    if (existing.workItem.status !== 'Ready') {
+      throw new DashboardIntegrationError(
+        'conflict',
+        `Task id=${request.workItemId} must be Ready before starting a workflow (current status: ${existing.workItem.status}).`,
+        {
+          status: 409,
+          details: {
+            workItemId: request.workItemId,
+            currentStatus: existing.workItem.status,
+          },
+        },
+      );
     }
 
     const repositoryName = await resolveRepositoryNameById(request.repositoryId);
@@ -225,20 +252,26 @@ export function createDashboardService(options: {
     const launchedRun = await runOperations.launchWorkflowRun({
       treeKey: taskRunTreeKey,
       repositoryName,
+      workItemId: request.workItemId,
       executionMode: 'async',
       policyConstraints,
     });
 
     try {
-      return await workItemOperations.moveWorkItemStatus({
+      const moved = await workItemOperations.moveWorkItemStatus({
         ...request,
+        toStatus: 'InProgress',
         linkedWorkflowRunId: launchedRun.workflowRunId,
       });
+      return {
+        workItem: moved.workItem,
+        workflowRunId: launchedRun.workflowRunId,
+      };
     } catch (error) {
       try {
         await runOperations.controlWorkflowRun(launchedRun.workflowRunId, 'cancel');
       } catch {
-        // Best-effort cleanup if move fails after launching.
+        // Best-effort cleanup if task start fails after launching.
       }
       throw error;
     }
@@ -252,7 +285,8 @@ export function createDashboardService(options: {
       operations: {
         getWorkItem: workItemOperations.getWorkItem,
         listWorkItems: workItemOperations.listWorkItems,
-        moveWorkItemStatus: moveWorkItemStatusWithTaskRunOrchestration,
+        moveWorkItemStatus: workItemOperations.moveWorkItemStatus,
+        startTaskWorkflow,
         approveStoryBreakdown: workItemOperations.approveStoryBreakdown,
       },
     });
@@ -265,7 +299,7 @@ export function createDashboardService(options: {
     ...workItemOperations,
     ...storyBreakdownRunOperations,
     runStoryWorkflow,
-    moveWorkItemStatus: moveWorkItemStatusWithTaskRunOrchestration,
+    startTaskWorkflow,
     ...runOperations,
   };
 }

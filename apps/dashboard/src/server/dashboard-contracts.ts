@@ -636,6 +636,19 @@ export type DashboardMoveWorkItemStatusResult = {
   workItem: DashboardWorkItemSnapshot;
 };
 
+export type DashboardStartTaskWorkflowRequest = {
+  repositoryId: number;
+  workItemId: number;
+  expectedRevision: number;
+  actorType: WorkItemActorType;
+  actorLabel: string;
+};
+
+export type DashboardStartTaskWorkflowResult = {
+  workItem: DashboardWorkItemSnapshot;
+  workflowRunId: number;
+};
+
 export type DashboardRequestWorkItemReplanRequest = {
   repositoryId: number;
   workItemId: number;

@@ -694,6 +694,54 @@ describe('RepositoryBoardPageContent', () => {
     expect(within(screen.getByRole('region', { name: 'Tasks Done' })).getByRole('button', { name: /Write tests/ })).toBeInTheDocument();
   });
 
+  it('starts task workflows explicitly when Ready tasks move to InProgress', async () => {
+    const user = userEvent.setup();
+    const fetchMock = vi.mocked(global.fetch);
+
+    fetchMock.mockResolvedValueOnce(
+      createJsonResponse({
+        workItem: createWorkItem({
+          id: 10,
+          status: 'InProgress',
+          revision: 1,
+          title: 'Write tests',
+          linkedWorkflowRun: {
+            workflowRunId: 44,
+            runStatus: 'pending',
+            linkedAt: new Date('2026-03-06T00:00:00.000Z').toISOString(),
+          },
+        }),
+        workflowRunId: 44,
+      }),
+    );
+
+    render(
+      <RepositoryBoardPageContent
+        repository={createRepository({ id: 1, name: 'demo-repo' })}
+        actor={{ actorType: 'human', actorLabel: 'octocat' }}
+        initialLatestEventId={0}
+        initialWorkItems={[createWorkItem({ id: 10, status: 'Ready', revision: 0, title: 'Write tests', type: 'task' })]}
+      />,
+    );
+
+    await user.click(screen.getByRole('button', { name: /Write tests/ }));
+    await user.selectOptions(screen.getByRole('combobox', { name: 'Status' }), 'InProgress');
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/dashboard/work-items/10/actions/start-task-workflow', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        repositoryId: 1,
+        expectedRevision: 0,
+        actorType: 'human',
+        actorLabel: 'octocat',
+      }),
+    });
+
+    expect(within(screen.getByRole('region', { name: 'Tasks InProgress' })).getByRole('button', { name: /Write tests/ })).toBeInTheDocument();
+  });
+
   it('saves drafted files and assignees via the patch API', async () => {
     const user = userEvent.setup();
     const fetchMock = vi.mocked(global.fetch);

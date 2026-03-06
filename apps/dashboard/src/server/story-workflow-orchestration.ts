@@ -8,6 +8,8 @@ import type {
   DashboardRunStoryWorkflowRequest,
   DashboardRunStoryWorkflowResult,
   DashboardRunStoryWorkflowStepResult,
+  DashboardStartTaskWorkflowRequest,
+  DashboardStartTaskWorkflowResult,
   DashboardWorkItemSnapshot,
 } from './dashboard-contracts';
 import { DashboardIntegrationError } from './dashboard-errors';
@@ -18,6 +20,7 @@ export type StoryWorkflowOrchestrationOperations = {
   getWorkItem: (params: { repositoryId: number; workItemId: number }) => Promise<DashboardGetWorkItemResult>;
   listWorkItems: (repositoryId: number) => Promise<DashboardListWorkItemsResult>;
   moveWorkItemStatus: (request: DashboardMoveWorkItemStatusRequest) => Promise<DashboardMoveWorkItemStatusResult>;
+  startTaskWorkflow: (request: DashboardStartTaskWorkflowRequest) => Promise<DashboardStartTaskWorkflowResult>;
   approveStoryBreakdown: (request: DashboardApproveStoryBreakdownRequest) => Promise<DashboardApproveStoryBreakdownResult>;
 };
 
@@ -287,11 +290,10 @@ export async function runStoryWorkflowOrchestration(params: {
   let conflictStartError: DashboardIntegrationError | null = null;
   for (const task of readyTasks) {
     try {
-      const startedTask = await params.operations.moveWorkItemStatus({
+      const startedTask = await params.operations.startTaskWorkflow({
         repositoryId,
         workItemId: task.id,
         expectedRevision: task.revision,
-        toStatus: 'InProgress',
         actorType,
         actorLabel,
       });
