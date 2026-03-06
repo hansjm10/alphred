@@ -6,6 +6,7 @@ import type {
   DashboardWorkItemEffectivePolicySnapshot,
   DashboardWorkItemLinkedRunSnapshot,
   DashboardRequestWorkItemReplanResult,
+  DashboardStartTaskWorkflowResult,
   DashboardWorkItemSnapshot,
 } from '@dashboard/server/dashboard-contracts';
 
@@ -482,6 +483,54 @@ export async function moveWorkItemStatus<TStatus extends string>(params: {
   }
 
   return { ok: true, workItem: payload.workItem as DashboardWorkItemSnapshot };
+}
+
+export async function startTaskWorkflow(params: {
+  repositoryId: number;
+  workItemId: number;
+  expectedRevision: number;
+  actor: WorkItemActor;
+  errorPrefix?: string;
+}): Promise<
+  | { ok: true; workItem: DashboardWorkItemSnapshot; workflowRunId: number }
+  | { ok: false; status: number; message: string }
+> {
+  const errorPrefix = params.errorPrefix ?? 'Unable to start task workflow';
+  const response = await fetch(`/api/dashboard/work-items/${params.workItemId}/actions/start-task-workflow`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      repositoryId: params.repositoryId,
+      expectedRevision: params.expectedRevision,
+      actorType: params.actor.actorType,
+      actorLabel: params.actor.actorLabel,
+    }),
+  });
+
+  const payload = parseJsonSafely(await response.text());
+
+  if (!response.ok) {
+    return {
+      ok: false,
+      status: response.status,
+      message: resolveApiErrorMessage(response.status, payload, errorPrefix),
+    };
+  }
+
+  if (
+    !isRecord(payload)
+    || !isRecord(payload.workItem)
+    || typeof payload.workflowRunId !== 'number'
+  ) {
+    return { ok: false, status: 500, message: `${errorPrefix} (malformed response).` };
+  }
+
+  const result = payload as DashboardStartTaskWorkflowResult;
+  return {
+    ok: true,
+    workItem: result.workItem,
+    workflowRunId: result.workflowRunId,
+  };
 }
 
 export async function runStoryWorkflow(params: {

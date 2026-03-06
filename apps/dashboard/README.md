@@ -675,6 +675,35 @@ Lifecycle semantics:
 Validation note:
 - The planner result contract is intentionally shaped for downstream breakdown proposal consumption and replaces heuristic free-form parsing on the consumer side.
 
+### `POST /work-items/[workItemId]/actions/start-task-workflow`
+
+Launches the configured async task workflow for a Ready task and transitions the task to `InProgress`.
+
+Path parameters:
+- `workItemId`: positive integer task id.
+
+Request body:
+
+```json
+{
+  "repositoryId": 4,
+  "expectedRevision": 2,
+  "actorType": "human",
+  "actorLabel": "alice"
+}
+```
+
+Response `200`: `DashboardStartTaskWorkflowResult`.
+
+Behavior notes:
+- `moveWorkItemStatus` is lifecycle-only and does not launch runs.
+- This endpoint resolves effective policy constraints, launches the configured task workflow tree, links the launched run to the task, and then performs the `Ready -> InProgress` status transition.
+- The task workflow tree key is configured with `ALPHRED_DASHBOARD_TASK_RUN_TREE_KEY` and defaults to `design-implement-review`.
+
+Failure semantics:
+- Validation and policy failures happen before launch and leave the task unchanged.
+- If launch succeeds but the task link/status update fails, the dashboard issues a best-effort run cancellation and returns the original error.
+
 ### `POST /repositories/[repositoryId]/work-items/[workItemId]/actions/request-replan`
 
 Appends an audit event requesting replanning for a task based on planned-vs-actual file deltas.

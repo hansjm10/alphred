@@ -17,6 +17,7 @@ import {
   workItems,
   runWorktrees,
   workflowRuns,
+  workflowRunAssociations,
   workflowTrees,
   treeNodes,
   type AlphredDatabase,
@@ -945,11 +946,75 @@ describe('work-item-operations', () => {
     });
   });
 
-  it('auto-launches and links a run when task transitions Ready -> InProgress and autolaunch is enabled', async () => {
+  it('keeps Ready -> InProgress moves lifecycle-only without auto-launching runs', async () => {
+    const { db, service } = createHarness();
+
+    const repository = insertRepository(db, {
+      name: 'repo',
+      provider: 'github',
+      remoteUrl: 'https://example.com/repo.git',
+      remoteRef: 'acme/repo',
+    });
+
+    const taskId = Number(
+      db.insert(workItems)
+        .values({
+          repositoryId: repository.id,
+          type: 'task',
+          status: 'Ready',
+          title: 'Move me only',
+          revision: 0,
+        })
+        .run().lastInsertRowid,
+    );
+
+    const moved = await service.moveWorkItemStatus({
+      repositoryId: repository.id,
+      workItemId: taskId,
+      expectedRevision: 0,
+      toStatus: 'InProgress',
+      actorType: 'human',
+      actorLabel: 'alice',
+    });
+
+    expect(moved.workItem.status).toBe('InProgress');
+    expect(moved.workItem.linkedWorkflowRun).toBeNull();
+
+    const taskRow = db
+      .select({
+        status: workItems.status,
+        revision: workItems.revision,
+      })
+      .from(workItems)
+      .where(and(eq(workItems.repositoryId, repository.id), eq(workItems.id, taskId)))
+      .get();
+    expect(taskRow).toEqual({
+      status: 'InProgress',
+      revision: 1,
+    });
+
+    const linkedRows = db
+      .select()
+      .from(workItemWorkflowRuns)
+      .where(and(eq(workItemWorkflowRuns.repositoryId, repository.id), eq(workItemWorkflowRuns.workItemId, taskId)))
+      .all();
+    expect(linkedRows).toHaveLength(0);
+
+    const associationRows = db
+      .select()
+      .from(workflowRunAssociations)
+      .where(and(eq(workflowRunAssociations.repositoryId, repository.id), eq(workflowRunAssociations.workItemId, taskId)))
+      .all();
+    expect(associationRows).toHaveLength(0);
+
+    const runRows = db.select().from(workflowRuns).orderBy(desc(workflowRuns.id)).all();
+    expect(runRows).toHaveLength(0);
+  });
+
+  it('starts a task workflow explicitly and preserves run associations', async () => {
     const { db, service } = createHarness({
       environment: {
         ...process.env,
-        ALPHRED_DASHBOARD_TASK_RUN_AUTOLAUNCH: '1',
         ALPHRED_DASHBOARD_TASK_RUN_TREE_KEY: 'design-implement-review',
       },
     });
@@ -969,23 +1034,23 @@ describe('work-item-operations', () => {
           repositoryId: repository.id,
           type: 'task',
           status: 'Ready',
-          title: 'Autolaunch me',
+          title: 'Start me',
           revision: 0,
         })
         .run().lastInsertRowid,
     );
 
-    const moved = await service.moveWorkItemStatus({
+    const started = await service.startTaskWorkflow({
       repositoryId: repository.id,
       workItemId: taskId,
       expectedRevision: 0,
-      toStatus: 'InProgress',
       actorType: 'human',
       actorLabel: 'alice',
     });
 
-    expect(moved.workItem.status).toBe('InProgress');
-    expect(moved.workItem.linkedWorkflowRun?.workflowRunId).toBeGreaterThan(0);
+    expect(started.workflowRunId).toBeGreaterThan(0);
+    expect(started.workItem.status).toBe('InProgress');
+    expect(started.workItem.linkedWorkflowRun?.workflowRunId).toBe(started.workflowRunId);
 
     const linkedRows = db
       .select()
@@ -993,6 +1058,24 @@ describe('work-item-operations', () => {
       .where(and(eq(workItemWorkflowRuns.repositoryId, repository.id), eq(workItemWorkflowRuns.workItemId, taskId)))
       .all();
     expect(linkedRows).toHaveLength(1);
+    expect(linkedRows[0]?.workflowRunId).toBe(started.workflowRunId);
+
+    const association = db
+      .select({
+        workflowRunId: workflowRunAssociations.workflowRunId,
+        repositoryId: workflowRunAssociations.repositoryId,
+        workItemId: workflowRunAssociations.workItemId,
+        issueId: workflowRunAssociations.issueId,
+      })
+      .from(workflowRunAssociations)
+      .where(eq(workflowRunAssociations.workflowRunId, started.workflowRunId))
+      .get();
+    expect(association).toEqual({
+      workflowRunId: started.workflowRunId,
+      repositoryId: repository.id,
+      workItemId: taskId,
+      issueId: null,
+    });
 
     const event = db
       .select()
@@ -1008,14 +1091,93 @@ describe('work-item-operations', () => {
       .limit(1)
       .get();
     const eventPayload = event?.payload as { linkedWorkflowRun?: { workflowRunId?: number } | null };
-    expect(eventPayload.linkedWorkflowRun?.workflowRunId).toBe(moved.workItem.linkedWorkflowRun?.workflowRunId);
+    expect(eventPayload.linkedWorkflowRun?.workflowRunId).toBe(started.workflowRunId);
   });
 
-  it('blocks autolaunch when repository is archived', async () => {
+  it('rejects explicit task start for non-task work items', async () => {
+    const { db, service } = createHarness();
+
+    const repository = insertRepository(db, {
+      name: 'repo',
+      provider: 'github',
+      remoteUrl: 'https://example.com/repo.git',
+      remoteRef: 'acme/repo',
+    });
+
+    const storyId = Number(
+      db.insert(workItems)
+        .values({
+          repositoryId: repository.id,
+          type: 'story',
+          status: 'Approved',
+          title: 'Not a task',
+          revision: 0,
+        })
+        .run().lastInsertRowid,
+    );
+
+    await expect(
+      service.startTaskWorkflow({
+        repositoryId: repository.id,
+        workItemId: storyId,
+        expectedRevision: 0,
+        actorType: 'human',
+        actorLabel: 'alice',
+      }),
+    ).rejects.toMatchObject({
+      code: 'invalid_request',
+      status: 400,
+      message: `Work item id=${storyId} is not a task.`,
+    });
+
+    const runRows = db.select().from(workflowRuns).orderBy(desc(workflowRuns.id)).all();
+    expect(runRows).toHaveLength(0);
+  });
+
+  it('rejects explicit task start when the task is not Ready', async () => {
+    const { db, service } = createHarness();
+
+    const repository = insertRepository(db, {
+      name: 'repo',
+      provider: 'github',
+      remoteUrl: 'https://example.com/repo.git',
+      remoteRef: 'acme/repo',
+    });
+
+    const taskId = Number(
+      db.insert(workItems)
+        .values({
+          repositoryId: repository.id,
+          type: 'task',
+          status: 'Draft',
+          title: 'Not ready yet',
+          revision: 0,
+        })
+        .run().lastInsertRowid,
+    );
+
+    await expect(
+      service.startTaskWorkflow({
+        repositoryId: repository.id,
+        workItemId: taskId,
+        expectedRevision: 0,
+        actorType: 'human',
+        actorLabel: 'alice',
+      }),
+    ).rejects.toMatchObject({
+      code: 'conflict',
+      status: 409,
+      message: `Task id=${taskId} must be Ready before starting a workflow (current status: Draft).`,
+    });
+
+    const runRows = db.select().from(workflowRuns).orderBy(desc(workflowRuns.id)).all();
+    expect(runRows).toHaveLength(0);
+  });
+
+  it('blocks explicit task start when repository is archived', async () => {
     const { db, service } = createHarness({
       environment: {
         ...process.env,
-        ALPHRED_DASHBOARD_TASK_RUN_AUTOLAUNCH: '1',
         ALPHRED_DASHBOARD_TASK_RUN_TREE_KEY: 'design-implement-review',
       },
     });
@@ -1036,18 +1198,17 @@ describe('work-item-operations', () => {
           repositoryId: repository.id,
           type: 'task',
           status: 'Ready',
-          title: 'Archived autolaunch task',
+          title: 'Archived explicit start task',
           revision: 0,
         })
         .run().lastInsertRowid,
     );
 
     await expect(
-      service.moveWorkItemStatus({
+      service.startTaskWorkflow({
         repositoryId: repository.id,
         workItemId: taskId,
         expectedRevision: 0,
-        toStatus: 'InProgress',
         actorType: 'human',
         actorLabel: 'alice',
       }),
@@ -1077,15 +1238,21 @@ describe('work-item-operations', () => {
       .all();
     expect(linkedRows).toHaveLength(0);
 
+    const associationRows = db
+      .select()
+      .from(workflowRunAssociations)
+      .where(and(eq(workflowRunAssociations.repositoryId, repository.id), eq(workflowRunAssociations.workItemId, taskId)))
+      .all();
+    expect(associationRows).toHaveLength(0);
+
     const runRows = db.select().from(workflowRuns).orderBy(desc(workflowRuns.id)).all();
     expect(runRows).toHaveLength(0);
   });
 
-  it('rejects invalid autolaunch move requests before creating workflow runs', async () => {
+  it('rejects invalid explicit task start requests before creating workflow runs', async () => {
     const { db, service } = createHarness({
       environment: {
         ...process.env,
-        ALPHRED_DASHBOARD_TASK_RUN_AUTOLAUNCH: '1',
         ALPHRED_DASHBOARD_TASK_RUN_TREE_KEY: 'design-implement-review',
       },
     });
@@ -1105,18 +1272,17 @@ describe('work-item-operations', () => {
           repositoryId: repository.id,
           type: 'task',
           status: 'Ready',
-          title: 'Invalid autolaunch request',
+          title: 'Invalid explicit start request',
           revision: 0,
         })
         .run().lastInsertRowid,
     );
 
     await expect(
-      service.moveWorkItemStatus({
+      service.startTaskWorkflow({
         repositoryId: repository.id,
         workItemId: taskId,
         expectedRevision: 0,
-        toStatus: 'InProgress',
         actorType: 'human',
         actorLabel: '   ',
       }),
@@ -1146,15 +1312,21 @@ describe('work-item-operations', () => {
       .all();
     expect(linkedRows).toHaveLength(0);
 
+    const associationRows = db
+      .select()
+      .from(workflowRunAssociations)
+      .where(and(eq(workflowRunAssociations.repositoryId, repository.id), eq(workflowRunAssociations.workItemId, taskId)))
+      .all();
+    expect(associationRows).toHaveLength(0);
+
     const runRows = db.select().from(workflowRuns).orderBy(desc(workflowRuns.id)).all();
     expect(runRows).toHaveLength(0);
   });
 
-  it('blocks autolaunch when policy provider allowlist rejects workflow node providers', async () => {
+  it('blocks explicit task start when policy provider allowlist rejects workflow node providers', async () => {
     const { db, service } = createHarness({
       environment: {
         ...process.env,
-        ALPHRED_DASHBOARD_TASK_RUN_AUTOLAUNCH: '1',
         ALPHRED_DASHBOARD_TASK_RUN_TREE_KEY: 'design-implement-review',
       },
     });
@@ -1194,11 +1366,10 @@ describe('work-item-operations', () => {
     );
 
     await expect(
-      service.moveWorkItemStatus({
+      service.startTaskWorkflow({
         repositoryId: repository.id,
         workItemId: taskId,
         expectedRevision: 0,
-        toStatus: 'InProgress',
         actorType: 'human',
         actorLabel: 'alice',
       }),
@@ -1222,8 +1393,118 @@ describe('work-item-operations', () => {
       .all();
     expect(linkedRows).toHaveLength(0);
 
+    const associationRows = db
+      .select()
+      .from(workflowRunAssociations)
+      .where(and(eq(workflowRunAssociations.repositoryId, repository.id), eq(workflowRunAssociations.workItemId, taskId)))
+      .all();
+    expect(associationRows).toHaveLength(0);
+
     const runRows = db.select().from(workflowRuns).orderBy(desc(workflowRuns.id)).all();
     expect(runRows).toHaveLength(0);
+  });
+
+  it('cancels launched runs when explicit task start fails after launch', async () => {
+    const harnessDbRef: { current: AlphredDatabase | undefined } = { current: undefined };
+    let taskId = 0;
+    const { db, service } = createHarness({
+      dependencies: {
+        createWorktreeManager: () => ({
+          createRunWorktree: async ({ runId }: { runId: number }) => {
+            if (!harnessDbRef.current) {
+              throw new Error('Expected harness database to be initialized.');
+            }
+            harnessDbRef.current.update(workItems)
+              .set({ revision: 1 })
+              .where(eq(workItems.id, taskId))
+              .run();
+            return {
+              id: 1,
+              runId,
+              repositoryId: 1,
+              path: '/tmp/worktree',
+              branch: 'main',
+              commitHash: null,
+              createdAt: '2026-02-17T20:00:00.000Z',
+            };
+          },
+          cleanupRun: async () => undefined,
+        }),
+      },
+      environment: {
+        ...process.env,
+        ALPHRED_DASHBOARD_TASK_RUN_TREE_KEY: 'design-implement-review',
+      },
+    });
+    harnessDbRef.current = db;
+
+    const repository = insertRepository(db, {
+      name: 'repo',
+      provider: 'github',
+      remoteUrl: 'https://example.com/repo.git',
+      remoteRef: 'acme/repo',
+    });
+
+    seedPublishedWorkflowTree(db, { treeKey: 'design-implement-review', provider: 'codex' });
+
+    taskId = Number(
+      db.insert(workItems)
+        .values({
+          repositoryId: repository.id,
+          type: 'task',
+          status: 'Ready',
+          title: 'Cancel me on failure',
+          revision: 0,
+        })
+        .run().lastInsertRowid,
+    );
+
+    await expect(
+      service.startTaskWorkflow({
+        repositoryId: repository.id,
+        workItemId: taskId,
+        expectedRevision: 0,
+        actorType: 'human',
+        actorLabel: 'alice',
+      }),
+    ).rejects.toMatchObject({
+      code: 'conflict',
+      status: 409,
+      message: `Work item id=${taskId} revision conflict (expected 0).`,
+    });
+
+    const taskRow = db
+      .select({
+        status: workItems.status,
+        revision: workItems.revision,
+      })
+      .from(workItems)
+      .where(and(eq(workItems.repositoryId, repository.id), eq(workItems.id, taskId)))
+      .get();
+    expect(taskRow).toEqual({
+      status: 'Ready',
+      revision: 1,
+    });
+
+    const linkedRows = db
+      .select()
+      .from(workItemWorkflowRuns)
+      .where(and(eq(workItemWorkflowRuns.repositoryId, repository.id), eq(workItemWorkflowRuns.workItemId, taskId)))
+      .all();
+    expect(linkedRows).toHaveLength(0);
+
+    const cancelledRun = db
+      .select({
+        id: workflowRuns.id,
+        status: workflowRuns.status,
+      })
+      .from(workflowRuns)
+      .orderBy(desc(workflowRuns.id))
+      .limit(1)
+      .get();
+    expect(cancelledRun).toMatchObject({
+      status: 'cancelled',
+    });
   });
 
   it('requires non-empty actorLabel', async () => {

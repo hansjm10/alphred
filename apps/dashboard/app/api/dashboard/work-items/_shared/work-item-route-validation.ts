@@ -8,6 +8,7 @@ import type {
   DashboardProposeStoryBreakdownRequest,
   DashboardRunStoryWorkflowRequest,
   DashboardRequestWorkItemReplanRequest,
+  DashboardStartTaskWorkflowRequest,
   DashboardUpdateWorkItemFieldsRequest,
   DashboardWorkItemProposedBreakdownTask,
 } from '@dashboard/server/dashboard-contracts';
@@ -339,6 +340,27 @@ export function parseMoveWorkItemStatusRequest(
     workItemId,
     expectedRevision,
     toStatus,
+    actorType,
+    actorLabel,
+  };
+}
+
+export function parseStartTaskWorkflowRequest(
+  payload: Record<string, unknown>,
+  workItemId: number,
+): DashboardStartTaskWorkflowRequest {
+  const repositoryId = parsePositiveInteger(payload.repositoryId, 'Field "repositoryId" must be a positive integer.');
+  const expectedRevision = parseNonNegativeInteger(
+    payload.expectedRevision,
+    'Field "expectedRevision" must be a non-negative integer.',
+  );
+  const actorType = parseActorType(payload.actorType);
+  const actorLabel = parseActorLabel(payload.actorLabel);
+
+  return {
+    repositoryId,
+    workItemId,
+    expectedRevision,
     actorType,
     actorLabel,
   };

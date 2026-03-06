@@ -30,6 +30,7 @@ function createOperations(overrides: Partial<StoryWorkflowOrchestrationOperation
     getWorkItem: vi.fn(),
     listWorkItems: vi.fn(),
     moveWorkItemStatus: vi.fn(),
+    startTaskWorkflow: vi.fn(),
     approveStoryBreakdown: vi.fn(),
     ...overrides,
   };
@@ -50,10 +51,10 @@ describe('runStoryWorkflowOrchestration', () => {
         story: approvedStory,
         tasks: [readyTaskA, readyTaskB],
       }),
-      moveWorkItemStatus: vi
+      startTaskWorkflow: vi
         .fn()
-        .mockResolvedValueOnce({ workItem: inProgressTaskA })
-        .mockResolvedValueOnce({ workItem: inProgressTaskB }),
+        .mockResolvedValueOnce({ workItem: inProgressTaskA, workflowRunId: 41 })
+        .mockResolvedValueOnce({ workItem: inProgressTaskB, workflowRunId: 42 }),
       listWorkItems: vi.fn().mockResolvedValue({ workItems: [] }),
     });
 
@@ -88,9 +89,9 @@ describe('runStoryWorkflowOrchestration', () => {
     const operations = createOperations({
       getWorkItem: vi.fn().mockResolvedValue({ workItem: story }),
       listWorkItems: vi.fn().mockResolvedValue({ workItems: [readyTaskA, readyTaskB] }),
-      moveWorkItemStatus: vi
+      startTaskWorkflow: vi
         .fn()
-        .mockResolvedValueOnce({ workItem: inProgressTaskA })
+        .mockResolvedValueOnce({ workItem: inProgressTaskA, workflowRunId: 41 })
         .mockRejectedValueOnce(
           new DashboardIntegrationError('conflict', 'Task revision conflict.', { status: 409 }),
         ),
@@ -125,7 +126,7 @@ describe('runStoryWorkflowOrchestration', () => {
     const operations = createOperations({
       getWorkItem: vi.fn().mockResolvedValue({ workItem: story }),
       listWorkItems: vi.fn().mockResolvedValue({ workItems: [readyTask] }),
-      moveWorkItemStatus: vi
+      startTaskWorkflow: vi
         .fn()
         .mockRejectedValueOnce(new DashboardIntegrationError('conflict', 'Task revision conflict.', { status: 409 })),
     });
@@ -161,7 +162,7 @@ describe('runStoryWorkflowOrchestration', () => {
         story: approvedStory,
         tasks: [readyTaskA, readyTaskB],
       }),
-      moveWorkItemStatus: vi
+      startTaskWorkflow: vi
         .fn()
         .mockRejectedValueOnce(new DashboardIntegrationError('internal_error', 'Task launch failed.', { status: 500 })),
       listWorkItems: vi.fn().mockResolvedValue({ workItems: [] }),
@@ -209,9 +210,9 @@ describe('runStoryWorkflowOrchestration', () => {
         story: approvedStory,
         tasks: [readyTaskA, readyTaskB],
       }),
-      moveWorkItemStatus: vi
+      startTaskWorkflow: vi
         .fn()
-        .mockResolvedValueOnce({ workItem: startedTaskA })
+        .mockResolvedValueOnce({ workItem: startedTaskA, workflowRunId: 41 })
         .mockRejectedValueOnce(
           new DashboardIntegrationError('conflict', 'Task revision conflict.', { status: 409 }),
         ),
@@ -250,7 +251,7 @@ describe('runStoryWorkflowOrchestration', () => {
     const operations = createOperations({
       getWorkItem: vi.fn().mockResolvedValue({ workItem: story }),
       listWorkItems: vi.fn().mockResolvedValue({ workItems: [readyTask] }),
-      moveWorkItemStatus: vi
+      startTaskWorkflow: vi
         .fn()
         .mockRejectedValueOnce(new DashboardIntegrationError('internal_error', 'Task launch failed.', { status: 500 })),
     });
@@ -296,6 +297,7 @@ describe('runStoryWorkflowOrchestration', () => {
       status: 409,
     });
     expect(operations.moveWorkItemStatus).not.toHaveBeenCalled();
+    expect(operations.startTaskWorkflow).not.toHaveBeenCalled();
     expect(operations.approveStoryBreakdown).not.toHaveBeenCalled();
   });
 

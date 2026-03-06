@@ -28,6 +28,7 @@ import {
   parseBoardEventSnapshot,
   parseJsonSafely,
   requestWorkItemReplan,
+  startTaskWorkflow,
   toWorkItemsById,
   updateWorkItemFields,
 } from '../_shared/work-items-shared';
@@ -1113,7 +1114,8 @@ export function RepositoryBoardPageContent({
 
   const handleMove = async (workItemId: number, nextStatusRaw: string) => {
     const current = workItemsById[workItemId];
-    if (current?.type !== 'task') {
+    const currentTask = asSelectedTaskWorkItem(current ?? null);
+    if (!currentTask) {
       return;
     }
 
@@ -1131,34 +1133,14 @@ export function RepositoryBoardPageContent({
     setMovingWorkItemIds(previous => new Set([...previous, workItemId]));
 
     try {
-      const moveResult = await moveWorkItemStatus({
-        repositoryId: repository.id,
-        workItemId,
-        expectedRevision: current.revision,
+      const moved = await transitionTaskStatus({
+        currentTask,
+        expectedRevision: currentTask.revision,
         toStatus: nextStatus,
-        actor,
       });
-
-      if (moveResult.ok) {
-        setWorkItemsById(previous => ({
-          ...previous,
-          [workItemId]: moveResult.workItem,
-        }));
-        setActionMessage({ tone: 'success', message: `Moved "${current.title}" to ${nextStatus}.` });
-        return;
+      if (moved) {
+        setActionMessage({ tone: 'success', message: `Moved "${currentTask.title}" to ${nextStatus}.` });
       }
-
-      if (moveResult.status === 409) {
-        const refreshed = await fetchWorkItem({ repositoryId: repository.id, workItemId });
-        setWorkItemsById(previous => ({
-          ...previous,
-          [workItemId]: refreshed,
-        }));
-        setActionMessage({ tone: 'error', message: `${moveResult.message} Refreshed from server.` });
-        return;
-      }
-
-      setActionMessage({ tone: 'error', message: moveResult.message });
     } catch (error) {
       setActionMessage({
         tone: 'error',
@@ -1314,27 +1296,36 @@ export function RepositoryBoardPageContent({
     }));
   };
 
-  const moveTaskForDraftSave = async (params: {
-    workItemId: number;
+  const transitionTaskStatus = async (params: {
+    currentTask: SelectedTaskWorkItem;
     expectedRevision: number;
     toStatus: TaskWorkItemStatus;
   }): Promise<DashboardWorkItemSnapshot | null> => {
-    const moveResult = await moveWorkItemStatus({
-      repositoryId: repository.id,
-      workItemId: params.workItemId,
-      expectedRevision: params.expectedRevision,
-      toStatus: params.toStatus,
-      actor,
-    });
-    if (moveResult.ok) {
-      syncWorkItemSnapshot(moveResult.workItem);
-      return moveResult.workItem;
+    const statusResult =
+      params.currentTask.status === 'Ready' && params.toStatus === 'InProgress'
+        ? await startTaskWorkflow({
+            repositoryId: repository.id,
+            workItemId: params.currentTask.id,
+            expectedRevision: params.expectedRevision,
+            actor,
+          })
+        : await moveWorkItemStatus({
+            repositoryId: repository.id,
+            workItemId: params.currentTask.id,
+            expectedRevision: params.expectedRevision,
+            toStatus: params.toStatus,
+            actor,
+          });
+
+    if (statusResult.ok) {
+      syncWorkItemSnapshot(statusResult.workItem);
+      return statusResult.workItem;
     }
-    if (moveResult.status === 409) {
-      await refreshWorkItemFromServer(params.workItemId, moveResult.message);
+    if (statusResult.status === 409) {
+      await refreshWorkItemFromServer(params.currentTask.id, statusResult.message);
       return null;
     }
-    setActionMessage({ tone: 'error', message: moveResult.message });
+    setActionMessage({ tone: 'error', message: statusResult.message });
     return null;
   };
 
@@ -1389,8 +1380,8 @@ export function RepositoryBoardPageContent({
       let latest: DashboardWorkItemSnapshot = selectedTask;
 
       if (draftChanges.statusChanged) {
-        const moved = await moveTaskForDraftSave({
-          workItemId,
+        const moved = await transitionTaskStatus({
+          currentTask: selectedTask,
           expectedRevision: latest.revision,
           toStatus: taskDraft.status,
         });

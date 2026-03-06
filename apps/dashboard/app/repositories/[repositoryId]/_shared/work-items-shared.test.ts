@@ -5,8 +5,9 @@ import {
   fetchWorkItem,
   moveWorkItemStatus,
   parseBoardEventSnapshot,
-  runStoryWorkflow,
   requestWorkItemReplan,
+  runStoryWorkflow,
+  startTaskWorkflow,
   toWorkItemsById,
   type BoardEventSnapshot,
   type WorkItemActor,
@@ -423,6 +424,64 @@ describe('runStoryWorkflow', () => {
       ok: false,
       status: 500,
       message: 'Unable to run story workflow (malformed response).',
+    });
+  });
+});
+
+describe('startTaskWorkflow', () => {
+  it('returns ok=true for successful responses', async () => {
+    const fetchMock = vi.fn(async () =>
+      new Response(
+        JSON.stringify({
+          workItem: createWorkItem({ id: 20, type: 'task', status: 'InProgress', revision: 2 }),
+          workflowRunId: 41,
+        }),
+        { status: 200 },
+      ),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await startTaskWorkflow({
+      repositoryId: 1,
+      workItemId: 20,
+      expectedRevision: 1,
+      actor,
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/dashboard/work-items/20/actions/start-task-workflow', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        repositoryId: 1,
+        expectedRevision: 1,
+        actorType: 'human',
+        actorLabel: 'octocat',
+      }),
+    });
+    expect(result).toEqual({
+      ok: true,
+      workItem: createWorkItem({ id: 20, type: 'task', status: 'InProgress', revision: 2 }),
+      workflowRunId: 41,
+    });
+  });
+
+  it('returns ok=false for malformed success payloads', async () => {
+    const fetchMock = vi.fn(async () =>
+      new Response(JSON.stringify({ workItem: createWorkItem({ id: 20, type: 'task' }) }), { status: 200 }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await startTaskWorkflow({
+      repositoryId: 1,
+      workItemId: 20,
+      expectedRevision: 1,
+      actor,
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      status: 500,
+      message: 'Unable to start task workflow (malformed response).',
     });
   });
 });
