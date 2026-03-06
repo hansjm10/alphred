@@ -1,5 +1,6 @@
 import { sql } from 'drizzle-orm';
 import { check, foreignKey, index, integer, sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqlite-core';
+import { storyWorkspaceStatusReasons, storyWorkspaceStatuses } from '@alphred/shared';
 import {
   epicWorkItemStatuses,
   featureWorkItemStatuses,
@@ -382,6 +383,55 @@ export const runWorktrees = sqliteTable(
     runStatusIdx: index('run_worktrees_run_id_status_idx').on(table.workflowRunId, table.status),
     repositoryStatusIdx: index('run_worktrees_repository_id_status_idx').on(table.repositoryId, table.status),
     createdAtIdx: index('run_worktrees_created_at_idx').on(table.createdAt),
+  }),
+);
+
+// SQLite cannot express cross-table type checks in table CHECK constraints.
+export const storyWorkspaces = sqliteTable(
+  'story_workspaces',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    repositoryId: integer('repository_id')
+      .notNull()
+      .references(() => repositories.id, { onDelete: 'restrict' }),
+    storyWorkItemId: integer('story_work_item_id')
+      .notNull()
+      .references(() => workItems.id, { onDelete: 'cascade' }),
+    worktreePath: text('worktree_path').notNull(),
+    branch: text('branch').notNull(),
+    baseBranch: text('base_branch').notNull(),
+    baseCommitHash: text('base_commit_hash'),
+    status: text('status').notNull().default('active'),
+    statusReason: text('status_reason'),
+    lastReconciledAt: text('last_reconciled_at'),
+    createdAt: text('created_at').notNull().default(utcNow),
+    updatedAt: text('updated_at').notNull().default(utcNow),
+    removedAt: text('removed_at'),
+  },
+  table => ({
+    repositoryStoryFk: foreignKey({
+      columns: [table.repositoryId, table.storyWorkItemId],
+      foreignColumns: [workItems.repositoryId, workItems.id],
+      name: 'story_workspaces_repository_id_story_work_item_id_fk',
+    }).onDelete('cascade'),
+    statusCheck: check('story_workspaces_status_ck', sql`${table.status} in (${sqlEnumValues(storyWorkspaceStatuses)})`),
+    statusReasonCheck: check(
+      'story_workspaces_status_reason_ck',
+      sql`${table.statusReason} is null or ${table.statusReason} in (${sqlEnumValues(storyWorkspaceStatusReasons)})`,
+    ),
+    removalTimestampCheck: check(
+      'story_workspaces_removal_timestamp_ck',
+      sql`(
+        ${table.status} in ('active', 'stale')
+        and ${table.removedAt} is null
+      ) or (
+        ${table.status} = 'removed'
+        and ${table.removedAt} is not null
+      )`,
+    ),
+    storyWorkItemUnique: uniqueIndex('story_workspaces_story_work_item_id_uq').on(table.storyWorkItemId),
+    repositoryStatusIdx: index('story_workspaces_repository_id_status_idx').on(table.repositoryId, table.status),
+    createdAtIdx: index('story_workspaces_created_at_idx').on(table.createdAt),
   }),
 );
 

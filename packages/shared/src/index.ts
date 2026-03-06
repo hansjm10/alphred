@@ -121,6 +121,7 @@ export const routingDecisionSources = ['provider_result_metadata', 'result_conte
 export type RoutingDecisionSource = (typeof routingDecisionSources)[number];
 
 export * from './workItems.js';
+export * from './storyWorkspaces.js';
 export const routingDecisionContractSentinel = 'ALPHRED_ROUTING_CONTRACT_V1';
 export const routingDecisionContractLinePrefix = 'result.metadata.routingDecision:';
 export const spawnerOutputContractSentinel = 'ALPHRED_SPAWNER_CONTRACT_V1';

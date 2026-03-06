@@ -1,5 +1,6 @@
 import type { AlphredDatabase } from './connection.js';
 import { sql, type SQL } from 'drizzle-orm';
+import { storyWorkspaceStatusReasons, storyWorkspaceStatuses } from '@alphred/shared';
 import {
   epicWorkItemStatuses,
   featureWorkItemStatuses,
@@ -394,6 +395,94 @@ export function migrateDatabase(db: AlphredDatabase): void {
     ON run_worktrees(repository_id, status)`);
   tx.run(sql`CREATE INDEX IF NOT EXISTS run_worktrees_created_at_idx
     ON run_worktrees(created_at)`);
+
+  const storyWorkspacesDefinition = tx.get<{ sql: string | null }>(
+    sql`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'story_workspaces'`,
+  )?.sql;
+  if (
+    storyWorkspacesDefinition &&
+    (
+      !storyWorkspacesDefinition.includes('story_workspaces_repository_id_story_work_item_id_fk') ||
+      !storyWorkspacesDefinition.includes('story_workspaces_status_ck') ||
+      !storyWorkspacesDefinition.includes('story_workspaces_status_reason_ck') ||
+      !storyWorkspacesDefinition.includes('story_workspaces_removal_timestamp_ck')
+    )
+  ) {
+    tx.run(sql`DROP TABLE IF EXISTS story_workspaces`);
+  }
+
+  tx.run(sql`CREATE TABLE IF NOT EXISTS story_workspaces (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    repository_id INTEGER NOT NULL REFERENCES repositories(id) ON DELETE RESTRICT,
+    story_work_item_id INTEGER NOT NULL REFERENCES work_items(id) ON DELETE CASCADE,
+    worktree_path TEXT NOT NULL,
+    branch TEXT NOT NULL,
+    base_branch TEXT NOT NULL,
+    base_commit_hash TEXT,
+    status TEXT NOT NULL DEFAULT 'active',
+    status_reason TEXT,
+    last_reconciled_at TEXT,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    removed_at TEXT,
+    CONSTRAINT story_workspaces_repository_id_story_work_item_id_fk
+      FOREIGN KEY (repository_id, story_work_item_id)
+      REFERENCES work_items(repository_id, id)
+      ON DELETE CASCADE,
+    CONSTRAINT story_workspaces_status_ck
+      CHECK (status IN (${sqlEnumValues(storyWorkspaceStatuses)})),
+    CONSTRAINT story_workspaces_status_reason_ck
+      CHECK (status_reason IS NULL OR status_reason IN (${sqlEnumValues(storyWorkspaceStatusReasons)})),
+    CONSTRAINT story_workspaces_removal_timestamp_ck
+      CHECK (
+        (status IN ('active', 'stale') AND removed_at IS NULL)
+        OR
+        (status = 'removed' AND removed_at IS NOT NULL)
+      )
+  )`);
+  tx.run(sql`CREATE UNIQUE INDEX IF NOT EXISTS story_workspaces_story_work_item_id_uq
+    ON story_workspaces(story_work_item_id)`);
+  tx.run(sql`CREATE INDEX IF NOT EXISTS story_workspaces_repository_id_status_idx
+    ON story_workspaces(repository_id, status)`);
+  tx.run(sql`CREATE INDEX IF NOT EXISTS story_workspaces_created_at_idx
+    ON story_workspaces(created_at)`);
+  tx.run(sql`CREATE TRIGGER IF NOT EXISTS story_workspaces_story_type_insert_ck
+    BEFORE INSERT ON story_workspaces
+    FOR EACH ROW
+    WHEN (
+      SELECT type
+      FROM work_items
+      WHERE id = NEW.story_work_item_id
+    ) <> 'story'
+    BEGIN
+      SELECT RAISE(ABORT, 'story_workspaces.story_work_item_id must reference a story work_item');
+    END`);
+  tx.run(sql`CREATE TRIGGER IF NOT EXISTS story_workspaces_story_type_update_ck
+    BEFORE UPDATE OF story_work_item_id ON story_workspaces
+    FOR EACH ROW
+    WHEN (
+      SELECT type
+      FROM work_items
+      WHERE id = NEW.story_work_item_id
+    ) <> 'story'
+    BEGIN
+      SELECT RAISE(ABORT, 'story_workspaces.story_work_item_id must reference a story work_item');
+    END`);
+  tx.run(sql`CREATE TRIGGER IF NOT EXISTS work_items_story_workspace_type_update_ck
+    BEFORE UPDATE OF type ON work_items
+    FOR EACH ROW
+    WHEN (
+      OLD.type = 'story'
+      AND NEW.type <> 'story'
+      AND EXISTS (
+        SELECT 1
+        FROM story_workspaces
+        WHERE story_work_item_id = NEW.id
+      )
+    )
+    BEGIN
+      SELECT RAISE(ABORT, 'work_items.type must remain story while referenced by story_workspaces');
+    END`);
 
   tx.run(sql`CREATE TABLE IF NOT EXISTS tree_nodes (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
