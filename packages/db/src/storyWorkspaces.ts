@@ -61,9 +61,19 @@ function assertKnownStoryWorkspaceStatusReason(reason: string | null): asserts r
   }
 }
 
+function assertStoryWorkspaceLifecycleCompatibility(
+  status: StoryWorkspaceStatus,
+  statusReason: StoryWorkspaceStatusReason | null,
+): void {
+  if (status === 'active' && statusReason !== null) {
+    throw new Error(`Story workspace status "active" requires statusReason to be null; received ${statusReason}.`);
+  }
+}
+
 function toStoryWorkspaceRecord(row: StoryWorkspaceRow): StoryWorkspaceRecord {
   assertKnownStoryWorkspaceStatus(row.status);
   assertKnownStoryWorkspaceStatusReason(row.statusReason);
+  assertStoryWorkspaceLifecycleCompatibility(row.status, row.statusReason);
 
   return {
     id: row.id,
@@ -180,6 +190,11 @@ export function listStoryWorkspacesForRepository(db: AlphredDatabase, repository
 
 export function updateStoryWorkspace(db: AlphredDatabase, params: UpdateStoryWorkspaceParams): StoryWorkspaceRecord {
   const occurredAt = params.occurredAt ?? new Date().toISOString();
+  const current = getStoryWorkspaceById(db, params.storyWorkspaceId);
+  if (!current) {
+    throw new Error(`Story workspace id=${params.storyWorkspaceId} was not found for update.`);
+  }
+
   const values: {
     updatedAt: string;
     worktreePath?: string;
@@ -220,6 +235,10 @@ export function updateStoryWorkspace(db: AlphredDatabase, params: UpdateStoryWor
   if ('removedAt' in params) {
     values.removedAt = params.removedAt ?? null;
   }
+
+  const nextStatus = params.status ?? current.status;
+  const nextStatusReason = params.statusReason !== undefined ? params.statusReason ?? null : current.statusReason;
+  assertStoryWorkspaceLifecycleCompatibility(nextStatus, nextStatusReason);
 
   const updated = db
     .update(storyWorkspaces)

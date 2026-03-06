@@ -404,4 +404,59 @@ describe('story_workspaces lifecycle helpers', () => {
       }),
     ).toThrow('Unknown story-workspace status reason: invalid_reason');
   });
+
+  it('rejects non-null status reasons while the workspace remains active', () => {
+    const db = createMigratedDb();
+    const seed = seedStoryWorkItem(db, {
+      repositoryName: 'story-workspace-active-reason',
+      storyTitle: 'Active story workspace reason guard',
+    });
+
+    const inserted = insertStoryWorkspace(db, {
+      repositoryId: seed.repository.id,
+      storyWorkItemId: seed.storyId,
+      worktreePath: '/tmp/alphred/worktrees/story-active-reason',
+      branch: 'alphred/story/8-a1b2c3',
+      baseBranch: 'main',
+    });
+
+    expect(() =>
+      updateStoryWorkspace(db, {
+        storyWorkspaceId: inserted.id,
+        statusReason: 'cleanup_requested',
+      }),
+    ).toThrow('Story workspace status "active" requires statusReason to be null');
+  });
+
+  it('rejects reactivating a workspace without clearing the prior status reason', () => {
+    const db = createMigratedDb();
+    const seed = seedStoryWorkItem(db, {
+      repositoryName: 'story-workspace-reactivate-reason',
+      storyTitle: 'Reactivate story workspace reason guard',
+    });
+
+    const inserted = insertStoryWorkspace(db, {
+      repositoryId: seed.repository.id,
+      storyWorkItemId: seed.storyId,
+      worktreePath: '/tmp/alphred/worktrees/story-reactivate-reason',
+      branch: 'alphred/story/9-a1b2c3',
+      baseBranch: 'main',
+    });
+
+    updateStoryWorkspace(db, {
+      storyWorkspaceId: inserted.id,
+      status: 'stale',
+      statusReason: 'missing_path',
+      lastReconciledAt: '2026-03-05T10:05:00.000Z',
+      occurredAt: '2026-03-05T10:05:00.000Z',
+    });
+
+    expect(() =>
+      updateStoryWorkspace(db, {
+        storyWorkspaceId: inserted.id,
+        status: 'active',
+        occurredAt: '2026-03-05T10:10:00.000Z',
+      }),
+    ).toThrow('Story workspace status "active" requires statusReason to be null');
+  });
 });

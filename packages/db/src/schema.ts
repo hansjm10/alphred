@@ -419,6 +419,10 @@ export const storyWorkspaces = sqliteTable(
       'story_workspaces_status_reason_ck',
       sql`${table.statusReason} is null or ${table.statusReason} in (${sqlEnumValues(storyWorkspaceStatusReasons)})`,
     ),
+    activeStatusReasonCheck: check(
+      'story_workspaces_active_status_reason_ck',
+      sql`${table.status} <> 'active' or ${table.statusReason} is null`,
+    ),
     removalTimestampCheck: check(
       'story_workspaces_removal_timestamp_ck',
       sql`(

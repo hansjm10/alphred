@@ -405,6 +405,7 @@ export function migrateDatabase(db: AlphredDatabase): void {
       !storyWorkspacesDefinition.includes('story_workspaces_repository_id_story_work_item_id_fk') ||
       !storyWorkspacesDefinition.includes('story_workspaces_status_ck') ||
       !storyWorkspacesDefinition.includes('story_workspaces_status_reason_ck') ||
+      !storyWorkspacesDefinition.includes('story_workspaces_active_status_reason_ck') ||
       !storyWorkspacesDefinition.includes('story_workspaces_removal_timestamp_ck')
     )
   ) {
@@ -433,6 +434,8 @@ export function migrateDatabase(db: AlphredDatabase): void {
       CHECK (status IN (${sqlEnumValues(storyWorkspaceStatuses)})),
     CONSTRAINT story_workspaces_status_reason_ck
       CHECK (status_reason IS NULL OR status_reason IN (${sqlEnumValues(storyWorkspaceStatusReasons)})),
+    CONSTRAINT story_workspaces_active_status_reason_ck
+      CHECK (status <> 'active' OR status_reason IS NULL),
     CONSTRAINT story_workspaces_removal_timestamp_ck
       CHECK (
         (status IN ('active', 'stale') AND removed_at IS NULL)

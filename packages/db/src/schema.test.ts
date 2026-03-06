@@ -1408,6 +1408,14 @@ describe('database schema hardening', () => {
     ).not.toThrow();
 
     expect(() =>
+      db
+        .update(storyWorkspaces)
+        .set({ statusReason: 'cleanup_requested' })
+        .where(eq(storyWorkspaces.storyWorkItemId, story.id))
+        .run(),
+    ).toThrow();
+
+    expect(() =>
       db.insert(storyWorkspaces).values({
         repositoryId: firstRepository.id,
         storyWorkItemId: story.id,
@@ -1470,6 +1478,20 @@ describe('database schema hardening', () => {
         status: 'unknown',
         statusReason: null,
         lastReconciledAt: null,
+        removedAt: null,
+      }).run(),
+    ).toThrow();
+
+    expect(() =>
+      db.insert(storyWorkspaces).values({
+        repositoryId: repository.id,
+        storyWorkItemId: story.id,
+        worktreePath: '/tmp/alphred/worktrees/story-workspace-active-has-reason',
+        branch: 'alphred/story/active-has-reason',
+        baseBranch: 'main',
+        status: 'active',
+        statusReason: 'cleanup_requested',
+        lastReconciledAt: '2026-03-05T10:00:00.000Z',
         removedAt: null,
       }).run(),
     ).toThrow();
