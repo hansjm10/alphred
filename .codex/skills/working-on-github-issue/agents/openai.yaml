@@ -1,0 +1,4 @@
+interface:
+  display_name: "Work on a GitHub Issue"
+  short_description: "Plan, build, review, and package a GitHub issue into a PR"
+  default_prompt: "Use $working-on-github-issue to take a GitHub issue from live retrieval through plan review, behavior-first TDD execution, per-step review, and PR creation."

@@ -8,8 +8,13 @@
 
 # Claude / Codex
 .claude/
-.codex/
+.codex/*
+!.codex/skills/
+.codex/skills/*
+!.codex/skills/working-on-github-issue/
+!.codex/skills/working-on-github-issue/**
 .mcp.json
+.codex-artifacts/
 .playwright-mcp/
 .playwright-cli/
 
