@@ -4,12 +4,14 @@ import {
   parseApproveStoryBreakdownRequest,
   parseCreateWorkItemRequest,
   parseJsonObjectBody,
+  parseLaunchStoryBreakdownRunRequest,
   parseMoveWorkItemStatusRequest,
   parseProposeStoryBreakdownRequest,
-  parseRunStoryWorkflowRequest,
   parseRequestWorkItemReplanRequest,
   parseRepositoryIdFromPathSegment,
   parseRepositoryIdFromQuery,
+  parseRunIdFromPathSegment,
+  parseRunStoryWorkflowRequest,
   parseUpdateWorkItemFieldsRequest,
   parseWorkItemIdFromPathSegment,
 } from './work-item-route-validation';
@@ -112,11 +114,13 @@ describe('work item route validation', () => {
   describe('route id parsing', () => {
     it('parses repository and work item path segments', () => {
       expect(parseRepositoryIdFromPathSegment('15')).toBe(15);
+      expect(parseRunIdFromPathSegment('23')).toBe(23);
       expect(parseWorkItemIdFromPathSegment('41')).toBe(41);
     });
 
     it('rejects invalid path segments', () => {
       expect(() => parseRepositoryIdFromPathSegment('0')).toThrowError(DashboardIntegrationError);
+      expect(() => parseRunIdFromPathSegment('0')).toThrowError(DashboardIntegrationError);
       expect(() => parseWorkItemIdFromPathSegment('abc')).toThrowError(DashboardIntegrationError);
     });
 
@@ -649,6 +653,46 @@ describe('work item route validation', () => {
             expectedRevision: 1,
             actorType: 'human',
             actorLabel: null,
+          },
+          20,
+        ),
+      ).toThrowError(DashboardIntegrationError);
+    });
+  });
+
+  describe('parseLaunchStoryBreakdownRunRequest', () => {
+    it('parses launch payloads', () => {
+      expect(
+        parseLaunchStoryBreakdownRunRequest(
+          {
+            repositoryId: 5,
+            expectedRevision: 3,
+          },
+          20,
+        ),
+      ).toEqual({
+        repositoryId: 5,
+        storyId: 20,
+        expectedRevision: 3,
+      });
+    });
+
+    it('rejects invalid launch payloads', () => {
+      expect(() =>
+        parseLaunchStoryBreakdownRunRequest(
+          {
+            repositoryId: '5',
+            expectedRevision: 3,
+          },
+          20,
+        ),
+      ).toThrowError(DashboardIntegrationError);
+
+      expect(() =>
+        parseLaunchStoryBreakdownRunRequest(
+          {
+            repositoryId: 5,
+            expectedRevision: -1,
           },
           20,
         ),

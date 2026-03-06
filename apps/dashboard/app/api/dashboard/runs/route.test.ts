@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { DashboardIntegrationError } from '@dashboard/server/dashboard-errors';
 
 const { createDashboardServiceMock, listWorkflowRunsMock, launchWorkflowRunMock } = vi.hoisted(() => ({
   createDashboardServiceMock: vi.fn(),
@@ -225,6 +226,38 @@ describe('Route /api/dashboard/runs', () => {
         cleanupWorktree: undefined,
       });
       expect(response.status).toBe(202);
+    });
+
+    it('returns the service error when launching a hidden workflow tree', async () => {
+      launchWorkflowRunMock.mockRejectedValue(
+        new DashboardIntegrationError('not_found', 'Workflow tree "story-breakdown-planner" was not found.', {
+          status: 404,
+        }),
+      );
+
+      const response = await POST(createJsonRequest('http://localhost/api/dashboard/runs', {
+        treeKey: 'story-breakdown-planner',
+        executionMode: 'async',
+      }));
+
+      expect(launchWorkflowRunMock).toHaveBeenCalledWith({
+        treeKey: 'story-breakdown-planner',
+        repositoryName: undefined,
+        branch: undefined,
+        workItemId: undefined,
+        issueId: undefined,
+        executionMode: 'async',
+        executionScope: undefined,
+        nodeSelector: undefined,
+        cleanupWorktree: undefined,
+      });
+      expect(response.status).toBe(404);
+      await expect(response.json()).resolves.toEqual({
+        error: {
+          code: 'not_found',
+          message: 'Workflow tree "story-breakdown-planner" was not found.',
+        },
+      });
     });
 
     it('returns 400 when request body is not an object', async () => {

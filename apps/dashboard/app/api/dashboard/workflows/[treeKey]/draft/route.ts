@@ -25,6 +25,7 @@ type RouteContext = {
 const guardOperators = new Set(['==', '!=', '>', '<', '>=', '<=']);
 const edgeRouteOnValues = new Set(['success', 'failure']);
 const nodeRoleValues = new Set(['standard', 'spawner', 'join']);
+const reportArtifactContentTypeValues = new Set(['text', 'markdown', 'json', 'diff']);
 const executionPermissionKeys = new Set([
   'approvalPolicy',
   'sandboxMode',
@@ -280,6 +281,28 @@ function parseDraftNodeMaxChildren(value: unknown, index: number): number {
   return value;
 }
 
+function parseDraftNodeReportArtifactContentType(
+  value: unknown,
+  index: number,
+): DashboardWorkflowDraftNode['reportArtifactContentType'] {
+  if (value === undefined || value === null) {
+    return null;
+  }
+
+  if (typeof value !== 'string' || !reportArtifactContentTypeValues.has(value)) {
+    throw new DashboardIntegrationError(
+      'invalid_request',
+      `Draft node at index ${index} has an invalid reportArtifactContentType.`,
+      {
+        status: 400,
+        details: { field: `nodes[${index}].reportArtifactContentType` },
+      },
+    );
+  }
+
+  return value as DashboardWorkflowDraftNode['reportArtifactContentType'];
+}
+
 function parseDraftNodePromptTemplate(
   value: unknown,
   index: number,
@@ -377,6 +400,7 @@ function parseDraftNode(raw: unknown, index: number): DashboardWorkflowDraftNode
   const position = parseDraftNodePosition(raw.position, index);
   const nodeRole = parseDraftNodeRole(raw.nodeRole, index);
   const maxChildren = parseDraftNodeMaxChildren(raw.maxChildren, index);
+  const reportArtifactContentType = parseDraftNodeReportArtifactContentType(raw.reportArtifactContentType, index);
   const promptTemplate = parseDraftNodePromptTemplate(raw.promptTemplate, index);
   const executionPermissions = parseDraftNodeExecutionPermissions(raw.executionPermissions, index);
 
@@ -407,6 +431,7 @@ function parseDraftNode(raw: unknown, index: number): DashboardWorkflowDraftNode
     nodeType,
     nodeRole,
     maxChildren,
+    reportArtifactContentType,
     provider,
     model,
     ...(executionPermissions === null ? {} : { executionPermissions }),

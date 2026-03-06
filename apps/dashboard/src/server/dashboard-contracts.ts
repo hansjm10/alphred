@@ -77,6 +77,8 @@ export type DashboardDuplicateWorkflowRequest = {
 
 export type DashboardDuplicateWorkflowResult = DashboardCreateWorkflowResult;
 
+export type DashboardReportArtifactContentType = 'text' | 'markdown' | 'json' | 'diff';
+
 export type DashboardWorkflowDraftNode = {
   nodeKey: string;
   displayName: string;
@@ -86,6 +88,7 @@ export type DashboardWorkflowDraftNode = {
   provider: string | null;
   model?: string | null;
   executionPermissions?: ProviderExecutionPermissions | null;
+  reportArtifactContentType?: DashboardReportArtifactContentType | null;
   maxRetries: number;
   sequenceIndex: number;
   position: { x: number; y: number } | null;
@@ -689,6 +692,44 @@ export type DashboardStoryBreakdownProposalSnapshot = {
 export type DashboardGetStoryBreakdownProposalResult = {
   proposal: DashboardStoryBreakdownProposalSnapshot | null;
 };
+
+export type DashboardStoryBreakdownPlannerResult = {
+  schemaVersion: 1;
+  resultType: 'story_breakdown_result';
+  proposed: {
+    tags: string[] | null;
+    plannedFiles: string[] | null;
+    links: string[] | null;
+    tasks: DashboardWorkItemProposedBreakdownTask[];
+  };
+};
+
+export type DashboardLaunchStoryBreakdownRunRequest = {
+  repositoryId: number;
+  storyId: number;
+  expectedRevision: number;
+};
+
+export type DashboardStoryBreakdownRunError = {
+  code: 'auth' | 'transient' | 'invalid_output' | 'conflict';
+  message: string;
+  retryable: boolean;
+  details: Record<string, unknown> | null;
+};
+
+export type DashboardStoryBreakdownRunSnapshot = {
+  workflowRunId: number;
+  runStatus: DashboardRunSummary['status'];
+  result: DashboardStoryBreakdownPlannerResult | null;
+  error: DashboardStoryBreakdownRunError | null;
+};
+
+export type DashboardLaunchStoryBreakdownRunResult = DashboardStoryBreakdownRunSnapshot & {
+  mode: 'async';
+  status: 'accepted';
+};
+
+export type DashboardGetStoryBreakdownRunResult = DashboardStoryBreakdownRunSnapshot;
 
 export type DashboardProposeStoryBreakdownRequest = {
   repositoryId: number;

@@ -17,12 +17,14 @@ import { loadAgentCatalog, resolveDefaultModelForProvider, type AgentCatalog } f
 import type {
   DashboardCreateWorkflowRequest,
   DashboardCreateWorkflowResult,
+  DashboardReportArtifactContentType,
   DashboardWorkflowDraftEdge,
   DashboardWorkflowDraftTopology,
   DashboardWorkflowValidationResult,
   DashboardSaveWorkflowDraftRequest,
 } from './dashboard-contracts';
 import { DashboardIntegrationError } from './dashboard-errors';
+import { assertWorkflowTreeIsPublic } from './workflow-visibility';
 import {
   computeInitialRunnableNodeKeys,
   isWorkflowTreeUniqueConstraintError,
@@ -116,6 +118,7 @@ export function loadDraftTopologyByTreeId(
       provider: treeNodes.provider,
       model: treeNodes.model,
       executionPermissions: treeNodes.executionPermissions,
+      reportArtifactContentType: treeNodes.reportArtifactContentType,
       maxChildren: treeNodes.maxChildren,
       maxRetries: treeNodes.maxRetries,
       sequenceIndex: treeNodes.sequenceIndex,
@@ -152,6 +155,11 @@ export function loadDraftTopologyByTreeId(
             ? (row.model ?? resolveDefaultModelForProvider(row.provider, catalog))
             : null,
         ...(executionPermissions === null ? {} : { executionPermissions }),
+        ...(row.reportArtifactContentType === null
+          ? {}
+          : {
+              reportArtifactContentType: row.reportArtifactContentType as DashboardReportArtifactContentType,
+            }),
         maxRetries: row.maxRetries,
         sequenceIndex: row.sequenceIndex,
         position:
@@ -206,8 +214,9 @@ export function loadDraftTopologyByTreeId(
 
 export function createWorkflowDraftOperations(params: {
   withDatabase: WithDatabase;
+  environment: NodeJS.ProcessEnv;
 }): WorkflowDraftOperations {
-  const { withDatabase } = params;
+  const { withDatabase, environment } = params;
 
   return {
     async createWorkflowDraft(request: DashboardCreateWorkflowRequest): Promise<DashboardCreateWorkflowResult> {
@@ -368,6 +377,7 @@ export function createWorkflowDraftOperations(params: {
 
     async getOrCreateWorkflowDraft(treeKeyRaw: string): Promise<DashboardWorkflowDraftTopology> {
       const treeKey = normalizeWorkflowTreeKey(treeKeyRaw);
+      assertWorkflowTreeIsPublic(treeKey, environment);
 
       return withDatabase(async db => {
         const catalog = loadAgentCatalog(db);
@@ -456,6 +466,7 @@ export function createWorkflowDraftOperations(params: {
                 provider: treeNodes.provider,
                 model: treeNodes.model,
                 executionPermissions: treeNodes.executionPermissions,
+                reportArtifactContentType: treeNodes.reportArtifactContentType,
                 maxChildren: treeNodes.maxChildren,
                 maxRetries: treeNodes.maxRetries,
                 sequenceIndex: treeNodes.sequenceIndex,
@@ -528,6 +539,7 @@ export function createWorkflowDraftOperations(params: {
                       | null
                       | undefined,
                   ),
+                  reportArtifactContentType: node.reportArtifactContentType,
                   promptTemplateId:
                     node.promptTemplateId === null ? null : (promptTemplateCloneById.get(node.promptTemplateId) ?? null),
                   maxChildren: normalizeDraftNodeMaxChildren(node.maxChildren),
@@ -677,6 +689,7 @@ export function createWorkflowDraftOperations(params: {
       request: DashboardSaveWorkflowDraftRequest,
     ): Promise<DashboardWorkflowDraftTopology> {
       const treeKey = normalizeWorkflowTreeKey(treeKeyRaw);
+      assertWorkflowTreeIsPublic(treeKey, environment);
       if (!Number.isInteger(version) || version < 1) {
         throw new DashboardIntegrationError('invalid_request', 'Workflow version must be a positive integer.', {
           status: 400,
@@ -826,6 +839,7 @@ export function createWorkflowDraftOperations(params: {
                 provider: node.provider,
                 model: nodeModel,
                 executionPermissions: normalizeExecutionPermissions(node.executionPermissions),
+                reportArtifactContentType: node.reportArtifactContentType ?? null,
                 promptTemplateId: promptTemplateIdByNodeKey.get(node.nodeKey) ?? null,
                 maxChildren: normalizeDraftNodeMaxChildren(node.maxChildren),
                 maxRetries: node.maxRetries,
@@ -914,6 +928,7 @@ export function createWorkflowDraftOperations(params: {
 
     async validateWorkflowDraft(treeKeyRaw: string, version: number): Promise<DashboardWorkflowValidationResult> {
       const treeKey = normalizeWorkflowTreeKey(treeKeyRaw);
+      assertWorkflowTreeIsPublic(treeKey, environment);
       if (!Number.isInteger(version) || version < 1) {
         throw new DashboardIntegrationError('invalid_request', 'Workflow version must be a positive integer.', {
           status: 400,

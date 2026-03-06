@@ -57,6 +57,21 @@ describe('workflow-editor-helpers', () => {
     });
   });
 
+  it('preserves report artifact content type when mapping nodes from React Flow', () => {
+    const mapped = mapNodeFromReactFlow({
+      id: 'design',
+      position: { x: 18.4, y: 20.6 },
+      data: {
+        ...createDraftNodeData({
+          reportArtifactContentType: 'json',
+        }),
+        label: 'Design',
+      },
+    } as unknown as Node);
+
+    expect(mapped.reportArtifactContentType).toBe('json');
+  });
+
   it('initializes new agent draft nodes with null execution permissions and unique keys', () => {
     const created = createDraftNode({
       nodeType: 'agent',

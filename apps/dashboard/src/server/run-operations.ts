@@ -59,6 +59,11 @@ import {
   type RunStatus,
 } from './dashboard-utils';
 import { ensureRepositoryAuth, type RepositoryOperationsDependencies } from './repository-operations';
+import {
+  findActiveStoryBreakdownRunForStory,
+  loadStoryBreakdownRunIdentity,
+} from './story-breakdown-run-state';
+import { assertWorkflowTreeIsPublic } from './workflow-visibility';
 
 const BACKGROUND_RUN_STATUS: RunStatus = 'running';
 const RECENT_SNAPSHOT_LIMIT = 30;
@@ -68,6 +73,21 @@ const runPolicyConstraintsByRunId = new Map<number, DashboardRunLaunchPolicyCons
 
 type WithDatabase = <T>(operation: (db: AlphredDatabase) => Promise<T> | T) => Promise<T>;
 type RunExecutionPolicyAssertion = (db: AlphredDatabase, runId: number) => Promise<void> | void;
+type LaunchRepositoryContext = NonNullable<ReturnType<typeof getRepositoryByName>>;
+type PersistedRunExecutionConfig = Pick<PreparedWorkflowRunLaunch, 'executionScope' | 'nodeSelector'>;
+
+type NormalizedRunLaunchRequest = {
+  treeKey: string;
+  repositoryName: string | undefined;
+  issueId: string | undefined;
+  workItemId: number | undefined;
+  executionMode: 'async' | 'sync';
+  executionScope: 'full' | 'single_node';
+  nodeSelector: DashboardRunLaunchRequest['nodeSelector'];
+  branch: string | undefined;
+  cleanupWorktree: boolean;
+  policyConstraints: DashboardRunLaunchPolicyConstraints | undefined;
+};
 
 type RunOperationsDependencies = {
   createSqlWorkflowPlanner: (db: AlphredDatabase) => {
@@ -148,6 +168,37 @@ export type RunOperations = {
   hasBackgroundExecution: (runId: number) => boolean;
 };
 
+export type PreparedWorkflowRunLaunch = {
+  workflowRunId: number;
+  treeKey: string;
+  repository: LaunchRepositoryContext | null;
+  issueId: string | undefined;
+  workItemId: number | undefined;
+  executionMode: 'async' | 'sync';
+  executionScope: 'full' | 'single_node';
+  nodeSelector: DashboardRunLaunchRequest['nodeSelector'];
+  branch: string | undefined;
+  cleanupWorktree: boolean;
+  policyConstraints: DashboardRunLaunchPolicyConstraints | undefined;
+};
+
+export type WorkflowRunLaunchPreparationOptions = {
+  allowedHiddenTreeKey?: string;
+  environment?: NodeJS.ProcessEnv;
+};
+
+export type WorkflowRunLaunchCoordinator = {
+  prepareWorkflowRunLaunch: (
+    db: AlphredDatabase,
+    request: DashboardRunLaunchRequest,
+    options?: WorkflowRunLaunchPreparationOptions,
+  ) => PreparedWorkflowRunLaunch;
+  completeWorkflowRunLaunch: (
+    db: AlphredDatabase,
+    prepared: PreparedWorkflowRunLaunch,
+  ) => Promise<DashboardRunLaunchResult>;
+};
+
 function normalizeLaunchNodeSelector(
   executionScope: DashboardRunLaunchRequest['executionScope'],
   nodeSelector: DashboardRunLaunchRequest['nodeSelector'],
@@ -181,6 +232,90 @@ function normalizeLaunchNodeSelector(
 
   throw new DashboardIntegrationError('invalid_request', 'nodeSelector.type must be "next_runnable" or "node_key".', {
     status: 400,
+  });
+}
+
+function serializeRunNodeSelector(nodeSelector: DashboardRunLaunchRequest['nodeSelector']): string | null {
+  return nodeSelector === undefined ? null : JSON.stringify(nodeSelector);
+}
+
+function resolveRunExecutionConfig(
+  db: Pick<AlphredDatabase, 'select'>,
+  runId: number,
+): PersistedRunExecutionConfig {
+  const row = db
+    .select({
+      executionScope: workflowRuns.executionScope,
+      nodeSelector: workflowRuns.nodeSelector,
+    })
+    .from(workflowRuns)
+    .where(eq(workflowRuns.id, runId))
+    .get();
+
+  if (!row) {
+    throw new DashboardIntegrationError('not_found', `Workflow run id=${runId} was not found.`, {
+      status: 404,
+    });
+  }
+
+  let parsedNodeSelector: DashboardRunLaunchRequest['nodeSelector'];
+  if (row.nodeSelector === null) {
+    parsedNodeSelector = undefined;
+  } else {
+    try {
+      parsedNodeSelector = JSON.parse(row.nodeSelector) as DashboardRunLaunchRequest['nodeSelector'];
+    } catch (error) {
+      throw new DashboardIntegrationError('internal_error', `Workflow run id=${runId} has invalid node selector state.`, {
+        status: 500,
+        cause: error,
+      });
+    }
+  }
+
+  const executionScope = row.executionScope === 'single_node' ? 'single_node' : 'full';
+  return {
+    executionScope,
+    nodeSelector: normalizeLaunchNodeSelector(executionScope, parsedNodeSelector),
+  };
+}
+
+function persistRunExecutionConfig(
+  db: Pick<AlphredDatabase, 'update'>,
+  runId: number,
+  config: PersistedRunExecutionConfig,
+): void {
+  db.update(workflowRuns)
+    .set({
+      executionScope: config.executionScope,
+      nodeSelector: serializeRunNodeSelector(config.nodeSelector),
+      updatedAt: new Date().toISOString(),
+    })
+    .where(eq(workflowRuns.id, runId))
+    .run();
+}
+
+function assertStoryBreakdownRetryExclusivity(db: AlphredDatabase, runId: number): void {
+  const targetRun = loadStoryBreakdownRunIdentity(db, runId);
+  if (!targetRun) {
+    return;
+  }
+
+  const activeRun = findActiveStoryBreakdownRunForStory(db, {
+    repositoryId: targetRun.repositoryId,
+    storyId: targetRun.storyId,
+    excludeWorkflowRunId: runId,
+  });
+  if (!activeRun) {
+    return;
+  }
+
+  throw new DashboardIntegrationError('conflict', 'Story breakdown planner run is already active for this story.', {
+    status: 409,
+    details: {
+      workflowRunId: activeRun.workflowRunId,
+      runStatus: activeRun.runStatus,
+      treeKey: activeRun.treeKey,
+    },
   });
 }
 
@@ -352,6 +487,79 @@ function hasLaunchPolicyConstraints(policyConstraints: DashboardRunLaunchPolicyC
   );
 }
 
+function normalizeRunLaunchRequest(
+  request: DashboardRunLaunchRequest,
+  options: WorkflowRunLaunchPreparationOptions = {},
+): NormalizedRunLaunchRequest {
+  const treeKey = request.treeKey.trim();
+  if (treeKey.length === 0) {
+    throw new DashboardIntegrationError('invalid_request', 'treeKey cannot be empty.', {
+      status: 400,
+    });
+  }
+  if (options.allowedHiddenTreeKey?.trim() !== treeKey) {
+    assertWorkflowTreeIsPublic(treeKey, options.environment);
+  }
+
+  const repositoryName = request.repositoryName?.trim();
+  if (request.repositoryName !== undefined && repositoryName?.length === 0) {
+    throw new DashboardIntegrationError('invalid_request', 'repositoryName cannot be empty when provided.', {
+      status: 400,
+    });
+  }
+
+  const issueId = request.issueId?.trim();
+  if (request.issueId !== undefined && issueId?.length === 0) {
+    throw new DashboardIntegrationError('invalid_request', 'issueId cannot be empty when provided.', {
+      status: 400,
+    });
+  }
+
+  const workItemId = request.workItemId;
+  if (workItemId !== undefined && (!Number.isInteger(workItemId) || workItemId < 1)) {
+    throw new DashboardIntegrationError('invalid_request', 'workItemId must be a positive integer when provided.', {
+      status: 400,
+    });
+  }
+  if (workItemId !== undefined && repositoryName === undefined) {
+    throw new DashboardIntegrationError(
+      'invalid_request',
+      'workItemId requires repositoryName so run association can be validated.',
+      {
+        status: 400,
+      },
+    );
+  }
+
+  const executionMode = request.executionMode ?? 'async';
+  if (executionMode !== 'async' && executionMode !== 'sync') {
+    throw new DashboardIntegrationError('invalid_request', 'executionMode must be "async" or "sync".', {
+      status: 400,
+    });
+  }
+
+  const executionScope = request.executionScope ?? 'full';
+  if (executionScope !== 'full' && executionScope !== 'single_node') {
+    throw new DashboardIntegrationError('invalid_request', 'executionScope must be "full" or "single_node".', {
+      status: 400,
+    });
+  }
+
+  return {
+    treeKey,
+    repositoryName,
+    issueId,
+    workItemId,
+    executionMode,
+    executionScope,
+    nodeSelector: normalizeLaunchNodeSelector(executionScope, request.nodeSelector),
+    branch: request.branch?.trim() || undefined,
+    cleanupWorktree: request.cleanupWorktree ?? false,
+    policyConstraints:
+      request.policyConstraints === undefined ? undefined : cloneLaunchPolicyConstraints(request.policyConstraints),
+  };
+}
+
 function isTerminalRunStatus(status: RunStatus): boolean {
   return status === 'completed' || status === 'failed' || status === 'cancelled';
 }
@@ -368,13 +576,6 @@ function createRunExecutionPolicyAssertion(
       runId,
       policyConstraints,
     });
-}
-
-function isRunPolicyConflict(error: unknown): error is DashboardIntegrationError {
-  if (!(error instanceof DashboardIntegrationError)) {
-    return false;
-  }
-  return error.code === 'conflict' && error.details?.kind === 'work_item_policy_launch';
 }
 
 function toOptionalNonNegativeInteger(value: unknown): number | null {
@@ -431,6 +632,12 @@ function parseFailedCommandOutputContent(
     exitCode: Number.isInteger(parsed.exitCode) ? (parsed.exitCode as number) : null,
     outputChars: toOptionalNonNegativeInteger(parsed.outputChars),
   };
+}
+
+function clearRunPolicyConstraintsOnSettlement({ runId, runStatus }: BackgroundRunExecutionSettlement): void {
+  if (runStatus !== null && isTerminalRunStatus(runStatus)) {
+    runPolicyConstraintsByRunId.delete(runId);
+  }
 }
 
 function loadRunAssociationSnapshot(
@@ -569,6 +776,251 @@ async function loadRunSummary(db: AlphredDatabase, runId: number): Promise<Dashb
   };
 }
 
+export function createWorkflowRunLaunchCoordinator(params: {
+  dependencies: RunOperationsDependencies;
+  backgroundExecution: BackgroundExecutionManager;
+  environment: NodeJS.ProcessEnv;
+  cwd: string;
+  repositoryAuthDependencies: Pick<RepositoryOperationsDependencies, 'createScmProvider'>;
+}): WorkflowRunLaunchCoordinator {
+  const {
+    dependencies,
+    backgroundExecution,
+    environment,
+    cwd,
+    repositoryAuthDependencies,
+  } = params;
+
+  function prepareWorkflowRunLaunch(
+    db: AlphredDatabase,
+    request: DashboardRunLaunchRequest,
+    options: WorkflowRunLaunchPreparationOptions = {},
+  ): PreparedWorkflowRunLaunch {
+    const normalizedRequest = normalizeRunLaunchRequest(request, {
+      ...options,
+      environment,
+    });
+    try {
+      return db.transaction(() => {
+        const planner = dependencies.createSqlWorkflowPlanner(db);
+        const materializedRun = planner.materializeRun({ treeKey: normalizedRequest.treeKey });
+        const workflowRunId = materializedRun.run.id;
+        const assertRunExecutionAllowed = createRunExecutionPolicyAssertion(normalizedRequest.policyConstraints);
+
+        if (assertRunExecutionAllowed !== undefined) {
+          assertRunExecutionAllowed(db, workflowRunId);
+        }
+
+        let repository: LaunchRepositoryContext | null = null;
+        if (normalizedRequest.repositoryName !== undefined) {
+          repository = getRepositoryByName(db, normalizedRequest.repositoryName, { includeArchived: true });
+          if (!repository) {
+            throw new DashboardIntegrationError(
+              'not_found',
+              `Repository "${normalizedRequest.repositoryName}" was not found.`,
+              { status: 404 },
+            );
+          }
+          if (repository.archivedAt !== null) {
+            throw new DashboardIntegrationError(
+              'conflict',
+              `Repository "${normalizedRequest.repositoryName}" is archived. Restore it before launching runs.`,
+              {
+                status: 409,
+                details: {
+                  archivedAt: repository.archivedAt,
+                },
+              },
+            );
+          }
+
+          if (normalizedRequest.workItemId !== undefined) {
+            const linkedWorkItem = db
+              .select({
+                id: workItems.id,
+                repositoryId: workItems.repositoryId,
+              })
+              .from(workItems)
+              .where(eq(workItems.id, normalizedRequest.workItemId))
+              .get();
+            if (!linkedWorkItem) {
+              throw new DashboardIntegrationError(
+                'not_found',
+                `Work item id=${normalizedRequest.workItemId} was not found.`,
+                {
+                  status: 404,
+                },
+              );
+            }
+            if (linkedWorkItem.repositoryId !== repository.id) {
+              throw new DashboardIntegrationError(
+                'conflict',
+                `Work item id=${normalizedRequest.workItemId} does not belong to repository "${repository.name}".`,
+                {
+                  status: 409,
+                  details: {
+                    workItemId: normalizedRequest.workItemId,
+                    workItemRepositoryId: linkedWorkItem.repositoryId,
+                    repositoryId: repository.id,
+                  },
+                },
+              );
+            }
+          }
+        }
+
+        if (normalizedRequest.workItemId !== undefined || normalizedRequest.issueId !== undefined) {
+          db.insert(workflowRunAssociations)
+            .values({
+              workflowRunId,
+              repositoryId: repository?.id ?? null,
+              workItemId: normalizedRequest.workItemId ?? null,
+              issueId: normalizedRequest.issueId ?? null,
+            })
+            .run();
+        }
+
+        if (normalizedRequest.executionScope === 'single_node') {
+          backgroundExecution.validateSingleNodeSelection(db, workflowRunId, normalizedRequest.nodeSelector);
+        }
+        persistRunExecutionConfig(db, workflowRunId, {
+          executionScope: normalizedRequest.executionScope,
+          nodeSelector: normalizedRequest.nodeSelector,
+        });
+
+        return {
+          workflowRunId,
+          treeKey: normalizedRequest.treeKey,
+          repository,
+          issueId: normalizedRequest.issueId,
+          workItemId: normalizedRequest.workItemId,
+          executionMode: normalizedRequest.executionMode,
+          executionScope: normalizedRequest.executionScope,
+          nodeSelector: normalizedRequest.nodeSelector,
+          branch: normalizedRequest.branch,
+          cleanupWorktree: normalizedRequest.cleanupWorktree,
+          policyConstraints: normalizedRequest.policyConstraints,
+        };
+      });
+    } catch (error) {
+      if (error instanceof WorkflowRunExecutionValidationError) {
+        throw new DashboardIntegrationError('invalid_request', error.message, {
+          status: 400,
+          details: {
+            code: error.code,
+            nodeSelector: error.nodeSelector,
+          },
+          cause: error,
+        });
+      }
+      throw error;
+    }
+  }
+
+  async function completeWorkflowRunLaunch(
+    db: AlphredDatabase,
+    prepared: PreparedWorkflowRunLaunch,
+  ): Promise<DashboardRunLaunchResult> {
+    const runId = prepared.workflowRunId;
+    let workingDirectory = cwd;
+    let worktreeManager: Pick<WorktreeManager, 'createRunWorktree' | 'cleanupRun'> | null = null;
+
+    if (prepared.policyConstraints !== undefined && hasLaunchPolicyConstraints(prepared.policyConstraints)) {
+      runPolicyConstraintsByRunId.set(runId, prepared.policyConstraints);
+    }
+
+    try {
+      if (prepared.repository !== null) {
+        await ensureRepositoryAuth(prepared.repository, repositoryAuthDependencies, environment);
+
+        worktreeManager = dependencies.createWorktreeManager(db, environment);
+        const createdWorktree = await worktreeManager.createRunWorktree({
+          repoName: prepared.repository.name,
+          treeKey: prepared.treeKey,
+          runId,
+          branch: prepared.branch,
+          issueId: prepared.issueId,
+        });
+        workingDirectory = createdWorktree.path;
+      }
+
+      if (prepared.executionMode === 'sync') {
+        const execution = await backgroundExecution.executeWorkflowRun(
+          db,
+          runId,
+          workingDirectory,
+          worktreeManager,
+          prepared.cleanupWorktree,
+          prepared.executionScope,
+          prepared.nodeSelector,
+          createRunExecutionPolicyAssertion(prepared.policyConstraints),
+        );
+
+        if (isTerminalRunStatus(execution.runStatus)) {
+          runPolicyConstraintsByRunId.delete(runId);
+        }
+
+        return {
+          workflowRunId: runId,
+          mode: 'sync',
+          status: 'completed',
+          runStatus: execution.runStatus,
+          executionOutcome: execution.executionOutcome,
+          executedNodes: execution.executedNodes,
+        };
+      }
+
+      backgroundExecution.enqueueBackgroundRunExecution({
+        runId,
+        workingDirectory,
+        hasManagedWorktree: worktreeManager !== null,
+        cleanupWorktree: prepared.cleanupWorktree,
+        executionScope: prepared.executionScope,
+        nodeSelector: prepared.nodeSelector,
+        assertRunExecutionAllowed: createRunExecutionPolicyAssertion(prepared.policyConstraints),
+        onBackgroundExecutionSettled: clearRunPolicyConstraintsOnSettlement,
+      });
+
+      return {
+        workflowRunId: runId,
+        mode: 'async',
+        status: 'accepted',
+        runStatus: BACKGROUND_RUN_STATUS,
+        executionOutcome: null,
+        executedNodes: null,
+      };
+    } catch (error) {
+      runPolicyConstraintsByRunId.delete(runId);
+      try {
+        const executor = dependencies.createSqlWorkflowExecutor(db, {
+          resolveProvider: dependencies.resolveProvider,
+        });
+        await executor.cancelRun({ workflowRunId: runId });
+      } catch (cancelError) {
+        if (!(cancelError instanceof WorkflowRunControlError)) {
+          throw cancelError;
+        }
+      }
+      if (error instanceof WorkflowRunExecutionValidationError) {
+        throw new DashboardIntegrationError('invalid_request', error.message, {
+          status: 400,
+          details: {
+            code: error.code,
+            nodeSelector: error.nodeSelector,
+          },
+          cause: error,
+        });
+      }
+      throw error;
+    }
+  }
+
+  return {
+    prepareWorkflowRunLaunch,
+    completeWorkflowRunLaunch,
+  };
+}
+
 export function createRunOperations(params: {
   withDatabase: WithDatabase;
   dependencies: RunOperationsDependencies;
@@ -585,12 +1037,13 @@ export function createRunOperations(params: {
     repositoryAuthDependencies,
     backgroundExecution,
   } = params;
-
-  const clearCachedRunPolicyConstraints = ({ runId, runStatus }: BackgroundRunExecutionSettlement): void => {
-    if (runStatus !== null && isTerminalRunStatus(runStatus)) {
-      runPolicyConstraintsByRunId.delete(runId);
-    }
-  };
+  const workflowRunLaunchCoordinator = createWorkflowRunLaunchCoordinator({
+    dependencies,
+    backgroundExecution,
+    environment,
+    cwd,
+    repositoryAuthDependencies,
+  });
 
   return {
     listWorkflowRuns(limit = 20): Promise<DashboardRunSummary[]> {
@@ -1162,241 +1615,9 @@ export function createRunOperations(params: {
     },
 
     launchWorkflowRun(request: DashboardRunLaunchRequest): Promise<DashboardRunLaunchResult> {
-      const treeKey = request.treeKey.trim();
-      if (treeKey.length === 0) {
-        throw new DashboardIntegrationError('invalid_request', 'treeKey cannot be empty.', {
-          status: 400,
-        });
-      }
-
-      const repositoryName = request.repositoryName?.trim();
-      if (request.repositoryName !== undefined && repositoryName?.length === 0) {
-        throw new DashboardIntegrationError('invalid_request', 'repositoryName cannot be empty when provided.', {
-          status: 400,
-        });
-      }
-      const issueId = request.issueId?.trim();
-      if (request.issueId !== undefined && issueId?.length === 0) {
-        throw new DashboardIntegrationError('invalid_request', 'issueId cannot be empty when provided.', {
-          status: 400,
-        });
-      }
-      const workItemId = request.workItemId;
-      if (workItemId !== undefined && (!Number.isInteger(workItemId) || workItemId < 1)) {
-        throw new DashboardIntegrationError('invalid_request', 'workItemId must be a positive integer when provided.', {
-          status: 400,
-        });
-      }
-      if (workItemId !== undefined && repositoryName === undefined) {
-        throw new DashboardIntegrationError(
-          'invalid_request',
-          'workItemId requires repositoryName so run association can be validated.',
-          {
-            status: 400,
-          },
-        );
-      }
-
-      const executionMode = request.executionMode ?? 'async';
-      if (executionMode !== 'async' && executionMode !== 'sync') {
-        throw new DashboardIntegrationError('invalid_request', 'executionMode must be "async" or "sync".', {
-          status: 400,
-        });
-      }
-
-      const executionScope = request.executionScope ?? 'full';
-      if (executionScope !== 'full' && executionScope !== 'single_node') {
-        throw new DashboardIntegrationError('invalid_request', 'executionScope must be "full" or "single_node".', {
-          status: 400,
-        });
-      }
-      const nodeSelector = normalizeLaunchNodeSelector(executionScope, request.nodeSelector);
-
       return withDatabase(async db => {
-        const planner = dependencies.createSqlWorkflowPlanner(db);
-        const materializedRun = planner.materializeRun({ treeKey });
-
-        const workflowRunId = materializedRun.run.id;
-        const runId = workflowRunId;
-        let workingDirectory = cwd;
-        let worktreeManager: Pick<WorktreeManager, 'createRunWorktree' | 'cleanupRun'> | null = null;
-        let launchRepositoryId: number | null = null;
-        const policyConstraints =
-          request.policyConstraints === undefined
-            ? undefined
-            : cloneLaunchPolicyConstraints(request.policyConstraints);
-        const assertRunExecutionAllowed = createRunExecutionPolicyAssertion(policyConstraints);
-
-        try {
-          if (assertRunExecutionAllowed !== undefined) {
-            assertRunExecutionAllowed(db, runId);
-            if (policyConstraints !== undefined) {
-              runPolicyConstraintsByRunId.set(runId, policyConstraints);
-            }
-          }
-
-          if (repositoryName !== undefined) {
-            const repository = getRepositoryByName(db, repositoryName, { includeArchived: true });
-            if (!repository) {
-              throw new DashboardIntegrationError(
-                'not_found',
-                `Repository "${repositoryName}" was not found.`,
-                { status: 404 },
-              );
-            }
-            if (repository.archivedAt !== null) {
-              throw new DashboardIntegrationError(
-                'conflict',
-                `Repository "${repositoryName}" is archived. Restore it before launching runs.`,
-                {
-                  status: 409,
-                  details: {
-                    archivedAt: repository.archivedAt,
-                  },
-                },
-              );
-            }
-            launchRepositoryId = repository.id;
-
-            if (workItemId !== undefined) {
-              const linkedWorkItem = db
-                .select({
-                  id: workItems.id,
-                  repositoryId: workItems.repositoryId,
-                })
-                .from(workItems)
-                .where(eq(workItems.id, workItemId))
-                .get();
-              if (!linkedWorkItem) {
-                throw new DashboardIntegrationError('not_found', `Work item id=${workItemId} was not found.`, {
-                  status: 404,
-                });
-              }
-              if (linkedWorkItem.repositoryId !== repository.id) {
-                throw new DashboardIntegrationError(
-                  'conflict',
-                  `Work item id=${workItemId} does not belong to repository "${repository.name}".`,
-                  {
-                    status: 409,
-                    details: {
-                      workItemId,
-                      workItemRepositoryId: linkedWorkItem.repositoryId,
-                      repositoryId: repository.id,
-                    },
-                  },
-                );
-              }
-            }
-
-            if (workItemId !== undefined || issueId !== undefined) {
-              db.insert(workflowRunAssociations)
-                .values({
-                  workflowRunId: runId,
-                  repositoryId: launchRepositoryId,
-                  workItemId: workItemId ?? null,
-                  issueId: issueId ?? null,
-                })
-                .run();
-            }
-
-            await ensureRepositoryAuth(repository, repositoryAuthDependencies, environment);
-
-            worktreeManager = dependencies.createWorktreeManager(db, environment);
-            const createdWorktree = await worktreeManager.createRunWorktree({
-              repoName: repository.name,
-              treeKey,
-              runId,
-              branch: request.branch?.trim() || undefined,
-              issueId: issueId ?? undefined,
-            });
-            workingDirectory = createdWorktree.path;
-          } else if (issueId !== undefined) {
-            db.insert(workflowRunAssociations)
-              .values({
-                workflowRunId: runId,
-                repositoryId: null,
-                workItemId: null,
-                issueId,
-              })
-              .run();
-          }
-
-          if (executionMode === 'sync') {
-            const execution = await backgroundExecution.executeWorkflowRun(
-              db,
-              runId,
-              workingDirectory,
-              worktreeManager,
-              request.cleanupWorktree ?? false,
-              executionScope,
-              nodeSelector,
-              assertRunExecutionAllowed,
-            );
-
-            if (isTerminalRunStatus(execution.runStatus)) {
-              runPolicyConstraintsByRunId.delete(runId);
-            }
-
-            return {
-              workflowRunId,
-              mode: 'sync',
-              status: 'completed',
-              runStatus: execution.runStatus,
-              executionOutcome: execution.executionOutcome,
-              executedNodes: execution.executedNodes,
-            };
-          }
-
-          if (executionScope === 'single_node') {
-            backgroundExecution.validateSingleNodeSelection(db, runId, nodeSelector);
-          }
-
-          backgroundExecution.enqueueBackgroundRunExecution({
-            runId,
-            workingDirectory,
-            hasManagedWorktree: worktreeManager !== null,
-            cleanupWorktree: request.cleanupWorktree ?? false,
-            executionScope,
-            nodeSelector,
-            assertRunExecutionAllowed,
-            onBackgroundExecutionSettled: clearCachedRunPolicyConstraints,
-          });
-
-          return {
-            workflowRunId,
-            mode: 'async',
-            status: 'accepted',
-            runStatus: BACKGROUND_RUN_STATUS,
-            executionOutcome: null,
-            executedNodes: null,
-          };
-        } catch (error) {
-          runPolicyConstraintsByRunId.delete(runId);
-          await backgroundExecution.markPendingRunCancelled(db, workflowRunId);
-          if (isRunPolicyConflict(error)) {
-            const executor = dependencies.createSqlWorkflowExecutor(db, {
-              resolveProvider: dependencies.resolveProvider,
-            });
-            try {
-              await executor.cancelRun({ workflowRunId });
-            } catch (cancelError) {
-              if (!(cancelError instanceof WorkflowRunControlError)) {
-                throw cancelError;
-              }
-            }
-          }
-          if (error instanceof WorkflowRunExecutionValidationError) {
-            throw new DashboardIntegrationError('invalid_request', error.message, {
-              status: 400,
-              details: {
-                code: error.code,
-                nodeSelector: error.nodeSelector,
-              },
-              cause: error,
-            });
-          }
-          throw error;
-        }
+        const prepared = workflowRunLaunchCoordinator.prepareWorkflowRunLaunch(db, request);
+        return workflowRunLaunchCoordinator.completeWorkflowRunLaunch(db, prepared);
       });
     },
 
@@ -1425,6 +1646,7 @@ export function createRunOperations(params: {
               controlResult = await executor.resumeRun({ workflowRunId: runId });
               break;
             case 'retry':
+              assertStoryBreakdownRetryExclusivity(db, runId);
               controlResult = await executor.retryRun({ workflowRunId: runId });
               break;
           }
@@ -1442,14 +1664,17 @@ export function createRunOperations(params: {
 
         if ((action === 'resume' || action === 'retry') && controlResult.runStatus === 'running') {
           const executionContext = backgroundExecution.resolveRunExecutionContext(db, runId);
+          const executionConfig = resolveRunExecutionConfig(db, runId);
           const policyConstraints = runPolicyConstraintsByRunId.get(runId);
           backgroundExecution.ensureBackgroundRunExecution({
             runId,
             workingDirectory: executionContext.workingDirectory,
             hasManagedWorktree: executionContext.hasManagedWorktree,
             cleanupWorktree: false,
+            executionScope: executionConfig.executionScope,
+            nodeSelector: executionConfig.nodeSelector,
             assertRunExecutionAllowed: createRunExecutionPolicyAssertion(policyConstraints),
-            onBackgroundExecutionSettled: clearCachedRunPolicyConstraints,
+            onBackgroundExecutionSettled: clearRunPolicyConstraintsOnSettlement,
           });
         }
 

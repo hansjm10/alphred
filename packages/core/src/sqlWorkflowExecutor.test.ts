@@ -122,6 +122,7 @@ function createProvider(events: ProviderEvent[]) {
 function seedSingleAgentRun(
   promptContentType: 'markdown' | 'text' = 'markdown',
   maxRetries = 0,
+  reportArtifactContentType: 'text' | 'markdown' | 'json' | 'diff' | null = promptContentType,
 ) {
   const db = createDatabase(':memory:');
   migrateDatabase(db);
@@ -154,6 +155,7 @@ function seedSingleAgentRun(
       nodeType: 'agent',
       provider: 'codex',
       promptTemplateId: prompt.id,
+      reportArtifactContentType,
       maxRetries,
       sequenceIndex: 1,
     })
@@ -6409,6 +6411,45 @@ describe('createSqlWorkflowExecutor', () => {
       artifactType: 'report',
       contentType: 'markdown',
       content: 'Generated report',
+    });
+  });
+
+  it('uses report_artifact_content_type when a node overrides the prompt content type', async () => {
+    const { db, runId, runNodeId } = seedSingleAgentRun('markdown', 0, 'json');
+    const executor = createSqlWorkflowExecutor(db, {
+      resolveProvider: () =>
+        createProvider([
+          { type: 'result', content: '{"schemaVersion":1}', timestamp: 10 },
+        ]),
+    });
+
+    const result = await executor.executeRun({
+      workflowRunId: runId,
+      options: {
+        workingDirectory: '/tmp/alphred-worktree',
+      },
+    });
+
+    expect(result.finalStep).toEqual({
+      outcome: 'run_terminal',
+      workflowRunId: runId,
+      runStatus: 'completed',
+    });
+
+    const artifact = db
+      .select({
+        artifactType: phaseArtifacts.artifactType,
+        contentType: phaseArtifacts.contentType,
+        content: phaseArtifacts.content,
+      })
+      .from(phaseArtifacts)
+      .where(eq(phaseArtifacts.runNodeId, runNodeId))
+      .get();
+
+    expect(artifact).toEqual({
+      artifactType: 'report',
+      contentType: 'json',
+      content: '{"schemaVersion":1}',
     });
   });
 

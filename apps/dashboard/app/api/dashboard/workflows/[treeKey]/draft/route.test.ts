@@ -187,6 +187,45 @@ describe('PUT /api/dashboard/workflows/[treeKey]/draft', () => {
     expect(saveWorkflowDraftMock).not.toHaveBeenCalled();
   });
 
+  it('returns 400 when a node reportArtifactContentType payload is invalid', async () => {
+    const request = new Request('http://localhost/api/dashboard/workflows/demo-tree/draft?version=1', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        draftRevision: 1,
+        name: 'Demo Tree',
+        nodes: [
+          {
+            nodeKey: 'design',
+            displayName: 'Design',
+            nodeType: 'agent',
+            provider: null,
+            reportArtifactContentType: 'yaml',
+            maxRetries: 0,
+            sequenceIndex: 10,
+            position: null,
+            promptTemplate: null,
+          },
+        ],
+        edges: [],
+      }),
+    });
+
+    const response = await PUT(request, { params: Promise.resolve({ treeKey: 'demo-tree' }) });
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      error: {
+        code: 'invalid_request',
+        message: 'Draft node at index 0 has an invalid reportArtifactContentType.',
+        details: {
+          field: 'nodes[0].reportArtifactContentType',
+        },
+      },
+    });
+    expect(saveWorkflowDraftMock).not.toHaveBeenCalled();
+  });
+
   it('returns 400 when a node position payload is invalid', async () => {
     const request = new Request('http://localhost/api/dashboard/workflows/demo-tree/draft?version=1', {
       method: 'PUT',
@@ -1065,6 +1104,7 @@ describe('PUT /api/dashboard/workflows/[treeKey]/draft', () => {
             nodeType: 'agent',
             nodeRole: 'spawner',
             provider: 'codex',
+            reportArtifactContentType: 'json',
             maxChildren: 7,
             maxRetries: 0,
             sequenceIndex: 10,
@@ -1113,6 +1153,7 @@ describe('PUT /api/dashboard/workflows/[treeKey]/draft', () => {
         expect.objectContaining({
           nodeRole: 'spawner',
           maxChildren: 7,
+          reportArtifactContentType: 'json',
           executionPermissions: {
             approvalPolicy: 'on-request',
             sandboxMode: 'workspace-write',
@@ -1278,6 +1319,7 @@ describe('PUT /api/dashboard/workflows/[treeKey]/draft', () => {
           maxChildren: 12,
           provider: 'codex',
           model: null,
+          reportArtifactContentType: null,
           maxRetries: 0,
           sequenceIndex: 10,
           position: { x: 10, y: 20 },

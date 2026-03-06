@@ -1,3 +1,4 @@
+import { asc, eq } from 'drizzle-orm';
 import { describe, expect, it } from 'vitest';
 import { createDatabase } from './connection.js';
 import { migrateDatabase } from './migrate.js';
@@ -138,6 +139,7 @@ function seedDesignTreeVersions() {
       nodeType: 'agent',
       provider: 'claude',
       promptTemplateId: reviewPrompt.id,
+      reportArtifactContentType: 'json',
       maxRetries: 1,
       sequenceIndex: 30,
     })
@@ -706,6 +708,21 @@ describe('workflow planner/materializer', () => {
     expect(firstRun.runNodes.map(node => node.nodeKey)).toEqual(['design', 'implement', 'review']);
     expect(firstRun.runNodes.map(node => node.sequenceIndex)).toEqual([10, 20, 30]);
     expect(firstRun.runNodes.map(node => node.isInitialRunnable)).toEqual([true, false, false]);
+    expect(
+      db
+        .select({
+          nodeKey: runNodes.nodeKey,
+          reportArtifactContentType: runNodes.reportArtifactContentType,
+        })
+        .from(runNodes)
+        .where(eq(runNodes.workflowRunId, firstRun.run.id))
+        .orderBy(asc(runNodes.sequenceIndex), asc(runNodes.nodeKey), asc(runNodes.id))
+        .all(),
+    ).toEqual([
+      { nodeKey: 'design', reportArtifactContentType: null },
+      { nodeKey: 'implement', reportArtifactContentType: null },
+      { nodeKey: 'review', reportArtifactContentType: 'json' },
+    ]);
 
     expect(secondRun.runNodes.map(node => node.nodeKey)).toEqual(firstRun.runNodes.map(node => node.nodeKey));
     expect(secondRun.runNodes.map(node => node.sequenceIndex)).toEqual(firstRun.runNodes.map(node => node.sequenceIndex));

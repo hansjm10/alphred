@@ -247,6 +247,8 @@ export const workflowRuns = sqliteTable(
       .notNull()
       .references(() => workflowTrees.id, { onDelete: 'restrict' }),
     status: text('status').notNull().default('pending'),
+    executionScope: text('execution_scope').notNull().default('full'),
+    nodeSelector: text('node_selector'),
     startedAt: text('started_at'),
     completedAt: text('completed_at'),
     createdAt: text('created_at').notNull().default(utcNow),
@@ -256,6 +258,10 @@ export const workflowRuns = sqliteTable(
     statusCheck: check(
       'workflow_runs_status_ck',
       sql`${table.status} in ('pending', 'running', 'paused', 'completed', 'failed', 'cancelled')`,
+    ),
+    executionScopeCheck: check(
+      'workflow_runs_execution_scope_ck',
+      sql`${table.executionScope} in ('full', 'single_node')`,
     ),
     completionTimestampCheck: check(
       'workflow_runs_completion_timestamp_ck',
@@ -394,6 +400,7 @@ export const treeNodes = sqliteTable(
     executionPermissions: text('execution_permissions', { mode: 'json' }),
     errorHandlerConfig: text('error_handler_config', { mode: 'json' }),
     promptTemplateId: integer('prompt_template_id').references(() => promptTemplates.id, { onDelete: 'restrict' }),
+    reportArtifactContentType: text('report_artifact_content_type'),
     nodeRole: text('node_role').notNull().default('standard'),
     maxChildren: integer('max_children').notNull().default(12),
     maxRetries: integer('max_retries').notNull().default(0),
@@ -411,6 +418,10 @@ export const treeNodes = sqliteTable(
     nodeRoleAgentCheck: check(
       'tree_nodes_node_role_agent_ck',
       sql`(${table.nodeRole} not in ('spawner', 'join')) or (${table.nodeType} = 'agent')`,
+    ),
+    reportArtifactContentTypeCheck: check(
+      'tree_nodes_report_artifact_content_type_ck',
+      sql`${table.reportArtifactContentType} is null or ${table.reportArtifactContentType} in ('text', 'markdown', 'json', 'diff')`,
     ),
     providerForAgentCheck: check(
       'tree_nodes_provider_for_agent_ck',
@@ -481,6 +492,7 @@ export const runNodes = sqliteTable(
     model: text('model'),
     prompt: text('prompt'),
     promptContentType: text('prompt_content_type').notNull().default('markdown'),
+    reportArtifactContentType: text('report_artifact_content_type'),
     executionPermissions: text('execution_permissions', { mode: 'json' }),
     errorHandlerConfig: text('error_handler_config', { mode: 'json' }),
     maxChildren: integer('max_children').notNull().default(12),
@@ -520,6 +532,10 @@ export const runNodes = sqliteTable(
     promptContentTypeCheck: check(
       'run_nodes_prompt_content_type_ck',
       sql`${table.promptContentType} in ('text', 'markdown')`,
+    ),
+    reportArtifactContentTypeCheck: check(
+      'run_nodes_report_artifact_content_type_ck',
+      sql`${table.reportArtifactContentType} is null or ${table.reportArtifactContentType} in ('text', 'markdown', 'json', 'diff')`,
     ),
     maxRetriesCheck: check('run_nodes_max_retries_ck', sql`${table.maxRetries} >= 0`),
     maxChildrenCheck: check('run_nodes_max_children_ck', sql`${table.maxChildren} >= 0`),

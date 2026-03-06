@@ -68,6 +68,7 @@ export function loadRunNodeExecutionRows(db: AlphredDatabase, workflowRunId: num
       errorHandlerConfig: runNodes.errorHandlerConfig,
       prompt: runNodes.prompt,
       promptContentType: runNodes.promptContentType,
+      reportArtifactContentType: runNodes.reportArtifactContentType,
     })
     .from(runNodes)
     .where(eq(runNodes.workflowRunId, workflowRunId))
@@ -98,6 +99,7 @@ export function loadRunNodeExecutionRows(db: AlphredDatabase, workflowRunId: num
     errorHandlerConfig: row.errorHandlerConfig,
     prompt: row.prompt,
     promptContentType: row.promptContentType,
+    reportArtifactContentType: row.reportArtifactContentType,
   }));
 }
 

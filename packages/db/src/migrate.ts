@@ -297,12 +297,16 @@ export function migrateDatabase(db: AlphredDatabase): void {
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     workflow_tree_id INTEGER NOT NULL REFERENCES workflow_trees(id) ON DELETE RESTRICT,
     status TEXT NOT NULL DEFAULT 'pending',
+    execution_scope TEXT NOT NULL DEFAULT 'full',
+    node_selector TEXT,
     started_at TEXT,
     completed_at TEXT,
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
     updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
     CONSTRAINT workflow_runs_status_ck
       CHECK (status IN ('pending', 'running', 'paused', 'completed', 'failed', 'cancelled')),
+    CONSTRAINT workflow_runs_execution_scope_ck
+      CHECK (execution_scope IN ('full', 'single_node')),
     CONSTRAINT workflow_runs_completion_timestamp_ck
       CHECK (
         (status IN ('pending', 'running', 'paused') AND completed_at IS NULL)
@@ -310,6 +314,14 @@ export function migrateDatabase(db: AlphredDatabase): void {
         (status IN ('completed', 'failed', 'cancelled') AND completed_at IS NOT NULL)
       )
   )`);
+  addColumnIfMissing(tx, {
+    existsQuery: sql`SELECT COUNT(*) AS count FROM pragma_table_info('workflow_runs') WHERE name = 'execution_scope'`,
+    alterQuery: sql`ALTER TABLE workflow_runs ADD COLUMN execution_scope TEXT NOT NULL DEFAULT 'full'`,
+  });
+  addColumnIfMissing(tx, {
+    existsQuery: sql`SELECT COUNT(*) AS count FROM pragma_table_info('workflow_runs') WHERE name = 'node_selector'`,
+    alterQuery: sql`ALTER TABLE workflow_runs ADD COLUMN node_selector TEXT`,
+  });
   tx.run(sql`CREATE INDEX IF NOT EXISTS workflow_runs_created_at_idx
     ON workflow_runs(created_at)`);
 
@@ -394,6 +406,7 @@ export function migrateDatabase(db: AlphredDatabase): void {
     execution_permissions TEXT,
     error_handler_config TEXT,
     prompt_template_id INTEGER REFERENCES prompt_templates(id) ON DELETE RESTRICT,
+    report_artifact_content_type TEXT,
     node_role TEXT NOT NULL DEFAULT 'standard',
     max_children INTEGER NOT NULL DEFAULT 12,
     max_retries INTEGER NOT NULL DEFAULT 0,
@@ -408,6 +421,8 @@ export function migrateDatabase(db: AlphredDatabase): void {
       CHECK (node_role IN ('standard', 'spawner', 'join')),
     CONSTRAINT tree_nodes_node_role_agent_ck
       CHECK ((node_role NOT IN ('spawner', 'join')) OR (node_type = 'agent')),
+    CONSTRAINT tree_nodes_report_artifact_content_type_ck
+      CHECK (report_artifact_content_type IS NULL OR report_artifact_content_type IN ('text', 'markdown', 'json', 'diff')),
     CONSTRAINT tree_nodes_provider_for_agent_ck
       CHECK ((node_type <> 'agent') OR (provider IS NOT NULL)),
     CONSTRAINT tree_nodes_max_children_ck
@@ -438,6 +453,10 @@ export function migrateDatabase(db: AlphredDatabase): void {
   addColumnIfMissing(tx, {
     existsQuery: sql`SELECT COUNT(*) AS count FROM pragma_table_info('tree_nodes') WHERE name = 'error_handler_config'`,
     alterQuery: sql`ALTER TABLE tree_nodes ADD COLUMN error_handler_config TEXT`,
+  });
+  addColumnIfMissing(tx, {
+    existsQuery: sql`SELECT COUNT(*) AS count FROM pragma_table_info('tree_nodes') WHERE name = 'report_artifact_content_type'`,
+    alterQuery: sql`ALTER TABLE tree_nodes ADD COLUMN report_artifact_content_type TEXT`,
   });
   addColumnIfMissing(tx, {
     existsQuery: sql`SELECT COUNT(*) AS count FROM pragma_table_info('tree_nodes') WHERE name = 'node_role'`,
@@ -581,6 +600,7 @@ export function migrateDatabase(db: AlphredDatabase): void {
     model TEXT,
     prompt TEXT,
     prompt_content_type TEXT NOT NULL DEFAULT 'markdown',
+    report_artifact_content_type TEXT,
     execution_permissions TEXT,
     error_handler_config TEXT,
     max_children INTEGER NOT NULL DEFAULT 12,
@@ -610,6 +630,8 @@ export function migrateDatabase(db: AlphredDatabase): void {
       CHECK (node_type IN ('agent', 'human', 'tool')),
     CONSTRAINT run_nodes_prompt_content_type_ck
       CHECK (prompt_content_type IN ('text', 'markdown')),
+    CONSTRAINT run_nodes_report_artifact_content_type_ck
+      CHECK (report_artifact_content_type IS NULL OR report_artifact_content_type IN ('text', 'markdown', 'json', 'diff')),
     CONSTRAINT run_nodes_max_children_ck
       CHECK (max_children >= 0),
     CONSTRAINT run_nodes_max_retries_ck
@@ -695,6 +717,10 @@ export function migrateDatabase(db: AlphredDatabase): void {
               WHERE tree_nodes.id = run_nodes.tree_node_id
             ), 'markdown')`,
     ],
+  });
+  addColumnIfMissing(tx, {
+    existsQuery: sql`SELECT COUNT(*) AS count FROM pragma_table_info('run_nodes') WHERE name = 'report_artifact_content_type'`,
+    alterQuery: sql`ALTER TABLE run_nodes ADD COLUMN report_artifact_content_type TEXT`,
   });
   addColumnIfMissing(tx, {
     existsQuery: sql`SELECT COUNT(*) AS count FROM pragma_table_info('run_nodes') WHERE name = 'execution_permissions'`,

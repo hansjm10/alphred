@@ -23,10 +23,12 @@ import type {
   AuthStatus,
 } from '@alphred/shared';
 import { createBackgroundExecutionManager } from './background-execution';
+import { ensureDashboardDefaultWorkflows } from './dashboard-default-workflows';
 import { DashboardIntegrationError, toDashboardIntegrationError } from './dashboard-errors';
 import { createRepositoryOperations } from './repository-operations';
-import { createRunOperations } from './run-operations';
+import { createRunOperations, createWorkflowRunLaunchCoordinator } from './run-operations';
 import { resolveDatabasePath } from './dashboard-utils';
+import { createStoryBreakdownRunOperations } from './story-breakdown-run-operations';
 import { runStoryWorkflowOrchestration } from './story-workflow-orchestration';
 import { createWorkItemOperations, validateMoveWorkItemStatusRequest } from './work-item-operations';
 import { createWorkflowDraftOperations } from './workflow-draft-operations';
@@ -83,6 +85,7 @@ export function createDashboardService(options: {
 
     try {
       dependencies.migrateDatabase(db);
+      ensureDashboardDefaultWorkflows(db);
       result = await operation(db);
     } catch (error) {
       caughtError = toDashboardIntegrationError(error);
@@ -114,8 +117,8 @@ export function createDashboardService(options: {
     cwd,
   });
 
-  const workflowOperations = createWorkflowOperations({ withDatabase });
-  const workflowDraftOperations = createWorkflowDraftOperations({ withDatabase });
+  const workflowOperations = createWorkflowOperations({ withDatabase, environment });
+  const workflowDraftOperations = createWorkflowDraftOperations({ withDatabase, environment });
   const repositoryOperations = createRepositoryOperations({
     withDatabase,
     dependencies: {
@@ -139,6 +142,28 @@ export function createDashboardService(options: {
       createScmProvider: dependencies.createScmProvider,
     },
     backgroundExecution,
+  });
+  const workflowRunLaunchCoordinator = createWorkflowRunLaunchCoordinator({
+    dependencies: {
+      createSqlWorkflowPlanner: dependencies.createSqlWorkflowPlanner,
+      createSqlWorkflowExecutor: dependencies.createSqlWorkflowExecutor,
+      resolveProvider: dependencies.resolveProvider,
+      createWorktreeManager: dependencies.createWorktreeManager,
+    },
+    backgroundExecution,
+    environment,
+    cwd,
+    repositoryAuthDependencies: {
+      createScmProvider: dependencies.createScmProvider,
+    },
+  });
+  const storyBreakdownRunOperations = createStoryBreakdownRunOperations({
+    withDatabase,
+    dependencies: {
+      prepareWorkflowRunLaunch: workflowRunLaunchCoordinator.prepareWorkflowRunLaunch,
+      completeWorkflowRunLaunch: workflowRunLaunchCoordinator.completeWorkflowRunLaunch,
+    },
+    environment,
   });
 
   const taskRunAutolaunchEnabled = environment.ALPHRED_DASHBOARD_TASK_RUN_AUTOLAUNCH === '1';
@@ -238,6 +263,7 @@ export function createDashboardService(options: {
     ...workflowDraftOperations,
     ...repositoryOperations,
     ...workItemOperations,
+    ...storyBreakdownRunOperations,
     runStoryWorkflow,
     moveWorkItemStatus: moveWorkItemStatusWithTaskRunOrchestration,
     ...runOperations,
