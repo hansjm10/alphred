@@ -4,6 +4,7 @@ import {
   eq,
   migrateDatabase,
   promptTemplates,
+  treeNodes,
 } from '@alphred/db';
 import {
   DEFAULT_STORY_BREAKDOWN_NODE_KEY,
@@ -30,9 +31,17 @@ describe('dashboard-default-workflows', () => {
         ),
       )
       .get();
+    const plannerNode = db
+      .select({
+        reportArtifactContentType: treeNodes.reportArtifactContentType,
+      })
+      .from(treeNodes)
+      .where(eq(treeNodes.nodeKey, DEFAULT_STORY_BREAKDOWN_NODE_KEY))
+      .get();
 
     expect(prompt).not.toBeUndefined();
     expect(prompt?.content).not.toContain('string[] | null');
+    expect(plannerNode?.reportArtifactContentType).toBe('json');
 
     const exampleStart = prompt?.content.indexOf('{\n') ?? -1;
     const rulesStart = prompt?.content.indexOf('\nRules:') ?? -1;

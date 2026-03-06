@@ -610,7 +610,7 @@ export function handleClaimedNodeSuccess(
     workflowRunId: run.id,
     runNodeId: node.runNodeId,
     content: phaseResult.report,
-    contentType: node.promptContentType,
+    contentType: node.reportArtifactContentType ?? node.promptContentType,
     metadata: {
       success: true,
       provider: node.provider,

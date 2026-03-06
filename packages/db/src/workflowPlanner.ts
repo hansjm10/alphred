@@ -49,6 +49,7 @@ export type PlannedTreeNode = {
   maxChildren: number;
   maxRetries: number;
   sequenceIndex: number;
+  reportArtifactContentType: string | null;
   promptTemplate: PlannedPromptTemplate | null;
 };
 
@@ -299,6 +300,7 @@ export function loadWorkflowTreeTopology(
       maxChildren: treeNodes.maxChildren,
       maxRetries: treeNodes.maxRetries,
       sequenceIndex: treeNodes.sequenceIndex,
+      reportArtifactContentType: treeNodes.reportArtifactContentType,
       promptTemplateId: promptTemplates.id,
       promptTemplateKey: promptTemplates.templateKey,
       promptTemplateVersion: promptTemplates.version,
@@ -324,6 +326,7 @@ export function loadWorkflowTreeTopology(
       maxChildren: row.maxChildren,
       maxRetries: row.maxRetries,
       sequenceIndex: row.sequenceIndex,
+      reportArtifactContentType: row.reportArtifactContentType,
       promptTemplate:
         row.promptTemplateId === null
           ? null
@@ -428,6 +431,7 @@ export function materializeWorkflowRunFromTree(
             model: node.model,
             prompt: node.promptTemplate?.content ?? null,
             promptContentType: node.promptTemplate?.contentType ?? 'markdown',
+            reportArtifactContentType: node.reportArtifactContentType,
             executionPermissions: node.executionPermissions ?? null,
             errorHandlerConfig: node.errorHandlerConfig ?? null,
             maxChildren: node.maxChildren,

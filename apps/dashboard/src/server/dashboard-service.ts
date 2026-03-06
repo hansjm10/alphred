@@ -117,8 +117,8 @@ export function createDashboardService(options: {
     cwd,
   });
 
-  const workflowOperations = createWorkflowOperations({ withDatabase });
-  const workflowDraftOperations = createWorkflowDraftOperations({ withDatabase });
+  const workflowOperations = createWorkflowOperations({ withDatabase, environment });
+  const workflowDraftOperations = createWorkflowDraftOperations({ withDatabase, environment });
   const repositoryOperations = createRepositoryOperations({
     withDatabase,
     dependencies: {

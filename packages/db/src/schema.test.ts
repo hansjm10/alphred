@@ -173,6 +173,7 @@ describe('database schema hardening', () => {
     expect(columnNames).toContain('model');
     expect(columnNames).toContain('execution_permissions');
     expect(columnNames).toContain('error_handler_config');
+    expect(columnNames).toContain('report_artifact_content_type');
   });
 
   it('backfills run_nodes execution columns from source nodes during legacy upgrades', () => {
@@ -281,9 +282,10 @@ describe('database schema hardening', () => {
       node_role: string;
       node_type: string;
       prompt_content_type: string;
+      report_artifact_content_type: string | null;
       max_children: number;
       max_retries: number;
-    }>(sql`SELECT node_role, node_type, prompt_content_type, max_children, max_retries
+    }>(sql`SELECT node_role, node_type, prompt_content_type, report_artifact_content_type, max_children, max_retries
       FROM run_nodes
       WHERE id = 1`);
 
@@ -291,6 +293,7 @@ describe('database schema hardening', () => {
       node_role: 'spawner',
       node_type: 'human',
       prompt_content_type: 'text',
+      report_artifact_content_type: null,
       max_children: 3,
       max_retries: 7,
     });

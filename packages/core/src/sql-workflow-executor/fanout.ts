@@ -379,6 +379,7 @@ export function spawnDynamicChildrenForSpawner(
                 model: subtask.model ?? params.spawnerNode.model,
                 prompt: subtask.prompt,
                 promptContentType: 'markdown',
+                reportArtifactContentType: null,
                 executionPermissions: params.spawnerNode.executionPermissions,
                 errorHandlerConfig: params.spawnerNode.errorHandlerConfig,
                 maxChildren: 0,

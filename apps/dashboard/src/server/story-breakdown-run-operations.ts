@@ -22,12 +22,9 @@ import type {
   DashboardStoryBreakdownRunError,
   DashboardWorkItemProposedBreakdownTask,
 } from './dashboard-contracts';
-import {
-  DEFAULT_STORY_BREAKDOWN_NODE_KEY,
-  DEFAULT_STORY_BREAKDOWN_TREE_KEY,
-} from './dashboard-default-workflows';
 import { DashboardIntegrationError } from './dashboard-errors';
 import type { PreparedWorkflowRunLaunch, WorkflowRunLaunchPreparationOptions } from './run-operations';
+import { resolveStoryBreakdownPlannerConfig } from './story-breakdown-planner-config';
 import {
   findActiveStoryBreakdownRunForStory,
   STORY_BREAKDOWN_LAUNCH_CONTEXT_ARTIFACT_KIND,
@@ -73,11 +70,6 @@ export type StoryBreakdownRunOperations = {
     storyId: number;
     workflowRunId: number;
   }) => Promise<DashboardGetStoryBreakdownRunResult>;
-};
-
-type StoryBreakdownPlannerConfig = {
-  treeKey: string;
-  nodeKey: string;
 };
 
 type PlannerNodeExecutionContext = {
@@ -139,24 +131,6 @@ function requireNonNegativeInteger(value: number, fieldName: string): number {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
-}
-
-function normalizeConfiguredValue(value: string | undefined, fallback: string): string {
-  const trimmed = value?.trim();
-  return trimmed && trimmed.length > 0 ? trimmed : fallback;
-}
-
-function resolvePlannerConfig(environment: NodeJS.ProcessEnv): StoryBreakdownPlannerConfig {
-  return {
-    treeKey: normalizeConfiguredValue(
-      environment.ALPHRED_DASHBOARD_STORY_BREAKDOWN_TREE_KEY,
-      DEFAULT_STORY_BREAKDOWN_TREE_KEY,
-    ),
-    nodeKey: normalizeConfiguredValue(
-      environment.ALPHRED_DASHBOARD_STORY_BREAKDOWN_NODE_KEY,
-      DEFAULT_STORY_BREAKDOWN_NODE_KEY,
-    ),
-  };
 }
 
 function runInImmediateTransaction<T>(db: AlphredDatabase, operation: () => T): T {
@@ -753,7 +727,7 @@ export function createStoryBreakdownRunOperations(params: {
       const repositoryId = requirePositiveInteger(request.repositoryId, 'repositoryId');
       const storyId = requirePositiveInteger(request.storyId, 'storyId');
       const expectedRevision = requireNonNegativeInteger(request.expectedRevision, 'expectedRevision');
-      const plannerConfig = resolvePlannerConfig(environment);
+      const plannerConfig = resolveStoryBreakdownPlannerConfig(environment);
 
       const preparedLaunch = await withDatabase(db =>
         runInImmediateTransaction(db, () => {

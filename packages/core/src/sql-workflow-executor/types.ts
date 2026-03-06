@@ -32,6 +32,7 @@ export type RunNodeExecutionRow = {
   errorHandlerConfig: unknown;
   prompt: string | null;
   promptContentType: string | null;
+  reportArtifactContentType?: string | null;
 };
 
 export type ErrorHandlerConfig =

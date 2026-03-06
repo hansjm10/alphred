@@ -207,8 +207,9 @@ export function loadDraftTopologyByTreeId(
 
 export function createWorkflowDraftOperations(params: {
   withDatabase: WithDatabase;
+  environment: NodeJS.ProcessEnv;
 }): WorkflowDraftOperations {
-  const { withDatabase } = params;
+  const { withDatabase, environment } = params;
 
   return {
     async createWorkflowDraft(request: DashboardCreateWorkflowRequest): Promise<DashboardCreateWorkflowResult> {
@@ -369,7 +370,7 @@ export function createWorkflowDraftOperations(params: {
 
     async getOrCreateWorkflowDraft(treeKeyRaw: string): Promise<DashboardWorkflowDraftTopology> {
       const treeKey = normalizeWorkflowTreeKey(treeKeyRaw);
-      assertWorkflowTreeIsPublic(treeKey);
+      assertWorkflowTreeIsPublic(treeKey, environment);
 
       return withDatabase(async db => {
         const catalog = loadAgentCatalog(db);
@@ -679,7 +680,7 @@ export function createWorkflowDraftOperations(params: {
       request: DashboardSaveWorkflowDraftRequest,
     ): Promise<DashboardWorkflowDraftTopology> {
       const treeKey = normalizeWorkflowTreeKey(treeKeyRaw);
-      assertWorkflowTreeIsPublic(treeKey);
+      assertWorkflowTreeIsPublic(treeKey, environment);
       if (!Number.isInteger(version) || version < 1) {
         throw new DashboardIntegrationError('invalid_request', 'Workflow version must be a positive integer.', {
           status: 400,
@@ -917,7 +918,7 @@ export function createWorkflowDraftOperations(params: {
 
     async validateWorkflowDraft(treeKeyRaw: string, version: number): Promise<DashboardWorkflowValidationResult> {
       const treeKey = normalizeWorkflowTreeKey(treeKeyRaw);
-      assertWorkflowTreeIsPublic(treeKey);
+      assertWorkflowTreeIsPublic(treeKey, environment);
       if (!Number.isInteger(version) || version < 1) {
         throw new DashboardIntegrationError('invalid_request', 'Workflow version must be a positive integer.', {
           status: 400,

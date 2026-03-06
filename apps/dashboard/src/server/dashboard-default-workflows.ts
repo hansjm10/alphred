@@ -17,7 +17,7 @@ const DEFAULT_STORY_BREAKDOWN_WORKFLOW_NAME = 'Story Breakdown Planner';
 const DEFAULT_STORY_BREAKDOWN_WORKFLOW_DESCRIPTION =
   'Single-node planner that returns story_breakdown_result JSON for a story.';
 const DEFAULT_STORY_BREAKDOWN_VERSION_NOTES = 'Seeded default story breakdown planner.';
-type WorkflowSeedExecutor = Pick<AlphredDatabase, 'select' | 'insert'>;
+type WorkflowSeedExecutor = Pick<AlphredDatabase, 'select' | 'insert' | 'update'>;
 
 const DEFAULT_STORY_BREAKDOWN_PROMPT = [
   'You are the story breakdown planner for a single story.',
@@ -73,6 +73,18 @@ function ensurePublishedStoryBreakdownWorkflow(db: WorkflowSeedExecutor): void {
     .orderBy(desc(workflowTrees.version), desc(workflowTrees.id))
     .get();
   if (published) {
+    db.update(treeNodes)
+      .set({
+        reportArtifactContentType: 'json',
+        updatedAt: new Date().toISOString(),
+      })
+      .where(
+        and(
+          eq(treeNodes.workflowTreeId, published.id),
+          eq(treeNodes.nodeKey, DEFAULT_STORY_BREAKDOWN_NODE_KEY),
+        ),
+      )
+      .run();
     return;
   }
 
@@ -116,6 +128,7 @@ function ensurePublishedStoryBreakdownWorkflow(db: WorkflowSeedExecutor): void {
       model: defaultCodexModel,
       executionPermissions: null,
       promptTemplateId: prompt.id,
+      reportArtifactContentType: 'json',
       maxChildren: 12,
       maxRetries: 0,
       sequenceIndex: 10,

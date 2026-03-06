@@ -400,7 +400,7 @@ function insertPlannerReportArtifact(
         workflowRunId: runId,
         runNodeId,
         artifactType: 'report',
-        contentType: 'markdown',
+        contentType: 'json',
         content,
         metadata: { success: true, attempt },
         createdAt: '2026-03-05T17:04:00.000Z',

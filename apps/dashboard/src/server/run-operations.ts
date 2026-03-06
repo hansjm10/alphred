@@ -184,6 +184,7 @@ export type PreparedWorkflowRunLaunch = {
 
 export type WorkflowRunLaunchPreparationOptions = {
   allowedHiddenTreeKey?: string;
+  environment?: NodeJS.ProcessEnv;
 };
 
 export type WorkflowRunLaunchCoordinator = {
@@ -497,7 +498,7 @@ function normalizeRunLaunchRequest(
     });
   }
   if (options.allowedHiddenTreeKey?.trim() !== treeKey) {
-    assertWorkflowTreeIsPublic(treeKey);
+    assertWorkflowTreeIsPublic(treeKey, options.environment);
   }
 
   const repositoryName = request.repositoryName?.trim();
@@ -795,7 +796,10 @@ export function createWorkflowRunLaunchCoordinator(params: {
     request: DashboardRunLaunchRequest,
     options: WorkflowRunLaunchPreparationOptions = {},
   ): PreparedWorkflowRunLaunch {
-    const normalizedRequest = normalizeRunLaunchRequest(request, options);
+    const normalizedRequest = normalizeRunLaunchRequest(request, {
+      ...options,
+      environment,
+    });
     try {
       return db.transaction(() => {
         const planner = dependencies.createSqlWorkflowPlanner(db);

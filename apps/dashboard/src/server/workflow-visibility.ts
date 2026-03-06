@@ -1,14 +1,12 @@
-import { DEFAULT_STORY_BREAKDOWN_TREE_KEY } from './dashboard-default-workflows';
 import { DashboardIntegrationError } from './dashboard-errors';
+import { resolveHiddenWorkflowTreeKeys } from './story-breakdown-planner-config';
 
-const hiddenWorkflowTreeKeys = new Set([DEFAULT_STORY_BREAKDOWN_TREE_KEY]);
-
-export function isHiddenWorkflowTreeKey(treeKey: string): boolean {
-  return hiddenWorkflowTreeKeys.has(treeKey);
+export function isHiddenWorkflowTreeKey(treeKey: string, environment: NodeJS.ProcessEnv = process.env): boolean {
+  return resolveHiddenWorkflowTreeKeys(environment).has(treeKey);
 }
 
-export function assertWorkflowTreeIsPublic(treeKey: string): void {
-  if (!isHiddenWorkflowTreeKey(treeKey)) {
+export function assertWorkflowTreeIsPublic(treeKey: string, environment: NodeJS.ProcessEnv = process.env): void {
+  if (!isHiddenWorkflowTreeKey(treeKey, environment)) {
     return;
   }
 

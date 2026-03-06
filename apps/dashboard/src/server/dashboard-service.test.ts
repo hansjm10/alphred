@@ -2054,6 +2054,14 @@ describe('createDashboardService', () => {
       .get();
     expect(prompt?.content).toContain('"resultType": "story_breakdown_result"');
     expect(prompt?.content).toContain('Return exactly one JSON object');
+    const plannerNode = db
+      .select({
+        reportArtifactContentType: treeNodes.reportArtifactContentType,
+      })
+      .from(treeNodes)
+      .where(eq(treeNodes.nodeKey, DEFAULT_STORY_BREAKDOWN_NODE_KEY))
+      .get();
+    expect(plannerNode?.reportArtifactContentType).toBe('json');
 
     const storedTrees = db
       .select({
@@ -3796,6 +3804,81 @@ describe('createDashboardService', () => {
       .from(workflowRuns)
       .all();
     expect(persistedRuns).toEqual([]);
+  });
+
+  it('hides env-configured story-breakdown planner trees from generic service APIs', async () => {
+    const { db, dependencies } = createHarness();
+    migrateDatabase(db);
+
+    const tree = db
+      .insert(workflowTrees)
+      .values({
+        treeKey: 'next-story-breakdown-planner',
+        version: 1,
+        status: 'published',
+        name: 'Next Story Breakdown Planner',
+      })
+      .returning({ id: workflowTrees.id })
+      .get();
+    const prompt = db
+      .insert(promptTemplates)
+      .values({
+        templateKey: 'next-story-breakdown-planner/v1/breakdown/prompt',
+        version: 1,
+        content: 'Return JSON only.',
+        contentType: 'markdown',
+      })
+      .returning({ id: promptTemplates.id })
+      .get();
+
+    db.insert(treeNodes)
+      .values({
+        workflowTreeId: tree.id,
+        nodeKey: DEFAULT_STORY_BREAKDOWN_NODE_KEY,
+        nodeType: 'agent',
+        provider: 'codex',
+        model: 'gpt-5.3-codex',
+        promptTemplateId: prompt.id,
+        reportArtifactContentType: 'json',
+        sequenceIndex: 0,
+      })
+      .run();
+
+    const service = createDashboardService({
+      dependencies,
+      environment: {
+        ...process.env,
+        ALPHRED_DASHBOARD_STORY_BREAKDOWN_TREE_KEY: 'next-story-breakdown-planner',
+      },
+    });
+
+    expect(await service.listWorkflowTrees()).toEqual([]);
+    expect(await service.listWorkflowCatalog()).toEqual([]);
+    await expect(service.getWorkflowTreeSnapshot('next-story-breakdown-planner')).rejects.toMatchObject({
+      name: 'DashboardIntegrationError',
+      code: 'not_found',
+      status: 404,
+    });
+    await expect(service.getOrCreateWorkflowDraft('next-story-breakdown-planner')).rejects.toMatchObject({
+      name: 'DashboardIntegrationError',
+      code: 'not_found',
+      status: 404,
+    });
+    await expect(service.isWorkflowTreeKeyAvailable('next-story-breakdown-planner')).resolves.toEqual({
+      treeKey: 'next-story-breakdown-planner',
+      available: false,
+    });
+    await expect(
+      service.launchWorkflowRun({
+        treeKey: 'next-story-breakdown-planner',
+        executionMode: 'sync',
+      }),
+    ).rejects.toMatchObject({
+      name: 'DashboardIntegrationError',
+      code: 'not_found',
+      status: 404,
+      message: 'Workflow tree "next-story-breakdown-planner" was not found.',
+    });
   });
 
   it.each([
