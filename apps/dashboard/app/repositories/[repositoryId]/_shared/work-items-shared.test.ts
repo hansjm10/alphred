@@ -484,6 +484,26 @@ describe('startTaskWorkflow', () => {
       message: 'Unable to start task workflow (malformed response).',
     });
   });
+
+  it('returns ok=false for api error responses', async () => {
+    const fetchMock = vi.fn(async () =>
+      new Response(JSON.stringify({ error: { code: 'conflict', message: 'Task revision conflict.' } }), { status: 409 }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await startTaskWorkflow({
+      repositoryId: 1,
+      workItemId: 20,
+      expectedRevision: 1,
+      actor,
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      status: 409,
+      message: 'Task revision conflict.',
+    });
+  });
 });
 
 describe('requestWorkItemReplan', () => {
