@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { DashboardIntegrationError } from '@dashboard/server/dashboard-errors';
 import {
   parseApproveStoryBreakdownRequest,
+  parseCreateStoryWorkspaceRequest,
   parseCreateWorkItemRequest,
   parseJsonObjectBody,
   parseLaunchStoryBreakdownRunRequest,
@@ -800,6 +801,33 @@ describe('work item route validation', () => {
             approveOnly: true,
           },
           22,
+        ),
+      ).toThrowError(DashboardIntegrationError);
+    });
+  });
+
+  describe('parseCreateStoryWorkspaceRequest', () => {
+    it('parses create story workspace payloads', () => {
+      expect(
+        parseCreateStoryWorkspaceRequest(
+          {
+            repositoryId: 3,
+          },
+          20,
+        ),
+      ).toEqual({
+        repositoryId: 3,
+        storyId: 20,
+      });
+    });
+
+    it('rejects invalid create story workspace payloads', () => {
+      expect(() =>
+        parseCreateStoryWorkspaceRequest(
+          {
+            repositoryId: '3',
+          },
+          20,
         ),
       ).toThrowError(DashboardIntegrationError);
     });

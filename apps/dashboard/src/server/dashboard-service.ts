@@ -30,6 +30,7 @@ import { createRunOperations, createWorkflowRunLaunchCoordinator } from './run-o
 import { resolveDatabasePath } from './dashboard-utils';
 import { createStoryBreakdownRunOperations } from './story-breakdown-run-operations';
 import { runStoryWorkflowOrchestration } from './story-workflow-orchestration';
+import { createStoryWorkspaceOperations } from './story-workspace-operations';
 import { createWorkItemOperations, validateMoveWorkItemStatusRequest } from './work-item-operations';
 import { createWorkflowDraftOperations } from './workflow-draft-operations';
 import { createWorkflowOperations } from './workflow-operations';
@@ -128,6 +129,13 @@ export function createDashboardService(options: {
     environment,
   });
   const workItemOperations = createWorkItemOperations({ withDatabase });
+  const storyWorkspaceOperations = createStoryWorkspaceOperations({
+    withDatabase,
+    dependencies: {
+      ensureRepositoryClone: dependencies.ensureRepositoryClone,
+    },
+    environment,
+  });
   const runOperations = createRunOperations({
     withDatabase,
     dependencies: {
@@ -298,6 +306,7 @@ export function createDashboardService(options: {
     ...repositoryOperations,
     ...workItemOperations,
     ...storyBreakdownRunOperations,
+    ...storyWorkspaceOperations,
     runStoryWorkflow,
     startTaskWorkflow,
     ...runOperations,

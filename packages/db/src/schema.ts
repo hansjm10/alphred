@@ -385,6 +385,54 @@ export const runWorktrees = sqliteTable(
   }),
 );
 
+export const storyWorkspaces = sqliteTable(
+  'story_workspaces',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    repositoryId: integer('repository_id')
+      .notNull()
+      .references(() => repositories.id, { onDelete: 'restrict' }),
+    storyWorkItemId: integer('story_work_item_id')
+      .notNull()
+      .references(() => workItems.id, { onDelete: 'cascade' }),
+    worktreePath: text('worktree_path').notNull(),
+    branch: text('branch').notNull(),
+    baseBranch: text('base_branch').notNull(),
+    baseCommitHash: text('base_commit_hash'),
+    status: text('status').notNull().default('active'),
+    statusReason: text('status_reason'),
+    lastReconciledAt: text('last_reconciled_at'),
+    createdAt: text('created_at').notNull().default(utcNow),
+    updatedAt: text('updated_at').notNull().default(utcNow),
+    removedAt: text('removed_at'),
+  },
+  table => ({
+    repositoryStoryFk: foreignKey({
+      columns: [table.repositoryId, table.storyWorkItemId],
+      foreignColumns: [workItems.repositoryId, workItems.id],
+      name: 'story_workspaces_repository_id_story_work_item_id_fk',
+    }).onDelete('cascade'),
+    statusCheck: check('story_workspaces_status_ck', sql`${table.status} in ('active', 'stale', 'removed')`),
+    reasonNotEmptyCheck: check(
+      'story_workspaces_status_reason_not_empty_ck',
+      sql`${table.statusReason} is null or ${table.statusReason} <> ''`,
+    ),
+    removalTimestampCheck: check(
+      'story_workspaces_removal_timestamp_ck',
+      sql`(
+        ${table.status} in ('active', 'stale')
+        and ${table.removedAt} is null
+      ) or (
+        ${table.status} = 'removed'
+        and ${table.removedAt} is not null
+      )`,
+    ),
+    storyWorkItemUnique: uniqueIndex('story_workspaces_story_work_item_id_uq').on(table.storyWorkItemId),
+    repositoryStatusIdx: index('story_workspaces_repository_id_status_idx').on(table.repositoryId, table.status),
+    createdAtIdx: index('story_workspaces_created_at_idx').on(table.createdAt),
+  }),
+);
+
 export const treeNodes = sqliteTable(
   'tree_nodes',
   {

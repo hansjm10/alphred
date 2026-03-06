@@ -7,6 +7,7 @@ import type {
   DashboardRepositoryState,
   DashboardRunStoryWorkflowResult,
   DashboardStoryBreakdownProposalSnapshot,
+  DashboardStoryWorkspaceSnapshot,
   DashboardWorkItemSnapshot,
 } from '@dashboard/server/dashboard-contracts';
 import { ActionButton, ButtonLink } from '../../../../ui/primitives';
@@ -24,6 +25,42 @@ import {
   toWorkItemsById,
 } from '../../_shared/work-items-shared';
 
+type StoryWorkspaceAction = 'create-workspace' | 'reconcile-workspace' | 'cleanup-workspace' | 'recreate-workspace';
+
+type StoryWorkspaceActionResult = {
+  workspace: DashboardStoryWorkspaceSnapshot;
+  created?: boolean;
+};
+
+const storyWorkspaceStatuses = new Set<DashboardStoryWorkspaceSnapshot['status']>(['active', 'stale', 'removed']);
+
+function isNullableString(value: unknown): value is string | null {
+  return value === null || typeof value === 'string';
+}
+
+function isStoryWorkspaceSnapshot(value: unknown): value is DashboardStoryWorkspaceSnapshot {
+  if (!isRecord(value)) {
+    return false;
+  }
+
+  return (
+    typeof value.id === 'number'
+    && typeof value.repositoryId === 'number'
+    && typeof value.storyId === 'number'
+    && typeof value.path === 'string'
+    && typeof value.branch === 'string'
+    && typeof value.baseBranch === 'string'
+    && isNullableString(value.baseCommitHash)
+    && typeof value.status === 'string'
+    && storyWorkspaceStatuses.has(value.status as DashboardStoryWorkspaceSnapshot['status'])
+    && isNullableString(value.statusReason)
+    && isNullableString(value.lastReconciledAt)
+    && isNullableString(value.removedAt)
+    && typeof value.createdAt === 'string'
+    && typeof value.updatedAt === 'string'
+  );
+}
+
 async function fetchRepositoryWorkItems(params: { repositoryId: number }): Promise<DashboardWorkItemSnapshot[]> {
   const response = await fetch(`/api/dashboard/repositories/${params.repositoryId}/work-items`, { method: 'GET' });
   const payload = parseJsonSafely(await response.text());
@@ -39,7 +76,10 @@ async function fetchRepositoryWorkItems(params: { repositoryId: number }): Promi
   return payload.workItems as DashboardWorkItemSnapshot[];
 }
 
-async function fetchBreakdownProposal(params: { repositoryId: number; storyId: number }): Promise<DashboardStoryBreakdownProposalSnapshot | null> {
+async function fetchBreakdownProposal(params: {
+  repositoryId: number;
+  storyId: number;
+}): Promise<DashboardStoryBreakdownProposalSnapshot | null> {
   const response = await fetch(`/api/dashboard/work-items/${params.storyId}/breakdown?repositoryId=${params.repositoryId}`, {
     method: 'GET',
   });
@@ -54,6 +94,37 @@ async function fetchBreakdownProposal(params: { repositoryId: number; storyId: n
   }
 
   return (payload.proposal ?? null) as DashboardStoryBreakdownProposalSnapshot | null;
+}
+
+async function runStoryWorkspaceAction(params: {
+  repositoryId: number;
+  storyId: number;
+  action: StoryWorkspaceAction;
+  errorPrefix: string;
+}): Promise<StoryWorkspaceActionResult> {
+  const response = await fetch(`/api/dashboard/work-items/${params.storyId}/actions/${params.action}`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify({
+      repositoryId: params.repositoryId,
+    }),
+  });
+  const payload = parseJsonSafely(await response.text());
+
+  if (!response.ok) {
+    throw new Error(resolveApiErrorMessage(response.status, payload, params.errorPrefix));
+  }
+
+  if (!isRecord(payload) || !isStoryWorkspaceSnapshot(payload.workspace)) {
+    throw new Error(`${params.errorPrefix} (malformed response).`);
+  }
+
+  return {
+    workspace: payload.workspace,
+    created: typeof payload.created === 'boolean' ? payload.created : undefined,
+  };
 }
 
 function renderStringList(values: string[] | null): ReactNode {
@@ -85,6 +156,42 @@ function formatWorkItemStatusLabel(status: WorkItemStatus): string {
   }
 }
 
+function formatStoryWorkspaceStatusLabel(status: DashboardStoryWorkspaceSnapshot['status']): string {
+  switch (status) {
+    case 'active':
+      return 'Active';
+    case 'stale':
+      return 'Stale';
+    case 'removed':
+      return 'Removed';
+  }
+}
+
+function formatStoryWorkspaceReason(reason: string | null): string | null {
+  switch (reason) {
+    case null:
+      return null;
+    case 'missing_path':
+      return 'Workspace directory is missing from disk.';
+    case 'worktree_not_registered':
+      return 'Git no longer reports this directory as a registered worktree.';
+    case 'branch_mismatch':
+      return 'Git reports a different branch for this worktree than the persisted story branch.';
+    case 'repository_clone_missing':
+      return 'The repository clone is unavailable, so the workspace cannot be fully reconciled.';
+    case 'reconcile_failed':
+      return 'Workspace reconciliation could not inspect the repository state.';
+    case 'cleanup_requested':
+      return 'The workspace was explicitly cleaned up.';
+    default:
+      return reason;
+  }
+}
+
+function formatTimestamp(value: string | null): string {
+  return value ? new Date(value).toLocaleString() : 'Unavailable';
+}
+
 function mergeStoryWorkflowWorkItems(
   previous: Readonly<Record<number, DashboardWorkItemSnapshot>>,
   result: DashboardRunStoryWorkflowResult,
@@ -104,16 +211,19 @@ export function StoryDetailPageContent(props: Readonly<{
   initialLatestEventId: number;
   initialWorkItems: readonly DashboardWorkItemSnapshot[];
   initialProposal: DashboardStoryBreakdownProposalSnapshot | null;
+  initialWorkspace: DashboardStoryWorkspaceSnapshot | null;
 }>) {
-  const { repository, actor, storyId, initialLatestEventId, initialWorkItems, initialProposal } = props;
+  const { repository, actor, storyId, initialLatestEventId, initialWorkItems, initialProposal, initialWorkspace } = props;
 
   const [workItemsById, setWorkItemsById] = useState<Readonly<Record<number, DashboardWorkItemSnapshot>>>(() =>
     toWorkItemsById(initialWorkItems),
   );
   const [proposal, setProposal] = useState<DashboardStoryBreakdownProposalSnapshot | null>(initialProposal);
+  const [workspace, setWorkspace] = useState<DashboardStoryWorkspaceSnapshot | null>(initialWorkspace);
   const [connectionState, setConnectionState] = useState<BoardConnectionState>('connecting');
   const [connectionError, setConnectionError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [actionNotice, setActionNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   const latestEventIdRef = useRef(initialLatestEventId);
@@ -133,6 +243,19 @@ export function StoryDetailPageContent(props: Readonly<{
       .filter(item => item.type === 'task' && item.parentId === storyId)
       .sort((a, b) => a.id - b.id);
   }, [workItemsById, story, storyId]);
+
+  const workspaceCreateBlockedReason = useMemo(() => {
+    if (!story || story.status !== 'Done') {
+      if (repository.archivedAt !== null) {
+        return 'Repository is archived. Restore it before creating or recreating a story workspace.';
+      }
+      return null;
+    }
+
+    return repository.archivedAt !== null
+      ? 'Repository is archived and the story is already Done. Only reconciliation and cleanup remain available.'
+      : 'Story is Done. Clean up the existing workspace instead of creating or recreating a new one.';
+  }, [repository.archivedAt, story]);
 
   const connect = (sessionId: number) => {
     if (connectionSessionRef.current !== sessionId) {
@@ -159,7 +282,6 @@ export function StoryDetailPageContent(props: Readonly<{
       }
       const parsed = parseJsonSafely(event.data);
       if (isRecord(parsed) && typeof parsed.latestEventId === 'number') {
-        // board_state indicates a high watermark, but we still resume from last delivered event id.
         setConnectionState('live');
       }
     });
@@ -264,14 +386,26 @@ export function StoryDetailPageContent(props: Readonly<{
   const refreshAll = async (options?: { bannerMessage?: string | null }) => {
     setBusy(true);
     setActionError(options?.bannerMessage ?? null);
+    setActionNotice(null);
     try {
-      const [workItems, latestProposal, latestStory] = await Promise.all([
+      const workspaceRefresh = workspace
+        ? runStoryWorkspaceAction({
+            repositoryId: repository.id,
+            storyId,
+            action: 'reconcile-workspace',
+            errorPrefix: 'Unable to refresh story workspace',
+          })
+        : Promise.resolve<StoryWorkspaceActionResult | null>(null);
+
+      const [workItems, latestProposal, latestStory, latestWorkspace] = await Promise.all([
         fetchRepositoryWorkItems({ repositoryId: repository.id }),
         fetchBreakdownProposal({ repositoryId: repository.id, storyId }),
         fetchWorkItem({ repositoryId: repository.id, workItemId: storyId }),
+        workspaceRefresh,
       ]);
       setWorkItemsById(toWorkItemsById(workItems));
       setProposal(latestProposal);
+      setWorkspace(latestWorkspace?.workspace ?? workspace);
       setWorkItemsById(previous => ({ ...previous, [latestStory.id]: latestStory }));
     } catch (error) {
       setActionError(error instanceof Error ? error.message : String(error));
@@ -284,6 +418,7 @@ export function StoryDetailPageContent(props: Readonly<{
     if (!story) return;
     setBusy(true);
     setActionError(null);
+    setActionNotice(null);
     const workflowResult = await runStoryWorkflow({
       repositoryId: repository.id,
       storyId: story.id,
@@ -306,6 +441,7 @@ export function StoryDetailPageContent(props: Readonly<{
     if (!story) return;
     setBusy(true);
     setActionError(null);
+    setActionNotice(null);
     const moveResult = await moveWorkItemStatus({
       repositoryId: repository.id,
       workItemId: story.id,
@@ -329,6 +465,7 @@ export function StoryDetailPageContent(props: Readonly<{
     if (!story) return;
     setBusy(true);
     setActionError(null);
+    setActionNotice(null);
     const workflowResult = await runStoryWorkflow({
       repositoryId: repository.id,
       storyId,
@@ -350,6 +487,99 @@ export function StoryDetailPageContent(props: Readonly<{
     setBusy(false);
   };
 
+  const handleCreateStoryWorkspace = async () => {
+    if (!story) return;
+    setBusy(true);
+    setActionError(null);
+    setActionNotice(null);
+    try {
+      const result = await runStoryWorkspaceAction({
+        repositoryId: repository.id,
+        storyId: story.id,
+        action: 'create-workspace',
+        errorPrefix: 'Unable to create story workspace',
+      });
+      setWorkspace(result.workspace);
+      setActionNotice(
+        result.created === false
+          ? `Story workspace already exists on branch ${result.workspace.branch}.`
+          : `Story workspace ready on branch ${result.workspace.branch}.`,
+      );
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : 'Unable to create story workspace.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleReconcileStoryWorkspace = async () => {
+    if (!story || !workspace) return;
+    setBusy(true);
+    setActionError(null);
+    setActionNotice(null);
+    try {
+      const result = await runStoryWorkspaceAction({
+        repositoryId: repository.id,
+        storyId: story.id,
+        action: 'reconcile-workspace',
+        errorPrefix: 'Unable to reconcile story workspace',
+      });
+      setWorkspace(result.workspace);
+      const reason = formatStoryWorkspaceReason(result.workspace.statusReason);
+      setActionNotice(
+        result.workspace.status === 'active'
+          ? 'Story workspace is active and matches the repository state.'
+          : `Story workspace is ${formatStoryWorkspaceStatusLabel(result.workspace.status).toLowerCase()}${reason ? `: ${reason}` : '.'}`,
+      );
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : 'Unable to reconcile story workspace.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleCleanupStoryWorkspace = async () => {
+    if (!story || !workspace) return;
+    setBusy(true);
+    setActionError(null);
+    setActionNotice(null);
+    try {
+      const result = await runStoryWorkspaceAction({
+        repositoryId: repository.id,
+        storyId: story.id,
+        action: 'cleanup-workspace',
+        errorPrefix: 'Unable to clean up story workspace',
+      });
+      setWorkspace(result.workspace);
+      setActionNotice('Story workspace cleaned up.');
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : 'Unable to clean up story workspace.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleRecreateStoryWorkspace = async () => {
+    if (!story || !workspace) return;
+    setBusy(true);
+    setActionError(null);
+    setActionNotice(null);
+    try {
+      const result = await runStoryWorkspaceAction({
+        repositoryId: repository.id,
+        storyId: story.id,
+        action: 'recreate-workspace',
+        errorPrefix: 'Unable to recreate story workspace',
+      });
+      setWorkspace(result.workspace);
+      setActionNotice(`Story workspace recreated on branch ${result.workspace.branch}.`);
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : 'Unable to recreate story workspace.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
   if (story?.type !== 'story') {
     return (
       <div className="page-stack">
@@ -361,6 +591,8 @@ export function StoryDetailPageContent(props: Readonly<{
   }
 
   const launchRunHref = `/runs?repository=${encodeURIComponent(repository.name)}&launchWorkItemId=${story.id}`;
+  const workspaceReason = formatStoryWorkspaceReason(workspace?.statusReason ?? null);
+  const canCreateOrRecreateWorkspace = workspaceCreateBlockedReason === null;
 
   return (
     <div className="page-stack">
@@ -394,6 +626,12 @@ export function StoryDetailPageContent(props: Readonly<{
         <p className="repo-banner repo-banner--error" role="alert">
           {actionError}
         </p>
+      ) : null}
+
+      {actionNotice ? (
+        <output className="repo-banner repo-banner--success" aria-live="polite">
+          {actionNotice}
+        </output>
       ) : null}
 
       <section className="surface surface-card surface--default">
@@ -449,6 +687,58 @@ export function StoryDetailPageContent(props: Readonly<{
               Waiting for an agent to propose a breakdown. Once proposed, review the plan here and approve to move tasks from Draft to Ready.
             </p>
           ) : null}
+        </div>
+
+        <div className="board-detail__section board-detail__section--divider">
+          <h5>Story workspace</h5>
+          {workspace ? (
+            <>
+              <p className="meta-text">
+                Status: <span className="board-pill">{formatStoryWorkspaceStatusLabel(workspace.status)}</span>
+              </p>
+              <p className="meta-text">
+                Branch: <code>{workspace.branch}</code> · Base: <code>{workspace.baseBranch}</code>
+              </p>
+              <p className="meta-text">
+                Path: <code>{workspace.path}</code>
+              </p>
+              <p className="meta-text">Last reconciled: {formatTimestamp(workspace.lastReconciledAt)}</p>
+              {workspace.removedAt ? (
+                <p className="meta-text">Removed at: {formatTimestamp(workspace.removedAt)}</p>
+              ) : null}
+              {workspaceReason ? <p className="meta-text">{workspaceReason}</p> : null}
+            </>
+          ) : (
+            <p className="meta-text">No workspace created yet.</p>
+          )}
+
+          <div className="board-action-row">
+            {workspace === null && canCreateOrRecreateWorkspace ? (
+              <ActionButton tone="secondary" onClick={() => void handleCreateStoryWorkspace()} disabled={busy}>
+                Create story workspace
+              </ActionButton>
+            ) : null}
+
+            {workspace !== null && workspace.status !== 'removed' ? (
+              <ActionButton tone="secondary" onClick={() => void handleReconcileStoryWorkspace()} disabled={busy}>
+                Reconcile workspace
+              </ActionButton>
+            ) : null}
+
+            {workspace !== null && workspace.status !== 'removed' ? (
+              <ActionButton tone="secondary" onClick={() => void handleCleanupStoryWorkspace()} disabled={busy}>
+                Cleanup workspace
+              </ActionButton>
+            ) : null}
+
+            {workspace !== null && canCreateOrRecreateWorkspace ? (
+              <ActionButton tone="secondary" onClick={() => void handleRecreateStoryWorkspace()} disabled={busy}>
+                Recreate workspace
+              </ActionButton>
+            ) : null}
+          </div>
+
+          {workspaceCreateBlockedReason ? <p className="meta-text">{workspaceCreateBlockedReason}</p> : null}
         </div>
 
         {story.status === 'BreakdownProposed' ? (

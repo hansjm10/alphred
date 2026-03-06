@@ -555,6 +555,22 @@ export type DashboardWorkItemLinkedRunSnapshot = {
   touchedFiles?: string[] | null;
 };
 
+export type DashboardStoryWorkspaceSnapshot = {
+  id: number;
+  repositoryId: number;
+  storyId: number;
+  path: string;
+  branch: string;
+  baseBranch: string;
+  baseCommitHash: string | null;
+  status: 'active' | 'stale' | 'removed';
+  statusReason: string | null;
+  lastReconciledAt: string | null;
+  removedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
 export type DashboardWorkItemSnapshot = {
   id: number;
   repositoryId: number;
@@ -763,6 +779,39 @@ export type DashboardProposeStoryBreakdownResult = {
   tasks: DashboardWorkItemSnapshot[];
 };
 
+export type DashboardGetStoryWorkspaceRequest = {
+  repositoryId: number;
+  storyId: number;
+};
+
+export type DashboardGetStoryWorkspaceResult = {
+  workspace: DashboardStoryWorkspaceSnapshot | null;
+};
+
+export type DashboardCreateStoryWorkspaceRequest = DashboardGetStoryWorkspaceRequest;
+
+export type DashboardCreateStoryWorkspaceResult = {
+  workspace: DashboardStoryWorkspaceSnapshot;
+  created: boolean;
+};
+
+export type DashboardReconcileStoryWorkspaceRequest = DashboardGetStoryWorkspaceRequest;
+
+export type DashboardReconcileStoryWorkspaceResult = {
+  workspace: DashboardStoryWorkspaceSnapshot;
+};
+
+export type DashboardCleanupStoryWorkspaceRequest = DashboardGetStoryWorkspaceRequest;
+
+export type DashboardCleanupStoryWorkspaceResult = {
+  workspace: DashboardStoryWorkspaceSnapshot;
+};
+
+export type DashboardRecreateStoryWorkspaceRequest = DashboardGetStoryWorkspaceRequest;
+
+export type DashboardRecreateStoryWorkspaceResult = {
+  workspace: DashboardStoryWorkspaceSnapshot;
+};
 export type DashboardApproveStoryBreakdownRequest = {
   repositoryId: number;
   storyId: number;
