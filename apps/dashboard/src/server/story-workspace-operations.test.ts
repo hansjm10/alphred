@@ -188,6 +188,42 @@ describe('story workspace operations', () => {
     });
   });
 
+  it('reconciles a workspace to stale when git no longer registers the worktree path', async () => {
+    const db = createMigratedDb();
+    const seed = seedRepositoryAndStory(db);
+
+    insertStoryWorkspace(db, {
+      repositoryId: seed.repositoryId,
+      storyWorkItemId: seed.storyId,
+      worktreePath: '/tmp/alphred/worktrees/alphred-story-1-a1b2c3',
+      branch: 'alphred/story/1-a1b2c3',
+      baseBranch: 'main',
+      baseCommitHash: 'abc123',
+      occurredAt: '2026-03-05T10:00:00.000Z',
+    });
+
+    const operations = createStoryWorkspaceOperations({
+      withDatabase: createWithDatabase(db),
+      dependencies: createDependencies(seed.repository, {
+        listWorktrees: async () => [],
+        pathExists: async () => true,
+        now: () => '2026-03-06T01:02:00.000Z',
+      }),
+      environment: createTestEnvironment(),
+    });
+
+    const reconciled = await operations.reconcileStoryWorkspace({
+      repositoryId: seed.repositoryId,
+      storyId: seed.storyId,
+    });
+
+    expect(reconciled.workspace).toMatchObject({
+      status: 'stale',
+      statusReason: 'worktree_not_registered',
+      lastReconciledAt: '2026-03-06T01:02:00.000Z',
+    });
+  });
+
   it('reconciles a workspace to stale when the registered branch no longer matches', async () => {
     const db = createMigratedDb();
     const seed = seedRepositoryAndStory(db);
