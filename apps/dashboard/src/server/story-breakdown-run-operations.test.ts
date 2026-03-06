@@ -386,7 +386,13 @@ function insertLaunchContextArtifact(db: AlphredDatabase, runId: number, runNode
   );
 }
 
-function insertPlannerReportArtifact(db: AlphredDatabase, runId: number, runNodeId: number, content: string): number {
+function insertPlannerReportArtifact(
+  db: AlphredDatabase,
+  runId: number,
+  runNodeId: number,
+  content: string,
+  attempt = 1,
+): number {
   return Number(
     db.insert(phaseArtifacts)
       .values({
@@ -395,14 +401,20 @@ function insertPlannerReportArtifact(db: AlphredDatabase, runId: number, runNode
         artifactType: 'report',
         contentType: 'markdown',
         content,
-        metadata: { success: true },
+        metadata: { success: true, attempt },
         createdAt: '2026-03-05T17:04:00.000Z',
       })
       .run().lastInsertRowid,
   );
 }
 
-function insertFailureArtifact(db: AlphredDatabase, runId: number, runNodeId: number, content: string): number {
+function insertFailureArtifact(
+  db: AlphredDatabase,
+  runId: number,
+  runNodeId: number,
+  content: string,
+  attempt = 1,
+): number {
   return Number(
     db.insert(phaseArtifacts)
       .values({
@@ -411,7 +423,7 @@ function insertFailureArtifact(db: AlphredDatabase, runId: number, runNodeId: nu
         artifactType: 'log',
         contentType: 'text',
         content,
-        metadata: { failureReason: 'retry_limit_exceeded' },
+        metadata: { failureReason: 'retry_limit_exceeded', attempt },
         createdAt: '2026-03-05T17:04:00.000Z',
       })
       .run().lastInsertRowid,
@@ -1257,6 +1269,7 @@ describe('story-breakdown-run-operations', () => {
       runId,
       secondAttemptRunNodeId,
       'Request timed out while waiting for model response.',
+      2,
     );
     const diagnosticId = insertDiagnostics(
       db,
@@ -1294,6 +1307,62 @@ describe('story-breakdown-run-operations', () => {
           diagnosticId,
           failureArtifactId,
           diagnosticClassification: 'timeout',
+        }),
+      },
+    });
+  });
+
+  it('does not surface stale attempt-one artifacts when a retried planner attempt reuses the same run node id', async () => {
+    const { db, operations } = createHarness();
+    const repositoryId = seedRepository(db, 'planner-stale-artifacts');
+    const storyId = seedStory(db, repositoryId);
+    const { treeId, treeNodeId } = seedPlannerTree(db);
+    const { runId, runNodeId } = seedPlannerRun(db, {
+      treeId,
+      treeNodeId,
+      repositoryId,
+      storyId,
+      runStatus: 'failed',
+      nodeStatus: 'failed',
+      attempt: 2,
+    });
+
+    insertFailureArtifact(db, runId, runNodeId, 'attempt 1 failure details', 1);
+    insertDiagnostics(
+      db,
+      runId,
+      runNodeId,
+      {
+        error: {
+          name: 'AttemptOneError',
+          message: 'attempt 1 failure details',
+          classification: 'internal',
+          stackPreview: null,
+        },
+      },
+      1,
+    );
+
+    const result = await operations.getStoryBreakdownRun({
+      repositoryId,
+      storyId,
+      workflowRunId: runId,
+    });
+
+    expect(result).toEqual({
+      workflowRunId: runId,
+      runStatus: 'failed',
+      result: null,
+      error: {
+        code: 'transient',
+        message: 'Planner run failed before producing a valid story breakdown result.',
+        retryable: false,
+        details: expect.objectContaining({
+          runNodeId,
+          attempt: 2,
+          diagnosticId: null,
+          failureArtifactId: null,
+          diagnosticClassification: null,
         }),
       },
     });

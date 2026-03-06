@@ -59,6 +59,10 @@ import {
   type RunStatus,
 } from './dashboard-utils';
 import { ensureRepositoryAuth, type RepositoryOperationsDependencies } from './repository-operations';
+import {
+  findActiveStoryBreakdownRunForStory,
+  loadStoryBreakdownRunIdentity,
+} from './story-breakdown-run-state';
 
 const BACKGROUND_RUN_STATUS: RunStatus = 'running';
 const RECENT_SNAPSHOT_LIMIT = 30;
@@ -69,6 +73,7 @@ const runPolicyConstraintsByRunId = new Map<number, DashboardRunLaunchPolicyCons
 type WithDatabase = <T>(operation: (db: AlphredDatabase) => Promise<T> | T) => Promise<T>;
 type RunExecutionPolicyAssertion = (db: AlphredDatabase, runId: number) => Promise<void> | void;
 type LaunchRepositoryContext = NonNullable<ReturnType<typeof getRepositoryByName>>;
+type PersistedRunExecutionConfig = Pick<PreparedWorkflowRunLaunch, 'executionScope' | 'nodeSelector'>;
 
 type NormalizedRunLaunchRequest = {
   treeKey: string;
@@ -217,6 +222,90 @@ function normalizeLaunchNodeSelector(
 
   throw new DashboardIntegrationError('invalid_request', 'nodeSelector.type must be "next_runnable" or "node_key".', {
     status: 400,
+  });
+}
+
+function serializeRunNodeSelector(nodeSelector: DashboardRunLaunchRequest['nodeSelector']): string | null {
+  return nodeSelector === undefined ? null : JSON.stringify(nodeSelector);
+}
+
+function resolveRunExecutionConfig(
+  db: Pick<AlphredDatabase, 'select'>,
+  runId: number,
+): PersistedRunExecutionConfig {
+  const row = db
+    .select({
+      executionScope: workflowRuns.executionScope,
+      nodeSelector: workflowRuns.nodeSelector,
+    })
+    .from(workflowRuns)
+    .where(eq(workflowRuns.id, runId))
+    .get();
+
+  if (!row) {
+    throw new DashboardIntegrationError('not_found', `Workflow run id=${runId} was not found.`, {
+      status: 404,
+    });
+  }
+
+  let parsedNodeSelector: DashboardRunLaunchRequest['nodeSelector'];
+  if (row.nodeSelector === null) {
+    parsedNodeSelector = undefined;
+  } else {
+    try {
+      parsedNodeSelector = JSON.parse(row.nodeSelector) as DashboardRunLaunchRequest['nodeSelector'];
+    } catch (error) {
+      throw new DashboardIntegrationError('internal_error', `Workflow run id=${runId} has invalid node selector state.`, {
+        status: 500,
+        cause: error,
+      });
+    }
+  }
+
+  const executionScope = row.executionScope === 'single_node' ? 'single_node' : 'full';
+  return {
+    executionScope,
+    nodeSelector: normalizeLaunchNodeSelector(executionScope, parsedNodeSelector),
+  };
+}
+
+function persistRunExecutionConfig(
+  db: Pick<AlphredDatabase, 'update'>,
+  runId: number,
+  config: PersistedRunExecutionConfig,
+): void {
+  db.update(workflowRuns)
+    .set({
+      executionScope: config.executionScope,
+      nodeSelector: serializeRunNodeSelector(config.nodeSelector),
+      updatedAt: new Date().toISOString(),
+    })
+    .where(eq(workflowRuns.id, runId))
+    .run();
+}
+
+function assertStoryBreakdownRetryExclusivity(db: AlphredDatabase, runId: number): void {
+  const targetRun = loadStoryBreakdownRunIdentity(db, runId);
+  if (!targetRun) {
+    return;
+  }
+
+  const activeRun = findActiveStoryBreakdownRunForStory(db, {
+    repositoryId: targetRun.repositoryId,
+    storyId: targetRun.storyId,
+    excludeWorkflowRunId: runId,
+  });
+  if (!activeRun) {
+    return;
+  }
+
+  throw new DashboardIntegrationError('conflict', 'Story breakdown planner run is already active for this story.', {
+    status: 409,
+    details: {
+      workflowRunId: activeRun.workflowRunId,
+      runStatus: activeRun.runStatus,
+      treeKey: activeRun.treeKey,
+    },
   });
 }
 
@@ -774,6 +863,10 @@ export function createWorkflowRunLaunchCoordinator(params: {
         if (normalizedRequest.executionScope === 'single_node') {
           backgroundExecution.validateSingleNodeSelection(db, workflowRunId, normalizedRequest.nodeSelector);
         }
+        persistRunExecutionConfig(db, workflowRunId, {
+          executionScope: normalizedRequest.executionScope,
+          nodeSelector: normalizedRequest.nodeSelector,
+        });
 
         return {
           workflowRunId,
@@ -1533,6 +1626,7 @@ export function createRunOperations(params: {
               controlResult = await executor.resumeRun({ workflowRunId: runId });
               break;
             case 'retry':
+              assertStoryBreakdownRetryExclusivity(db, runId);
               controlResult = await executor.retryRun({ workflowRunId: runId });
               break;
           }
@@ -1550,12 +1644,15 @@ export function createRunOperations(params: {
 
         if ((action === 'resume' || action === 'retry') && controlResult.runStatus === 'running') {
           const executionContext = backgroundExecution.resolveRunExecutionContext(db, runId);
+          const executionConfig = resolveRunExecutionConfig(db, runId);
           const policyConstraints = runPolicyConstraintsByRunId.get(runId);
           backgroundExecution.ensureBackgroundRunExecution({
             runId,
             workingDirectory: executionContext.workingDirectory,
             hasManagedWorktree: executionContext.hasManagedWorktree,
             cleanupWorktree: false,
+            executionScope: executionConfig.executionScope,
+            nodeSelector: executionConfig.nodeSelector,
             assertRunExecutionAllowed: createRunExecutionPolicyAssertion(policyConstraints),
             onBackgroundExecutionSettled: clearRunPolicyConstraintsOnSettlement,
           });

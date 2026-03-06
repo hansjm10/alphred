@@ -247,6 +247,8 @@ export const workflowRuns = sqliteTable(
       .notNull()
       .references(() => workflowTrees.id, { onDelete: 'restrict' }),
     status: text('status').notNull().default('pending'),
+    executionScope: text('execution_scope').notNull().default('full'),
+    nodeSelector: text('node_selector'),
     startedAt: text('started_at'),
     completedAt: text('completed_at'),
     createdAt: text('created_at').notNull().default(utcNow),
@@ -256,6 +258,10 @@ export const workflowRuns = sqliteTable(
     statusCheck: check(
       'workflow_runs_status_ck',
       sql`${table.status} in ('pending', 'running', 'paused', 'completed', 'failed', 'cancelled')`,
+    ),
+    executionScopeCheck: check(
+      'workflow_runs_execution_scope_ck',
+      sql`${table.executionScope} in ('full', 'single_node')`,
     ),
     completionTimestampCheck: check(
       'workflow_runs_completion_timestamp_ck',

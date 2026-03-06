@@ -321,6 +321,144 @@ async function waitForBackgroundExecution(service: ReturnType<typeof createDashb
   }
 }
 
+function seedControlTargetRun(
+  db: AlphredDatabase,
+  params: {
+    runId?: number;
+    workflowTreeId?: number;
+    status: 'pending' | 'running' | 'paused' | 'completed' | 'failed' | 'cancelled';
+    executionScope?: 'full' | 'single_node';
+    nodeSelector?: { type: 'next_runnable' } | { type: 'node_key'; nodeKey: string };
+  },
+): number {
+  const workflowTreeId = params.workflowTreeId
+    ?? db
+      .select({ id: workflowTrees.id })
+      .from(workflowTrees)
+      .where(eq(workflowTrees.treeKey, 'demo-tree'))
+      .get()?.id;
+  if (workflowTreeId === undefined) {
+    throw new Error('Expected demo-tree workflow to exist before seeding a control target run.');
+  }
+
+  return Number(
+    db.insert(workflowRuns)
+      .values({
+        ...(params.runId === undefined ? {} : { id: params.runId }),
+        workflowTreeId,
+        status: params.status,
+        executionScope: params.executionScope ?? 'full',
+        nodeSelector: params.nodeSelector ? JSON.stringify(params.nodeSelector) : null,
+        startedAt: params.status === 'pending' ? null : '2026-02-17T20:03:00.000Z',
+        completedAt:
+          params.status === 'completed' || params.status === 'failed' || params.status === 'cancelled'
+            ? '2026-02-17T20:04:00.000Z'
+            : null,
+        createdAt: '2026-02-17T20:03:00.000Z',
+        updatedAt: '2026-02-17T20:04:00.000Z',
+      })
+      .run().lastInsertRowid,
+  );
+}
+
+function seedStoryBreakdownControlRun(
+  db: AlphredDatabase,
+  params: {
+    workflowTreeId: number;
+    repositoryId: number;
+    storyId: number;
+    status: 'pending' | 'running' | 'paused' | 'completed' | 'failed' | 'cancelled';
+  },
+): number {
+  const runId = Number(
+    db.insert(workflowRuns)
+      .values({
+        workflowTreeId: params.workflowTreeId,
+        status: params.status,
+        executionScope: 'single_node',
+        nodeSelector: JSON.stringify({
+          type: 'node_key',
+          nodeKey: DEFAULT_STORY_BREAKDOWN_NODE_KEY,
+        }),
+        startedAt: params.status === 'pending' ? null : '2026-02-17T21:00:00.000Z',
+        completedAt:
+          params.status === 'completed' || params.status === 'failed' || params.status === 'cancelled'
+            ? '2026-02-17T21:01:00.000Z'
+            : null,
+        createdAt: '2026-02-17T21:00:00.000Z',
+        updatedAt: '2026-02-17T21:01:00.000Z',
+      })
+      .run().lastInsertRowid,
+  );
+
+  const treeNodeId = db
+    .select({
+      id: treeNodes.id,
+    })
+    .from(treeNodes)
+    .where(and(eq(treeNodes.workflowTreeId, params.workflowTreeId), eq(treeNodes.nodeKey, DEFAULT_STORY_BREAKDOWN_NODE_KEY)))
+    .get()?.id;
+  if (treeNodeId === undefined) {
+    throw new Error('Expected the story-breakdown planner node to exist before seeding a planner control run.');
+  }
+
+  const runNodeId = Number(
+    db.insert(runNodes)
+      .values({
+        workflowRunId: runId,
+        treeNodeId,
+        nodeKey: DEFAULT_STORY_BREAKDOWN_NODE_KEY,
+        nodeRole: 'standard',
+        nodeType: 'agent',
+        provider: 'codex',
+        model: 'gpt-5.3-codex',
+        prompt: 'Return exactly one JSON object.',
+        promptContentType: 'markdown',
+        maxRetries: 0,
+        sequenceIndex: 0,
+        attempt: 1,
+        status: 'pending',
+        startedAt: null,
+        completedAt: null,
+        createdAt: '2026-02-17T21:00:00.000Z',
+        updatedAt: '2026-02-17T21:01:00.000Z',
+      })
+      .run().lastInsertRowid,
+  );
+
+  db.insert(workflowRunAssociations)
+    .values({
+      workflowRunId: runId,
+      repositoryId: params.repositoryId,
+      workItemId: params.storyId,
+      createdAt: '2026-02-17T21:00:00.000Z',
+    })
+    .run();
+
+  db.insert(phaseArtifacts)
+    .values({
+      workflowRunId: runId,
+      runNodeId,
+      artifactType: 'note',
+      contentType: 'json',
+      content: JSON.stringify({
+        schemaVersion: 1,
+        kind: 'story_breakdown_launch_context_v1',
+        story: {
+          id: params.storyId,
+        },
+      }),
+      metadata: {
+        kind: 'story_breakdown_launch_context_v1',
+        storyId: params.storyId,
+      },
+      createdAt: '2026-02-17T21:00:00.000Z',
+    })
+    .run();
+
+  return runId;
+}
+
 function createDatabaseWithWorkflowTreeInsertUniqueRace(db: AlphredDatabase): {
   proxiedDatabase: AlphredDatabase;
   wasInjected: () => boolean;
@@ -499,7 +637,14 @@ describe('createDashboardService', () => {
       },
     });
     expect(executeRun).not.toHaveBeenCalled();
-    expect(validateSingleNodeSelection).not.toHaveBeenCalled();
+    expect(validateSingleNodeSelection).toHaveBeenCalledTimes(1);
+    expect(validateSingleNodeSelection).toHaveBeenCalledWith({
+      workflowRunId: result.workflowRunId,
+      nodeSelector: {
+        type: 'node_key',
+        nodeKey: 'design',
+      },
+    });
   });
 
   it('validates selector before enqueuing async single-node launches', async () => {
@@ -1872,20 +2017,43 @@ describe('createDashboardService', () => {
     const workflows = await service.listWorkflowTrees();
     expect(workflows).toEqual([]);
 
-    const snapshot = await service.getWorkflowTreeSnapshot(DEFAULT_STORY_BREAKDOWN_TREE_KEY);
-    expect(snapshot.status).toBe('published');
-    expect(snapshot.initialRunnableNodeKeys).toEqual([DEFAULT_STORY_BREAKDOWN_NODE_KEY]);
-    expect(snapshot.edges).toEqual([]);
-    expect(snapshot.nodes).toEqual([
-      expect.objectContaining({
-        nodeKey: DEFAULT_STORY_BREAKDOWN_NODE_KEY,
-        displayName: 'Breakdown',
-        nodeType: 'agent',
-        provider: 'codex',
-      }),
-    ]);
-    expect(snapshot.nodes[0]?.promptTemplate?.content).toContain('"resultType": "story_breakdown_result"');
-    expect(snapshot.nodes[0]?.promptTemplate?.content).toContain('Return exactly one JSON object');
+    const catalog = await service.listWorkflowCatalog();
+    expect(catalog).toEqual([]);
+
+    await expect(service.getWorkflowTreeSnapshot(DEFAULT_STORY_BREAKDOWN_TREE_KEY)).rejects.toMatchObject({
+      name: 'DashboardIntegrationError',
+      code: 'not_found',
+      status: 404,
+    });
+    await expect(service.getOrCreateWorkflowDraft(DEFAULT_STORY_BREAKDOWN_TREE_KEY)).rejects.toMatchObject({
+      name: 'DashboardIntegrationError',
+      code: 'not_found',
+      status: 404,
+    });
+    try {
+      service.listPublishedTreeNodes(DEFAULT_STORY_BREAKDOWN_TREE_KEY);
+      throw new Error('Expected listPublishedTreeNodes to reject hidden workflow access.');
+    } catch (error) {
+      expect(error).toMatchObject({
+        name: 'DashboardIntegrationError',
+        code: 'not_found',
+        status: 404,
+      });
+    }
+    await expect(service.isWorkflowTreeKeyAvailable(DEFAULT_STORY_BREAKDOWN_TREE_KEY)).resolves.toEqual({
+      treeKey: DEFAULT_STORY_BREAKDOWN_TREE_KEY,
+      available: false,
+    });
+
+    const prompt = db
+      .select({
+        content: promptTemplates.content,
+      })
+      .from(promptTemplates)
+      .where(eq(promptTemplates.templateKey, `${DEFAULT_STORY_BREAKDOWN_TREE_KEY}/v1/${DEFAULT_STORY_BREAKDOWN_NODE_KEY}/prompt`))
+      .get();
+    expect(prompt?.content).toContain('"resultType": "story_breakdown_result"');
+    expect(prompt?.content).toContain('Return exactly one JSON object');
 
     const storedTrees = db
       .select({
@@ -1909,7 +2077,11 @@ describe('createDashboardService', () => {
 
     await service.listWorkflowTrees();
     await service.listWorkflowTrees();
-    await service.getWorkflowTreeSnapshot(DEFAULT_STORY_BREAKDOWN_TREE_KEY);
+    await service.listWorkflowCatalog();
+    await expect(service.getWorkflowTreeSnapshot(DEFAULT_STORY_BREAKDOWN_TREE_KEY)).rejects.toMatchObject({
+      code: 'not_found',
+      status: 404,
+    });
 
     const storedTrees = db
       .select({
@@ -3515,20 +3687,17 @@ describe('createDashboardService', () => {
     const { dependencies } = createHarness();
     const service = createDashboardService({ dependencies });
 
-    try {
+    await expect(
       service.launchWorkflowRun({
         treeKey: 'demo-tree',
         repositoryName,
-      });
-      throw new Error('Expected launchWorkflowRun to throw for empty repositoryName input.');
-    } catch (error) {
-      expect(error).toMatchObject({
-        name: 'DashboardIntegrationError',
-        code: 'invalid_request',
-        status: 400,
-        message: 'repositoryName cannot be empty when provided.',
-      });
-    }
+      }),
+    ).rejects.toMatchObject({
+      name: 'DashboardIntegrationError',
+      code: 'invalid_request',
+      status: 400,
+      message: 'repositoryName cannot be empty when provided.',
+    });
   });
 
   it('persists run launch associations and threads issueId into worktree creation context', async () => {
@@ -3676,17 +3845,12 @@ describe('createDashboardService', () => {
     const { dependencies } = createHarness();
     const service = createDashboardService({ dependencies });
 
-    try {
-      service.launchWorkflowRun({ treeKey: 'demo-tree', workItemId: 1 });
-      throw new Error('Expected launchWorkflowRun to reject when workItemId is used without repositoryName.');
-    } catch (error) {
-      expect(error).toMatchObject({
-        name: 'DashboardIntegrationError',
-        code: 'invalid_request',
-        status: 400,
-        message: 'workItemId requires repositoryName so run association can be validated.',
-      });
-    }
+    await expect(service.launchWorkflowRun({ treeKey: 'demo-tree', workItemId: 1 })).rejects.toMatchObject({
+      name: 'DashboardIntegrationError',
+      code: 'invalid_request',
+      status: 400,
+      message: 'workItemId requires repositoryName so run association can be validated.',
+    });
   });
 
   it('returns not_found when launch association references a missing work item', async () => {
@@ -3787,73 +3951,64 @@ describe('createDashboardService', () => {
     expect(createRunWorktreeMock).not.toHaveBeenCalled();
   });
 
-  it('rejects invalid executionMode input when launching runs', () => {
+  it('rejects invalid executionMode input when launching runs', async () => {
     const { dependencies } = createHarness();
     const service = createDashboardService({ dependencies });
 
-    try {
+    await expect(
       service.launchWorkflowRun({
         treeKey: 'demo-tree',
         executionMode: 'queued' as unknown as 'async',
-      });
-      throw new Error('Expected launchWorkflowRun to throw for invalid executionMode input.');
-    } catch (error) {
-      expect(error).toMatchObject({
-        name: 'DashboardIntegrationError',
-        code: 'invalid_request',
-        status: 400,
-        message: 'executionMode must be "async" or "sync".',
-      });
-    }
+      }),
+    ).rejects.toMatchObject({
+      name: 'DashboardIntegrationError',
+      code: 'invalid_request',
+      status: 400,
+      message: 'executionMode must be "async" or "sync".',
+    });
   });
 
-  it('rejects invalid executionScope input when launching runs', () => {
+  it('rejects invalid executionScope input when launching runs', async () => {
     const { dependencies } = createHarness();
     const service = createDashboardService({ dependencies });
 
-    try {
+    await expect(
       service.launchWorkflowRun({
         treeKey: 'demo-tree',
         executionScope: 'partial' as unknown as 'full',
-      });
-      throw new Error('Expected launchWorkflowRun to throw for invalid executionScope input.');
-    } catch (error) {
-      expect(error).toMatchObject({
-        name: 'DashboardIntegrationError',
-        code: 'invalid_request',
-        status: 400,
-        message: 'executionScope must be "full" or "single_node".',
-      });
-    }
+      }),
+    ).rejects.toMatchObject({
+      name: 'DashboardIntegrationError',
+      code: 'invalid_request',
+      status: 400,
+      message: 'executionScope must be "full" or "single_node".',
+    });
   });
 
-  it('rejects nodeSelector when executionScope is not single_node', () => {
+  it('rejects nodeSelector when executionScope is not single_node', async () => {
     const { dependencies } = createHarness();
     const service = createDashboardService({ dependencies });
 
-    try {
+    await expect(
       service.launchWorkflowRun({
         treeKey: 'demo-tree',
         nodeSelector: {
           type: 'next_runnable',
         },
-      });
-      throw new Error('Expected launchWorkflowRun to throw when nodeSelector is used outside single_node scope.');
-    } catch (error) {
-      expect(error).toMatchObject({
-        name: 'DashboardIntegrationError',
-        code: 'invalid_request',
-        status: 400,
-        message: 'nodeSelector requires executionScope "single_node".',
-      });
-    }
+      }),
+    ).rejects.toMatchObject({
+      name: 'DashboardIntegrationError',
+      code: 'invalid_request',
+      status: 400,
+      message: 'nodeSelector requires executionScope "single_node".',
+    });
   });
 
-  it('rejects empty nodeSelector.nodeKey values for single-node launches', () => {
+  it('rejects empty nodeSelector.nodeKey values for single-node launches', async () => {
     const { dependencies } = createHarness();
     const service = createDashboardService({ dependencies });
 
-    try {
+    await expect(
       service.launchWorkflowRun({
         treeKey: 'demo-tree',
         executionScope: 'single_node',
@@ -3861,23 +4016,20 @@ describe('createDashboardService', () => {
           type: 'node_key',
           nodeKey: '   ',
         },
-      });
-      throw new Error('Expected launchWorkflowRun to throw when nodeSelector.nodeKey is empty.');
-    } catch (error) {
-      expect(error).toMatchObject({
-        name: 'DashboardIntegrationError',
-        code: 'invalid_request',
-        status: 400,
-        message: 'nodeSelector.nodeKey cannot be empty.',
-      });
-    }
+      }),
+    ).rejects.toMatchObject({
+      name: 'DashboardIntegrationError',
+      code: 'invalid_request',
+      status: 400,
+      message: 'nodeSelector.nodeKey cannot be empty.',
+    });
   });
 
-  it('rejects unsupported nodeSelector types for single-node launches', () => {
+  it('rejects unsupported nodeSelector types for single-node launches', async () => {
     const { dependencies } = createHarness();
     const service = createDashboardService({ dependencies });
 
-    try {
+    await expect(
       service.launchWorkflowRun({
         treeKey: 'demo-tree',
         executionScope: 'single_node',
@@ -3886,16 +4038,13 @@ describe('createDashboardService', () => {
         } as unknown as {
           type: 'next_runnable';
         },
-      });
-      throw new Error('Expected launchWorkflowRun to throw when nodeSelector.type is unsupported.');
-    } catch (error) {
-      expect(error).toMatchObject({
-        name: 'DashboardIntegrationError',
-        code: 'invalid_request',
-        status: 400,
-        message: 'nodeSelector.type must be "next_runnable" or "node_key".',
-      });
-    }
+      }),
+    ).rejects.toMatchObject({
+      name: 'DashboardIntegrationError',
+      code: 'invalid_request',
+      status: 400,
+      message: 'nodeSelector.type must be "next_runnable" or "node_key".',
+    });
   });
 
   it('maps single-node selector validation failures to invalid_request errors', async () => {
@@ -4182,6 +4331,80 @@ describe('createDashboardService', () => {
     });
   });
 
+  it('rejects retry for a failed story-breakdown run when another breakdown run is already active for the story', async () => {
+    const retryRun = vi.fn(async (params: { workflowRunId: number }) => ({
+      action: 'retry' as const,
+      outcome: 'applied' as const,
+      workflowRunId: params.workflowRunId,
+      previousRunStatus: 'failed' as const,
+      runStatus: 'running' as const,
+      retriedRunNodeIds: [] as number[],
+    }));
+
+    const { db, dependencies } = createHarness({
+      createSqlWorkflowExecutor: () =>
+        ({
+          executeRun: vi.fn(),
+          cancelRun: vi.fn(),
+          pauseRun: vi.fn(),
+          resumeRun: vi.fn(),
+          retryRun,
+        }) as unknown as ReturnType<DashboardServiceDependencies['createSqlWorkflowExecutor']>,
+    });
+    seedRunData(db);
+
+    const storyId = Number(
+      db.insert(workItems)
+        .values({
+          repositoryId: 1,
+          type: 'story',
+          status: 'NeedsBreakdown',
+          title: 'Retry conflict story',
+        })
+        .run().lastInsertRowid,
+    );
+
+    const service = createDashboardService({ dependencies });
+    await service.listWorkflowTrees();
+
+    const plannerTree = db
+      .select({
+        id: workflowTrees.id,
+      })
+      .from(workflowTrees)
+      .where(eq(workflowTrees.treeKey, DEFAULT_STORY_BREAKDOWN_TREE_KEY))
+      .get();
+    if (!plannerTree) {
+      throw new Error('Expected the story-breakdown planner tree to be bootstrapped.');
+    }
+
+    const failedRunId = seedStoryBreakdownControlRun(db, {
+      workflowTreeId: plannerTree.id,
+      repositoryId: 1,
+      storyId,
+      status: 'failed',
+    });
+    const activeRunId = seedStoryBreakdownControlRun(db, {
+      workflowTreeId: plannerTree.id,
+      repositoryId: 1,
+      storyId,
+      status: 'running',
+    });
+
+    await expect(service.controlWorkflowRun(failedRunId, 'retry')).rejects.toMatchObject({
+      name: 'DashboardIntegrationError',
+      code: 'conflict',
+      status: 409,
+      message: 'Story breakdown planner run is already active for this story.',
+      details: {
+        workflowRunId: activeRunId,
+        runStatus: 'running',
+        treeKey: DEFAULT_STORY_BREAKDOWN_TREE_KEY,
+      },
+    });
+    expect(retryRun).not.toHaveBeenCalled();
+  });
+
   it('starts a background execution for resume control when run transitions back to running', async () => {
     const resumeRun = vi.fn(async () => ({
       action: 'resume' as const,
@@ -4202,7 +4425,7 @@ describe('createDashboardService', () => {
       };
     });
 
-    const { dependencies } = createHarness({
+    const { db, dependencies } = createHarness({
       createSqlWorkflowExecutor: () =>
         ({
           executeRun,
@@ -4211,6 +4434,12 @@ describe('createDashboardService', () => {
           resumeRun,
           retryRun: vi.fn(),
         }) as unknown as ReturnType<DashboardServiceDependencies['createSqlWorkflowExecutor']>,
+    });
+    seedRunData(db);
+    seedControlTargetRun(db, {
+      runId: 77,
+      status: 'paused',
+      executionScope: 'full',
     });
     const service = createDashboardService({ dependencies });
 
@@ -4234,6 +4463,79 @@ describe('createDashboardService', () => {
     expect(executeRun).toHaveBeenCalledTimes(1);
     expect(service.hasBackgroundExecution(77)).toBe(false);
   });
+
+  for (const controlAction of ['resume', 'retry'] as const) {
+    it(`restarts persisted single-node runs with executeSingleNode on ${controlAction}`, async () => {
+      const executeRun = vi.fn(async () => ({
+        finalStep: {
+          runStatus: 'completed',
+          outcome: 'completed',
+        },
+        executedNodes: 1,
+      }));
+      const executeSingleNode = vi.fn(async () => ({
+        finalStep: {
+          runStatus: 'completed',
+          outcome: 'run_terminal',
+        },
+        executedNodes: 1,
+      }));
+      const resumeRun = vi.fn(async (params: { workflowRunId: number }) => ({
+        action: 'resume' as const,
+        outcome: 'applied' as const,
+        workflowRunId: params.workflowRunId,
+        previousRunStatus: 'paused' as const,
+        runStatus: 'running' as const,
+        retriedRunNodeIds: [] as number[],
+      }));
+      const retryRun = vi.fn(async (params: { workflowRunId: number }) => ({
+        action: 'retry' as const,
+        outcome: 'applied' as const,
+        workflowRunId: params.workflowRunId,
+        previousRunStatus: 'failed' as const,
+        runStatus: 'running' as const,
+        retriedRunNodeIds: [] as number[],
+      }));
+
+      const { db, dependencies } = createHarness({
+        createSqlWorkflowExecutor: () =>
+          ({
+            executeRun,
+            executeSingleNode,
+            cancelRun: vi.fn(),
+            pauseRun: vi.fn(),
+            resumeRun,
+            retryRun,
+          }) as unknown as ReturnType<DashboardServiceDependencies['createSqlWorkflowExecutor']>,
+      });
+      seedRunData(db);
+      const runId = seedControlTargetRun(db, {
+        status: controlAction === 'resume' ? 'paused' : 'failed',
+        executionScope: 'single_node',
+        nodeSelector: {
+          type: 'node_key',
+          nodeKey: 'design',
+        },
+      });
+
+      const service = createDashboardService({ dependencies });
+      await service.controlWorkflowRun(runId, controlAction);
+      await waitForBackgroundExecution(service, runId);
+
+      expect(executeSingleNode).toHaveBeenCalledTimes(1);
+      expect(executeSingleNode).toHaveBeenCalledWith({
+        workflowRunId: runId,
+        options: {
+          workingDirectory: process.cwd(),
+        },
+        nodeSelector: {
+          type: 'node_key',
+          nodeKey: 'design',
+        },
+      });
+      expect(executeRun).not.toHaveBeenCalled();
+    });
+  }
 
   for (const controlAction of ['resume', 'retry'] as const) {
     it(`reapplies launch policy assertions when ${controlAction} restarts background execution`, async () => {
@@ -4454,7 +4756,7 @@ describe('createDashboardService', () => {
       };
     });
 
-    const { dependencies } = createHarness({
+    const { db, dependencies } = createHarness({
       createSqlWorkflowExecutor: () =>
         ({
           executeRun,
@@ -4463,6 +4765,12 @@ describe('createDashboardService', () => {
           resumeRun,
           retryRun: vi.fn(),
         }) as unknown as ReturnType<DashboardServiceDependencies['createSqlWorkflowExecutor']>,
+    });
+    seedRunData(db);
+    seedControlTargetRun(db, {
+      runId: 88,
+      status: 'paused',
+      executionScope: 'full',
     });
     const service = createDashboardService({ dependencies });
 

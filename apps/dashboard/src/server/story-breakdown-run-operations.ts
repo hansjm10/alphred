@@ -28,6 +28,10 @@ import {
 } from './dashboard-default-workflows';
 import { DashboardIntegrationError } from './dashboard-errors';
 import type { PreparedWorkflowRunLaunch } from './run-operations';
+import {
+  findActiveStoryBreakdownRunForStory,
+  STORY_BREAKDOWN_LAUNCH_CONTEXT_ARTIFACT_KIND,
+} from './story-breakdown-run-state';
 const STORY_BREAKDOWN_RESULT_SCHEMA_VERSION = 1;
 const STORY_BREAKDOWN_RESULT_TYPE = 'story_breakdown_result';
 
@@ -101,8 +105,6 @@ type PersistedPlannerRunContext = {
   treeKey: string;
   nodeKey: string | null;
 };
-
-const STORY_BREAKDOWN_LAUNCH_CONTEXT_ARTIFACT_KIND = 'story_breakdown_launch_context_v1';
 
 type StoryBreakdownLaunchContext = {
   storyId: number;
@@ -646,6 +648,7 @@ function loadPlannerNodeExecutionContext(
         eq(phaseArtifacts.workflowRunId, workflowRunId),
         eq(phaseArtifacts.runNodeId, plannerNode.runNodeId),
         eq(phaseArtifacts.artifactType, 'report'),
+        sql`json_extract(${phaseArtifacts.metadata}, '$.attempt') = ${plannerNode.attempt}`,
       ),
     )
     .orderBy(desc(phaseArtifacts.createdAt), desc(phaseArtifacts.id))
@@ -662,6 +665,7 @@ function loadPlannerNodeExecutionContext(
         eq(phaseArtifacts.workflowRunId, workflowRunId),
         eq(phaseArtifacts.runNodeId, plannerNode.runNodeId),
         eq(phaseArtifacts.artifactType, 'log'),
+        sql`json_extract(${phaseArtifacts.metadata}, '$.attempt') = ${plannerNode.attempt}`,
       ),
     )
     .orderBy(desc(phaseArtifacts.createdAt), desc(phaseArtifacts.id))
@@ -674,7 +678,11 @@ function loadPlannerNodeExecutionContext(
     })
     .from(runNodeDiagnostics)
     .where(
-      and(eq(runNodeDiagnostics.workflowRunId, workflowRunId), eq(runNodeDiagnostics.runNodeId, plannerNode.runNodeId)),
+      and(
+        eq(runNodeDiagnostics.workflowRunId, workflowRunId),
+        eq(runNodeDiagnostics.runNodeId, plannerNode.runNodeId),
+        eq(runNodeDiagnostics.attempt, plannerNode.attempt),
+      ),
     )
     .orderBy(desc(runNodeDiagnostics.attempt), desc(runNodeDiagnostics.id))
     .get();
@@ -787,32 +795,10 @@ export function createStoryBreakdownRunOperations(params: {
             );
           }
 
-          const activeRun = db
-            .select({
-              workflowRunId: workflowRuns.id,
-              runStatus: workflowRuns.status,
-              treeKey: workflowTrees.treeKey,
-            })
-            .from(workflowRunAssociations)
-            .innerJoin(workflowRuns, eq(workflowRunAssociations.workflowRunId, workflowRuns.id))
-            .innerJoin(workflowTrees, eq(workflowRuns.workflowTreeId, workflowTrees.id))
-            .innerJoin(
-              phaseArtifacts,
-              and(
-                eq(phaseArtifacts.workflowRunId, workflowRuns.id),
-                eq(phaseArtifacts.artifactType, 'note'),
-                sql`coalesce(json_extract(${phaseArtifacts.metadata}, '$.kind'), '') = ${STORY_BREAKDOWN_LAUNCH_CONTEXT_ARTIFACT_KIND}`,
-              ),
-            )
-            .where(
-              and(
-                eq(workflowRunAssociations.repositoryId, repositoryId),
-                eq(workflowRunAssociations.workItemId, storyId),
-                sql`${workflowRuns.status} in ('pending', 'running', 'paused')`,
-              ),
-            )
-            .orderBy(desc(workflowRuns.id))
-            .get();
+          const activeRun = findActiveStoryBreakdownRunForStory(db, {
+            repositoryId,
+            storyId,
+          });
 
           if (activeRun) {
             throw new DashboardIntegrationError('conflict', 'Story breakdown planner run is already active for this story.', {

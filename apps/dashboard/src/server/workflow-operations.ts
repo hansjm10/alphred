@@ -24,9 +24,9 @@ import type {
   DashboardWorkflowTreeSnapshot,
   DashboardWorkflowTreeSummary,
 } from './dashboard-contracts';
-import { DEFAULT_STORY_BREAKDOWN_TREE_KEY } from './dashboard-default-workflows';
 import { DashboardIntegrationError } from './dashboard-errors';
 import { loadDraftTopologyByTreeId } from './workflow-draft-operations';
+import { assertWorkflowTreeIsPublic, isHiddenWorkflowTreeKey } from './workflow-visibility';
 import {
   isWorkflowTreeUniqueConstraintError,
   normalizeExecutionPermissions,
@@ -35,7 +35,6 @@ import {
 } from './workflow-validation';
 
 const utcNow = sql`(strftime('%Y-%m-%dT%H:%M:%fZ','now'))`;
-const hiddenWorkflowTreeKeys = new Set([DEFAULT_STORY_BREAKDOWN_TREE_KEY]);
 
 type WithDatabase = <T>(operation: (db: AlphredDatabase) => Promise<T> | T) => Promise<T>;
 
@@ -83,7 +82,7 @@ export function createWorkflowOperations(params: {
         const seen = new Set<string>();
         const workflows: DashboardWorkflowTreeSummary[] = [];
         for (const row of rows) {
-          if (seen.has(row.treeKey) || hiddenWorkflowTreeKeys.has(row.treeKey)) {
+          if (seen.has(row.treeKey) || isHiddenWorkflowTreeKey(row.treeKey)) {
             continue;
           }
           seen.add(row.treeKey);
@@ -111,6 +110,9 @@ export function createWorkflowOperations(params: {
 
         const catalogByKey = new Map<string, DashboardWorkflowCatalogItem>();
         for (const row of rows) {
+          if (isHiddenWorkflowTreeKey(row.treeKey)) {
+            continue;
+          }
           const existing = catalogByKey.get(row.treeKey);
           if (!existing) {
             catalogByKey.set(row.treeKey, {
@@ -153,6 +155,12 @@ export function createWorkflowOperations(params: {
 
     isWorkflowTreeKeyAvailable(treeKeyRaw: string): Promise<DashboardWorkflowTreeKeyAvailability> {
       const treeKey = normalizeWorkflowTreeKey(treeKeyRaw);
+      if (isHiddenWorkflowTreeKey(treeKey)) {
+        return Promise.resolve({
+          treeKey,
+          available: false,
+        });
+      }
 
       return withDatabase(async db => {
         const existing = db
@@ -171,6 +179,7 @@ export function createWorkflowOperations(params: {
 
     async getWorkflowTreeSnapshot(treeKeyRaw: string): Promise<DashboardWorkflowTreeSnapshot> {
       const treeKey = normalizeWorkflowTreeKey(treeKeyRaw);
+      assertWorkflowTreeIsPublic(treeKey);
 
       return withDatabase(async db => {
         const draft = db
@@ -229,6 +238,7 @@ export function createWorkflowOperations(params: {
 
     async getWorkflowTreeVersionSnapshot(treeKeyRaw: string, version: number): Promise<DashboardWorkflowTreeSnapshot> {
       const treeKey = normalizeWorkflowTreeKey(treeKeyRaw);
+      assertWorkflowTreeIsPublic(treeKey);
       if (!Number.isInteger(version) || version < 1) {
         throw new DashboardIntegrationError('invalid_request', 'Workflow version must be a positive integer.', {
           status: 400,
@@ -273,6 +283,7 @@ export function createWorkflowOperations(params: {
 
     listPublishedTreeNodes(treeKeyRaw: string): Promise<DashboardWorkflowNodeOption[]> {
       const treeKey = normalizeWorkflowTreeKey(treeKeyRaw);
+      assertWorkflowTreeIsPublic(treeKey);
 
       return withDatabase(async db => {
         const published = db
@@ -310,6 +321,7 @@ export function createWorkflowOperations(params: {
       request: DashboardDuplicateWorkflowRequest,
     ): Promise<DashboardDuplicateWorkflowResult> {
       const sourceTreeKey = normalizeWorkflowTreeKey(sourceTreeKeyRaw);
+      assertWorkflowTreeIsPublic(sourceTreeKey);
 
       const name = request.name.trim();
       if (name.length === 0) {
@@ -317,6 +329,7 @@ export function createWorkflowOperations(params: {
       }
 
       const treeKey = normalizeWorkflowTreeKey(request.treeKey);
+      assertWorkflowTreeIsPublic(treeKey);
       const description = request.description?.trim() ?? null;
 
       return withDatabase(async db =>
@@ -495,6 +508,7 @@ export function createWorkflowOperations(params: {
       request: DashboardPublishWorkflowDraftRequest,
     ): Promise<DashboardWorkflowTreeSummary> {
       const treeKey = normalizeWorkflowTreeKey(treeKeyRaw);
+      assertWorkflowTreeIsPublic(treeKey);
       if (!Number.isInteger(version) || version < 1) {
         throw new DashboardIntegrationError('invalid_request', 'Workflow version must be a positive integer.', {
           status: 400,

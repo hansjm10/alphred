@@ -297,12 +297,16 @@ export function migrateDatabase(db: AlphredDatabase): void {
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     workflow_tree_id INTEGER NOT NULL REFERENCES workflow_trees(id) ON DELETE RESTRICT,
     status TEXT NOT NULL DEFAULT 'pending',
+    execution_scope TEXT NOT NULL DEFAULT 'full',
+    node_selector TEXT,
     started_at TEXT,
     completed_at TEXT,
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
     updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
     CONSTRAINT workflow_runs_status_ck
       CHECK (status IN ('pending', 'running', 'paused', 'completed', 'failed', 'cancelled')),
+    CONSTRAINT workflow_runs_execution_scope_ck
+      CHECK (execution_scope IN ('full', 'single_node')),
     CONSTRAINT workflow_runs_completion_timestamp_ck
       CHECK (
         (status IN ('pending', 'running', 'paused') AND completed_at IS NULL)
@@ -310,6 +314,14 @@ export function migrateDatabase(db: AlphredDatabase): void {
         (status IN ('completed', 'failed', 'cancelled') AND completed_at IS NOT NULL)
       )
   )`);
+  addColumnIfMissing(tx, {
+    existsQuery: sql`SELECT COUNT(*) AS count FROM pragma_table_info('workflow_runs') WHERE name = 'execution_scope'`,
+    alterQuery: sql`ALTER TABLE workflow_runs ADD COLUMN execution_scope TEXT NOT NULL DEFAULT 'full'`,
+  });
+  addColumnIfMissing(tx, {
+    existsQuery: sql`SELECT COUNT(*) AS count FROM pragma_table_info('workflow_runs') WHERE name = 'node_selector'`,
+    alterQuery: sql`ALTER TABLE workflow_runs ADD COLUMN node_selector TEXT`,
+  });
   tx.run(sql`CREATE INDEX IF NOT EXISTS workflow_runs_created_at_idx
     ON workflow_runs(created_at)`);
 

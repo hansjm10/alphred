@@ -23,6 +23,7 @@ import type {
   DashboardSaveWorkflowDraftRequest,
 } from './dashboard-contracts';
 import { DashboardIntegrationError } from './dashboard-errors';
+import { assertWorkflowTreeIsPublic } from './workflow-visibility';
 import {
   computeInitialRunnableNodeKeys,
   isWorkflowTreeUniqueConstraintError,
@@ -368,6 +369,7 @@ export function createWorkflowDraftOperations(params: {
 
     async getOrCreateWorkflowDraft(treeKeyRaw: string): Promise<DashboardWorkflowDraftTopology> {
       const treeKey = normalizeWorkflowTreeKey(treeKeyRaw);
+      assertWorkflowTreeIsPublic(treeKey);
 
       return withDatabase(async db => {
         const catalog = loadAgentCatalog(db);
@@ -677,6 +679,7 @@ export function createWorkflowDraftOperations(params: {
       request: DashboardSaveWorkflowDraftRequest,
     ): Promise<DashboardWorkflowDraftTopology> {
       const treeKey = normalizeWorkflowTreeKey(treeKeyRaw);
+      assertWorkflowTreeIsPublic(treeKey);
       if (!Number.isInteger(version) || version < 1) {
         throw new DashboardIntegrationError('invalid_request', 'Workflow version must be a positive integer.', {
           status: 400,
@@ -914,6 +917,7 @@ export function createWorkflowDraftOperations(params: {
 
     async validateWorkflowDraft(treeKeyRaw: string, version: number): Promise<DashboardWorkflowValidationResult> {
       const treeKey = normalizeWorkflowTreeKey(treeKeyRaw);
+      assertWorkflowTreeIsPublic(treeKey);
       if (!Number.isInteger(version) || version < 1) {
         throw new DashboardIntegrationError('invalid_request', 'Workflow version must be a positive integer.', {
           status: 400,
