@@ -268,7 +268,11 @@ describe('story workspace operations', () => {
   it('cleans up a story workspace and marks it removed', async () => {
     const db = createMigratedDb();
     const seed = seedRepositoryAndStory(db, { storyStatus: 'Approved' });
-    const removeWorktreeMock = vi.fn(async () => undefined);
+    let worktreeRegistered = true;
+    let workspacePathExists = true;
+    const removeWorktreeMock = vi.fn(async () => {
+      worktreeRegistered = false;
+    });
     const deleteBranchMock = vi.fn(async () => undefined);
 
     insertStoryWorkspace(db, {
@@ -284,7 +288,21 @@ describe('story workspace operations', () => {
     const operations = createStoryWorkspaceOperations({
       withDatabase: createWithDatabase(db),
       dependencies: createDependencies(seed.repository, {
+        listWorktrees: async () =>
+          worktreeRegistered
+            ? [
+                {
+                  path: '/tmp/alphred/worktrees/alphred-story-1-a1b2c3',
+                  branch: 'alphred/story/1-a1b2c3',
+                  commit: 'abc123',
+                },
+              ]
+            : [],
         removeWorktree: removeWorktreeMock,
+        pathExists: async () => workspacePathExists,
+        removePath: async () => {
+          workspacePathExists = false;
+        },
         deleteBranch: deleteBranchMock,
         now: () => '2026-03-06T01:10:00.000Z',
       }),
@@ -308,9 +326,177 @@ describe('story workspace operations', () => {
     });
   });
 
+  it('rejects cleanup when git still reports the worktree after removal fails', async () => {
+    const db = createMigratedDb();
+    const seed = seedRepositoryAndStory(db, { storyStatus: 'Approved' });
+    let workspacePathExists = true;
+    const deleteBranchMock = vi.fn(async () => undefined);
+
+    insertStoryWorkspace(db, {
+      repositoryId: seed.repositoryId,
+      storyWorkItemId: seed.storyId,
+      worktreePath: '/tmp/alphred/worktrees/alphred-story-1-a1b2c3',
+      branch: 'alphred/story/1-a1b2c3',
+      baseBranch: 'main',
+      baseCommitHash: 'abc123',
+      occurredAt: '2026-03-05T10:00:00.000Z',
+    });
+
+    const operations = createStoryWorkspaceOperations({
+      withDatabase: createWithDatabase(db),
+      dependencies: createDependencies(seed.repository, {
+        listWorktrees: async () => [
+          {
+            path: '/tmp/alphred/worktrees/alphred-story-1-a1b2c3',
+            branch: 'alphred/story/1-a1b2c3',
+            commit: 'abc123',
+          },
+        ],
+        removeWorktree: async () => {
+          throw new Error('git remove failed');
+        },
+        pathExists: async () => workspacePathExists,
+        removePath: async () => {
+          workspacePathExists = false;
+        },
+        deleteBranch: deleteBranchMock,
+      }),
+      environment: createTestEnvironment(),
+    });
+
+    await expect(
+      operations.cleanupStoryWorkspace({
+        repositoryId: seed.repositoryId,
+        storyId: seed.storyId,
+      }),
+    ).rejects.toMatchObject({
+      code: 'conflict',
+      status: 409,
+      message: `Unable to clean up story workspace for story id=${seed.storyId}.`,
+    });
+
+    expect(deleteBranchMock).not.toHaveBeenCalled();
+    expect(getStoryWorkspaceByStoryWorkItemId(db, seed.storyId)).toMatchObject({
+      status: 'active',
+      removedAt: null,
+    });
+  });
+
+  it('retires a workspace when git removal errors but verification shows it is already gone', async () => {
+    const db = createMigratedDb();
+    const seed = seedRepositoryAndStory(db, { storyStatus: 'Approved' });
+    let workspacePathExists = true;
+    let listCalls = 0;
+
+    insertStoryWorkspace(db, {
+      repositoryId: seed.repositoryId,
+      storyWorkItemId: seed.storyId,
+      worktreePath: '/tmp/alphred/worktrees/alphred-story-1-a1b2c3',
+      branch: 'alphred/story/1-a1b2c3',
+      baseBranch: 'main',
+      baseCommitHash: 'abc123',
+      occurredAt: '2026-03-05T10:00:00.000Z',
+    });
+
+    const operations = createStoryWorkspaceOperations({
+      withDatabase: createWithDatabase(db),
+      dependencies: createDependencies(seed.repository, {
+        listWorktrees: async () => {
+          listCalls += 1;
+          return listCalls === 1
+            ? [
+                {
+                  path: '/tmp/alphred/worktrees/alphred-story-1-a1b2c3',
+                  branch: 'alphred/story/1-a1b2c3',
+                  commit: 'abc123',
+                },
+              ]
+            : [];
+        },
+        removeWorktree: async () => {
+          throw new Error('git remove reported failure');
+        },
+        pathExists: async () => workspacePathExists,
+        removePath: async () => {
+          workspacePathExists = false;
+        },
+        now: () => '2026-03-06T01:12:00.000Z',
+      }),
+      environment: createTestEnvironment(),
+    });
+
+    const cleaned = await operations.cleanupStoryWorkspace({
+      repositoryId: seed.repositoryId,
+      storyId: seed.storyId,
+    });
+
+    expect(cleaned.workspace).toMatchObject({
+      status: 'removed',
+      statusReason: 'cleanup_requested',
+      removedAt: '2026-03-06T01:12:00.000Z',
+    });
+  });
+
+  it('rejects cleanup when the workspace path remains after git cleanup succeeds', async () => {
+    const db = createMigratedDb();
+    const seed = seedRepositoryAndStory(db, { storyStatus: 'Approved' });
+    let worktreeRegistered = true;
+
+    insertStoryWorkspace(db, {
+      repositoryId: seed.repositoryId,
+      storyWorkItemId: seed.storyId,
+      worktreePath: '/tmp/alphred/worktrees/alphred-story-1-a1b2c3',
+      branch: 'alphred/story/1-a1b2c3',
+      baseBranch: 'main',
+      baseCommitHash: 'abc123',
+      occurredAt: '2026-03-05T10:00:00.000Z',
+    });
+
+    const operations = createStoryWorkspaceOperations({
+      withDatabase: createWithDatabase(db),
+      dependencies: createDependencies(seed.repository, {
+        listWorktrees: async () =>
+          worktreeRegistered
+            ? [
+                {
+                  path: '/tmp/alphred/worktrees/alphred-story-1-a1b2c3',
+                  branch: 'alphred/story/1-a1b2c3',
+                  commit: 'abc123',
+                },
+              ]
+            : [],
+        removeWorktree: async () => {
+          worktreeRegistered = false;
+        },
+        pathExists: async () => true,
+        removePath: async () => {
+          throw new Error('rm failed');
+        },
+      }),
+      environment: createTestEnvironment(),
+    });
+
+    await expect(
+      operations.cleanupStoryWorkspace({
+        repositoryId: seed.repositoryId,
+        storyId: seed.storyId,
+      }),
+    ).rejects.toMatchObject({
+      code: 'conflict',
+      status: 409,
+    });
+
+    expect(getStoryWorkspaceByStoryWorkItemId(db, seed.storyId)).toMatchObject({
+      status: 'active',
+      removedAt: null,
+    });
+  });
+
   it('recreates a removed workspace in place on the same row', async () => {
     const db = createMigratedDb();
     const seed = seedRepositoryAndStory(db, { storyStatus: 'Approved' });
+    let worktreeRegistered = true;
+    let workspacePathExists = true;
     const existing = insertStoryWorkspace(db, {
       repositoryId: seed.repositoryId,
       storyWorkItemId: seed.storyId,
@@ -324,6 +510,23 @@ describe('story workspace operations', () => {
     const operations = createStoryWorkspaceOperations({
       withDatabase: createWithDatabase(db),
       dependencies: createDependencies(seed.repository, {
+        listWorktrees: async () =>
+          worktreeRegistered
+            ? [
+                {
+                  path: '/tmp/alphred/worktrees/alphred-story-1-a1b2c3',
+                  branch: 'alphred/story/1-a1b2c3',
+                  commit: 'abc123',
+                },
+              ]
+            : [],
+        removeWorktree: async () => {
+          worktreeRegistered = false;
+        },
+        pathExists: async () => workspacePathExists,
+        removePath: async () => {
+          workspacePathExists = false;
+        },
         createWorktree: async () => ({
           path: '/tmp/alphred/worktrees/alphred-story-1-d4e5f6',
           branch: 'alphred/story/1-d4e5f6',

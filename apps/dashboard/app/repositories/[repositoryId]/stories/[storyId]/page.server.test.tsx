@@ -104,7 +104,7 @@ describe('StoryDetailPage', () => {
 
     await renderStoryPage({ repositoryId: '1', storyId: '3' });
 
-    expect(loadDashboardRepositoriesMock).toHaveBeenCalledWith(false);
+    expect(loadDashboardRepositoriesMock).toHaveBeenCalledWith(true);
     const payload = JSON.parse(screen.getByTestId('payload').textContent ?? '{}');
     expect(payload.repository.name).toBe('demo-repo');
     expect(payload.actor.actorLabel).toBe('octocat');
@@ -112,6 +112,27 @@ describe('StoryDetailPage', () => {
     expect(payload.initialLatestEventId).toBe(7);
     expect(payload.initialWorkItems).toHaveLength(1);
     expect(payload.initialWorkspace).toBeNull();
+  });
+
+  it('allows direct story detail navigation for archived repositories', async () => {
+    const repository = createRepository({ id: 1, archivedAt: '2026-03-06T00:00:00.000Z' });
+    const story = createWorkItem({ id: 3, type: 'story' });
+
+    createDashboardServiceMock.mockReturnValue({
+      getRepositoryBoardBootstrap: vi.fn(async () => ({ latestEventId: 7, workItems: [story] })),
+      getStoryBreakdownProposal: vi.fn(async () => ({ proposal: null })),
+      getStoryWorkspace: vi.fn(async () => ({ workspace: null })),
+    });
+    loadDashboardRepositoriesMock.mockResolvedValue([repository]);
+    loadGitHubAuthGateMock.mockResolvedValue({ state: 'authenticated', user: 'octocat' });
+    storyDetailPageContentMock.mockImplementation((props: unknown) => (
+      <div data-testid="payload">{JSON.stringify(props)}</div>
+    ));
+
+    await renderStoryPage({ repositoryId: '1', storyId: '3' });
+
+    const payload = JSON.parse(screen.getByTestId('payload').textContent ?? '{}');
+    expect(payload.repository.archivedAt).toBe('2026-03-06T00:00:00.000Z');
   });
 
   it('calls notFound when ids are invalid', async () => {

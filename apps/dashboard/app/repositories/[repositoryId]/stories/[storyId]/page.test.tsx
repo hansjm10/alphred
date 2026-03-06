@@ -268,6 +268,81 @@ describe('StoryDetailPageContent', () => {
     expect(screen.getByText('Active')).toBeInTheDocument();
   });
 
+  it('refresh discovers a workspace that was created after the page loaded', async () => {
+    const user = userEvent.setup();
+    const fetchMock = vi.mocked(global.fetch);
+
+    fetchMock
+      .mockResolvedValueOnce(createJsonResponse({ workspace: createWorkspace() }))
+      .mockResolvedValueOnce(
+        createJsonResponse({
+          workItems: [createWorkItem({ id: 3, type: 'story', title: 'Story title', status: 'Approved', revision: 2 })],
+        }),
+      )
+      .mockResolvedValueOnce(createJsonResponse({ proposal: null }))
+      .mockResolvedValueOnce(
+        createJsonResponse({ workItem: createWorkItem({ id: 3, type: 'story', title: 'Story title', status: 'Approved', revision: 2 }) }),
+      );
+
+    render(
+      <StoryDetailPageContent
+        repository={createRepository({ id: 1, name: 'demo-repo' })}
+        actor={{ actorType: 'human', actorLabel: 'octocat' }}
+        storyId={3}
+        initialLatestEventId={0}
+        initialProposal={null}
+        initialWorkspace={null}
+        initialWorkItems={[createWorkItem({ id: 3, type: 'story', title: 'Story title', status: 'Approved', revision: 1 })]}
+      />,
+    );
+
+    await user.click(screen.getByRole('button', { name: 'Refresh' }));
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/dashboard/work-items/3/actions/reconcile-workspace', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        repositoryId: 1,
+      }),
+    });
+    expect(await screen.findByText('Active')).toBeInTheDocument();
+    expect(screen.getByText('alphred/story/3-a1b2c3')).toBeInTheDocument();
+  });
+
+  it('keeps the workspace empty on refresh when no workspace exists yet', async () => {
+    const user = userEvent.setup();
+    const fetchMock = vi.mocked(global.fetch);
+
+    fetchMock
+      .mockResolvedValueOnce(createJsonResponse({ error: { message: 'Not found' } }, { status: 404 }))
+      .mockResolvedValueOnce(
+        createJsonResponse({
+          workItems: [createWorkItem({ id: 3, type: 'story', title: 'Story title', status: 'Approved', revision: 2 })],
+        }),
+      )
+      .mockResolvedValueOnce(createJsonResponse({ proposal: null }))
+      .mockResolvedValueOnce(
+        createJsonResponse({ workItem: createWorkItem({ id: 3, type: 'story', title: 'Story title', status: 'Approved', revision: 2 }) }),
+      );
+
+    render(
+      <StoryDetailPageContent
+        repository={createRepository({ id: 1, name: 'demo-repo' })}
+        actor={{ actorType: 'human', actorLabel: 'octocat' }}
+        storyId={3}
+        initialLatestEventId={0}
+        initialProposal={null}
+        initialWorkspace={null}
+        initialWorkItems={[createWorkItem({ id: 3, type: 'story', title: 'Story title', status: 'Approved', revision: 1 })]}
+      />,
+    );
+
+    await user.click(screen.getByRole('button', { name: 'Refresh' }));
+
+    expect(screen.getByText('No workspace created yet.')).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
   it('reconciles a stale story workspace and surfaces diagnostics', async () => {
     const user = userEvent.setup();
     const fetchMock = vi.mocked(global.fetch);
@@ -614,6 +689,7 @@ describe('StoryDetailPageContent', () => {
 
     fetchMock
       .mockResolvedValueOnce(createJsonResponse({ error: { message: 'Revision conflict' } }, { status: 409 }))
+      .mockResolvedValueOnce(createJsonResponse({ error: { message: 'Not found' } }, { status: 404 }))
       .mockResolvedValueOnce(createJsonResponse({ workItems: [createWorkItem({ id: 3, status: 'Draft', revision: 2 })] }))
       .mockResolvedValueOnce(createJsonResponse({ proposal: null }))
       .mockResolvedValueOnce(createJsonResponse({ workItem: createWorkItem({ id: 3, status: 'Draft', revision: 2 }) }));

@@ -421,43 +421,50 @@ async function cleanupWorkspaceRecord(
     return params.workspace;
   }
 
-  const registeredWorktreeExists = async (): Promise<boolean> => {
+  const getRegisteredWorktreeState = async (): Promise<'registered' | 'unregistered' | 'unknown'> => {
     if (!params.repositoryLocalPath) {
-      return false;
+      return 'unregistered';
     }
 
     try {
       const worktrees = await params.listRepositoryWorktrees(params.repositoryLocalPath);
-      return worktrees.some(entry => normalizeFsPath(entry.path) === normalizeFsPath(params.workspace.worktreePath));
+      return worktrees.some(entry => normalizeFsPath(entry.path) === normalizeFsPath(params.workspace.worktreePath))
+        ? 'registered'
+        : 'unregistered';
     } catch {
-      return false;
+      return 'unknown';
     }
   };
 
-  let removalError: unknown = null;
-  const registered = await registeredWorktreeExists();
-  const pathExists = await params.pathExists(params.workspace.worktreePath);
+  let cleanupError: unknown = null;
+  const registeredStateBeforeRemoval = await getRegisteredWorktreeState();
+  const pathExistsBeforeRemoval = await params.pathExists(params.workspace.worktreePath);
 
-  if (registered && params.repositoryLocalPath) {
+  if (registeredStateBeforeRemoval !== 'unregistered' && params.repositoryLocalPath) {
     try {
       await params.removeRepositoryWorktree(params.repositoryLocalPath, params.workspace.worktreePath);
     } catch (error) {
-      removalError = error;
+      cleanupError = error;
     }
   }
 
-  if (pathExists) {
+  if (pathExistsBeforeRemoval) {
     try {
       await params.removePath(params.workspace.worktreePath);
-      removalError = null;
     } catch (error) {
-      if (removalError === null) {
-        removalError = error;
+      if (cleanupError === null) {
+        cleanupError = error;
       }
     }
   }
 
-  if (pathExists && removalError !== null) {
+  const registeredStateAfterRemoval =
+    registeredStateBeforeRemoval === 'unregistered' ? 'unregistered' : await getRegisteredWorktreeState();
+  const pathExistsAfterRemoval = await params.pathExists(params.workspace.worktreePath);
+  const gitCleanupUnverified = registeredStateAfterRemoval === 'unknown';
+  const worktreeStillRegistered = registeredStateAfterRemoval === 'registered';
+
+  if (pathExistsAfterRemoval || worktreeStillRegistered || gitCleanupUnverified) {
     throw toCleanupConflict(
       `Unable to clean up story workspace for story id=${params.workspace.storyWorkItemId}.`,
       {
@@ -465,7 +472,7 @@ async function cleanupWorkspaceRecord(
         storyId: params.workspace.storyWorkItemId,
         worktreePath: params.workspace.worktreePath,
       },
-      removalError,
+      cleanupError,
     );
   }
 

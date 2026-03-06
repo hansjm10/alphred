@@ -50,7 +50,7 @@ export default async function StoryDetailPage({ params }: StoryDetailPageProps) 
   const service = createDashboardService();
 
   const [repositories, authGate] = await Promise.all([
-    loadDashboardRepositories(false),
+    loadDashboardRepositories(true),
     loadGitHubAuthGate(),
   ]);
 

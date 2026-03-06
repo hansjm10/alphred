@@ -127,6 +127,36 @@ async function runStoryWorkspaceAction(params: {
   };
 }
 
+async function refreshStoryWorkspace(params: {
+  repositoryId: number;
+  storyId: number;
+}): Promise<DashboardStoryWorkspaceSnapshot | null> {
+  const response = await fetch(`/api/dashboard/work-items/${params.storyId}/actions/reconcile-workspace`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify({
+      repositoryId: params.repositoryId,
+    }),
+  });
+  const payload = parseJsonSafely(await response.text());
+
+  if (response.status === 404) {
+    return null;
+  }
+
+  if (!response.ok) {
+    throw new Error(resolveApiErrorMessage(response.status, payload, 'Unable to refresh story workspace'));
+  }
+
+  if (!isRecord(payload) || !isStoryWorkspaceSnapshot(payload.workspace)) {
+    throw new Error('Unable to refresh story workspace (malformed response).');
+  }
+
+  return payload.workspace;
+}
+
 function renderStringList(values: string[] | null): ReactNode {
   if (!values || values.length === 0) {
     return <p className="meta-text">None</p>;
@@ -388,14 +418,10 @@ export function StoryDetailPageContent(props: Readonly<{
     setActionError(options?.bannerMessage ?? null);
     setActionNotice(null);
     try {
-      const workspaceRefresh = workspace
-        ? runStoryWorkspaceAction({
-            repositoryId: repository.id,
-            storyId,
-            action: 'reconcile-workspace',
-            errorPrefix: 'Unable to refresh story workspace',
-          })
-        : Promise.resolve<StoryWorkspaceActionResult | null>(null);
+      const workspaceRefresh = refreshStoryWorkspace({
+        repositoryId: repository.id,
+        storyId,
+      });
 
       const [workItems, latestProposal, latestStory, latestWorkspace] = await Promise.all([
         fetchRepositoryWorkItems({ repositoryId: repository.id }),
@@ -405,7 +431,7 @@ export function StoryDetailPageContent(props: Readonly<{
       ]);
       setWorkItemsById(toWorkItemsById(workItems));
       setProposal(latestProposal);
-      setWorkspace(latestWorkspace?.workspace ?? workspace);
+      setWorkspace(latestWorkspace);
       setWorkItemsById(previous => ({ ...previous, [latestStory.id]: latestStory }));
     } catch (error) {
       setActionError(error instanceof Error ? error.message : String(error));
