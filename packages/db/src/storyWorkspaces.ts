@@ -225,9 +225,11 @@ export function updateStoryWorkspace(db: AlphredDatabase, params: UpdateStoryWor
     assertKnownStoryWorkspaceStatus(params.status);
     values.status = params.status;
   }
-  if (params.statusReason !== undefined) {
-    assertKnownStoryWorkspaceStatusReason(params.statusReason ?? null);
-    values.statusReason = params.statusReason ?? null;
+  const resolvedStatusReason =
+    params.statusReason === undefined ? undefined : (params.statusReason ?? null);
+  if (resolvedStatusReason !== undefined) {
+    assertKnownStoryWorkspaceStatusReason(resolvedStatusReason);
+    values.statusReason = resolvedStatusReason;
   }
   if ('lastReconciledAt' in params) {
     values.lastReconciledAt = params.lastReconciledAt ?? null;
@@ -237,7 +239,7 @@ export function updateStoryWorkspace(db: AlphredDatabase, params: UpdateStoryWor
   }
 
   const nextStatus = params.status ?? current.status;
-  const nextStatusReason = params.statusReason !== undefined ? params.statusReason ?? null : current.statusReason;
+  const nextStatusReason = resolvedStatusReason === undefined ? current.statusReason : resolvedStatusReason;
   assertStoryWorkspaceLifecycleCompatibility(nextStatus, nextStatusReason);
 
   const updated = db
