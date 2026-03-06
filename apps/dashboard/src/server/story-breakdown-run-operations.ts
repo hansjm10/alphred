@@ -27,11 +27,13 @@ import {
   DEFAULT_STORY_BREAKDOWN_TREE_KEY,
 } from './dashboard-default-workflows';
 import { DashboardIntegrationError } from './dashboard-errors';
-import type { PreparedWorkflowRunLaunch } from './run-operations';
+import type { PreparedWorkflowRunLaunch, WorkflowRunLaunchPreparationOptions } from './run-operations';
 import {
   findActiveStoryBreakdownRunForStory,
   STORY_BREAKDOWN_LAUNCH_CONTEXT_ARTIFACT_KIND,
 } from './story-breakdown-run-state';
+
+const FAILED_COMMAND_OUTPUT_ARTIFACT_KIND = 'failed_command_output_v1';
 const STORY_BREAKDOWN_RESULT_SCHEMA_VERSION = 1;
 const STORY_BREAKDOWN_RESULT_TYPE = 'story_breakdown_result';
 
@@ -51,6 +53,7 @@ export type StoryBreakdownRunOperationsDependencies = {
         nodeKey: string;
       };
     },
+    options?: WorkflowRunLaunchPreparationOptions,
   ) => PreparedWorkflowRunLaunch;
   completeWorkflowRunLaunch: (
     db: AlphredDatabase,
@@ -666,6 +669,7 @@ function loadPlannerNodeExecutionContext(
         eq(phaseArtifacts.runNodeId, plannerNode.runNodeId),
         eq(phaseArtifacts.artifactType, 'log'),
         sql`json_extract(${phaseArtifacts.metadata}, '$.attempt') = ${plannerNode.attempt}`,
+        sql`coalesce(json_extract(${phaseArtifacts.metadata}, '$.kind'), '') <> ${FAILED_COMMAND_OUTPUT_ARTIFACT_KIND}`,
       ),
     )
     .orderBy(desc(phaseArtifacts.createdAt), desc(phaseArtifacts.id))
@@ -822,6 +826,8 @@ export function createStoryBreakdownRunOperations(params: {
               type: 'node_key',
               nodeKey: plannerConfig.nodeKey,
             },
+          }, {
+            allowedHiddenTreeKey: plannerConfig.treeKey,
           });
 
           persistStoryBreakdownLaunchContext({

@@ -182,8 +182,16 @@ export type PreparedWorkflowRunLaunch = {
   policyConstraints: DashboardRunLaunchPolicyConstraints | undefined;
 };
 
+export type WorkflowRunLaunchPreparationOptions = {
+  allowedHiddenTreeKey?: string;
+};
+
 export type WorkflowRunLaunchCoordinator = {
-  prepareWorkflowRunLaunch: (db: AlphredDatabase, request: DashboardRunLaunchRequest) => PreparedWorkflowRunLaunch;
+  prepareWorkflowRunLaunch: (
+    db: AlphredDatabase,
+    request: DashboardRunLaunchRequest,
+    options?: WorkflowRunLaunchPreparationOptions,
+  ) => PreparedWorkflowRunLaunch;
   completeWorkflowRunLaunch: (
     db: AlphredDatabase,
     prepared: PreparedWorkflowRunLaunch,
@@ -478,14 +486,19 @@ function hasLaunchPolicyConstraints(policyConstraints: DashboardRunLaunchPolicyC
   );
 }
 
-function normalizeRunLaunchRequest(request: DashboardRunLaunchRequest): NormalizedRunLaunchRequest {
+function normalizeRunLaunchRequest(
+  request: DashboardRunLaunchRequest,
+  options: WorkflowRunLaunchPreparationOptions = {},
+): NormalizedRunLaunchRequest {
   const treeKey = request.treeKey.trim();
   if (treeKey.length === 0) {
     throw new DashboardIntegrationError('invalid_request', 'treeKey cannot be empty.', {
       status: 400,
     });
   }
-  assertWorkflowTreeIsPublic(treeKey);
+  if (options.allowedHiddenTreeKey?.trim() !== treeKey) {
+    assertWorkflowTreeIsPublic(treeKey);
+  }
 
   const repositoryName = request.repositoryName?.trim();
   if (request.repositoryName !== undefined && repositoryName?.length === 0) {
@@ -780,8 +793,9 @@ export function createWorkflowRunLaunchCoordinator(params: {
   function prepareWorkflowRunLaunch(
     db: AlphredDatabase,
     request: DashboardRunLaunchRequest,
+    options: WorkflowRunLaunchPreparationOptions = {},
   ): PreparedWorkflowRunLaunch {
-    const normalizedRequest = normalizeRunLaunchRequest(request);
+    const normalizedRequest = normalizeRunLaunchRequest(request, options);
     try {
       return db.transaction(() => {
         const planner = dependencies.createSqlWorkflowPlanner(db);

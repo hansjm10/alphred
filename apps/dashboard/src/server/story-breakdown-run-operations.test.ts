@@ -18,7 +18,7 @@ import {
   type AlphredDatabase,
 } from '@alphred/db';
 import { createStoryBreakdownRunOperations } from './story-breakdown-run-operations';
-import type { PreparedWorkflowRunLaunch } from './run-operations';
+import type { PreparedWorkflowRunLaunch, WorkflowRunLaunchPreparationOptions } from './run-operations';
 
 const STORY_BREAKDOWN_LAUNCH_CONTEXT_ARTIFACT_KIND = 'story_breakdown_launch_context_v1';
 
@@ -45,6 +45,7 @@ function createHarness(environment: Partial<NodeJS.ProcessEnv> = {}): {
           nodeKey: string;
         };
       },
+      _options?: WorkflowRunLaunchPreparationOptions,
     ) => {
       const repository = launchDb
         .select({
@@ -425,6 +426,35 @@ function insertFailureArtifact(
         content,
         metadata: { failureReason: 'retry_limit_exceeded', attempt },
         createdAt: '2026-03-05T17:04:00.000Z',
+      })
+      .run().lastInsertRowid,
+  );
+}
+
+function insertFailedCommandOutputArtifact(
+  db: AlphredDatabase,
+  runId: number,
+  runNodeId: number,
+  content: string,
+  attempt = 1,
+): number {
+  return Number(
+    db.insert(phaseArtifacts)
+      .values({
+        workflowRunId: runId,
+        runNodeId,
+        artifactType: 'log',
+        contentType: 'json',
+        content,
+        metadata: {
+          kind: 'failed_command_output_v1',
+          attempt,
+          eventIndex: 2,
+          sequence: 3,
+          command: 'pnpm test:e2e',
+          exitCode: 1,
+        },
+        createdAt: '2026-03-05T17:04:05.000Z',
       })
       .run().lastInsertRowid,
   );
@@ -1207,6 +1237,53 @@ describe('story-breakdown-run-operations', () => {
           diagnosticId,
           failureArtifactId,
           diagnosticClassification: 'timeout',
+        }),
+      },
+    });
+  });
+
+  it('prefers human failure logs over failed command output artifacts for terminal planner errors', async () => {
+    const { db, operations } = createHarness();
+    const repositoryId = seedRepository(db, 'planner-failure-log-priority');
+    const storyId = seedStory(db, repositoryId);
+    const { treeId, treeNodeId } = seedPlannerTree(db);
+    const { runId, runNodeId } = seedPlannerRun(db, {
+      treeId,
+      treeNodeId,
+      repositoryId,
+      storyId,
+      runStatus: 'failed',
+      nodeStatus: 'failed',
+    });
+    const failureArtifactId = insertFailureArtifact(db, runId, runNodeId, 'Planner crashed before producing a valid breakdown.');
+    insertFailedCommandOutputArtifact(
+      db,
+      runId,
+      runNodeId,
+      JSON.stringify({
+        schemaVersion: 1,
+        kind: 'failed_command_output_v1',
+        output: 'raw shell failure output',
+      }),
+    );
+
+    const result = await operations.getStoryBreakdownRun({
+      repositoryId,
+      storyId,
+      workflowRunId: runId,
+    });
+
+    expect(result).toEqual({
+      workflowRunId: runId,
+      runStatus: 'failed',
+      result: null,
+      error: {
+        code: 'transient',
+        message: 'Planner crashed before producing a valid breakdown.',
+        retryable: false,
+        details: expect.objectContaining({
+          kind: 'planner_runtime_failure',
+          failureArtifactId,
         }),
       },
     });

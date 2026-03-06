@@ -2101,6 +2101,104 @@ describe('createDashboardService', () => {
     ]);
   });
 
+  it('launches story-breakdown runs through the hidden planner coordinator path', async () => {
+    const validateSingleNodeSelection = vi.fn();
+    const executeSingleNode = vi.fn(async () => ({
+      finalStep: {
+        runStatus: 'completed',
+        outcome: 'run_terminal',
+      },
+      executedNodes: 1,
+    }));
+    const executeRun = vi.fn();
+
+    const { db, dependencies } = createHarness({
+      createSqlWorkflowExecutor: () =>
+        ({
+          validateSingleNodeSelection,
+          executeSingleNode,
+          executeRun,
+          cancelRun: vi.fn(),
+          pauseRun: vi.fn(),
+          resumeRun: vi.fn(),
+          retryRun: vi.fn(),
+        }) as unknown as ReturnType<DashboardServiceDependencies['createSqlWorkflowExecutor']>,
+    });
+    seedRunData(db);
+    const storyId = Number(
+      db.insert(workItems)
+        .values({
+          repositoryId: 1,
+          type: 'story',
+          status: 'NeedsBreakdown',
+          title: 'Launch hidden planner story',
+          revision: 0,
+        })
+        .run().lastInsertRowid,
+    );
+
+    const service = createDashboardService({ dependencies });
+
+    const launch = await service.launchStoryBreakdownRun({
+      repositoryId: 1,
+      storyId,
+      expectedRevision: 0,
+    });
+
+    expect(launch).toEqual({
+      workflowRunId: expect.any(Number),
+      mode: 'async',
+      status: 'accepted',
+      runStatus: 'running',
+      result: null,
+      error: null,
+    });
+    expect(validateSingleNodeSelection).toHaveBeenCalledTimes(1);
+
+    const launchedRun = db
+      .select({
+        treeKey: workflowTrees.treeKey,
+        executionScope: workflowRuns.executionScope,
+        nodeSelector: workflowRuns.nodeSelector,
+      })
+      .from(workflowRuns)
+      .innerJoin(workflowTrees, eq(workflowRuns.workflowTreeId, workflowTrees.id))
+      .where(eq(workflowRuns.id, launch.workflowRunId))
+      .get();
+    expect(launchedRun).toEqual({
+      treeKey: DEFAULT_STORY_BREAKDOWN_TREE_KEY,
+      executionScope: 'single_node',
+      nodeSelector: JSON.stringify({
+        type: 'node_key',
+        nodeKey: DEFAULT_STORY_BREAKDOWN_NODE_KEY,
+      }),
+    });
+
+    const plannerNode = db
+      .select({
+        prompt: runNodes.prompt,
+      })
+      .from(runNodes)
+      .where(eq(runNodes.workflowRunId, launch.workflowRunId))
+      .get();
+    expect(plannerNode?.prompt).toContain('STORY_CONTEXT_JSON:');
+    expect(plannerNode?.prompt).toContain('"storyId":');
+
+    await waitForBackgroundExecution(service, launch.workflowRunId);
+
+    expect(executeSingleNode).toHaveBeenCalledWith({
+      workflowRunId: launch.workflowRunId,
+      options: {
+        workingDirectory: '/tmp/worktree',
+      },
+      nodeSelector: {
+        type: 'node_key',
+        nodeKey: DEFAULT_STORY_BREAKDOWN_NODE_KEY,
+      },
+    });
+    expect(executeRun).not.toHaveBeenCalled();
+  });
+
   it('returns concurrent draft when bootstrap hits single-draft unique constraint', async () => {
     const { db, dependencies } = createHarness();
     migrateDatabase(db);
