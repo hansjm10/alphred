@@ -1,4 +1,5 @@
 import {
+  getRepositoryById,
   archiveRepository as archiveRepositoryConfig,
   getRepositoryByName,
   insertRepository,
@@ -19,6 +20,8 @@ import type {
   DashboardArchiveRepositoryResult,
   DashboardCreateRepositoryRequest,
   DashboardCreateRepositoryResult,
+  DashboardGetRepositoryRequest,
+  DashboardGetRepositoryResult,
   DashboardGitHubAuthStatus,
   DashboardRepositoryState,
   DashboardRestoreRepositoryResult,
@@ -45,6 +48,7 @@ export type RepositoryOperationsDependencies = {
 };
 
 export type RepositoryOperations = {
+  getRepository: (request: DashboardGetRepositoryRequest) => Promise<DashboardGetRepositoryResult>;
   listRepositories: (options?: { includeArchived?: boolean }) => Promise<DashboardRepositoryState[]>;
   createRepository: (request: DashboardCreateRepositoryRequest) => Promise<DashboardCreateRepositoryResult>;
   checkGitHubAuth: () => Promise<DashboardGitHubAuthStatus>;
@@ -102,6 +106,29 @@ export function createRepositoryOperations(params: {
   const { withDatabase, dependencies, environment } = params;
 
   return {
+    getRepository(request: DashboardGetRepositoryRequest): Promise<DashboardGetRepositoryResult> {
+      if (!Number.isInteger(request.repositoryId) || request.repositoryId < 1) {
+        throw new DashboardIntegrationError('invalid_request', 'Repository id must be a positive integer.', {
+          status: 400,
+        });
+      }
+
+      return withDatabase(async db => {
+        const repository = getRepositoryById(db, request.repositoryId, {
+          includeArchived: request.includeArchived ?? false,
+        });
+        if (!repository) {
+          throw new DashboardIntegrationError('not_found', `Repository id=${request.repositoryId} was not found.`, {
+            status: 404,
+          });
+        }
+
+        return {
+          repository: toRepositoryState(repository),
+        };
+      });
+    },
+
     listRepositories(options?: { includeArchived?: boolean }): Promise<DashboardRepositoryState[]> {
       return withDatabase(async db =>
         listRepositoryConfigs(db, { includeArchived: options?.includeArchived ?? false }).map(toRepositoryState),

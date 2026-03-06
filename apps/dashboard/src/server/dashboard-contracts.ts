@@ -162,6 +162,15 @@ export type DashboardRepositoryState = {
   archivedAt: string | null;
 };
 
+export type DashboardGetRepositoryRequest = {
+  repositoryId: number;
+  includeArchived?: boolean;
+};
+
+export type DashboardGetRepositoryResult = {
+  repository: DashboardRepositoryState;
+};
+
 export type DashboardRunSummary = {
   id: number;
   tree: {
@@ -564,7 +573,14 @@ export type DashboardStoryWorkspaceSnapshot = {
   baseBranch: string;
   baseCommitHash: string | null;
   status: 'active' | 'stale' | 'removed';
-  statusReason: string | null;
+  statusReason:
+    | 'missing_path'
+    | 'worktree_not_registered'
+    | 'branch_mismatch'
+    | 'repository_clone_missing'
+    | 'reconcile_failed'
+    | 'cleanup_requested'
+    | null;
   lastReconciledAt: string | null;
   removedAt: string | null;
   createdAt: string;

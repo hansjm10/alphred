@@ -3769,6 +3769,37 @@ describe('createDashboardService', () => {
     expect(restoredList[0]?.archivedAt).toBeNull();
   });
 
+  it('loads repository snapshots by id and can include archived repositories when requested', async () => {
+    const { db, dependencies } = createHarness();
+    seedRunData(db);
+    const service = createDashboardService({ dependencies });
+
+    await expect(service.getRepository({ repositoryId: 1 })).resolves.toMatchObject({
+      repository: {
+        id: 1,
+        name: 'demo-repo',
+        archivedAt: null,
+      },
+    });
+
+    await service.archiveRepository('demo-repo');
+
+    await expect(service.getRepository({ repositoryId: 1 })).rejects.toMatchObject({
+      name: 'DashboardIntegrationError',
+      code: 'not_found',
+      status: 404,
+      message: 'Repository id=1 was not found.',
+    });
+
+    await expect(service.getRepository({ repositoryId: 1, includeArchived: true })).resolves.toMatchObject({
+      repository: {
+        id: 1,
+        name: 'demo-repo',
+        archivedAt: expect.any(String),
+      },
+    });
+  });
+
   it('gates repository archive mutation behind scm auth checks', async () => {
     const createScmProviderMock = vi.fn(() => ({
       checkAuth: async () =>

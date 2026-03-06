@@ -32,10 +32,49 @@ type StoryWorkspaceActionResult = {
   created?: boolean;
 };
 
+const repositoryProviders = new Set<DashboardRepositoryState['provider']>(['github', 'azure-devops']);
+const repositoryCloneStatuses = new Set<DashboardRepositoryState['cloneStatus']>(['pending', 'cloned', 'error']);
 const storyWorkspaceStatuses = new Set<DashboardStoryWorkspaceSnapshot['status']>(['active', 'stale', 'removed']);
+const storyWorkspaceStatusReasons = new Set<NonNullable<DashboardStoryWorkspaceSnapshot['statusReason']>>([
+  'missing_path',
+  'worktree_not_registered',
+  'branch_mismatch',
+  'repository_clone_missing',
+  'reconcile_failed',
+  'cleanup_requested',
+]);
 
 function isNullableString(value: unknown): value is string | null {
   return value === null || typeof value === 'string';
+}
+
+function isNullableStoryWorkspaceStatusReason(
+  value: unknown,
+): value is DashboardStoryWorkspaceSnapshot['statusReason'] {
+  return value === null || (typeof value === 'string' && storyWorkspaceStatusReasons.has(value as NonNullable<
+    DashboardStoryWorkspaceSnapshot['statusReason']
+  >));
+}
+
+function isRepositoryState(value: unknown): value is DashboardRepositoryState {
+  if (!isRecord(value)) {
+    return false;
+  }
+
+  return (
+    typeof value.id === 'number'
+    && typeof value.name === 'string'
+    && typeof value.provider === 'string'
+    && repositoryProviders.has(value.provider as DashboardRepositoryState['provider'])
+    && typeof value.remoteRef === 'string'
+    && typeof value.remoteUrl === 'string'
+    && typeof value.defaultBranch === 'string'
+    && isNullableString(value.branchTemplate)
+    && typeof value.cloneStatus === 'string'
+    && repositoryCloneStatuses.has(value.cloneStatus as DashboardRepositoryState['cloneStatus'])
+    && isNullableString(value.localPath)
+    && isNullableString(value.archivedAt)
+  );
 }
 
 function isStoryWorkspaceSnapshot(value: unknown): value is DashboardStoryWorkspaceSnapshot {
@@ -53,12 +92,27 @@ function isStoryWorkspaceSnapshot(value: unknown): value is DashboardStoryWorksp
     && isNullableString(value.baseCommitHash)
     && typeof value.status === 'string'
     && storyWorkspaceStatuses.has(value.status as DashboardStoryWorkspaceSnapshot['status'])
-    && isNullableString(value.statusReason)
+    && isNullableStoryWorkspaceStatusReason(value.statusReason)
     && isNullableString(value.lastReconciledAt)
     && isNullableString(value.removedAt)
     && typeof value.createdAt === 'string'
     && typeof value.updatedAt === 'string'
   );
+}
+
+async function fetchRepository(params: { repositoryId: number }): Promise<DashboardRepositoryState> {
+  const response = await fetch(`/api/dashboard/repositories/${params.repositoryId}`, { method: 'GET' });
+  const payload = parseJsonSafely(await response.text());
+
+  if (!response.ok) {
+    throw new Error(resolveApiErrorMessage(response.status, payload, 'Unable to refresh repository'));
+  }
+
+  if (!isRecord(payload) || !isRepositoryState(payload.repository)) {
+    throw new Error('Unable to refresh repository (malformed response).');
+  }
+
+  return payload.repository;
 }
 
 async function fetchRepositoryWorkItems(params: { repositoryId: number }): Promise<DashboardWorkItemSnapshot[]> {
@@ -222,6 +276,10 @@ function formatTimestamp(value: string | null): string {
   return value ? new Date(value).toLocaleString() : 'Unavailable';
 }
 
+function formatArchivedRunLaunchMessage(repositoryName: string): string {
+  return `Repository "${repositoryName}" is archived. Restore it before launching runs.`;
+}
+
 function mergeStoryWorkflowWorkItems(
   previous: Readonly<Record<number, DashboardWorkItemSnapshot>>,
   result: DashboardRunStoryWorkflowResult,
@@ -245,6 +303,7 @@ export function StoryDetailPageContent(props: Readonly<{
 }>) {
   const { repository, actor, storyId, initialLatestEventId, initialWorkItems, initialProposal, initialWorkspace } = props;
 
+  const [repositoryState, setRepositoryState] = useState<DashboardRepositoryState>(repository);
   const [workItemsById, setWorkItemsById] = useState<Readonly<Record<number, DashboardWorkItemSnapshot>>>(() =>
     toWorkItemsById(initialWorkItems),
   );
@@ -276,16 +335,16 @@ export function StoryDetailPageContent(props: Readonly<{
 
   const workspaceCreateBlockedReason = useMemo(() => {
     if (!story || story.status !== 'Done') {
-      if (repository.archivedAt !== null) {
+      if (repositoryState.archivedAt !== null) {
         return 'Repository is archived. Restore it before creating or recreating a story workspace.';
       }
       return null;
     }
 
-    return repository.archivedAt !== null
+    return repositoryState.archivedAt !== null
       ? 'Repository is archived and the story is already Done. Only reconciliation and cleanup remain available.'
       : 'Story is Done. Clean up the existing workspace instead of creating or recreating a new one.';
-  }, [repository.archivedAt, story]);
+  }, [repositoryState.archivedAt, story]);
 
   const connect = (sessionId: number) => {
     if (connectionSessionRef.current !== sessionId) {
@@ -302,7 +361,7 @@ export function StoryDetailPageContent(props: Readonly<{
     setConnectionError(null);
 
     const eventSource = new EventSource(
-      `/api/dashboard/repositories/${repository.id}/board/events?transport=sse&lastEventId=${lastEventId}`,
+      `/api/dashboard/repositories/${repositoryState.id}/board/events?transport=sse&lastEventId=${lastEventId}`,
     );
     eventSourceRef.current = eventSource;
 
@@ -347,7 +406,7 @@ export function StoryDetailPageContent(props: Readonly<{
 
       latestEventIdRef.current = Math.max(latestEventIdRef.current, snapshot.id);
 
-      setWorkItemsById(previous => applyBoardEventToWorkItems(previous, repository.id, snapshot));
+      setWorkItemsById(previous => applyBoardEventToWorkItems(previous, repositoryState.id, snapshot));
 
       if (snapshot.workItemId === storyId && snapshot.eventType === 'breakdown_proposed') {
         const payload = snapshot.payload;
@@ -411,24 +470,29 @@ export function StoryDetailPageContent(props: Readonly<{
         eventSourceRef.current = null;
       }
     };
-  }, [repository.id, storyId]);
+  }, [repositoryState.id, storyId]);
 
   const refreshAll = async (options?: { bannerMessage?: string | null }) => {
     setBusy(true);
     setActionError(options?.bannerMessage ?? null);
     setActionNotice(null);
     try {
+      const repositoryRefresh = fetchRepository({
+        repositoryId: repositoryState.id,
+      });
       const workspaceRefresh = refreshStoryWorkspace({
-        repositoryId: repository.id,
+        repositoryId: repositoryState.id,
         storyId,
       });
 
-      const [workItems, latestProposal, latestStory, latestWorkspace] = await Promise.all([
-        fetchRepositoryWorkItems({ repositoryId: repository.id }),
-        fetchBreakdownProposal({ repositoryId: repository.id, storyId }),
-        fetchWorkItem({ repositoryId: repository.id, workItemId: storyId }),
+      const [latestRepository, workItems, latestProposal, latestStory, latestWorkspace] = await Promise.all([
+        repositoryRefresh,
+        fetchRepositoryWorkItems({ repositoryId: repositoryState.id }),
+        fetchBreakdownProposal({ repositoryId: repositoryState.id, storyId }),
+        fetchWorkItem({ repositoryId: repositoryState.id, workItemId: storyId }),
         workspaceRefresh,
       ]);
+      setRepositoryState(latestRepository);
       setWorkItemsById(toWorkItemsById(workItems));
       setProposal(latestProposal);
       setWorkspace(latestWorkspace);
@@ -446,7 +510,7 @@ export function StoryDetailPageContent(props: Readonly<{
     setActionError(null);
     setActionNotice(null);
     const workflowResult = await runStoryWorkflow({
-      repositoryId: repository.id,
+      repositoryId: repositoryState.id,
       storyId: story.id,
       expectedRevision: story.revision,
       actor,
@@ -469,7 +533,7 @@ export function StoryDetailPageContent(props: Readonly<{
     setActionError(null);
     setActionNotice(null);
     const moveResult = await moveWorkItemStatus({
-      repositoryId: repository.id,
+      repositoryId: repositoryState.id,
       workItemId: story.id,
       expectedRevision: story.revision,
       toStatus: 'NeedsBreakdown',
@@ -493,7 +557,7 @@ export function StoryDetailPageContent(props: Readonly<{
     setActionError(null);
     setActionNotice(null);
     const workflowResult = await runStoryWorkflow({
-      repositoryId: repository.id,
+      repositoryId: repositoryState.id,
       storyId,
       expectedRevision: story.revision,
       actor,
@@ -520,7 +584,7 @@ export function StoryDetailPageContent(props: Readonly<{
     setActionNotice(null);
     try {
       const result = await runStoryWorkspaceAction({
-        repositoryId: repository.id,
+        repositoryId: repositoryState.id,
         storyId: story.id,
         action: 'create-workspace',
         errorPrefix: 'Unable to create story workspace',
@@ -545,7 +609,7 @@ export function StoryDetailPageContent(props: Readonly<{
     setActionNotice(null);
     try {
       const result = await runStoryWorkspaceAction({
-        repositoryId: repository.id,
+        repositoryId: repositoryState.id,
         storyId: story.id,
         action: 'reconcile-workspace',
         errorPrefix: 'Unable to reconcile story workspace',
@@ -571,7 +635,7 @@ export function StoryDetailPageContent(props: Readonly<{
     setActionNotice(null);
     try {
       const result = await runStoryWorkspaceAction({
-        repositoryId: repository.id,
+        repositoryId: repositoryState.id,
         storyId: story.id,
         action: 'cleanup-workspace',
         errorPrefix: 'Unable to clean up story workspace',
@@ -592,7 +656,7 @@ export function StoryDetailPageContent(props: Readonly<{
     setActionNotice(null);
     try {
       const result = await runStoryWorkspaceAction({
-        repositoryId: repository.id,
+        repositoryId: repositoryState.id,
         storyId: story.id,
         action: 'recreate-workspace',
         errorPrefix: 'Unable to recreate story workspace',
@@ -616,7 +680,10 @@ export function StoryDetailPageContent(props: Readonly<{
     );
   }
 
-  const launchRunHref = `/runs?repository=${encodeURIComponent(repository.name)}&launchWorkItemId=${story.id}`;
+  const launchRunHref = `/runs?repository=${encodeURIComponent(repositoryState.name)}&launchWorkItemId=${story.id}`;
+  const launchRunBlockedReason = repositoryState.archivedAt === null
+    ? null
+    : formatArchivedRunLaunchMessage(repositoryState.name);
   const workspaceReason = formatStoryWorkspaceReason(workspace?.statusReason ?? null);
   const canCreateOrRecreateWorkspace = workspaceCreateBlockedReason === null;
 
@@ -625,18 +692,22 @@ export function StoryDetailPageContent(props: Readonly<{
       <header className="board-page-header">
         <div>
           <h2 className="board-page-title">
-            <Link href={`/repositories/${repository.id}/board`}>{repository.name}</Link> / Story #{story.id}
+            <Link href={`/repositories/${repositoryState.id}/board`}>{repositoryState.name}</Link> / Story #{story.id}
           </h2>
           <p className="meta-text">{story.title}</p>
         </div>
         <div className="board-page-header__status">
           <div className="board-page-header__actions">
-            <ButtonLink href={`/repositories/${repository.id}/stories`} tone="secondary">
+            <ButtonLink href={`/repositories/${repositoryState.id}/stories`} tone="secondary">
               Stories
             </ButtonLink>
-            <ButtonLink href={launchRunHref} tone="secondary">
-              Launch run for this story
-            </ButtonLink>
+            {launchRunBlockedReason === null ? (
+              <ButtonLink href={launchRunHref} tone="secondary">
+                Launch run for this story
+              </ButtonLink>
+            ) : (
+              <span className="meta-text">{launchRunBlockedReason}</span>
+            )}
             <span className="meta-text">Board stream: {connectionState}</span>
           </div>
         </div>

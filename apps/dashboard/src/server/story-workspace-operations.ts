@@ -85,7 +85,25 @@ function normalizeFsPath(path: string): string {
   return resolve(path);
 }
 
+function assertKnownStoryWorkspaceStatusReason(
+  reason: string | null,
+): asserts reason is DashboardStoryWorkspaceSnapshot['statusReason'] {
+  if (
+    reason !== null
+    && reason !== 'missing_path'
+    && reason !== 'worktree_not_registered'
+    && reason !== 'branch_mismatch'
+    && reason !== 'repository_clone_missing'
+    && reason !== 'reconcile_failed'
+    && reason !== 'cleanup_requested'
+  ) {
+    throw new Error(`Unknown story workspace status reason: ${reason}`);
+  }
+}
+
 function toStoryWorkspaceSnapshot(record: StoryWorkspaceRecord): DashboardStoryWorkspaceSnapshot {
+  assertKnownStoryWorkspaceStatusReason(record.statusReason);
+
   return {
     id: record.id,
     repositoryId: record.repositoryId,

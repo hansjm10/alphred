@@ -75,6 +75,38 @@ Response `200`:
 
 Type: `{ repositories: DashboardRepositoryState[] }`.
 
+### `GET /repositories/[repositoryId]`
+
+Gets the latest snapshot for a single repository by id.
+
+Path parameters:
+- `repositoryId`: positive integer repository id.
+
+Response `200`:
+
+```json
+{
+  "repository": {
+    "id": 1,
+    "name": "demo-repo",
+    "provider": "github",
+    "remoteRef": "octocat/demo-repo",
+    "remoteUrl": "https://github.com/octocat/demo-repo.git",
+    "defaultBranch": "main",
+    "branchTemplate": null,
+    "cloneStatus": "cloned",
+    "localPath": "/tmp/repos/demo-repo",
+    "archivedAt": "2026-03-03T10:20:30.000Z"
+  }
+}
+```
+
+Type: `DashboardGetRepositoryResult`.
+
+Behavior notes:
+- This lookup includes archived repositories so route-level refresh flows can keep story-detail affordances in sync after archive/restore changes.
+- `404 not_found` is returned when the repository id does not exist.
+
 ### `POST /repositories`
 
 Registers a GitHub repository in the dashboard registry.
@@ -621,6 +653,114 @@ SSE transport events (`transport=sse`):
 - `board_state`: connection state + latest persisted board event id.
 - `heartbeat`: periodic keepalive containing the latest delivered board event id.
 - `board_error`: stream-channel failure details.
+
+### Story Workspace Lifecycle
+
+Story workspaces persist one lifecycle row per story and expose that state through `DashboardStoryWorkspaceSnapshot`.
+
+Lifecycle states:
+- `active`: the persisted worktree path exists, Git still reports it as a registered worktree, and the persisted branch matches the live worktree branch.
+- `stale`: the workspace record still exists, but reconciliation found drift or missing local repository state.
+- `removed`: cleanup has retired the workspace and set `removedAt`.
+
+Current `statusReason` values:
+- `missing_path`: the persisted worktree directory no longer exists on disk.
+- `worktree_not_registered`: the directory exists, but Git no longer reports it as a registered worktree.
+- `branch_mismatch`: Git reports a different branch than the persisted story workspace branch.
+- `repository_clone_missing`: the repository clone is unavailable, so reconciliation cannot fully verify the workspace.
+- `reconcile_failed`: worktree inspection failed unexpectedly during reconciliation.
+- `cleanup_requested`: the workspace was explicitly cleaned up.
+
+Archived repository behavior:
+- Archived story pages remain directly viewable.
+- Archived repositories do not allow `Launch run for this story`.
+- Archived repositories do not allow create/recreate of story workspaces.
+- `Refresh`, `Reconcile workspace`, and `Cleanup workspace` remain available when the current workspace state allows them.
+
+### `POST /work-items/[workItemId]/actions/create-workspace`
+
+Creates a story workspace for a story that does not already have one.
+
+Path parameters:
+- `workItemId`: positive integer story id.
+
+Request body:
+
+```json
+{
+  "repositoryId": 4
+}
+```
+
+Response `200`: `DashboardCreateStoryWorkspaceResult`.
+
+Behavior notes:
+- Creates or reuses the single persisted workspace row for the story.
+- Returns `created: false` when the workspace already exists and is reused.
+- Returns `409 conflict` when the repository is archived or the story is already `Done`.
+
+### `POST /work-items/[workItemId]/actions/reconcile-workspace`
+
+Reconciles the persisted story workspace row against the current local repository/worktree state.
+
+Path parameters:
+- `workItemId`: positive integer story id.
+
+Request body:
+
+```json
+{
+  "repositoryId": 4
+}
+```
+
+Response `200`: `DashboardReconcileStoryWorkspaceResult`.
+
+Behavior notes:
+- Updates `status`, `statusReason`, and `lastReconciledAt` based on clone availability, Git worktree registration, branch agreement, and on-disk path existence.
+- Returns `404 not_found` when no story workspace exists yet for the story.
+
+### `POST /work-items/[workItemId]/actions/cleanup-workspace`
+
+Cleans up a story workspace and marks it removed.
+
+Path parameters:
+- `workItemId`: positive integer story id.
+
+Request body:
+
+```json
+{
+  "repositoryId": 4
+}
+```
+
+Response `200`: `DashboardCleanupStoryWorkspaceResult`.
+
+Behavior notes:
+- Marks the workspace `removed` with `statusReason = "cleanup_requested"` when cleanup succeeds.
+- Leaves the row in place so the lifecycle remains inspectable and the workspace can be recreated later if the story is still active.
+
+### `POST /work-items/[workItemId]/actions/recreate-workspace`
+
+Recreates a previously removed story workspace in place.
+
+Path parameters:
+- `workItemId`: positive integer story id.
+
+Request body:
+
+```json
+{
+  "repositoryId": 4
+}
+```
+
+Response `200`: `DashboardRecreateStoryWorkspaceResult`.
+
+Behavior notes:
+- Reuses the existing story workspace row and updates its path/branch/base commit fields.
+- Returns `409 conflict` when the repository is archived or the story is already `Done`.
 
 ### `POST /work-items/[workItemId]/breakdown/runs`
 

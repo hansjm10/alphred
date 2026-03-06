@@ -180,6 +180,44 @@ describe('StoryDetailPageContent', () => {
     expect(screen.getByText('/tmp/alphred/worktrees/alphred-story-3-a1b2c3')).toBeInTheDocument();
   });
 
+  it('hides launch and create affordances for archived repositories without a workspace', () => {
+    render(
+      <StoryDetailPageContent
+        repository={createRepository({ id: 1, name: 'demo-repo', archivedAt: '2026-03-06T00:00:00.000Z' })}
+        actor={{ actorType: 'human', actorLabel: 'octocat' }}
+        storyId={3}
+        initialLatestEventId={0}
+        initialProposal={null}
+        initialWorkspace={null}
+        initialWorkItems={[createWorkItem({ id: 3, type: 'story', title: 'Story title', status: 'Approved', revision: 1 })]}
+      />,
+    );
+
+    expect(screen.queryByRole('link', { name: 'Launch run for this story' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Create story workspace' })).toBeNull();
+    expect(screen.getByText('Repository "demo-repo" is archived. Restore it before launching runs.')).toBeInTheDocument();
+    expect(screen.getByText('Repository is archived. Restore it before creating or recreating a story workspace.')).toBeInTheDocument();
+  });
+
+  it('keeps reconcile and cleanup affordances available for archived repositories with an existing workspace', () => {
+    render(
+      <StoryDetailPageContent
+        repository={createRepository({ id: 1, name: 'demo-repo', archivedAt: '2026-03-06T00:00:00.000Z' })}
+        actor={{ actorType: 'human', actorLabel: 'octocat' }}
+        storyId={3}
+        initialLatestEventId={0}
+        initialProposal={null}
+        initialWorkspace={createWorkspace()}
+        initialWorkItems={[createWorkItem({ id: 3, type: 'story', title: 'Story title', status: 'Approved', revision: 1 })]}
+      />,
+    );
+
+    expect(screen.queryByRole('link', { name: 'Launch run for this story' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Recreate workspace' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Reconcile workspace' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Cleanup workspace' })).toBeInTheDocument();
+  });
+
   it('requests breakdown by moving the story to NeedsBreakdown', async () => {
     const user = userEvent.setup();
     const fetchMock = vi.mocked(global.fetch);
@@ -273,6 +311,11 @@ describe('StoryDetailPageContent', () => {
     const fetchMock = vi.mocked(global.fetch);
 
     fetchMock
+      .mockResolvedValueOnce(
+        createJsonResponse({
+          repository: createRepository({ id: 1, name: 'demo-repo' }),
+        }),
+      )
       .mockResolvedValueOnce(createJsonResponse({ workspace: createWorkspace() }))
       .mockResolvedValueOnce(
         createJsonResponse({
@@ -298,6 +341,7 @@ describe('StoryDetailPageContent', () => {
 
     await user.click(screen.getByRole('button', { name: 'Refresh' }));
 
+    expect(fetchMock).toHaveBeenCalledWith('/api/dashboard/repositories/1', { method: 'GET' });
     expect(fetchMock).toHaveBeenCalledWith('/api/dashboard/work-items/3/actions/reconcile-workspace', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -314,6 +358,11 @@ describe('StoryDetailPageContent', () => {
     const fetchMock = vi.mocked(global.fetch);
 
     fetchMock
+      .mockResolvedValueOnce(
+        createJsonResponse({
+          repository: createRepository({ id: 1, name: 'demo-repo' }),
+        }),
+      )
       .mockResolvedValueOnce(createJsonResponse({ error: { message: 'Not found' } }, { status: 404 }))
       .mockResolvedValueOnce(
         createJsonResponse({
@@ -339,8 +388,126 @@ describe('StoryDetailPageContent', () => {
 
     await user.click(screen.getByRole('button', { name: 'Refresh' }));
 
+    expect(fetchMock).toHaveBeenCalledWith('/api/dashboard/repositories/1', { method: 'GET' });
     expect(screen.getByText('No workspace created yet.')).toBeInTheDocument();
     expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('refresh hides launch and recreate affordances after the repository is archived elsewhere', async () => {
+    const user = userEvent.setup();
+    const fetchMock = vi.mocked(global.fetch);
+
+    fetchMock
+      .mockResolvedValueOnce(
+        createJsonResponse({
+          repository: createRepository({ id: 1, name: 'demo-repo', archivedAt: '2026-03-06T00:00:00.000Z' }),
+        }),
+      )
+      .mockResolvedValueOnce(
+        createJsonResponse({
+          workspace: createWorkspace({
+            status: 'removed',
+            statusReason: 'cleanup_requested',
+            removedAt: '2026-03-06T01:05:00.000Z',
+          }),
+        }),
+      )
+      .mockResolvedValueOnce(
+        createJsonResponse({
+          workItems: [createWorkItem({ id: 3, type: 'story', title: 'Story title', status: 'Approved', revision: 2 })],
+        }),
+      )
+      .mockResolvedValueOnce(createJsonResponse({ proposal: null }))
+      .mockResolvedValueOnce(
+        createJsonResponse({ workItem: createWorkItem({ id: 3, type: 'story', title: 'Story title', status: 'Approved', revision: 2 }) }),
+      );
+
+    render(
+      <StoryDetailPageContent
+        repository={createRepository({ id: 1, name: 'demo-repo' })}
+        actor={{ actorType: 'human', actorLabel: 'octocat' }}
+        storyId={3}
+        initialLatestEventId={0}
+        initialProposal={null}
+        initialWorkspace={createWorkspace({
+          status: 'removed',
+          statusReason: 'cleanup_requested',
+          removedAt: '2026-03-06T01:05:00.000Z',
+        })}
+        initialWorkItems={[createWorkItem({ id: 3, type: 'story', title: 'Story title', status: 'Approved', revision: 1 })]}
+      />,
+    );
+
+    expect(screen.getByRole('link', { name: 'Launch run for this story' })).toHaveAttribute(
+      'href',
+      '/runs?repository=demo-repo&launchWorkItemId=3',
+    );
+    expect(screen.getByRole('button', { name: 'Recreate workspace' })).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Refresh' }));
+
+    expect(screen.queryByRole('link', { name: 'Launch run for this story' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Recreate workspace' })).toBeNull();
+    expect(screen.getByText('Repository "demo-repo" is archived. Restore it before launching runs.')).toBeInTheDocument();
+    expect(screen.getByText('Repository is archived. Restore it before creating or recreating a story workspace.')).toBeInTheDocument();
+  });
+
+  it('refresh restores launch and recreate affordances after the repository is restored elsewhere', async () => {
+    const user = userEvent.setup();
+    const fetchMock = vi.mocked(global.fetch);
+
+    fetchMock
+      .mockResolvedValueOnce(
+        createJsonResponse({
+          repository: createRepository({ id: 1, name: 'demo-repo', archivedAt: null }),
+        }),
+      )
+      .mockResolvedValueOnce(
+        createJsonResponse({
+          workspace: createWorkspace({
+            status: 'removed',
+            statusReason: 'cleanup_requested',
+            removedAt: '2026-03-06T01:05:00.000Z',
+          }),
+        }),
+      )
+      .mockResolvedValueOnce(
+        createJsonResponse({
+          workItems: [createWorkItem({ id: 3, type: 'story', title: 'Story title', status: 'Approved', revision: 2 })],
+        }),
+      )
+      .mockResolvedValueOnce(createJsonResponse({ proposal: null }))
+      .mockResolvedValueOnce(
+        createJsonResponse({ workItem: createWorkItem({ id: 3, type: 'story', title: 'Story title', status: 'Approved', revision: 2 }) }),
+      );
+
+    render(
+      <StoryDetailPageContent
+        repository={createRepository({ id: 1, name: 'demo-repo', archivedAt: '2026-03-06T00:00:00.000Z' })}
+        actor={{ actorType: 'human', actorLabel: 'octocat' }}
+        storyId={3}
+        initialLatestEventId={0}
+        initialProposal={null}
+        initialWorkspace={createWorkspace({
+          status: 'removed',
+          statusReason: 'cleanup_requested',
+          removedAt: '2026-03-06T01:05:00.000Z',
+        })}
+        initialWorkItems={[createWorkItem({ id: 3, type: 'story', title: 'Story title', status: 'Approved', revision: 1 })]}
+      />,
+    );
+
+    expect(screen.queryByRole('link', { name: 'Launch run for this story' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Recreate workspace' })).toBeNull();
+
+    await user.click(screen.getByRole('button', { name: 'Refresh' }));
+
+    expect(await screen.findByRole('link', { name: 'Launch run for this story' })).toHaveAttribute(
+      'href',
+      '/runs?repository=demo-repo&launchWorkItemId=3',
+    );
+    expect(screen.getByRole('button', { name: 'Recreate workspace' })).toBeInTheDocument();
+    expect(screen.queryByText('Repository "demo-repo" is archived. Restore it before launching runs.')).toBeNull();
   });
 
   it('reconciles a stale story workspace and surfaces diagnostics', async () => {
@@ -689,6 +856,7 @@ describe('StoryDetailPageContent', () => {
 
     fetchMock
       .mockResolvedValueOnce(createJsonResponse({ error: { message: 'Revision conflict' } }, { status: 409 }))
+      .mockResolvedValueOnce(createJsonResponse({ repository: createRepository({ id: 1, name: 'demo-repo' }) }))
       .mockResolvedValueOnce(createJsonResponse({ error: { message: 'Not found' } }, { status: 404 }))
       .mockResolvedValueOnce(createJsonResponse({ workItems: [createWorkItem({ id: 3, status: 'Draft', revision: 2 })] }))
       .mockResolvedValueOnce(createJsonResponse({ proposal: null }))
@@ -709,6 +877,7 @@ describe('StoryDetailPageContent', () => {
     await user.click(screen.getByRole('button', { name: 'Request breakdown' }));
 
     expect(await screen.findByRole('alert')).toHaveTextContent('Revision conflict: Revision conflict');
+    expect(fetchMock).toHaveBeenCalledWith('/api/dashboard/repositories/1', { method: 'GET' });
     expect(fetchMock).toHaveBeenCalledWith('/api/dashboard/repositories/1/work-items', { method: 'GET' });
   });
 });
