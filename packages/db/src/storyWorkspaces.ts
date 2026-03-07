@@ -38,6 +38,7 @@ export type InsertStoryWorkspaceParams = {
 
 export type UpdateStoryWorkspaceParams = {
   storyWorkspaceId: number;
+  expectedStatus?: StoryWorkspaceStatus;
   worktreePath?: string;
   branch?: string;
   baseBranch?: string;
@@ -304,6 +305,14 @@ export function updateStoryWorkspace(db: AlphredDatabase, params: UpdateStoryWor
     throw new Error(`Story workspace id=${params.storyWorkspaceId} was not found for update.`);
   }
 
+  if (params.expectedStatus !== undefined) {
+    assertKnownStoryWorkspaceStatus(params.expectedStatus);
+    if (current.status !== params.expectedStatus) {
+      throw new Error(
+        `Story workspace update precondition failed for id=${params.storyWorkspaceId}; expected status "${params.expectedStatus}".`,
+      );
+    }
+  }
   if (params.status !== undefined) {
     assertKnownStoryWorkspaceStatus(params.status);
   }
@@ -326,10 +335,19 @@ export function updateStoryWorkspace(db: AlphredDatabase, params: UpdateStoryWor
   const updated = db
     .update(storyWorkspaces)
     .set(values)
-    .where(eq(storyWorkspaces.id, params.storyWorkspaceId))
+    .where(
+      params.expectedStatus === undefined
+        ? eq(storyWorkspaces.id, params.storyWorkspaceId)
+        : and(eq(storyWorkspaces.id, params.storyWorkspaceId), eq(storyWorkspaces.status, params.expectedStatus)),
+    )
     .run();
 
   if (updated.changes !== 1) {
+    if (params.expectedStatus !== undefined) {
+      throw new Error(
+        `Story workspace update precondition failed for id=${params.storyWorkspaceId}; expected status "${params.expectedStatus}".`,
+      );
+    }
     throw new Error(`Story workspace id=${params.storyWorkspaceId} was not found for update.`);
   }
 

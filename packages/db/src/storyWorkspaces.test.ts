@@ -222,6 +222,37 @@ describe('story_workspaces lifecycle helpers', () => {
     ).toThrow(`Story workspace reactivation precondition failed for id=${removed.id}; expected status "removed".`);
   });
 
+  it('applies update preconditions only while the row still has the expected status', () => {
+    const db = createMigratedDb();
+    const seed = seedStoryWorkItem(db, {
+      repositoryName: 'story-workspace-update-guard',
+      storyTitle: 'Update precondition guard',
+    });
+
+    const inserted = insertStoryWorkspace(db, {
+      repositoryId: seed.repository.id,
+      storyWorkItemId: seed.storyId,
+      worktreePath: '/tmp/alphred/worktrees/story-update-guard',
+      branch: 'alphred/story/14-a1b2c3',
+      baseBranch: 'main',
+      baseCommitHash: 'abc123',
+      occurredAt: '2026-03-05T10:00:00.000Z',
+    });
+
+    expect(() =>
+      updateStoryWorkspace(db, {
+        storyWorkspaceId: inserted.id,
+        expectedStatus: 'removed',
+        status: 'removed',
+        statusReason: 'cleanup_requested',
+        removedAt: '2026-03-05T10:05:00.000Z',
+        occurredAt: '2026-03-05T10:05:00.000Z',
+      }),
+    ).toThrow(`Story workspace update precondition failed for id=${inserted.id}; expected status "removed".`);
+
+    expect(getStoryWorkspaceById(db, inserted.id)).toEqual(inserted);
+  });
+
   it('preserves updatedAt when reconciliation only advances lastReconciledAt', () => {
     const db = createMigratedDb();
     const seed = seedStoryWorkItem(db, {

@@ -5,6 +5,7 @@ import {
   and,
   eq,
   getRepositoryById,
+  getStoryWorkspaceById,
   getStoryWorkspaceByStoryWorkItemId,
   insertStoryWorkspace,
   reactivateRemovedStoryWorkspace,
@@ -291,6 +292,12 @@ function isStoryWorkspaceReactivationPreconditionError(error: unknown): boolean 
   return readErrorMessage(error)
     .toLowerCase()
     .includes('story workspace reactivation precondition failed');
+}
+
+function isStoryWorkspaceUpdatePreconditionError(error: unknown): boolean {
+  return readErrorMessage(error)
+    .toLowerCase()
+    .includes('story workspace update precondition failed');
 }
 
 async function rollbackCreatedStoryWorkspace(params: {
@@ -747,14 +754,28 @@ async function cleanupWorkspaceRecord(
     }
   }
 
-  return updateStoryWorkspace(db, {
-    storyWorkspaceId: params.workspace.id,
-    status: 'removed',
-    statusReason: 'cleanup_requested',
-    lastReconciledAt: params.occurredAt,
-    removedAt: params.removedAtOnSuccess ?? params.occurredAt,
-    occurredAt: params.occurredAt,
-  });
+  try {
+    return updateStoryWorkspace(db, {
+      storyWorkspaceId: params.workspace.id,
+      expectedStatus: params.workspace.status === 'removed' ? 'removed' : undefined,
+      status: 'removed',
+      statusReason: 'cleanup_requested',
+      lastReconciledAt: params.occurredAt,
+      removedAt: params.removedAtOnSuccess ?? params.occurredAt,
+      occurredAt: params.occurredAt,
+    });
+  } catch (error) {
+    if (!isStoryWorkspaceUpdatePreconditionError(error)) {
+      throw error;
+    }
+
+    const currentWorkspace = getStoryWorkspaceById(db, params.workspace.id);
+    if (currentWorkspace) {
+      return currentWorkspace;
+    }
+
+    throw error;
+  }
 }
 
 async function repairRemovedWorkspaceRecord(
@@ -1024,6 +1045,18 @@ export function createStoryWorkspaceOperations(params: {
           occurredAt,
           removedAtOnSuccess: workspace.removedAt ?? occurredAt,
         });
+        if (cleaned.status !== 'removed') {
+          throw toCleanupConflict({
+            storyWorkspaceId: cleaned.id,
+            storyId: cleaned.storyWorkItemId,
+            worktreePath: cleaned.worktreePath,
+            details: {
+              currentStatus: cleaned.status,
+              expectedStatus: workspace.status,
+              reason: 'workspace_state_changed',
+            },
+          });
+        }
 
         return {
           workspace: toStoryWorkspaceSnapshot(cleaned),
