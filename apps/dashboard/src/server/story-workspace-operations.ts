@@ -21,6 +21,7 @@ import {
   listWorktrees,
   removeWorktree,
   resolveSandboxDir,
+  type WorktreeInfo,
 } from '@alphred/git';
 import type {
   DashboardCleanupStoryWorkspaceRequest,
@@ -346,10 +347,21 @@ async function defaultRemovePath(path: string): Promise<void> {
   await rm(path, { recursive: true, force: true });
 }
 
+type RegisteredWorktreeInspection =
+  | {
+      state: 'registered';
+      worktree: WorktreeInfo;
+    }
+  | {
+      state: 'unregistered' | 'unknown';
+      worktree: null;
+    };
+
 function toCleanupConflict(params: {
   storyWorkspaceId: number;
   storyId: number;
   worktreePath: string;
+  details?: Record<string, unknown>;
   cause?: unknown;
 }): DashboardIntegrationError {
   return new DashboardIntegrationError('conflict', `Unable to clean up story workspace for story id=${params.storyId}.`, {
@@ -358,6 +370,7 @@ function toCleanupConflict(params: {
       storyWorkspaceId: params.storyWorkspaceId,
       storyId: params.storyId,
       worktreePath: params.worktreePath,
+      ...(params.details ?? {}),
     },
     cause: params.cause,
   });
@@ -577,27 +590,47 @@ async function createFreshStoryWorkspace(params: {
   }
 }
 
-async function resolveRegisteredWorktreeState(params: {
+async function inspectRegisteredWorktreeState(params: {
   repositoryLocalPath: string | null;
   workspacePath: string;
   listRepositoryWorktrees: NonNullable<StoryWorkspaceOperationsDependencies['listWorktrees']>;
   pathExists: NonNullable<StoryWorkspaceOperationsDependencies['pathExists']>;
-}): Promise<'registered' | 'unregistered' | 'unknown'> {
+}): Promise<RegisteredWorktreeInspection> {
   if (params.repositoryLocalPath === null) {
-    return 'unregistered';
+    return {
+      state: 'unregistered',
+      worktree: null,
+    };
   }
 
   if (!(await params.pathExists(params.repositoryLocalPath))) {
-    return 'unregistered';
+    return {
+      state: 'unregistered',
+      worktree: null,
+    };
   }
 
   try {
     const worktrees = await params.listRepositoryWorktrees(params.repositoryLocalPath);
-    return worktrees.some(entry => normalizeFsPath(entry.path) === normalizeFsPath(params.workspacePath))
-      ? 'registered'
-      : 'unregistered';
+    const matchingWorktree =
+      worktrees.find(entry => normalizeFsPath(entry.path) === normalizeFsPath(params.workspacePath)) ?? null;
+
+    if (matchingWorktree) {
+      return {
+        state: 'registered',
+        worktree: matchingWorktree,
+      };
+    }
+
+    return {
+      state: 'unregistered',
+      worktree: null,
+    };
   } catch {
-    return 'unknown';
+    return {
+      state: 'unknown',
+      worktree: null,
+    };
   }
 }
 
@@ -623,13 +656,41 @@ async function cleanupWorkspaceRecord(
     managedWorktreeRoot: params.managedWorktreeRoot,
   });
 
-  const registeredStateBeforeRemoval = await resolveRegisteredWorktreeState({
+  const registeredInspectionBeforeRemoval = await inspectRegisteredWorktreeState({
     repositoryLocalPath: params.repositoryLocalPath,
     workspacePath: params.workspace.worktreePath,
     listRepositoryWorktrees: params.listRepositoryWorktrees,
     pathExists: params.pathExists,
   });
+  const registeredStateBeforeRemoval = registeredInspectionBeforeRemoval.state;
   const workspacePathExistsBeforeRemoval = await params.pathExists(params.workspace.worktreePath);
+
+  if (
+    registeredInspectionBeforeRemoval.state === 'registered' &&
+    registeredInspectionBeforeRemoval.worktree.branch !== params.workspace.branch
+  ) {
+    if (params.workspace.status !== 'removed') {
+      updateStoryWorkspace(db, {
+        storyWorkspaceId: params.workspace.id,
+        status: 'stale',
+        statusReason: 'branch_mismatch',
+        lastReconciledAt: params.occurredAt,
+        removedAt: null,
+        occurredAt: params.occurredAt,
+      });
+    }
+
+    throw toCleanupConflict({
+      storyWorkspaceId: params.workspace.id,
+      storyId: params.workspace.storyWorkItemId,
+      worktreePath: params.workspace.worktreePath,
+      details: {
+        reason: 'branch_mismatch',
+        expectedBranch: params.workspace.branch,
+        registeredBranch: registeredInspectionBeforeRemoval.worktree.branch,
+      },
+    });
+  }
 
   let cleanupError: unknown = null;
 
@@ -651,10 +712,13 @@ async function cleanupWorkspaceRecord(
     }
   }
 
-  const registeredStateAfterRemoval =
+  const registeredInspectionAfterRemoval =
     registeredStateBeforeRemoval === 'unregistered'
-      ? 'unregistered'
-      : await resolveRegisteredWorktreeState({
+      ? {
+          state: 'unregistered' as const,
+          worktree: null,
+        }
+      : await inspectRegisteredWorktreeState({
           repositoryLocalPath: params.repositoryLocalPath,
           workspacePath: params.workspace.worktreePath,
           listRepositoryWorktrees: params.listRepositoryWorktrees,
@@ -664,8 +728,8 @@ async function cleanupWorkspaceRecord(
 
   if (
     workspacePathExistsAfterRemoval ||
-    registeredStateAfterRemoval === 'registered' ||
-    registeredStateAfterRemoval === 'unknown'
+    registeredInspectionAfterRemoval.state === 'registered' ||
+    registeredInspectionAfterRemoval.state === 'unknown'
   ) {
     throw toCleanupConflict({
       storyWorkspaceId: params.workspace.id,

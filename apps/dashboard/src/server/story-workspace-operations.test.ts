@@ -997,6 +997,73 @@ describe('story workspace operations', () => {
     });
   });
 
+  it('rejects cleanup when the registered worktree branch no longer matches the workspace row', async () => {
+    const db = createMigratedDb();
+    const seed = seedRepositoryAndStory(db, { storyStatus: 'Approved' });
+    const workspacePath = '/tmp/alphred/worktrees/alphred-story-1-a1b2c3';
+    const removeWorktreeMock = vi.fn(async () => undefined);
+    const removePathMock = vi.fn(async () => undefined);
+    const deleteBranchMock = vi.fn(async () => undefined);
+
+    const existing = insertStoryWorkspace(db, {
+      repositoryId: seed.repositoryId,
+      storyWorkItemId: seed.storyId,
+      worktreePath: workspacePath,
+      branch: 'alphred/story/1-a1b2c3',
+      baseBranch: 'main',
+      baseCommitHash: 'abc123',
+      occurredAt: '2026-03-05T10:00:00.000Z',
+    });
+
+    const operations = createStoryWorkspaceOperations({
+      withDatabase: createWithDatabase(db),
+      dependencies: createDependencies(seed.repository, {
+        listWorktrees: async () => [
+          {
+            path: workspacePath,
+            branch: 'alphred/story/1-z9y8x7',
+            commit: 'abc123',
+          },
+        ],
+        removeWorktree: removeWorktreeMock,
+        removePath: removePathMock,
+        deleteBranch: deleteBranchMock,
+        now: () => '2026-03-06T01:35:15.000Z',
+      }),
+      environment: createTestEnvironment(),
+    });
+
+    await expect(
+      operations.cleanupStoryWorkspace({
+        repositoryId: seed.repositoryId,
+        storyId: seed.storyId,
+      }),
+    ).rejects.toMatchObject({
+      code: 'conflict',
+      status: 409,
+      message: `Unable to clean up story workspace for story id=${seed.storyId}.`,
+      details: {
+        storyWorkspaceId: existing.id,
+        storyId: seed.storyId,
+        worktreePath: workspacePath,
+        reason: 'branch_mismatch',
+        expectedBranch: 'alphred/story/1-a1b2c3',
+        registeredBranch: 'alphred/story/1-z9y8x7',
+      },
+    });
+
+    expect(removeWorktreeMock).not.toHaveBeenCalled();
+    expect(removePathMock).not.toHaveBeenCalled();
+    expect(deleteBranchMock).not.toHaveBeenCalled();
+    expect(getStoryWorkspaceByStoryWorkItemId(db, seed.storyId)).toMatchObject({
+      id: existing.id,
+      status: 'stale',
+      statusReason: 'branch_mismatch',
+      lastReconciledAt: '2026-03-06T01:35:15.000Z',
+      removedAt: null,
+    });
+  });
+
   it('keeps cleanup successful when branch deletion fails after the worktree is gone', async () => {
     const db = createMigratedDb();
     const seed = seedRepositoryAndStory(db, { storyStatus: 'Approved' });
@@ -1378,6 +1445,80 @@ describe('story workspace operations', () => {
       statusReason: null,
       removedAt: null,
       lastReconciledAt: '2026-03-06T01:46:00.000Z',
+    });
+  });
+
+  it('rejects recreate when removed-state repair encounters a branch-mismatched worktree', async () => {
+    const db = createMigratedDb();
+    const seed = seedRepositoryAndStory(db, { storyStatus: 'Approved' });
+    const originalPath = '/tmp/alphred/worktrees/alphred-story-1-a1b2c3';
+    const removeWorktreeMock = vi.fn(async () => undefined);
+    const removePathMock = vi.fn(async () => undefined);
+    const deleteBranchMock = vi.fn(async () => undefined);
+    const createWorktreeMock = vi.fn(createDependencies(seed.repository).createWorktree);
+    const existing = insertStoryWorkspace(db, {
+      repositoryId: seed.repositoryId,
+      storyWorkItemId: seed.storyId,
+      worktreePath: originalPath,
+      branch: 'alphred/story/1-a1b2c3',
+      baseBranch: 'main',
+      baseCommitHash: 'abc123',
+      occurredAt: '2026-03-05T10:00:00.000Z',
+    });
+    updateStoryWorkspace(db, {
+      storyWorkspaceId: existing.id,
+      status: 'removed',
+      statusReason: 'cleanup_requested',
+      removedAt: '2026-03-06T01:45:00.000Z',
+      occurredAt: '2026-03-06T01:45:00.000Z',
+    });
+
+    const operations = createStoryWorkspaceOperations({
+      withDatabase: createWithDatabase(db),
+      dependencies: createDependencies(seed.repository, {
+        listWorktrees: async () => [
+          {
+            path: originalPath,
+            branch: 'alphred/story/1-z9y8x7',
+            commit: 'abc123',
+          },
+        ],
+        removeWorktree: removeWorktreeMock,
+        removePath: removePathMock,
+        deleteBranch: deleteBranchMock,
+        createWorktree: createWorktreeMock,
+        now: () => '2026-03-06T01:46:30.000Z',
+      }),
+      environment: createTestEnvironment(),
+    });
+
+    await expect(
+      operations.recreateStoryWorkspace({
+        repositoryId: seed.repositoryId,
+        storyId: seed.storyId,
+      }),
+    ).rejects.toMatchObject({
+      code: 'conflict',
+      status: 409,
+      message: `Story workspace for story id=${seed.storyId} must be removed before it can be recreated.`,
+      details: {
+        storyWorkspaceId: existing.id,
+        storyId: seed.storyId,
+        currentStatus: 'stale',
+        allowedStatuses: ['removed'],
+      },
+    });
+
+    expect(removeWorktreeMock).not.toHaveBeenCalled();
+    expect(removePathMock).not.toHaveBeenCalled();
+    expect(deleteBranchMock).not.toHaveBeenCalled();
+    expect(createWorktreeMock).not.toHaveBeenCalled();
+    expect(getStoryWorkspaceByStoryWorkItemId(db, seed.storyId)).toMatchObject({
+      id: existing.id,
+      status: 'stale',
+      statusReason: 'removed_state_drift',
+      lastReconciledAt: '2026-03-06T01:46:30.000Z',
+      removedAt: null,
     });
   });
 
@@ -1918,6 +2059,75 @@ describe('story workspace operations', () => {
       baseCommitHash: fixture.initialCommit,
       status: 'active',
     });
+  });
+
+  it('cleans up a live worktree and deletes its branch from git', async () => {
+    const fixture = await createLiveGitFixture();
+    const db = createMigratedDb();
+    const seed = seedRepositoryAndStory(db, {
+      localPath: fixture.repositoryPath,
+      storyStatus: 'Approved',
+    });
+    const liveWorktree = await withGitEnvironment(fixture.gitEnvironment, async () =>
+      createGitWorktree(fixture.repositoryPath, join(fixture.sandboxDir, 'worktrees'), {
+        branch: 'alphred/story/1-a1b2c3',
+        baseRef: 'main',
+      }),
+    );
+
+    insertStoryWorkspace(db, {
+      repositoryId: seed.repositoryId,
+      storyWorkItemId: seed.storyId,
+      worktreePath: liveWorktree.path,
+      branch: liveWorktree.branch,
+      baseBranch: 'main',
+      baseCommitHash: liveWorktree.commit,
+      occurredAt: '2026-03-06T02:06:00.000Z',
+    });
+
+    const operations = createStoryWorkspaceOperations({
+      withDatabase: createWithDatabase(db),
+      dependencies: {
+        ensureRepositoryClone: async () => ({
+          action: 'fetched' as const,
+          repository: seed.repository,
+          sync: {
+            mode: 'fetch' as const,
+            strategy: null,
+            branch: seed.repository.defaultBranch,
+            status: 'fetched' as const,
+            conflictMessage: null,
+          },
+        }),
+        now: () => '2026-03-06T02:07:00.000Z',
+      },
+      environment: fixture.gitEnvironment,
+    });
+
+    const cleaned = await withGitEnvironment(fixture.gitEnvironment, async () =>
+      operations.cleanupStoryWorkspace({
+        repositoryId: seed.repositoryId,
+        storyId: seed.storyId,
+      }),
+    );
+
+    expect(cleaned.workspace).toMatchObject({
+      status: 'removed',
+      statusReason: 'cleanup_requested',
+      removedAt: '2026-03-06T02:07:00.000Z',
+      lastReconciledAt: '2026-03-06T02:07:00.000Z',
+    });
+    expect(await pathExists(liveWorktree.path)).toBe(false);
+    expect(
+      await runGit(fixture.repositoryPath, ['worktree', 'list', '--porcelain'], fixture.gitEnvironment),
+    ).not.toContain(`worktree ${liveWorktree.path}`);
+    await expect(
+      runGit(
+        fixture.repositoryPath,
+        ['rev-parse', '--verify', `refs/heads/${liveWorktree.branch}`],
+        fixture.gitEnvironment,
+      ),
+    ).rejects.toThrow();
   });
 
   it('surfaces rollback cleanup failure distinctly after a live worktree create succeeds', async () => {
