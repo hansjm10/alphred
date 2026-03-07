@@ -2,10 +2,12 @@ import type { WorkItemActorType } from '@alphred/db';
 import { workItemStatusesByType, workItemTypes, type WorkItemStatus, type WorkItemType } from '@alphred/shared';
 import type {
   DashboardApproveStoryBreakdownRequest,
+  DashboardCreateStoryWorkspaceRequest,
   DashboardCreateWorkItemRequest,
   DashboardLaunchStoryBreakdownRunRequest,
   DashboardMoveWorkItemStatusRequest,
   DashboardProposeStoryBreakdownRequest,
+  DashboardReconcileStoryWorkspaceRequest,
   DashboardRunStoryWorkflowRequest,
   DashboardRequestWorkItemReplanRequest,
   DashboardStartTaskWorkflowRequest,
@@ -577,4 +579,30 @@ export function parseRunStoryWorkflowRequest(
   }
 
   return request;
+}
+
+function parseStoryWorkspaceRequest(
+  payload: Record<string, unknown>,
+  storyId: number,
+): DashboardCreateStoryWorkspaceRequest {
+  const repositoryId = parsePositiveInteger(payload.repositoryId, 'Field "repositoryId" must be a positive integer.');
+
+  return {
+    repositoryId,
+    storyId,
+  };
+}
+
+export function parseCreateStoryWorkspaceRequest(
+  payload: Record<string, unknown>,
+  storyId: number,
+): DashboardCreateStoryWorkspaceRequest {
+  return parseStoryWorkspaceRequest(payload, storyId);
+}
+
+export function parseReconcileStoryWorkspaceRequest(
+  payload: Record<string, unknown>,
+  storyId: number,
+): DashboardReconcileStoryWorkspaceRequest {
+  return parseStoryWorkspaceRequest(payload, storyId);
 }

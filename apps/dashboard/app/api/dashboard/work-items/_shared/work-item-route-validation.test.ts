@@ -2,11 +2,13 @@ import { describe, expect, it } from 'vitest';
 import { DashboardIntegrationError } from '@dashboard/server/dashboard-errors';
 import {
   parseApproveStoryBreakdownRequest,
+  parseCreateStoryWorkspaceRequest,
   parseCreateWorkItemRequest,
   parseJsonObjectBody,
   parseLaunchStoryBreakdownRunRequest,
   parseMoveWorkItemStatusRequest,
   parseProposeStoryBreakdownRequest,
+  parseReconcileStoryWorkspaceRequest,
   parseRequestWorkItemReplanRequest,
   parseRepositoryIdFromPathSegment,
   parseRepositoryIdFromQuery,
@@ -800,6 +802,54 @@ describe('work item route validation', () => {
             approveOnly: true,
           },
           22,
+        ),
+      ).toThrowError(DashboardIntegrationError);
+    });
+  });
+
+  describe('story workspace request parsing', () => {
+    it('parses create and reconcile payloads', () => {
+      expect(
+        parseCreateStoryWorkspaceRequest(
+          {
+            repositoryId: 3,
+          },
+          20,
+        ),
+      ).toEqual({
+        repositoryId: 3,
+        storyId: 20,
+      });
+
+      expect(
+        parseReconcileStoryWorkspaceRequest(
+          {
+            repositoryId: 3,
+          },
+          20,
+        ),
+      ).toEqual({
+        repositoryId: 3,
+        storyId: 20,
+      });
+    });
+
+    it('rejects invalid story workspace payloads', () => {
+      expect(() =>
+        parseCreateStoryWorkspaceRequest(
+          {
+            repositoryId: '3',
+          },
+          20,
+        ),
+      ).toThrowError(DashboardIntegrationError);
+
+      expect(() =>
+        parseReconcileStoryWorkspaceRequest(
+          {
+            repositoryId: 0,
+          },
+          20,
         ),
       ).toThrowError(DashboardIntegrationError);
     });
