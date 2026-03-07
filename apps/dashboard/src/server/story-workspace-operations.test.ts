@@ -174,6 +174,60 @@ describe('story workspace operations', () => {
     });
   });
 
+  it('advances only lastReconciledAt across repeated unchanged active reads', async () => {
+    const db = createMigratedDb();
+    const seed = seedRepositoryAndStory(db, { storyStatus: 'Approved' });
+
+    insertStoryWorkspace(db, {
+      repositoryId: seed.repositoryId,
+      storyWorkItemId: seed.storyId,
+      worktreePath: '/tmp/alphred/worktrees/alphred-story-1-a1b2c3',
+      branch: 'alphred/story/1-a1b2c3',
+      baseBranch: 'main',
+      baseCommitHash: 'abc123',
+      occurredAt: '2026-03-05T10:00:00.000Z',
+    });
+
+    const operations = createStoryWorkspaceOperations({
+      withDatabase: createWithDatabase(db),
+      dependencies: createDependencies(seed.repository, {
+        now: vi
+          .fn<() => string>()
+          .mockReturnValueOnce('2026-03-06T01:00:00.000Z')
+          .mockReturnValueOnce('2026-03-06T01:05:00.000Z'),
+      }),
+      environment: createTestEnvironment(),
+    });
+
+    const firstRead = await operations.getStoryWorkspace({
+      repositoryId: seed.repositoryId,
+      storyId: seed.storyId,
+    });
+    const secondRead = await operations.getStoryWorkspace({
+      repositoryId: seed.repositoryId,
+      storyId: seed.storyId,
+    });
+
+    expect(firstRead.workspace).toMatchObject({
+      status: 'active',
+      statusReason: null,
+      lastReconciledAt: '2026-03-06T01:00:00.000Z',
+      updatedAt: '2026-03-05T10:00:00.000Z',
+    });
+    expect(secondRead.workspace).toMatchObject({
+      status: 'active',
+      statusReason: null,
+      lastReconciledAt: '2026-03-06T01:05:00.000Z',
+      updatedAt: '2026-03-05T10:00:00.000Z',
+    });
+    expect(getStoryWorkspaceByStoryWorkItemId(db, seed.storyId)).toMatchObject({
+      status: 'active',
+      statusReason: null,
+      lastReconciledAt: '2026-03-06T01:05:00.000Z',
+      updatedAt: '2026-03-05T10:00:00.000Z',
+    });
+  });
+
   it('reconciles a workspace to stale when the path is missing', async () => {
     const db = createMigratedDb();
     const seed = seedRepositoryAndStory(db);
@@ -206,6 +260,53 @@ describe('story workspace operations', () => {
       status: 'stale',
       statusReason: 'missing_path',
       lastReconciledAt: '2026-03-06T01:00:00.000Z',
+    });
+  });
+
+  it('advances updatedAt when getStoryWorkspace reads reconcile stale state back to active', async () => {
+    const db = createMigratedDb();
+    const seed = seedRepositoryAndStory(db, { storyStatus: 'Approved' });
+    const existing = insertStoryWorkspace(db, {
+      repositoryId: seed.repositoryId,
+      storyWorkItemId: seed.storyId,
+      worktreePath: '/tmp/alphred/worktrees/alphred-story-1-a1b2c3',
+      branch: 'alphred/story/1-a1b2c3',
+      baseBranch: 'main',
+      baseCommitHash: 'abc123',
+      occurredAt: '2026-03-05T10:00:00.000Z',
+    });
+
+    const stale = updateStoryWorkspace(db, {
+      storyWorkspaceId: existing.id,
+      status: 'stale',
+      statusReason: 'missing_path',
+      lastReconciledAt: '2026-03-05T10:05:00.000Z',
+      occurredAt: '2026-03-05T10:05:00.000Z',
+    });
+
+    const operations = createStoryWorkspaceOperations({
+      withDatabase: createWithDatabase(db),
+      dependencies: createDependencies(seed.repository, {
+        now: () => '2026-03-06T01:03:00.000Z',
+      }),
+      environment: createTestEnvironment(),
+    });
+
+    const loaded = await operations.getStoryWorkspace({
+      repositoryId: seed.repositoryId,
+      storyId: seed.storyId,
+    });
+
+    expect(stale).toMatchObject({
+      status: 'stale',
+      statusReason: 'missing_path',
+      updatedAt: '2026-03-05T10:05:00.000Z',
+    });
+    expect(loaded.workspace).toMatchObject({
+      status: 'active',
+      statusReason: null,
+      lastReconciledAt: '2026-03-06T01:03:00.000Z',
+      updatedAt: '2026-03-06T01:03:00.000Z',
     });
   });
 
