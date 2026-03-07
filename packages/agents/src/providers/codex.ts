@@ -40,7 +40,7 @@ export class CodexProviderError extends Error {
   readonly code: CodexProviderErrorCode;
   readonly retryable: boolean;
   readonly details?: Record<string, unknown>;
-  readonly cause?: unknown;
+  override readonly cause?: unknown;
 
   constructor(
     code: CodexProviderErrorCode,

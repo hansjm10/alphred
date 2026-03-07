@@ -1,6 +1,15 @@
 {
   "extends": "./tsconfig.json",
   "compilerOptions": {
+    "baseUrl": ".",
+    "paths": {
+      "@dashboard/*": ["src/*"],
+      "@alphred/agents": ["../../packages/agents/src/index.ts"],
+      "@alphred/core": ["../../packages/core/src/index.ts"],
+      "@alphred/db": ["../../packages/db/src/index.ts"],
+      "@alphred/git": ["../../packages/git/src/index.ts"],
+      "@alphred/shared": ["../../packages/shared/src/index.ts"]
+    },
     "types": ["node", "vitest/globals", "@testing-library/jest-dom"]
   },
   "include": [

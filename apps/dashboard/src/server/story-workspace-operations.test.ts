@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { access, mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import { access, mkdtemp, mkdir, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -20,6 +20,13 @@ import { createStoryWorkspaceOperations, type StoryWorkspaceOperationsDependenci
 
 const execFileAsync = promisify(execFile);
 const cleanupPaths = new Set<string>();
+const GIT_ENV_KEYS = [
+  'ALPHRED_SANDBOX_DIR',
+  'GIT_CONFIG_GLOBAL',
+  'GIT_CONFIG_NOSYSTEM',
+  'HOME',
+  'XDG_CONFIG_HOME',
+] as const;
 
 function createMigratedDb(): AlphredDatabase {
   const db = createDatabase(':memory:');
@@ -31,6 +38,7 @@ function seedRepositoryAndStory(
   db: AlphredDatabase,
   overrides: {
     archivedAt?: string | null;
+    defaultBranch?: string;
     storyStatus?: 'Draft' | 'Approved' | 'Done';
     localPath?: string | null;
   } = {},
@@ -42,7 +50,7 @@ function seedRepositoryAndStory(
       provider: 'github',
       remoteUrl: 'https://github.com/octocat/demo-repo.git',
       remoteRef: 'octocat/demo-repo',
-      defaultBranch: 'main',
+      defaultBranch: overrides.defaultBranch ?? 'main',
       branchTemplate: null,
       localPath: overrides.localPath ?? '/tmp/alphred/repos/github/octocat/demo-repo',
       cloneStatus: 'cloned',
@@ -81,13 +89,47 @@ function createTestEnvironment(): NodeJS.ProcessEnv {
   };
 }
 
-async function runGit(cwd: string, args: readonly string[]): Promise<string> {
+async function runGit(
+  cwd: string,
+  args: readonly string[],
+  environment: NodeJS.ProcessEnv = process.env,
+): Promise<string> {
   const { stdout } = await execFileAsync('git', args, {
     cwd,
-    env: process.env,
+    env: environment,
   });
 
   return stdout.trim();
+}
+
+async function withGitEnvironment<T>(
+  environment: NodeJS.ProcessEnv,
+  operation: () => Promise<T>,
+): Promise<T> {
+  const originalValues = new Map<(typeof GIT_ENV_KEYS)[number], string | undefined>();
+
+  for (const key of GIT_ENV_KEYS) {
+    originalValues.set(key, process.env[key]);
+    const nextValue = environment[key];
+    if (nextValue === undefined) {
+      delete process.env[key];
+    } else {
+      process.env[key] = nextValue;
+    }
+  }
+
+  try {
+    return await operation();
+  } finally {
+    for (const key of GIT_ENV_KEYS) {
+      const originalValue = originalValues.get(key);
+      if (originalValue === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = originalValue;
+      }
+    }
+  }
 }
 
 async function pathExists(path: string): Promise<boolean> {
@@ -103,6 +145,7 @@ type LiveGitFixture = {
   sandboxDir: string;
   repositoryPath: string;
   initialCommit: string;
+  gitEnvironment: NodeJS.ProcessEnv;
 };
 
 function requireLiveWorktree(worktree: WorktreeInfo | null): WorktreeInfo {
@@ -113,33 +156,42 @@ function requireLiveWorktree(worktree: WorktreeInfo | null): WorktreeInfo {
   return worktree;
 }
 
+async function createLiveGitEnvironment(sandboxDir: string): Promise<NodeJS.ProcessEnv> {
+  const emptyGlobalConfigPath = join(sandboxDir, 'empty.gitconfig');
+  await writeFile(emptyGlobalConfigPath, '');
+
+  return {
+    ...process.env,
+    ALPHRED_SANDBOX_DIR: sandboxDir,
+    GIT_CONFIG_GLOBAL: emptyGlobalConfigPath,
+    GIT_CONFIG_NOSYSTEM: '1',
+    HOME: sandboxDir,
+    XDG_CONFIG_HOME: sandboxDir,
+  };
+}
+
 async function createLiveGitFixture(): Promise<LiveGitFixture> {
   const sandboxDir = await mkdtemp(join(tmpdir(), 'alphred-story-workspace-'));
   cleanupPaths.add(sandboxDir);
+  const gitEnvironment = await createLiveGitEnvironment(sandboxDir);
 
   const repositoryPath = join(sandboxDir, 'repo');
   await mkdir(repositoryPath, { recursive: true });
   await mkdir(join(sandboxDir, 'worktrees'), { recursive: true });
 
-  await runGit(repositoryPath, ['init']);
-  await runGit(repositoryPath, ['config', 'user.email', 'alphred-tests@example.com']);
-  await runGit(repositoryPath, ['config', 'user.name', 'Alphred Tests']);
-  await runGit(repositoryPath, ['checkout', '-b', 'main']);
+  await runGit(repositoryPath, ['init'], gitEnvironment);
+  await runGit(repositoryPath, ['config', 'user.email', 'alphred-tests@example.com'], gitEnvironment);
+  await runGit(repositoryPath, ['config', 'user.name', 'Alphred Tests'], gitEnvironment);
+  await runGit(repositoryPath, ['checkout', '-b', 'main'], gitEnvironment);
   await writeFile(join(repositoryPath, 'README.md'), '# fixture\n');
-  await runGit(repositoryPath, ['add', 'README.md']);
-  await runGit(repositoryPath, ['commit', '-m', 'initial']);
+  await runGit(repositoryPath, ['add', 'README.md'], gitEnvironment);
+  await runGit(repositoryPath, ['commit', '-m', 'initial'], gitEnvironment);
 
   return {
     sandboxDir,
     repositoryPath,
-    initialCommit: await runGit(repositoryPath, ['rev-parse', 'HEAD']),
-  };
-}
-
-function createLiveGitEnvironment(sandboxDir: string): NodeJS.ProcessEnv {
-  return {
-    ...process.env,
-    ALPHRED_SANDBOX_DIR: sandboxDir,
+    initialCommit: await runGit(repositoryPath, ['rev-parse', 'HEAD'], gitEnvironment),
+    gitEnvironment,
   };
 }
 
@@ -256,17 +308,23 @@ describe('story workspace operations', () => {
         }),
         now: () => '2026-03-06T02:00:00.000Z',
       },
-      environment: createLiveGitEnvironment(fixture.sandboxDir),
+      environment: fixture.gitEnvironment,
     });
 
-    const created = await operations.createStoryWorkspace({
-      repositoryId: seed.repositoryId,
-      storyId: seed.storyId,
-    });
+    const created = await withGitEnvironment(fixture.gitEnvironment, async () =>
+      operations.createStoryWorkspace({
+        repositoryId: seed.repositoryId,
+        storyId: seed.storyId,
+      }),
+    );
 
-    const worktreeList = await runGit(fixture.repositoryPath, ['worktree', 'list', '--porcelain']);
-    const branchCommit = await runGit(fixture.repositoryPath, ['rev-parse', '--verify', `refs/heads/${created.workspace.branch}`]);
-    const worktreeCommit = await runGit(created.workspace.path, ['rev-parse', 'HEAD']);
+    const worktreeList = await runGit(fixture.repositoryPath, ['worktree', 'list', '--porcelain'], fixture.gitEnvironment);
+    const branchCommit = await runGit(
+      fixture.repositoryPath,
+      ['rev-parse', '--verify', `refs/heads/${created.workspace.branch}`],
+      fixture.gitEnvironment,
+    );
+    const worktreeCommit = await runGit(created.workspace.path, ['rev-parse', 'HEAD'], fixture.gitEnvironment);
 
     expect(created.workspace).toMatchObject({
       repositoryId: seed.repositoryId,
@@ -291,6 +349,58 @@ describe('story workspace operations', () => {
       baseCommitHash: fixture.initialCommit,
       status: 'active',
     });
+  });
+
+  it('surfaces live createWorktree failure distinctly before any rollback cleanup', async () => {
+    const fixture = await createLiveGitFixture();
+    const db = createMigratedDb();
+    const seed = seedRepositoryAndStory(db, {
+      defaultBranch: 'missing-base',
+      localPath: fixture.repositoryPath,
+      storyStatus: 'Approved',
+    });
+
+    const operations = createStoryWorkspaceOperations({
+      withDatabase: createWithDatabase(db),
+      dependencies: {
+        ensureRepositoryClone: async () => ({
+          action: 'fetched' as const,
+          repository: seed.repository,
+          sync: {
+            mode: 'fetch' as const,
+            strategy: null,
+            branch: seed.repository.defaultBranch,
+            status: 'fetched' as const,
+            conflictMessage: null,
+          },
+        }),
+        now: () => '2026-03-06T02:02:00.000Z',
+      },
+      environment: fixture.gitEnvironment,
+    });
+
+    const thrown = await withGitEnvironment(fixture.gitEnvironment, async () =>
+      operations
+        .createStoryWorkspace({
+          repositoryId: seed.repositoryId,
+          storyId: seed.storyId,
+        })
+        .catch(error => error),
+    );
+
+    expect(thrown).toMatchObject({
+      code: 'conflict',
+      status: 409,
+      message: `Unable to create story workspace for story id=${seed.storyId}.`,
+      details: {
+        repositoryId: seed.repositoryId,
+        storyId: seed.storyId,
+        branch: expect.stringMatching(new RegExp(`^alphred/story/${seed.storyId}-`)),
+      },
+    });
+    expect(thrown.message).not.toBe(`Unable to roll back story workspace create failure for story id=${seed.storyId}.`);
+    expect(await readdir(join(fixture.sandboxDir, 'worktrees'))).toEqual([]);
+    expect(getStoryWorkspaceByStoryWorkItemId(db, seed.storyId)).toBeNull();
   });
 
   it('returns null from getStoryWorkspace when no workspace exists yet', async () => {
@@ -1012,32 +1122,38 @@ describe('story workspace operations', () => {
         },
         now: () => '2026-03-06T02:05:00.000Z',
       },
-      environment: createLiveGitEnvironment(fixture.sandboxDir),
+      environment: fixture.gitEnvironment,
     });
 
-    await expect(
-      operations.createStoryWorkspace({
-        repositoryId: seed.repositoryId,
-        storyId: seed.storyId,
-      }),
-    ).rejects.toMatchObject({
-      code: 'conflict',
-      status: 409,
-      message: `Story workspace for story id=${seed.storyId} already exists. Reconcile it instead of creating a new one.`,
-      details: {
-        storyId: seed.storyId,
-        currentStatus: 'active',
-        allowedActions: ['reconcile'],
-      },
+    await withGitEnvironment(fixture.gitEnvironment, async () => {
+      await expect(
+        operations.createStoryWorkspace({
+          repositoryId: seed.repositoryId,
+          storyId: seed.storyId,
+        }),
+      ).rejects.toMatchObject({
+        code: 'conflict',
+        status: 409,
+        message: `Story workspace for story id=${seed.storyId} already exists. Reconcile it instead of creating a new one.`,
+        details: {
+          storyId: seed.storyId,
+          currentStatus: 'active',
+          allowedActions: ['reconcile'],
+        },
+      });
     });
 
     const liveWorktree = requireLiveWorktree(createdWorktree);
-    const worktreeList = await runGit(fixture.repositoryPath, ['worktree', 'list', '--porcelain']);
+    const worktreeList = await runGit(fixture.repositoryPath, ['worktree', 'list', '--porcelain'], fixture.gitEnvironment);
 
     expect(await pathExists(liveWorktree.path)).toBe(false);
     expect(worktreeList).not.toContain(`worktree ${liveWorktree.path}`);
     await expect(
-      runGit(fixture.repositoryPath, ['rev-parse', '--verify', `refs/heads/${liveWorktree.branch}`]),
+      runGit(
+        fixture.repositoryPath,
+        ['rev-parse', '--verify', `refs/heads/${liveWorktree.branch}`],
+        fixture.gitEnvironment,
+      ),
     ).rejects.toThrow();
     expect(getStoryWorkspaceByStoryWorkItemId(db, seed.storyId)).toMatchObject({
       worktreePath: competingPath,
@@ -1092,15 +1208,17 @@ describe('story workspace operations', () => {
         },
         now: () => '2026-03-06T02:10:00.000Z',
       },
-      environment: createLiveGitEnvironment(fixture.sandboxDir),
+      environment: fixture.gitEnvironment,
     });
 
-    const thrown = await operations
-      .createStoryWorkspace({
-        repositoryId: seed.repositoryId,
-        storyId: seed.storyId,
-      })
-      .catch(error => error);
+    const thrown = await withGitEnvironment(fixture.gitEnvironment, async () =>
+      operations
+        .createStoryWorkspace({
+          repositoryId: seed.repositoryId,
+          storyId: seed.storyId,
+        })
+        .catch(error => error),
+    );
 
     const liveWorktree = requireLiveWorktree(createdWorktree);
 
@@ -1117,7 +1235,11 @@ describe('story workspace operations', () => {
     });
     expect(await pathExists(liveWorktree.path)).toBe(false);
     expect(
-      await runGit(fixture.repositoryPath, ['rev-parse', '--verify', `refs/heads/${liveWorktree.branch}`]),
+      await runGit(
+        fixture.repositoryPath,
+        ['rev-parse', '--verify', `refs/heads/${liveWorktree.branch}`],
+        fixture.gitEnvironment,
+      ),
     ).toBe(fixture.initialCommit);
     expect(getStoryWorkspaceByStoryWorkItemId(db, seed.storyId)).toMatchObject({
       worktreePath: competingPath,

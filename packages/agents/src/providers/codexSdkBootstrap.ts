@@ -26,7 +26,7 @@ export type CodexBootstrapErrorCode =
 export class CodexBootstrapError extends Error {
   readonly code: CodexBootstrapErrorCode;
   readonly details?: Record<string, unknown>;
-  readonly cause?: unknown;
+  override readonly cause?: unknown;
 
   constructor(
     code: CodexBootstrapErrorCode,

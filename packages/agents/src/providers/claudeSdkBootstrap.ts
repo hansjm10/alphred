@@ -20,7 +20,7 @@ export type ClaudeBootstrapErrorCode =
 export class ClaudeBootstrapError extends Error {
   readonly code: ClaudeBootstrapErrorCode;
   readonly details?: Record<string, unknown>;
-  readonly cause?: unknown;
+  override readonly cause?: unknown;
 
   constructor(
     code: ClaudeBootstrapErrorCode,
