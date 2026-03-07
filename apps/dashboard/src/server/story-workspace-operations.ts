@@ -447,14 +447,28 @@ function markWorkspaceRemovedStateDrift(
   workspace: StoryWorkspaceRecord,
   occurredAt: string,
 ): StoryWorkspaceRecord {
-  return updateStoryWorkspace(db, {
-    storyWorkspaceId: workspace.id,
-    status: 'stale',
-    statusReason: 'removed_state_drift',
-    lastReconciledAt: occurredAt,
-    removedAt: null,
-    occurredAt,
-  });
+  try {
+    return updateStoryWorkspace(db, {
+      storyWorkspaceId: workspace.id,
+      expectedStatus: 'removed',
+      status: 'stale',
+      statusReason: 'removed_state_drift',
+      lastReconciledAt: occurredAt,
+      removedAt: null,
+      occurredAt,
+    });
+  } catch (error) {
+    if (!isStoryWorkspaceUpdatePreconditionError(error)) {
+      throw error;
+    }
+
+    const currentWorkspace = getStoryWorkspaceById(db, workspace.id);
+    if (currentWorkspace) {
+      return currentWorkspace;
+    }
+
+    throw error;
+  }
 }
 
 async function createFreshStoryWorkspace(params: {
