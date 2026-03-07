@@ -2,12 +2,14 @@ import type { WorkItemActorType } from '@alphred/db';
 import { workItemStatusesByType, workItemTypes, type WorkItemStatus, type WorkItemType } from '@alphred/shared';
 import type {
   DashboardApproveStoryBreakdownRequest,
+  DashboardCleanupStoryWorkspaceRequest,
   DashboardCreateStoryWorkspaceRequest,
   DashboardCreateWorkItemRequest,
   DashboardLaunchStoryBreakdownRunRequest,
   DashboardMoveWorkItemStatusRequest,
   DashboardProposeStoryBreakdownRequest,
   DashboardReconcileStoryWorkspaceRequest,
+  DashboardRecreateStoryWorkspaceRequest,
   DashboardRunStoryWorkflowRequest,
   DashboardRequestWorkItemReplanRequest,
   DashboardStartTaskWorkflowRequest,
@@ -604,5 +606,19 @@ export function parseReconcileStoryWorkspaceRequest(
   payload: Record<string, unknown>,
   storyId: number,
 ): DashboardReconcileStoryWorkspaceRequest {
+  return parseStoryWorkspaceRequest(payload, storyId);
+}
+
+export function parseCleanupStoryWorkspaceRequest(
+  payload: Record<string, unknown>,
+  storyId: number,
+): DashboardCleanupStoryWorkspaceRequest {
+  return parseStoryWorkspaceRequest(payload, storyId);
+}
+
+export function parseRecreateStoryWorkspaceRequest(
+  payload: Record<string, unknown>,
+  storyId: number,
+): DashboardRecreateStoryWorkspaceRequest {
   return parseStoryWorkspaceRequest(payload, storyId);
 }

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { DashboardIntegrationError } from '@dashboard/server/dashboard-errors';
 import {
   parseApproveStoryBreakdownRequest,
+  parseCleanupStoryWorkspaceRequest,
   parseCreateStoryWorkspaceRequest,
   parseCreateWorkItemRequest,
   parseJsonObjectBody,
@@ -9,6 +10,7 @@ import {
   parseMoveWorkItemStatusRequest,
   parseProposeStoryBreakdownRequest,
   parseReconcileStoryWorkspaceRequest,
+  parseRecreateStoryWorkspaceRequest,
   parseRequestWorkItemReplanRequest,
   parseRepositoryIdFromPathSegment,
   parseRepositoryIdFromQuery,
@@ -808,7 +810,7 @@ describe('work item route validation', () => {
   });
 
   describe('story workspace request parsing', () => {
-    it('parses create and reconcile payloads', () => {
+    it('parses create, reconcile, cleanup, and recreate payloads', () => {
       expect(
         parseCreateStoryWorkspaceRequest(
           {
@@ -823,6 +825,30 @@ describe('work item route validation', () => {
 
       expect(
         parseReconcileStoryWorkspaceRequest(
+          {
+            repositoryId: 3,
+          },
+          20,
+        ),
+      ).toEqual({
+        repositoryId: 3,
+        storyId: 20,
+      });
+
+      expect(
+        parseCleanupStoryWorkspaceRequest(
+          {
+            repositoryId: 3,
+          },
+          20,
+        ),
+      ).toEqual({
+        repositoryId: 3,
+        storyId: 20,
+      });
+
+      expect(
+        parseRecreateStoryWorkspaceRequest(
           {
             repositoryId: 3,
           },
@@ -846,6 +872,24 @@ describe('work item route validation', () => {
 
       expect(() =>
         parseReconcileStoryWorkspaceRequest(
+          {
+            repositoryId: 0,
+          },
+          20,
+        ),
+      ).toThrowError(DashboardIntegrationError);
+
+      expect(() =>
+        parseCleanupStoryWorkspaceRequest(
+          {
+            repositoryId: '3',
+          },
+          20,
+        ),
+      ).toThrowError(DashboardIntegrationError);
+
+      expect(() =>
+        parseRecreateStoryWorkspaceRequest(
           {
             repositoryId: 0,
           },
