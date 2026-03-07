@@ -52,7 +52,7 @@ export class ClaudeProviderError extends Error {
   readonly code: ClaudeProviderErrorCode;
   readonly retryable: boolean;
   readonly details?: Record<string, unknown>;
-  readonly cause?: unknown;
+  override readonly cause?: unknown;
 
   constructor(
     code: ClaudeProviderErrorCode,

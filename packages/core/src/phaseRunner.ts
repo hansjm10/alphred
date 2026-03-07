@@ -19,7 +19,7 @@ export type PhaseRunResult = {
 export class PhaseRunError extends Error {
   readonly events: ProviderEvent[];
   readonly tokensUsed: number;
-  readonly cause: unknown;
+  override readonly cause: unknown;
 
   constructor(
     message: string,
