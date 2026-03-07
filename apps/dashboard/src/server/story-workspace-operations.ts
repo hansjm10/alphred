@@ -1,6 +1,6 @@
 import { constants } from 'node:fs';
 import { access, rm } from 'node:fs/promises';
-import { join, resolve } from 'node:path';
+import { isAbsolute, join, relative, resolve } from 'node:path';
 import {
   and,
   eq,
@@ -84,6 +84,11 @@ function requirePositiveInteger(value: number, label: string): number {
 
 function normalizeFsPath(path: string): string {
   return resolve(path);
+}
+
+function isDescendantPath(rootPath: string, candidatePath: string): boolean {
+  const relativePath = relative(normalizeFsPath(rootPath), normalizeFsPath(candidatePath));
+  return relativePath.length > 0 && !relativePath.startsWith('..') && !isAbsolute(relativePath);
 }
 
 function readErrorMessage(error: unknown): string {
@@ -351,6 +356,28 @@ function toCleanupConflict(params: {
   });
 }
 
+function toUnmanagedWorkspacePathConflict(params: {
+  storyWorkspaceId: number;
+  storyId: number;
+  worktreePath: string;
+  managedWorktreeRoot: string;
+}): DashboardIntegrationError {
+  return new DashboardIntegrationError(
+    'conflict',
+    `Story workspace for story id=${params.storyId} points outside the managed worktree root and cannot be modified safely.`,
+    {
+      status: 409,
+      details: {
+        storyWorkspaceId: params.storyWorkspaceId,
+        storyId: params.storyId,
+        worktreePath: params.worktreePath,
+        managedWorktreeRoot: params.managedWorktreeRoot,
+        reason: 'unmanaged_worktree_path',
+      },
+    },
+  );
+}
+
 function toRecreateConflict(workspace: StoryWorkspaceRecord): DashboardIntegrationError {
   return new DashboardIntegrationError(
     'conflict',
@@ -364,6 +391,27 @@ function toRecreateConflict(workspace: StoryWorkspaceRecord): DashboardIntegrati
         allowedStatuses: ['removed'],
       },
     },
+  );
+}
+
+function assertManagedWorktreePath(params: {
+  storyWorkspaceId: number;
+  storyId: number;
+  worktreePath: string;
+  managedWorktreeRoot: string;
+}): void {
+  if (isDescendantPath(params.managedWorktreeRoot, params.worktreePath)) {
+    return;
+  }
+
+  throw toUnmanagedWorkspacePathConflict(params);
+}
+
+function isUnmanagedWorkspacePathConflict(error: unknown): boolean {
+  return (
+    error instanceof DashboardIntegrationError &&
+    typeof error.details?.reason === 'string' &&
+    error.details.reason === 'unmanaged_worktree_path'
   );
 }
 
@@ -547,6 +595,7 @@ async function cleanupWorkspaceRecord(
   params: {
     repositoryLocalPath: string | null;
     workspace: StoryWorkspaceRecord;
+    managedWorktreeRoot: string;
     listRepositoryWorktrees: NonNullable<StoryWorkspaceOperationsDependencies['listWorktrees']>;
     removeStoryWorktree: NonNullable<StoryWorkspaceOperationsDependencies['removeWorktree']>;
     deleteStoryWorktreeBranch: NonNullable<StoryWorkspaceOperationsDependencies['deleteBranch']>;
@@ -556,6 +605,13 @@ async function cleanupWorkspaceRecord(
     removedAtOnSuccess?: string | null;
   },
 ): Promise<StoryWorkspaceRecord> {
+  assertManagedWorktreePath({
+    storyWorkspaceId: params.workspace.id,
+    storyId: params.workspace.storyWorkItemId,
+    worktreePath: params.workspace.worktreePath,
+    managedWorktreeRoot: params.managedWorktreeRoot,
+  });
+
   const registeredStateBeforeRemoval = await resolveRegisteredWorktreeState({
     repositoryLocalPath: params.repositoryLocalPath,
     workspacePath: params.workspace.worktreePath,
@@ -631,6 +687,7 @@ async function repairRemovedWorkspaceRecord(
   params: {
     repositoryLocalPath: string | null;
     workspace: StoryWorkspaceRecord;
+    managedWorktreeRoot: string;
     listRepositoryWorktrees: NonNullable<StoryWorkspaceOperationsDependencies['listWorktrees']>;
     removeStoryWorktree: NonNullable<StoryWorkspaceOperationsDependencies['removeWorktree']>;
     deleteStoryWorktreeBranch: NonNullable<StoryWorkspaceOperationsDependencies['deleteBranch']>;
@@ -646,6 +703,9 @@ async function repairRemovedWorkspaceRecord(
     });
   } catch (error) {
     if (!(error instanceof DashboardIntegrationError)) {
+      throw error;
+    }
+    if (isUnmanagedWorkspacePathConflict(error)) {
       throw error;
     }
     return markWorkspaceRemovedStateDrift(db, params.workspace, params.occurredAt);
@@ -880,6 +940,7 @@ export function createStoryWorkspaceOperations(params: {
         const cleaned = await cleanupWorkspaceRecord(db, {
           repositoryLocalPath: repository.localPath,
           workspace,
+          managedWorktreeRoot: worktreeBase,
           listRepositoryWorktrees,
           removeStoryWorktree,
           deleteStoryWorktreeBranch,
@@ -938,6 +999,7 @@ export function createStoryWorkspaceOperations(params: {
             ? await repairRemovedWorkspaceRecord(db, {
                 repositoryLocalPath: repository.localPath,
                 workspace: existingWorkspace,
+                managedWorktreeRoot: worktreeBase,
                 listRepositoryWorktrees,
                 removeStoryWorktree,
                 deleteStoryWorktreeBranch,
