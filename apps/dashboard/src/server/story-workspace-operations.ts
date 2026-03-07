@@ -444,7 +444,7 @@ async function reconcileRemovedWorkspaceRecord(
         return markWorkspaceRemovedStateDrift(db, params.workspace, params.occurredAt);
       }
     } catch {
-      return markWorkspaceRemovedStateDrift(db, params.workspace, params.occurredAt);
+      // A git inspection failure does not prove removed-state drift when the path is already absent.
     }
   }
 

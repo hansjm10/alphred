@@ -399,6 +399,52 @@ describe('story workspace operations', () => {
     });
   });
 
+  it('preserves removed state when git inspection fails after the worktree path is gone', async () => {
+    const db = createMigratedDb();
+    const seed = seedRepositoryAndStory(db, { storyStatus: 'Approved' });
+    const existing = insertStoryWorkspace(db, {
+      repositoryId: seed.repositoryId,
+      storyWorkItemId: seed.storyId,
+      worktreePath: '/tmp/alphred/worktrees/alphred-story-1-a1b2c3',
+      branch: 'alphred/story/1-a1b2c3',
+      baseBranch: 'main',
+      baseCommitHash: 'abc123',
+      occurredAt: '2026-03-05T10:00:00.000Z',
+    });
+    updateStoryWorkspace(db, {
+      storyWorkspaceId: existing.id,
+      status: 'removed',
+      statusReason: 'cleanup_requested',
+      removedAt: '2026-03-06T01:21:00.000Z',
+      occurredAt: '2026-03-06T01:21:00.000Z',
+    });
+
+    const operations = createStoryWorkspaceOperations({
+      withDatabase: createWithDatabase(db),
+      dependencies: createDependencies(seed.repository, {
+        listWorktrees: async () => {
+          throw new Error('git worktree list failed');
+        },
+        pathExists: async path => path === seed.repository.localPath,
+        now: () => '2026-03-06T01:22:00.000Z',
+      }),
+      environment: createTestEnvironment(),
+    });
+
+    const reconciled = await operations.reconcileStoryWorkspace({
+      repositoryId: seed.repositoryId,
+      storyId: seed.storyId,
+    });
+
+    expect(reconciled.workspace).toMatchObject({
+      id: existing.id,
+      status: 'removed',
+      statusReason: 'cleanup_requested',
+      lastReconciledAt: '2026-03-06T01:22:00.000Z',
+      removedAt: '2026-03-06T01:21:00.000Z',
+    });
+  });
+
   it('rejects create requests when the repository is archived or the story is done', async () => {
     const archivedDb = createMigratedDb();
     const archivedSeed = seedRepositoryAndStory(archivedDb, { archivedAt: '2026-03-06T00:00:00.000Z' });
