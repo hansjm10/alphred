@@ -8,6 +8,7 @@ import {
   insertRepository,
   insertStoryWorkspace,
   listStoryWorkspacesForRepository,
+  reactivateRemovedStoryWorkspace,
   updateStoryWorkspace,
   workItems,
 } from './index.js';
@@ -158,6 +159,67 @@ describe('story_workspaces lifecycle helpers', () => {
       updatedAt: '2026-03-05T10:10:00.000Z',
     });
     expect(getStoryWorkspaceByStoryWorkItemId(db, seed.storyId)).toEqual(recreated);
+  });
+
+  it('reactivates removed story workspaces only while the row is still removed', () => {
+    const db = createMigratedDb();
+    const seed = seedStoryWorkItem(db, {
+      repositoryName: 'story-workspace-reactivate-guard',
+      storyTitle: 'Reactivate removed workspace',
+    });
+
+    const inserted = insertStoryWorkspace(db, {
+      repositoryId: seed.repository.id,
+      storyWorkItemId: seed.storyId,
+      worktreePath: '/tmp/alphred/worktrees/story-reactivate-guard',
+      branch: 'alphred/story/13-a1b2c3',
+      baseBranch: 'main',
+      baseCommitHash: 'abc123',
+      occurredAt: '2026-03-05T10:00:00.000Z',
+    });
+
+    const removed = updateStoryWorkspace(db, {
+      storyWorkspaceId: inserted.id,
+      status: 'removed',
+      statusReason: 'cleanup_requested',
+      lastReconciledAt: '2026-03-05T10:05:00.000Z',
+      removedAt: '2026-03-05T10:05:00.000Z',
+      occurredAt: '2026-03-05T10:05:00.000Z',
+    });
+
+    const reactivated = reactivateRemovedStoryWorkspace(db, {
+      storyWorkspaceId: removed.id,
+      worktreePath: '/tmp/alphred/worktrees/story-reactivate-guard-2',
+      branch: 'alphred/story/13-d4e5f6',
+      baseBranch: 'main',
+      baseCommitHash: 'def456',
+      lastReconciledAt: '2026-03-05T10:10:00.000Z',
+      occurredAt: '2026-03-05T10:10:00.000Z',
+    });
+
+    expect(reactivated).toMatchObject({
+      id: removed.id,
+      worktreePath: '/tmp/alphred/worktrees/story-reactivate-guard-2',
+      branch: 'alphred/story/13-d4e5f6',
+      baseCommitHash: 'def456',
+      status: 'active',
+      statusReason: null,
+      removedAt: null,
+      lastReconciledAt: '2026-03-05T10:10:00.000Z',
+      updatedAt: '2026-03-05T10:10:00.000Z',
+    });
+
+    expect(() =>
+      reactivateRemovedStoryWorkspace(db, {
+        storyWorkspaceId: removed.id,
+        worktreePath: '/tmp/alphred/worktrees/story-reactivate-guard-3',
+        branch: 'alphred/story/13-g7h8i9',
+        baseBranch: 'main',
+        baseCommitHash: 'ghi789',
+        lastReconciledAt: '2026-03-05T10:15:00.000Z',
+        occurredAt: '2026-03-05T10:15:00.000Z',
+      }),
+    ).toThrow(`Story workspace reactivation precondition failed for id=${removed.id}; expected status "removed".`);
   });
 
   it('preserves updatedAt when reconciliation only advances lastReconciledAt', () => {

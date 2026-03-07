@@ -1381,6 +1381,96 @@ describe('story workspace operations', () => {
     });
   });
 
+  it('rolls back and reports conflict when recreate loses a duplicate-request race', async () => {
+    const db = createMigratedDb();
+    const seed = seedRepositoryAndStory(db, { storyStatus: 'Approved' });
+    const originalPath = '/tmp/alphred/worktrees/alphred-story-1-a1b2c3';
+    const createdPath = '/tmp/alphred/worktrees/alphred-story-1-z9y8x7';
+    const createdBranch = 'alphred/story/1-z9y8x7';
+    const competingPath = '/tmp/alphred/worktrees/alphred-story-1-d4e5f6';
+    const competingBranch = 'alphred/story/1-d4e5f6';
+    const removeWorktreeMock = vi.fn(async () => undefined);
+    const deleteBranchMock = vi.fn(async () => undefined);
+    const existing = insertStoryWorkspace(db, {
+      repositoryId: seed.repositoryId,
+      storyWorkItemId: seed.storyId,
+      worktreePath: originalPath,
+      branch: 'alphred/story/1-a1b2c3',
+      baseBranch: 'main',
+      baseCommitHash: 'abc123',
+      occurredAt: '2026-03-05T10:00:00.000Z',
+    });
+    updateStoryWorkspace(db, {
+      storyWorkspaceId: existing.id,
+      status: 'removed',
+      statusReason: 'cleanup_requested',
+      removedAt: '2026-03-06T01:45:00.000Z',
+      occurredAt: '2026-03-06T01:45:00.000Z',
+    });
+
+    const createWorktreeMock = vi.fn(async () => {
+      updateStoryWorkspace(db, {
+        storyWorkspaceId: existing.id,
+        worktreePath: competingPath,
+        branch: competingBranch,
+        baseBranch: 'main',
+        baseCommitHash: 'ghi789',
+        status: 'active',
+        statusReason: null,
+        lastReconciledAt: '2026-03-06T01:46:30.000Z',
+        removedAt: null,
+        occurredAt: '2026-03-06T01:46:30.000Z',
+      });
+
+      return {
+        path: createdPath,
+        branch: createdBranch,
+        commit: 'def456',
+      };
+    });
+
+    const operations = createStoryWorkspaceOperations({
+      withDatabase: createWithDatabase(db),
+      dependencies: createDependencies(seed.repository, {
+        listWorktrees: async () => [],
+        pathExists: async path => path === seed.repository.localPath,
+        createWorktree: createWorktreeMock,
+        removeWorktree: removeWorktreeMock,
+        deleteBranch: deleteBranchMock,
+        now: () => '2026-03-06T01:47:00.000Z',
+      }),
+      environment: createTestEnvironment(),
+    });
+
+    await expect(
+      operations.recreateStoryWorkspace({
+        repositoryId: seed.repositoryId,
+        storyId: seed.storyId,
+      }),
+    ).rejects.toMatchObject({
+      code: 'conflict',
+      status: 409,
+      message: `Story workspace for story id=${seed.storyId} must be removed before it can be recreated.`,
+      details: {
+        currentStatus: 'active',
+        allowedStatuses: ['removed'],
+      },
+    });
+
+    expect(createWorktreeMock).toHaveBeenCalledOnce();
+    expect(removeWorktreeMock).toHaveBeenCalledWith(seed.repository.localPath, createdPath);
+    expect(deleteBranchMock).toHaveBeenCalledWith(seed.repository.localPath, createdBranch);
+    expect(getStoryWorkspaceByStoryWorkItemId(db, seed.storyId)).toMatchObject({
+      id: existing.id,
+      worktreePath: competingPath,
+      branch: competingBranch,
+      baseCommitHash: 'ghi789',
+      status: 'active',
+      statusReason: null,
+      removedAt: null,
+    });
+  });
+
   it('rejects recreate when the current workspace is still active', async () => {
     const db = createMigratedDb();
     const seed = seedRepositoryAndStory(db, { storyStatus: 'Approved' });

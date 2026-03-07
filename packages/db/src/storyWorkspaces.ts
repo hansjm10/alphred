@@ -1,4 +1,4 @@
-import { asc, eq } from 'drizzle-orm';
+import { and, asc, eq } from 'drizzle-orm';
 import {
   storyWorkspaceStatusReasons,
   storyWorkspaceStatuses,
@@ -46,6 +46,16 @@ export type UpdateStoryWorkspaceParams = {
   statusReason?: StoryWorkspaceStatusReason | null;
   lastReconciledAt?: string | null;
   removedAt?: string | null;
+  occurredAt?: string;
+};
+
+export type ReactivateRemovedStoryWorkspaceParams = {
+  storyWorkspaceId: number;
+  worktreePath: string;
+  branch: string;
+  baseBranch: string;
+  baseCommitHash?: string | null;
+  lastReconciledAt?: string | null;
   occurredAt?: string;
 };
 
@@ -326,6 +336,60 @@ export function updateStoryWorkspace(db: AlphredDatabase, params: UpdateStoryWor
   const storyWorkspace = getStoryWorkspaceById(db, params.storyWorkspaceId);
   if (!storyWorkspace) {
     throw new Error(`Story workspace disappeared after update for id=${params.storyWorkspaceId}.`);
+  }
+
+  return storyWorkspace;
+}
+
+export function reactivateRemovedStoryWorkspace(
+  db: AlphredDatabase,
+  params: ReactivateRemovedStoryWorkspaceParams,
+): StoryWorkspaceRecord {
+  const occurredAt = params.occurredAt ?? new Date().toISOString();
+  const current = getStoryWorkspaceById(db, params.storyWorkspaceId);
+  if (!current) {
+    throw new Error(`Story workspace id=${params.storyWorkspaceId} was not found for reactivation.`);
+  }
+
+  const updateParams: UpdateStoryWorkspaceParams = {
+    storyWorkspaceId: params.storyWorkspaceId,
+    worktreePath: params.worktreePath,
+    branch: params.branch,
+    baseBranch: params.baseBranch,
+    baseCommitHash: params.baseCommitHash ?? null,
+    status: 'active',
+    statusReason: null,
+    lastReconciledAt: params.lastReconciledAt ?? null,
+    removedAt: null,
+    occurredAt,
+  };
+  const resolvedStatusReason = resolveStoryWorkspaceStatusReason(updateParams.statusReason);
+  const nextMaterialState = buildNextStoryWorkspaceMaterialState(current, updateParams, resolvedStatusReason);
+  assertStoryWorkspaceLifecycleCompatibility(nextMaterialState.status, nextMaterialState.statusReason);
+
+  const values = buildStoryWorkspaceUpdateValues(
+    current,
+    updateParams,
+    nextMaterialState,
+    resolvedStatusReason,
+    occurredAt,
+  );
+
+  const updated = db
+    .update(storyWorkspaces)
+    .set(values)
+    .where(and(eq(storyWorkspaces.id, params.storyWorkspaceId), eq(storyWorkspaces.status, 'removed')))
+    .run();
+
+  if (updated.changes !== 1) {
+    throw new Error(
+      `Story workspace reactivation precondition failed for id=${params.storyWorkspaceId}; expected status "removed".`,
+    );
+  }
+
+  const storyWorkspace = getStoryWorkspaceById(db, params.storyWorkspaceId);
+  if (!storyWorkspace) {
+    throw new Error(`Story workspace disappeared after reactivation update for id=${params.storyWorkspaceId}.`);
   }
 
   return storyWorkspace;

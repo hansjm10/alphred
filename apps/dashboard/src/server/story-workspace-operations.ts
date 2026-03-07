@@ -7,6 +7,7 @@ import {
   getRepositoryById,
   getStoryWorkspaceByStoryWorkItemId,
   insertStoryWorkspace,
+  reactivateRemovedStoryWorkspace,
   updateStoryWorkspace,
   workItems,
   type AlphredDatabase,
@@ -285,6 +286,12 @@ function isStoryWorkspaceUniqueConstraintError(error: unknown): boolean {
   return readErrorMessage(error).toLowerCase().includes('unique constraint failed: story_workspaces.story_work_item_id');
 }
 
+function isStoryWorkspaceReactivationPreconditionError(error: unknown): boolean {
+  return readErrorMessage(error)
+    .toLowerCase()
+    .includes('story workspace reactivation precondition failed');
+}
+
 async function rollbackCreatedStoryWorkspace(params: {
   repositoryId: number;
   storyId: number;
@@ -504,16 +511,13 @@ async function createFreshStoryWorkspace(params: {
 
   try {
     if (params.existingWorkspace) {
-      return updateStoryWorkspace(params.db, {
+      return reactivateRemovedStoryWorkspace(params.db, {
         storyWorkspaceId: params.existingWorkspace.id,
         worktreePath: createdWorktree.path,
         branch: createdWorktree.branch,
         baseBranch,
         baseCommitHash: createdWorktree.commit,
-        status: 'active',
-        statusReason: null,
         lastReconciledAt: params.occurredAt,
-        removedAt: null,
         occurredAt: params.occurredAt,
       });
     }
@@ -546,6 +550,13 @@ async function createFreshStoryWorkspace(params: {
           workspace: existingWorkspace,
           cause: error,
         });
+      }
+    }
+
+    if (params.existingWorkspace && isStoryWorkspaceReactivationPreconditionError(error)) {
+      const existingWorkspace = getStoryWorkspaceByStoryWorkItemId(params.db, params.storyId);
+      if (existingWorkspace) {
+        throw toRecreateConflict(existingWorkspace);
       }
     }
 
