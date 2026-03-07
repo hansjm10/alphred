@@ -514,6 +514,15 @@ function createDatabaseWithWorkflowTreeInsertUniqueRace(db: AlphredDatabase): {
 }
 
 describe('createDashboardService', () => {
+  it('exposes story workspace operations', () => {
+    const { dependencies } = createHarness();
+    const service = createDashboardService({ dependencies });
+
+    expect(typeof service.getStoryWorkspace).toBe('function');
+    expect(typeof service.createStoryWorkspace).toBe('function');
+    expect(typeof service.reconcileStoryWorkspace).toBe('function');
+  });
+
   it('closes database handles after each operation', async () => {
     const closeDatabase = vi.fn(() => undefined);
     const { db, dependencies } = createHarness({ closeDatabase });

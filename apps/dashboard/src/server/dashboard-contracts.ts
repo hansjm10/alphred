@@ -1,4 +1,11 @@
-import type { GuardExpression, ProviderExecutionPermissions, WorkItemStatus, WorkItemType } from '@alphred/shared';
+import type {
+  GuardExpression,
+  ProviderExecutionPermissions,
+  StoryWorkspaceStatus,
+  StoryWorkspaceStatusReason,
+  WorkItemStatus,
+  WorkItemType,
+} from '@alphred/shared';
 import type { WorkItemActorType, WorkItemEventType } from '@alphred/db';
 
 export type DashboardNodeStatus = 'pending' | 'running' | 'completed' | 'failed' | 'skipped' | 'cancelled';
@@ -581,6 +588,43 @@ export type DashboardListWorkItemsResult = {
 
 export type DashboardGetWorkItemResult = {
   workItem: DashboardWorkItemSnapshot;
+};
+
+export type DashboardStoryWorkspaceSnapshot = {
+  id: number;
+  repositoryId: number;
+  storyId: number;
+  path: string;
+  branch: string;
+  baseBranch: string;
+  baseCommitHash: string | null;
+  status: StoryWorkspaceStatus;
+  statusReason: StoryWorkspaceStatusReason | null;
+  lastReconciledAt: string | null;
+  removedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type DashboardGetStoryWorkspaceRequest = {
+  repositoryId: number;
+  storyId: number;
+};
+
+export type DashboardGetStoryWorkspaceResult = {
+  workspace: DashboardStoryWorkspaceSnapshot | null;
+};
+
+export type DashboardCreateStoryWorkspaceRequest = DashboardGetStoryWorkspaceRequest;
+
+export type DashboardCreateStoryWorkspaceResult = {
+  workspace: DashboardStoryWorkspaceSnapshot;
+};
+
+export type DashboardReconcileStoryWorkspaceRequest = DashboardGetStoryWorkspaceRequest;
+
+export type DashboardReconcileStoryWorkspaceResult = {
+  workspace: DashboardStoryWorkspaceSnapshot;
 };
 
 export type DashboardCreateWorkItemRequest = {
