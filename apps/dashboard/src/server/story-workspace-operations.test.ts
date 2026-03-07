@@ -93,6 +93,8 @@ function createDependencies(
       branch: typeof params === 'string' ? params : (params.branch ?? 'alphred/story/1-a1b2c3'),
       commit: 'abc123',
     }),
+    removeWorktree: async () => undefined,
+    deleteBranch: async () => undefined,
     listWorktrees: async () => [
       {
         path: '/tmp/alphred/worktrees/alphred-story-1-a1b2c3',
@@ -479,6 +481,69 @@ describe('story workspace operations', () => {
     });
 
     expect(createWorktreeMock).not.toHaveBeenCalled();
+  });
+
+  it('rolls back and reports conflict when the insert loses a duplicate-create race', async () => {
+    const db = createMigratedDb();
+    const seed = seedRepositoryAndStory(db, { storyStatus: 'Approved' });
+    const createdPath = '/tmp/alphred/worktrees/alphred-story-1-z9y8x7';
+    const createdBranch = 'alphred/story/1-z9y8x7';
+    const competingPath = '/tmp/alphred/worktrees/alphred-story-1-a1b2c3';
+    const competingBranch = 'alphred/story/1-a1b2c3';
+    const removeWorktreeMock = vi.fn(async () => undefined);
+    const deleteBranchMock = vi.fn(async () => undefined);
+    const createWorktreeMock = vi.fn(async () => {
+      insertStoryWorkspace(db, {
+        repositoryId: seed.repositoryId,
+        storyWorkItemId: seed.storyId,
+        worktreePath: competingPath,
+        branch: competingBranch,
+        baseBranch: 'main',
+        baseCommitHash: 'abc123',
+        occurredAt: '2026-03-05T10:00:00.000Z',
+      });
+
+      return {
+        path: createdPath,
+        branch: createdBranch,
+        commit: 'def456',
+      };
+    });
+
+    const operations = createStoryWorkspaceOperations({
+      withDatabase: createWithDatabase(db),
+      dependencies: createDependencies(seed.repository, {
+        createWorktree: createWorktreeMock,
+        removeWorktree: removeWorktreeMock,
+        deleteBranch: deleteBranchMock,
+      }),
+      environment: createTestEnvironment(),
+    });
+
+    await expect(
+      operations.createStoryWorkspace({
+        repositoryId: seed.repositoryId,
+        storyId: seed.storyId,
+      }),
+    ).rejects.toMatchObject({
+      code: 'conflict',
+      status: 409,
+      message: `Story workspace for story id=${seed.storyId} already exists. Reconcile it instead of creating a new one.`,
+      details: {
+        storyId: seed.storyId,
+        currentStatus: 'active',
+        allowedActions: ['reconcile'],
+      },
+    });
+
+    expect(createWorktreeMock).toHaveBeenCalledOnce();
+    expect(removeWorktreeMock).toHaveBeenCalledWith(seed.repository.localPath, createdPath);
+    expect(deleteBranchMock).toHaveBeenCalledWith(seed.repository.localPath, createdBranch);
+    expect(getStoryWorkspaceByStoryWorkItemId(db, seed.storyId)).toMatchObject({
+      worktreePath: competingPath,
+      branch: competingBranch,
+      status: 'active',
+    });
   });
 
   it('rejects create requests when only a removed workspace row exists', async () => {

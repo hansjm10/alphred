@@ -14,9 +14,11 @@ import {
 } from '@alphred/db';
 import {
   createWorktree,
+  deleteBranch,
   ensureRepositoryClone,
   generateConfiguredBranchName,
   listWorktrees,
+  removeWorktree,
   resolveSandboxDir,
 } from '@alphred/git';
 import type {
@@ -40,6 +42,8 @@ type StoryWorkItemRecord = {
 export type StoryWorkspaceOperationsDependencies = {
   ensureRepositoryClone: typeof ensureRepositoryClone;
   createWorktree?: typeof createWorktree;
+  removeWorktree?: typeof removeWorktree;
+  deleteBranch?: typeof deleteBranch;
   listWorktrees?: typeof listWorktrees;
   pathExists?: (path: string) => Promise<boolean>;
   now?: () => string;
@@ -69,6 +73,14 @@ function requirePositiveInteger(value: number, label: string): number {
 
 function normalizeFsPath(path: string): string {
   return resolve(path);
+}
+
+function readErrorMessage(error: unknown): string {
+  if (error instanceof Error) {
+    return error.message;
+  }
+
+  return String(error);
 }
 
 function toStoryWorkspaceSnapshot(record: StoryWorkspaceRecord) {
@@ -186,6 +198,7 @@ function assertStoryWorkspaceCreatable(params: {
 function assertStoryWorkspaceDoesNotExistForCreate(params: {
   storyId: number;
   workspace: StoryWorkspaceRecord;
+  cause?: unknown;
 }): never {
   if (params.workspace.status === 'removed') {
     throw new DashboardIntegrationError(
@@ -197,6 +210,7 @@ function assertStoryWorkspaceDoesNotExistForCreate(params: {
           storyId: params.storyId,
           currentStatus: params.workspace.status,
         },
+        cause: params.cause,
       },
     );
   }
@@ -211,8 +225,54 @@ function assertStoryWorkspaceDoesNotExistForCreate(params: {
         currentStatus: params.workspace.status,
         allowedActions: ['reconcile'],
       },
+      cause: params.cause,
     },
   );
+}
+
+function isStoryWorkspaceUniqueConstraintError(error: unknown): boolean {
+  return readErrorMessage(error).toLowerCase().includes('unique constraint failed: story_workspaces.story_work_item_id');
+}
+
+async function rollbackCreatedStoryWorkspace(params: {
+  repositoryId: number;
+  storyId: number;
+  repositoryLocalPath: string;
+  createdWorktree: Awaited<ReturnType<typeof createWorktree>>;
+  removeStoryWorktree: NonNullable<StoryWorkspaceOperationsDependencies['removeWorktree']>;
+  deleteStoryWorktreeBranch: NonNullable<StoryWorkspaceOperationsDependencies['deleteBranch']>;
+  originalError: unknown;
+}): Promise<void> {
+  const rollbackErrors: unknown[] = [];
+
+  try {
+    await params.removeStoryWorktree(params.repositoryLocalPath, params.createdWorktree.path);
+  } catch (removeError) {
+    rollbackErrors.push(removeError);
+  }
+
+  try {
+    await params.deleteStoryWorktreeBranch(params.repositoryLocalPath, params.createdWorktree.branch);
+  } catch (deleteError) {
+    rollbackErrors.push(deleteError);
+  }
+
+  if (rollbackErrors.length > 0) {
+    throw new DashboardIntegrationError(
+      'internal_error',
+      `Unable to roll back story workspace create failure for story id=${params.storyId}.`,
+      {
+        status: 500,
+        details: {
+          repositoryId: params.repositoryId,
+          storyId: params.storyId,
+          branch: params.createdWorktree.branch,
+          worktreePath: params.createdWorktree.path,
+        },
+        cause: new AggregateError([params.originalError, ...rollbackErrors], 'Story workspace create rollback failed.'),
+      },
+    );
+  }
 }
 
 async function defaultPathExists(path: string): Promise<boolean> {
@@ -252,6 +312,8 @@ async function createFreshStoryWorkspace(params: {
   worktreeBase: string;
   ensureRepositoryClone: StoryWorkspaceOperationsDependencies['ensureRepositoryClone'];
   createStoryWorktree: NonNullable<StoryWorkspaceOperationsDependencies['createWorktree']>;
+  removeStoryWorktree: NonNullable<StoryWorkspaceOperationsDependencies['removeWorktree']>;
+  deleteStoryWorktreeBranch: NonNullable<StoryWorkspaceOperationsDependencies['deleteBranch']>;
   occurredAt: string;
 }): Promise<StoryWorkspaceRecord> {
   const ensured = await params.ensureRepositoryClone({
@@ -308,15 +370,53 @@ async function createFreshStoryWorkspace(params: {
     );
   }
 
-  return insertStoryWorkspace(params.db, {
-    repositoryId: params.repositoryId,
-    storyWorkItemId: params.storyId,
-    worktreePath: createdWorktree.path,
-    branch: createdWorktree.branch,
-    baseBranch,
-    baseCommitHash: createdWorktree.commit,
-    occurredAt: params.occurredAt,
-  });
+  try {
+    return insertStoryWorkspace(params.db, {
+      repositoryId: params.repositoryId,
+      storyWorkItemId: params.storyId,
+      worktreePath: createdWorktree.path,
+      branch: createdWorktree.branch,
+      baseBranch,
+      baseCommitHash: createdWorktree.commit,
+      occurredAt: params.occurredAt,
+    });
+  } catch (error) {
+    await rollbackCreatedStoryWorkspace({
+      repositoryId: params.repositoryId,
+      storyId: params.storyId,
+      repositoryLocalPath: clonedRepository.localPath,
+      createdWorktree,
+      removeStoryWorktree: params.removeStoryWorktree,
+      deleteStoryWorktreeBranch: params.deleteStoryWorktreeBranch,
+      originalError: error,
+    });
+
+    if (isStoryWorkspaceUniqueConstraintError(error)) {
+      const existingWorkspace = getStoryWorkspaceByStoryWorkItemId(params.db, params.storyId);
+      if (existingWorkspace) {
+        assertStoryWorkspaceDoesNotExistForCreate({
+          storyId: params.storyId,
+          workspace: existingWorkspace,
+          cause: error,
+        });
+      }
+    }
+
+    throw new DashboardIntegrationError(
+      'internal_error',
+      `Unable to persist story workspace for story id=${params.storyId}.`,
+      {
+        status: 500,
+        details: {
+          repositoryId: params.repositoryId,
+          storyId: params.storyId,
+          branch: createdWorktree.branch,
+          worktreePath: createdWorktree.path,
+        },
+        cause: error,
+      },
+    );
+  }
 }
 
 async function reconcileRemovedWorkspaceRecord(
@@ -452,6 +552,8 @@ export function createStoryWorkspaceOperations(params: {
 }): StoryWorkspaceOperations {
   const { withDatabase, dependencies, environment } = params;
   const createStoryWorktree = dependencies.createWorktree ?? createWorktree;
+  const removeStoryWorktree = dependencies.removeWorktree ?? removeWorktree;
+  const deleteStoryWorktreeBranch = dependencies.deleteBranch ?? deleteBranch;
   const listRepositoryWorktrees = dependencies.listWorktrees ?? listWorktrees;
   const pathExists = dependencies.pathExists ?? defaultPathExists;
   const now = dependencies.now ?? (() => new Date().toISOString());
@@ -521,6 +623,8 @@ export function createStoryWorkspaceOperations(params: {
           worktreeBase,
           ensureRepositoryClone: dependencies.ensureRepositoryClone,
           createStoryWorktree,
+          removeStoryWorktree,
+          deleteStoryWorktreeBranch,
           occurredAt: now(),
         });
 

@@ -171,4 +171,26 @@ describe('POST /api/dashboard/work-items/[id]/actions/reconcile-workspace', () =
       },
     });
   });
+
+  it('returns 400 for valid non-object json payloads', async () => {
+    const response = await POST(
+      new Request('http://localhost/api/dashboard/work-items/14/actions/reconcile-workspace', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+        },
+        body: '[]',
+      }),
+      createContext('14'),
+    );
+
+    expect(reconcileStoryWorkspaceMock).not.toHaveBeenCalled();
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      error: {
+        code: 'invalid_request',
+        message: 'Story workspace payload must be a JSON object.',
+      },
+    });
+  });
 });
