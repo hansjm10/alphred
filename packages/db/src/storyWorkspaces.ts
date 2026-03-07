@@ -49,6 +49,23 @@ export type UpdateStoryWorkspaceParams = {
   occurredAt?: string;
 };
 
+type StoryWorkspaceMaterialState = Pick<
+  StoryWorkspaceRecord,
+  'worktreePath' | 'branch' | 'baseBranch' | 'baseCommitHash' | 'status' | 'statusReason' | 'removedAt'
+>;
+
+type StoryWorkspaceUpdateValues = {
+  updatedAt: string;
+  worktreePath?: string;
+  branch?: string;
+  baseBranch?: string;
+  baseCommitHash?: string | null;
+  status?: StoryWorkspaceStatus;
+  statusReason?: StoryWorkspaceStatusReason | null;
+  lastReconciledAt?: string | null;
+  removedAt?: string | null;
+};
+
 function assertKnownStoryWorkspaceStatus(status: string): asserts status is StoryWorkspaceStatus {
   if (!storyWorkspaceStatuses.includes(status as StoryWorkspaceStatus)) {
     throw new Error(`Unknown story-workspace status: ${status}`);
@@ -68,6 +85,88 @@ function assertStoryWorkspaceLifecycleCompatibility(
   if (status === 'active' && statusReason !== null) {
     throw new Error(`Story workspace status "active" requires statusReason to be null; received ${statusReason}.`);
   }
+}
+
+function didStoryWorkspaceMaterialStateChange(
+  current: StoryWorkspaceMaterialState,
+  next: StoryWorkspaceMaterialState,
+): boolean {
+  return (
+    current.worktreePath !== next.worktreePath ||
+    current.branch !== next.branch ||
+    current.baseBranch !== next.baseBranch ||
+    current.baseCommitHash !== next.baseCommitHash ||
+    current.status !== next.status ||
+    current.statusReason !== next.statusReason ||
+    current.removedAt !== next.removedAt
+  );
+}
+
+function resolveStoryWorkspaceStatusReason(
+  statusReason: UpdateStoryWorkspaceParams['statusReason'],
+): StoryWorkspaceStatusReason | null | undefined {
+  if (statusReason === undefined) {
+    return undefined;
+  }
+
+  return statusReason ?? null;
+}
+
+function buildNextStoryWorkspaceMaterialState(
+  current: StoryWorkspaceRecord,
+  params: UpdateStoryWorkspaceParams,
+  resolvedStatusReason: StoryWorkspaceStatusReason | null | undefined,
+): StoryWorkspaceMaterialState {
+  return {
+    worktreePath: params.worktreePath ?? current.worktreePath,
+    branch: params.branch ?? current.branch,
+    baseBranch: params.baseBranch ?? current.baseBranch,
+    baseCommitHash: 'baseCommitHash' in params ? (params.baseCommitHash ?? null) : current.baseCommitHash,
+    status: params.status ?? current.status,
+    statusReason: resolvedStatusReason === undefined ? current.statusReason : resolvedStatusReason,
+    removedAt: 'removedAt' in params ? (params.removedAt ?? null) : current.removedAt,
+  };
+}
+
+function buildStoryWorkspaceUpdateValues(
+  current: StoryWorkspaceRecord,
+  params: UpdateStoryWorkspaceParams,
+  nextMaterialState: StoryWorkspaceMaterialState,
+  resolvedStatusReason: StoryWorkspaceStatusReason | null | undefined,
+  occurredAt: string,
+): StoryWorkspaceUpdateValues {
+  const values: StoryWorkspaceUpdateValues = {
+    // `updatedAt` tracks material row changes. Reconciliation-only touches that
+    // just advance `lastReconciledAt` keep the prior `updatedAt`.
+    updatedAt: didStoryWorkspaceMaterialStateChange(current, nextMaterialState) ? occurredAt : current.updatedAt,
+  };
+
+  if ('worktreePath' in params) {
+    values.worktreePath = params.worktreePath;
+  }
+  if ('branch' in params) {
+    values.branch = params.branch;
+  }
+  if ('baseBranch' in params) {
+    values.baseBranch = params.baseBranch;
+  }
+  if ('baseCommitHash' in params) {
+    values.baseCommitHash = params.baseCommitHash ?? null;
+  }
+  if (params.status !== undefined) {
+    values.status = params.status;
+  }
+  if (resolvedStatusReason !== undefined) {
+    values.statusReason = resolvedStatusReason;
+  }
+  if ('lastReconciledAt' in params) {
+    values.lastReconciledAt = params.lastReconciledAt ?? null;
+  }
+  if ('removedAt' in params) {
+    values.removedAt = params.removedAt ?? null;
+  }
+
+  return values;
 }
 
 function toStoryWorkspaceRecord(row: StoryWorkspaceRow): StoryWorkspaceRecord {
@@ -195,52 +294,24 @@ export function updateStoryWorkspace(db: AlphredDatabase, params: UpdateStoryWor
     throw new Error(`Story workspace id=${params.storyWorkspaceId} was not found for update.`);
   }
 
-  const values: {
-    updatedAt: string;
-    worktreePath?: string;
-    branch?: string;
-    baseBranch?: string;
-    baseCommitHash?: string | null;
-    status?: StoryWorkspaceStatus;
-    statusReason?: StoryWorkspaceStatusReason | null;
-    lastReconciledAt?: string | null;
-    removedAt?: string | null;
-  } = {
-    updatedAt: occurredAt,
-  };
-
-  if ('worktreePath' in params) {
-    values.worktreePath = params.worktreePath;
-  }
-  if ('branch' in params) {
-    values.branch = params.branch;
-  }
-  if ('baseBranch' in params) {
-    values.baseBranch = params.baseBranch;
-  }
-  if ('baseCommitHash' in params) {
-    values.baseCommitHash = params.baseCommitHash ?? null;
-  }
   if (params.status !== undefined) {
     assertKnownStoryWorkspaceStatus(params.status);
-    values.status = params.status;
   }
-  const resolvedStatusReason =
-    params.statusReason === undefined ? undefined : (params.statusReason ?? null);
+  const resolvedStatusReason = resolveStoryWorkspaceStatusReason(params.statusReason);
   if (resolvedStatusReason !== undefined) {
     assertKnownStoryWorkspaceStatusReason(resolvedStatusReason);
-    values.statusReason = resolvedStatusReason;
-  }
-  if ('lastReconciledAt' in params) {
-    values.lastReconciledAt = params.lastReconciledAt ?? null;
-  }
-  if ('removedAt' in params) {
-    values.removedAt = params.removedAt ?? null;
   }
 
-  const nextStatus = params.status ?? current.status;
-  const nextStatusReason = resolvedStatusReason === undefined ? current.statusReason : resolvedStatusReason;
-  assertStoryWorkspaceLifecycleCompatibility(nextStatus, nextStatusReason);
+  const nextMaterialState = buildNextStoryWorkspaceMaterialState(current, params, resolvedStatusReason);
+  assertStoryWorkspaceLifecycleCompatibility(nextMaterialState.status, nextMaterialState.statusReason);
+
+  const values = buildStoryWorkspaceUpdateValues(
+    current,
+    params,
+    nextMaterialState,
+    resolvedStatusReason,
+    occurredAt,
+  );
 
   const updated = db
     .update(storyWorkspaces)

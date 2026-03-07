@@ -160,6 +160,42 @@ describe('story_workspaces lifecycle helpers', () => {
     expect(getStoryWorkspaceByStoryWorkItemId(db, seed.storyId)).toEqual(recreated);
   });
 
+  it('preserves updatedAt when reconciliation only advances lastReconciledAt', () => {
+    const db = createMigratedDb();
+    const seed = seedStoryWorkItem(db, {
+      repositoryName: 'story-workspace-reconcile-metadata',
+      storyTitle: 'Reconciliation metadata story workspace',
+    });
+
+    const inserted = insertStoryWorkspace(db, {
+      repositoryId: seed.repository.id,
+      storyWorkItemId: seed.storyId,
+      worktreePath: '/tmp/alphred/worktrees/story-reconcile-metadata',
+      branch: 'alphred/story/12-a1b2c3',
+      baseBranch: 'main',
+      baseCommitHash: 'abc123',
+      occurredAt: '2026-03-05T10:00:00.000Z',
+    });
+
+    const reconciled = updateStoryWorkspace(db, {
+      storyWorkspaceId: inserted.id,
+      status: 'active',
+      statusReason: null,
+      lastReconciledAt: '2026-03-05T10:05:00.000Z',
+      removedAt: null,
+      occurredAt: '2026-03-05T10:05:00.000Z',
+    });
+
+    expect(reconciled).toMatchObject({
+      id: inserted.id,
+      status: 'active',
+      statusReason: null,
+      lastReconciledAt: '2026-03-05T10:05:00.000Z',
+      removedAt: null,
+      updatedAt: '2026-03-05T10:00:00.000Z',
+    });
+  });
+
   it('lists story workspaces for a repository ordered by creation timestamp across statuses', () => {
     const db = createMigratedDb();
     const first = seedStoryWorkItem(db, {
