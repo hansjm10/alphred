@@ -1,4 +1,9 @@
-import { describe, expect, it, vi } from 'vitest';
+import { execFile } from 'node:child_process';
+import { access, mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { promisify } from 'node:util';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   createDatabase,
   getStoryWorkspaceByStoryWorkItemId,
@@ -9,8 +14,12 @@ import {
   type AlphredDatabase,
   workItems,
 } from '@alphred/db';
+import { createWorktree as createGitWorktree, type WorktreeInfo } from '@alphred/git';
 import type { RepositoryConfig } from '@alphred/shared';
 import { createStoryWorkspaceOperations, type StoryWorkspaceOperationsDependencies } from './story-workspace-operations';
+
+const execFileAsync = promisify(execFile);
+const cleanupPaths = new Set<string>();
 
 function createMigratedDb(): AlphredDatabase {
   const db = createDatabase(':memory:');
@@ -72,6 +81,68 @@ function createTestEnvironment(): NodeJS.ProcessEnv {
   };
 }
 
+async function runGit(cwd: string, args: readonly string[]): Promise<string> {
+  const { stdout } = await execFileAsync('git', args, {
+    cwd,
+    env: process.env,
+  });
+
+  return stdout.trim();
+}
+
+async function pathExists(path: string): Promise<boolean> {
+  try {
+    await access(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+type LiveGitFixture = {
+  sandboxDir: string;
+  repositoryPath: string;
+  initialCommit: string;
+};
+
+function requireLiveWorktree(worktree: WorktreeInfo | null): WorktreeInfo {
+  if (worktree === null) {
+    throw new Error('Expected the live createWorktree helper to create a worktree before the duplicate insert race.');
+  }
+
+  return worktree;
+}
+
+async function createLiveGitFixture(): Promise<LiveGitFixture> {
+  const sandboxDir = await mkdtemp(join(tmpdir(), 'alphred-story-workspace-'));
+  cleanupPaths.add(sandboxDir);
+
+  const repositoryPath = join(sandboxDir, 'repo');
+  await mkdir(repositoryPath, { recursive: true });
+  await mkdir(join(sandboxDir, 'worktrees'), { recursive: true });
+
+  await runGit(repositoryPath, ['init']);
+  await runGit(repositoryPath, ['config', 'user.email', 'alphred-tests@example.com']);
+  await runGit(repositoryPath, ['config', 'user.name', 'Alphred Tests']);
+  await runGit(repositoryPath, ['checkout', '-b', 'main']);
+  await writeFile(join(repositoryPath, 'README.md'), '# fixture\n');
+  await runGit(repositoryPath, ['add', 'README.md']);
+  await runGit(repositoryPath, ['commit', '-m', 'initial']);
+
+  return {
+    sandboxDir,
+    repositoryPath,
+    initialCommit: await runGit(repositoryPath, ['rev-parse', 'HEAD']),
+  };
+}
+
+function createLiveGitEnvironment(sandboxDir: string): NodeJS.ProcessEnv {
+  return {
+    ...process.env,
+    ALPHRED_SANDBOX_DIR: sandboxDir,
+  };
+}
+
 function createDependencies(
   repository: RepositoryConfig,
   overrides: Partial<StoryWorkspaceOperationsDependencies> = {},
@@ -108,6 +179,13 @@ function createDependencies(
     ...overrides,
   };
 }
+
+afterEach(async () => {
+  for (const path of [...cleanupPaths]) {
+    await rm(path, { recursive: true, force: true });
+    cleanupPaths.delete(path);
+  }
+});
 
 describe('story workspace operations', () => {
   it('creates a story workspace and returns it via getStoryWorkspace', async () => {
@@ -151,6 +229,67 @@ describe('story workspace operations', () => {
 
     expect(loaded).toEqual({
       workspace: created.workspace,
+    });
+  });
+
+  it('creates a story workspace against a live git repository and persists git state', async () => {
+    const fixture = await createLiveGitFixture();
+    const db = createMigratedDb();
+    const seed = seedRepositoryAndStory(db, {
+      localPath: fixture.repositoryPath,
+      storyStatus: 'Approved',
+    });
+
+    const operations = createStoryWorkspaceOperations({
+      withDatabase: createWithDatabase(db),
+      dependencies: {
+        ensureRepositoryClone: async () => ({
+          action: 'fetched' as const,
+          repository: seed.repository,
+          sync: {
+            mode: 'fetch' as const,
+            strategy: null,
+            branch: seed.repository.defaultBranch,
+            status: 'fetched' as const,
+            conflictMessage: null,
+          },
+        }),
+        now: () => '2026-03-06T02:00:00.000Z',
+      },
+      environment: createLiveGitEnvironment(fixture.sandboxDir),
+    });
+
+    const created = await operations.createStoryWorkspace({
+      repositoryId: seed.repositoryId,
+      storyId: seed.storyId,
+    });
+
+    const worktreeList = await runGit(fixture.repositoryPath, ['worktree', 'list', '--porcelain']);
+    const branchCommit = await runGit(fixture.repositoryPath, ['rev-parse', '--verify', `refs/heads/${created.workspace.branch}`]);
+    const worktreeCommit = await runGit(created.workspace.path, ['rev-parse', 'HEAD']);
+
+    expect(created.workspace).toMatchObject({
+      repositoryId: seed.repositoryId,
+      storyId: seed.storyId,
+      status: 'active',
+      statusReason: null,
+      baseBranch: 'main',
+      baseCommitHash: fixture.initialCommit,
+      createdAt: '2026-03-06T02:00:00.000Z',
+      updatedAt: '2026-03-06T02:00:00.000Z',
+    });
+    expect(created.workspace.branch.startsWith(`alphred/story/${String(seed.storyId)}-`)).toBe(true);
+    expect(created.workspace.path.startsWith(join(fixture.sandboxDir, 'worktrees'))).toBe(true);
+    expect(await pathExists(created.workspace.path)).toBe(true);
+    expect(branchCommit).toBe(fixture.initialCommit);
+    expect(worktreeCommit).toBe(fixture.initialCommit);
+    expect(worktreeList).toContain(`worktree ${created.workspace.path}`);
+    expect(worktreeList).toContain(`branch refs/heads/${created.workspace.branch}`);
+    expect(getStoryWorkspaceByStoryWorkItemId(db, seed.storyId)).toMatchObject({
+      worktreePath: created.workspace.path,
+      branch: created.workspace.branch,
+      baseCommitHash: fixture.initialCommit,
+      status: 'active',
     });
   });
 
@@ -829,6 +968,237 @@ describe('story workspace operations', () => {
       branch: competingBranch,
       status: 'active',
     });
+  });
+
+  it('rolls back a live created worktree and branch when the insert loses a duplicate-create race', async () => {
+    const fixture = await createLiveGitFixture();
+    const db = createMigratedDb();
+    const seed = seedRepositoryAndStory(db, {
+      localPath: fixture.repositoryPath,
+      storyStatus: 'Approved',
+    });
+    const competingPath = join(fixture.sandboxDir, 'worktrees', 'competing-story-workspace');
+    const competingBranch = 'alphred/story/1-competing';
+    let createdWorktree: WorktreeInfo | null = null;
+
+    const operations = createStoryWorkspaceOperations({
+      withDatabase: createWithDatabase(db),
+      dependencies: {
+        ensureRepositoryClone: async () => ({
+          action: 'fetched' as const,
+          repository: seed.repository,
+          sync: {
+            mode: 'fetch' as const,
+            strategy: null,
+            branch: seed.repository.defaultBranch,
+            status: 'fetched' as const,
+            conflictMessage: null,
+          },
+        }),
+        createWorktree: async (repoDir, worktreeBase, params) => {
+          const liveWorktree = await createGitWorktree(repoDir, worktreeBase, params);
+          createdWorktree = liveWorktree;
+          insertStoryWorkspace(db, {
+            repositoryId: seed.repositoryId,
+            storyWorkItemId: seed.storyId,
+            worktreePath: competingPath,
+            branch: competingBranch,
+            baseBranch: 'main',
+            baseCommitHash: liveWorktree.commit,
+            occurredAt: '2026-03-06T02:04:00.000Z',
+          });
+
+          return liveWorktree;
+        },
+        now: () => '2026-03-06T02:05:00.000Z',
+      },
+      environment: createLiveGitEnvironment(fixture.sandboxDir),
+    });
+
+    await expect(
+      operations.createStoryWorkspace({
+        repositoryId: seed.repositoryId,
+        storyId: seed.storyId,
+      }),
+    ).rejects.toMatchObject({
+      code: 'conflict',
+      status: 409,
+      message: `Story workspace for story id=${seed.storyId} already exists. Reconcile it instead of creating a new one.`,
+      details: {
+        storyId: seed.storyId,
+        currentStatus: 'active',
+        allowedActions: ['reconcile'],
+      },
+    });
+
+    const liveWorktree = requireLiveWorktree(createdWorktree);
+    const worktreeList = await runGit(fixture.repositoryPath, ['worktree', 'list', '--porcelain']);
+
+    expect(await pathExists(liveWorktree.path)).toBe(false);
+    expect(worktreeList).not.toContain(`worktree ${liveWorktree.path}`);
+    await expect(
+      runGit(fixture.repositoryPath, ['rev-parse', '--verify', `refs/heads/${liveWorktree.branch}`]),
+    ).rejects.toThrow();
+    expect(getStoryWorkspaceByStoryWorkItemId(db, seed.storyId)).toMatchObject({
+      worktreePath: competingPath,
+      branch: competingBranch,
+      baseCommitHash: fixture.initialCommit,
+      status: 'active',
+    });
+  });
+
+  it('surfaces rollback cleanup failure distinctly after a live worktree create succeeds', async () => {
+    const fixture = await createLiveGitFixture();
+    const db = createMigratedDb();
+    const seed = seedRepositoryAndStory(db, {
+      localPath: fixture.repositoryPath,
+      storyStatus: 'Approved',
+    });
+    const competingPath = join(fixture.sandboxDir, 'worktrees', 'competing-story-workspace');
+    const competingBranch = 'alphred/story/1-competing';
+    let createdWorktree: WorktreeInfo | null = null;
+
+    const operations = createStoryWorkspaceOperations({
+      withDatabase: createWithDatabase(db),
+      dependencies: {
+        ensureRepositoryClone: async () => ({
+          action: 'fetched' as const,
+          repository: seed.repository,
+          sync: {
+            mode: 'fetch' as const,
+            strategy: null,
+            branch: seed.repository.defaultBranch,
+            status: 'fetched' as const,
+            conflictMessage: null,
+          },
+        }),
+        createWorktree: async (repoDir, worktreeBase, params) => {
+          const liveWorktree = await createGitWorktree(repoDir, worktreeBase, params);
+          createdWorktree = liveWorktree;
+          insertStoryWorkspace(db, {
+            repositoryId: seed.repositoryId,
+            storyWorkItemId: seed.storyId,
+            worktreePath: competingPath,
+            branch: competingBranch,
+            baseBranch: 'main',
+            baseCommitHash: liveWorktree.commit,
+            occurredAt: '2026-03-06T02:09:00.000Z',
+          });
+
+          return liveWorktree;
+        },
+        deleteBranch: async () => {
+          throw new Error('simulated branch delete failure');
+        },
+        now: () => '2026-03-06T02:10:00.000Z',
+      },
+      environment: createLiveGitEnvironment(fixture.sandboxDir),
+    });
+
+    const thrown = await operations
+      .createStoryWorkspace({
+        repositoryId: seed.repositoryId,
+        storyId: seed.storyId,
+      })
+      .catch(error => error);
+
+    const liveWorktree = requireLiveWorktree(createdWorktree);
+
+    expect(thrown).toMatchObject({
+      code: 'internal_error',
+      status: 500,
+      message: `Unable to roll back story workspace create failure for story id=${seed.storyId}.`,
+      details: {
+        repositoryId: seed.repositoryId,
+        storyId: seed.storyId,
+        branch: liveWorktree.branch,
+        worktreePath: liveWorktree.path,
+      },
+    });
+    expect(await pathExists(liveWorktree.path)).toBe(false);
+    expect(
+      await runGit(fixture.repositoryPath, ['rev-parse', '--verify', `refs/heads/${liveWorktree.branch}`]),
+    ).toBe(fixture.initialCommit);
+    expect(getStoryWorkspaceByStoryWorkItemId(db, seed.storyId)).toMatchObject({
+      worktreePath: competingPath,
+      branch: competingBranch,
+      baseCommitHash: fixture.initialCommit,
+      status: 'active',
+    });
+  });
+
+  it('surfaces a distinct rollback cleanup failure after live worktree creation', async () => {
+    const fixture = await createLiveGitFixture();
+    const db = createMigratedDb();
+    const seed = seedRepositoryAndStory(db, {
+      localPath: fixture.repositoryPath,
+      storyStatus: 'Approved',
+    });
+    const competingPath = join(fixture.sandboxDir, 'worktrees', 'competing-story-workspace');
+    const competingBranch = 'alphred/story/1-competing';
+    let createdWorktree: WorktreeInfo | null = null;
+
+    const operations = createStoryWorkspaceOperations({
+      withDatabase: createWithDatabase(db),
+      dependencies: {
+        ensureRepositoryClone: async () => ({
+          action: 'fetched' as const,
+          repository: seed.repository,
+          sync: {
+            mode: 'fetch' as const,
+            strategy: null,
+            branch: seed.repository.defaultBranch,
+            status: 'fetched' as const,
+            conflictMessage: null,
+          },
+        }),
+        createWorktree: async (repoDir, worktreeBase, params) => {
+          const liveWorktree = await createGitWorktree(repoDir, worktreeBase, params);
+          createdWorktree = liveWorktree;
+          insertStoryWorkspace(db, {
+            repositoryId: seed.repositoryId,
+            storyWorkItemId: seed.storyId,
+            worktreePath: competingPath,
+            branch: competingBranch,
+            baseBranch: 'main',
+            baseCommitHash: liveWorktree.commit,
+            occurredAt: '2026-03-06T02:09:00.000Z',
+          });
+
+          return liveWorktree;
+        },
+        removeWorktree: async () => {
+          throw new Error('simulated removeWorktree failure');
+        },
+        now: () => '2026-03-06T02:10:00.000Z',
+      },
+      environment: createLiveGitEnvironment(fixture.sandboxDir),
+    });
+
+    const rollbackFailure = await operations
+      .createStoryWorkspace({
+        repositoryId: seed.repositoryId,
+        storyId: seed.storyId,
+      })
+      .catch(error => error);
+    const liveWorktree = requireLiveWorktree(createdWorktree);
+
+    expect(rollbackFailure).toMatchObject({
+      code: 'internal_error',
+      status: 500,
+      message: `Unable to roll back story workspace create failure for story id=${seed.storyId}.`,
+      details: {
+        repositoryId: seed.repositoryId,
+        storyId: seed.storyId,
+        branch: liveWorktree.branch,
+        worktreePath: liveWorktree.path,
+      },
+    });
+
+    const worktreeList = await runGit(fixture.repositoryPath, ['worktree', 'list', '--porcelain']);
+
+    expect(await pathExists(liveWorktree.path)).toBe(true);
+    expect(worktreeList).toContain(`worktree ${liveWorktree.path}`);
   });
 
   it('rejects create requests when only a removed workspace row exists', async () => {
