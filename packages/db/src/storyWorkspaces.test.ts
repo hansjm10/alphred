@@ -222,6 +222,19 @@ describe('story_workspaces lifecycle helpers', () => {
     ).toThrow(`Story workspace reactivation precondition failed for id=${removed.id}; expected status "removed".`);
   });
 
+  it('throws when reactivating a workspace that does not exist', () => {
+    const db = createMigratedDb();
+
+    expect(() =>
+      reactivateRemovedStoryWorkspace(db, {
+        storyWorkspaceId: 9_999_999,
+        worktreePath: '/tmp/alphred/worktrees/story-reactivate-missing',
+        branch: 'alphred/story/missing',
+        baseBranch: 'main',
+      }),
+    ).toThrow('Story workspace id=9999999 was not found for reactivation.');
+  });
+
   it('applies update preconditions only while the row still has the expected status', () => {
     const db = createMigratedDb();
     const seed = seedStoryWorkItem(db, {
@@ -251,6 +264,106 @@ describe('story_workspaces lifecycle helpers', () => {
     ).toThrow(`Story workspace update precondition failed for id=${inserted.id}; expected status "removed".`);
 
     expect(getStoryWorkspaceById(db, inserted.id)).toEqual(inserted);
+  });
+
+  it('updates a workspace when the expected status still matches at write time', () => {
+    const db = createMigratedDb();
+    const seed = seedStoryWorkItem(db, {
+      repositoryName: 'story-workspace-update-expected-status',
+      storyTitle: 'Expected status update',
+    });
+
+    const inserted = insertStoryWorkspace(db, {
+      repositoryId: seed.repository.id,
+      storyWorkItemId: seed.storyId,
+      worktreePath: '/tmp/alphred/worktrees/story-update-expected-status',
+      branch: 'alphred/story/15-a1b2c3',
+      baseBranch: 'main',
+      baseCommitHash: 'abc123',
+      occurredAt: '2026-03-05T10:00:00.000Z',
+    });
+
+    const updated = updateStoryWorkspace(db, {
+      storyWorkspaceId: inserted.id,
+      expectedStatus: 'active',
+      status: 'stale',
+      statusReason: 'missing_path',
+      occurredAt: '2026-03-05T10:05:00.000Z',
+    });
+
+    expect(updated).toMatchObject({
+      id: inserted.id,
+      status: 'stale',
+      statusReason: 'missing_path',
+      updatedAt: '2026-03-05T10:05:00.000Z',
+    });
+  });
+
+  it('throws when an update without expectedStatus changes zero rows', () => {
+    const db = createMigratedDb();
+    const seed = seedStoryWorkItem(db, {
+      repositoryName: 'story-workspace-update-noop-missing',
+      storyTitle: 'Update no-op missing workspace',
+    });
+
+    const inserted = insertStoryWorkspace(db, {
+      repositoryId: seed.repository.id,
+      storyWorkItemId: seed.storyId,
+      worktreePath: '/tmp/alphred/worktrees/story-update-noop-missing',
+      branch: 'alphred/story/16-a1b2c3',
+      baseBranch: 'main',
+    });
+
+    db.run(sql`DROP TRIGGER IF EXISTS story_workspaces_test_ignore_update_without_expected_status`);
+    db.run(sql`CREATE TRIGGER story_workspaces_test_ignore_update_without_expected_status
+      BEFORE UPDATE ON story_workspaces
+      FOR EACH ROW
+      BEGIN
+        SELECT RAISE(IGNORE);
+      END`);
+
+    expect(() =>
+      updateStoryWorkspace(db, {
+        storyWorkspaceId: inserted.id,
+        status: 'stale',
+        statusReason: 'missing_path',
+      }),
+    ).toThrow(`Story workspace id=${inserted.id} was not found for update.`);
+  });
+
+  it('throws when an expected-status update changes zero rows', () => {
+    const db = createMigratedDb();
+    const seed = seedStoryWorkItem(db, {
+      repositoryName: 'story-workspace-update-noop-expected-status',
+      storyTitle: 'Update no-op expected status workspace',
+    });
+
+    const inserted = insertStoryWorkspace(db, {
+      repositoryId: seed.repository.id,
+      storyWorkItemId: seed.storyId,
+      worktreePath: '/tmp/alphred/worktrees/story-update-noop-expected-status',
+      branch: 'alphred/story/17-a1b2c3',
+      baseBranch: 'main',
+    });
+
+    db.run(sql`DROP TRIGGER IF EXISTS story_workspaces_test_ignore_update_with_expected_status`);
+    db.run(sql`CREATE TRIGGER story_workspaces_test_ignore_update_with_expected_status
+      BEFORE UPDATE ON story_workspaces
+      FOR EACH ROW
+      BEGIN
+        SELECT RAISE(IGNORE);
+      END`);
+
+    expect(() =>
+      updateStoryWorkspace(db, {
+        storyWorkspaceId: inserted.id,
+        expectedStatus: 'active',
+        status: 'removed',
+        statusReason: 'cleanup_requested',
+        removedAt: '2026-03-05T10:05:00.000Z',
+        occurredAt: '2026-03-05T10:05:00.000Z',
+      }),
+    ).toThrow(`Story workspace update precondition failed for id=${inserted.id}; expected status "active".`);
   });
 
   it('preserves updatedAt when reconciliation only advances lastReconciledAt', () => {
@@ -509,6 +622,48 @@ describe('story_workspaces lifecycle helpers', () => {
         lastReconciledAt: '2026-03-05T10:05:00.000Z',
       }),
     ).toThrow('Story workspace disappeared after update');
+  });
+
+  it('throws when a reactivated row is deleted before readback', () => {
+    const db = createMigratedDb();
+    const seed = seedStoryWorkItem(db, {
+      repositoryName: 'story-workspace-delete-after-reactivate',
+      storyTitle: 'Reactivate cleanup story workspace',
+    });
+
+    const inserted = insertStoryWorkspace(db, {
+      repositoryId: seed.repository.id,
+      storyWorkItemId: seed.storyId,
+      worktreePath: '/tmp/alphred/worktrees/story-reactivate-delete',
+      branch: 'alphred/story/18-a1b2c3',
+      baseBranch: 'main',
+    });
+
+    updateStoryWorkspace(db, {
+      storyWorkspaceId: inserted.id,
+      status: 'removed',
+      statusReason: 'cleanup_requested',
+      removedAt: '2026-03-05T10:05:00.000Z',
+      occurredAt: '2026-03-05T10:05:00.000Z',
+    });
+
+    db.run(sql`DROP TRIGGER IF EXISTS story_workspaces_test_delete_after_reactivate`);
+    db.run(sql`CREATE TRIGGER story_workspaces_test_delete_after_reactivate
+      AFTER UPDATE ON story_workspaces
+      FOR EACH ROW
+      BEGIN
+        DELETE FROM story_workspaces WHERE id = NEW.id;
+      END`);
+
+    expect(() =>
+      reactivateRemovedStoryWorkspace(db, {
+        storyWorkspaceId: inserted.id,
+        worktreePath: '/tmp/alphred/worktrees/story-reactivate-delete-2',
+        branch: 'alphred/story/18-d4e5f6',
+        baseBranch: 'main',
+        occurredAt: '2026-03-05T10:10:00.000Z',
+      }),
+    ).toThrow('Story workspace disappeared after reactivation update');
   });
 
   it('rejects unknown story workspace status reasons on update', () => {
