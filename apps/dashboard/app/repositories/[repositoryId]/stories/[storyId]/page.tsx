@@ -1,8 +1,7 @@
 import { notFound } from 'next/navigation';
-import type { DashboardRepositoryState } from '@dashboard/server/dashboard-contracts';
+import { DashboardIntegrationError } from '@dashboard/server/dashboard-errors';
 import { createDashboardService } from '@dashboard/server/dashboard-service';
 import { loadGitHubAuthGate } from '../../../../ui/load-github-auth-gate';
-import { loadDashboardRepositories } from '../../../load-dashboard-repositories';
 import { StoryDetailPageContent } from './story-detail-client';
 
 type StoryDetailPageProps = Readonly<{
@@ -32,13 +31,6 @@ function resolveActor(authGate: Awaited<ReturnType<typeof loadGitHubAuthGate>>):
   };
 }
 
-function resolveRepository(
-  repositories: readonly DashboardRepositoryState[],
-  repositoryId: number,
-): DashboardRepositoryState | null {
-  return repositories.find(candidate => candidate.id === repositoryId) ?? null;
-}
-
 export default async function StoryDetailPage({ params }: StoryDetailPageProps) {
   const { repositoryId, storyId } = await params;
   const parsedRepositoryId = parsePositiveId(repositoryId);
@@ -48,16 +40,17 @@ export default async function StoryDetailPage({ params }: StoryDetailPageProps) 
   }
 
   const service = createDashboardService();
-
-  const [repositories, authGate] = await Promise.all([
-    loadDashboardRepositories(false),
-    loadGitHubAuthGate(),
-  ]);
-
-  const repository = resolveRepository(repositories, parsedRepositoryId);
-  if (!repository) {
-    notFound();
+  const authGatePromise = loadGitHubAuthGate();
+  let repositoryResult: Awaited<ReturnType<typeof service.getRepository>>;
+  try {
+    repositoryResult = await service.getRepository(parsedRepositoryId);
+  } catch (error) {
+    if (error instanceof DashboardIntegrationError && error.status === 404) {
+      notFound();
+    }
+    throw error;
   }
+  const authGate = await authGatePromise;
 
   const bootstrap = await service.getRepositoryBoardBootstrap({ repositoryId: parsedRepositoryId });
   const story = bootstrap.workItems.find(item => item.id === parsedStoryId && item.type === 'story') ?? null;
@@ -65,16 +58,20 @@ export default async function StoryDetailPage({ params }: StoryDetailPageProps) 
     notFound();
   }
 
-  const proposal = await service.getStoryBreakdownProposal({ repositoryId: parsedRepositoryId, storyId: parsedStoryId });
+  const [proposal, workspace] = await Promise.all([
+    service.getStoryBreakdownProposal({ repositoryId: parsedRepositoryId, storyId: parsedStoryId }),
+    service.getStoryWorkspace({ repositoryId: parsedRepositoryId, storyId: parsedStoryId }),
+  ]);
 
   return (
     <StoryDetailPageContent
-      repository={repository}
+      repository={repositoryResult.repository}
       actor={resolveActor(authGate)}
       storyId={parsedStoryId}
       initialLatestEventId={bootstrap.latestEventId}
       initialWorkItems={bootstrap.workItems}
       initialProposal={proposal.proposal}
+      initialWorkspace={workspace.workspace}
     />
   );
 }

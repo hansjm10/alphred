@@ -7,6 +7,7 @@ import type {
   DashboardRepositoryState,
   DashboardRunStoryWorkflowResult,
   DashboardStoryBreakdownProposalSnapshot,
+  DashboardStoryWorkspaceSnapshot,
   DashboardWorkItemSnapshot,
 } from '@dashboard/server/dashboard-contracts';
 import { ActionButton, ButtonLink } from '../../../../ui/primitives';
@@ -17,12 +18,55 @@ import {
   fetchWorkItem,
   isRecord,
   moveWorkItemStatus,
-  runStoryWorkflow,
   parseBoardEventSnapshot,
   parseJsonSafely,
   resolveApiErrorMessage,
+  runStoryWorkflow,
   toWorkItemsById,
 } from '../../_shared/work-items-shared';
+
+type ActionMessage = Readonly<{
+  tone: 'success' | 'error';
+  message: string;
+}>;
+
+type WorkspaceAction = 'create' | 'reconcile' | 'cleanup' | 'recreate';
+
+type StoryDetailSnapshot = Readonly<{
+  repository: DashboardRepositoryState;
+  workItemsById: Readonly<Record<number, DashboardWorkItemSnapshot>>;
+  proposal: DashboardStoryBreakdownProposalSnapshot | null;
+  workspace: DashboardStoryWorkspaceSnapshot | null;
+}>;
+
+const workspaceActionSuccessMessage: Record<WorkspaceAction, string> = {
+  create: 'Workspace created.',
+  reconcile: 'Workspace reconciled.',
+  cleanup: 'Workspace cleanup completed.',
+  recreate: 'Workspace recreated.',
+};
+
+const workspaceActionPathSegment: Record<WorkspaceAction, string> = {
+  create: 'create-workspace',
+  reconcile: 'reconcile-workspace',
+  cleanup: 'cleanup-workspace',
+  recreate: 'recreate-workspace',
+};
+
+async function fetchRepository(params: { repositoryId: number }): Promise<DashboardRepositoryState> {
+  const response = await fetch(`/api/dashboard/repositories/${params.repositoryId}`, { method: 'GET' });
+  const payload = parseJsonSafely(await response.text());
+
+  if (!response.ok) {
+    throw new Error(resolveApiErrorMessage(response.status, payload, 'Unable to refresh repository'));
+  }
+
+  if (!isRecord(payload) || !isRecord(payload.repository)) {
+    throw new Error('Unable to refresh repository (malformed response).');
+  }
+
+  return payload.repository as DashboardRepositoryState;
+}
 
 async function fetchRepositoryWorkItems(params: { repositoryId: number }): Promise<DashboardWorkItemSnapshot[]> {
   const response = await fetch(`/api/dashboard/repositories/${params.repositoryId}/work-items`, { method: 'GET' });
@@ -39,7 +83,10 @@ async function fetchRepositoryWorkItems(params: { repositoryId: number }): Promi
   return payload.workItems as DashboardWorkItemSnapshot[];
 }
 
-async function fetchBreakdownProposal(params: { repositoryId: number; storyId: number }): Promise<DashboardStoryBreakdownProposalSnapshot | null> {
+async function fetchBreakdownProposal(params: {
+  repositoryId: number;
+  storyId: number;
+}): Promise<DashboardStoryBreakdownProposalSnapshot | null> {
   const response = await fetch(`/api/dashboard/work-items/${params.storyId}/breakdown?repositoryId=${params.repositoryId}`, {
     method: 'GET',
   });
@@ -54,6 +101,51 @@ async function fetchBreakdownProposal(params: { repositoryId: number; storyId: n
   }
 
   return (payload.proposal ?? null) as DashboardStoryBreakdownProposalSnapshot | null;
+}
+
+async function fetchStoryWorkspace(params: {
+  repositoryId: number;
+  storyId: number;
+}): Promise<DashboardStoryWorkspaceSnapshot | null> {
+  const response = await fetch(`/api/dashboard/work-items/${params.storyId}/workspace?repositoryId=${params.repositoryId}`, {
+    method: 'GET',
+  });
+  const payload = parseJsonSafely(await response.text());
+
+  if (!response.ok) {
+    throw new Error(resolveApiErrorMessage(response.status, payload, 'Unable to refresh story workspace'));
+  }
+
+  if (!isRecord(payload)) {
+    throw new Error('Unable to refresh story workspace (malformed response).');
+  }
+
+  return (payload.workspace ?? null) as DashboardStoryWorkspaceSnapshot | null;
+}
+
+async function runWorkspaceAction(params: {
+  repositoryId: number;
+  storyId: number;
+  action: WorkspaceAction;
+}): Promise<DashboardStoryWorkspaceSnapshot> {
+  const response = await fetch(`/api/dashboard/work-items/${params.storyId}/actions/${workspaceActionPathSegment[params.action]}`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      repositoryId: params.repositoryId,
+    }),
+  });
+  const payload = parseJsonSafely(await response.text());
+
+  if (!response.ok) {
+    throw new Error(resolveApiErrorMessage(response.status, payload, 'Unable to update story workspace'));
+  }
+
+  if (!isRecord(payload) || !isRecord(payload.workspace)) {
+    throw new Error('Unable to update story workspace (malformed response).');
+  }
+
+  return payload.workspace as DashboardStoryWorkspaceSnapshot;
 }
 
 function renderStringList(values: string[] | null): ReactNode {
@@ -85,6 +177,52 @@ function formatWorkItemStatusLabel(status: WorkItemStatus): string {
   }
 }
 
+function formatWorkspaceStatusLabel(status: DashboardStoryWorkspaceSnapshot['status']): string {
+  switch (status) {
+    case 'active':
+      return 'Active';
+    case 'stale':
+      return 'Stale';
+    case 'removed':
+      return 'Removed';
+    default:
+      return status;
+  }
+}
+
+function formatWorkspaceStatusReasonLabel(
+  statusReason: DashboardStoryWorkspaceSnapshot['statusReason'],
+): string {
+  switch (statusReason) {
+    case null:
+      return 'None';
+    case 'missing_path':
+      return 'Missing path';
+    case 'worktree_not_registered':
+      return 'Worktree not registered';
+    case 'branch_mismatch':
+      return 'Branch mismatch';
+    case 'repository_clone_missing':
+      return 'Repository clone missing';
+    case 'reconcile_failed':
+      return 'Reconcile failed';
+    case 'removed_state_drift':
+      return 'Removed state drift';
+    case 'cleanup_requested':
+      return 'Cleanup requested';
+    default:
+      return statusReason;
+  }
+}
+
+function formatTimestamp(value: string | null): string {
+  if (value === null) {
+    return 'None';
+  }
+
+  return new Date(value).toLocaleString();
+}
+
 function mergeStoryWorkflowWorkItems(
   previous: Readonly<Record<number, DashboardWorkItemSnapshot>>,
   result: DashboardRunStoryWorkflowResult,
@@ -97,6 +235,22 @@ function mergeStoryWorkflowWorkItems(
   return next;
 }
 
+function toErrorMessage(error: unknown, fallback: string): string {
+  return error instanceof Error ? error.message : fallback;
+}
+
+function resolveVisibleWorkspaceActions(workspace: DashboardStoryWorkspaceSnapshot | null): readonly WorkspaceAction[] {
+  if (workspace === null) {
+    return ['create'];
+  }
+
+  if (workspace.status === 'removed') {
+    return ['recreate'];
+  }
+
+  return ['reconcile', 'cleanup'];
+}
+
 export function StoryDetailPageContent(props: Readonly<{
   repository: DashboardRepositoryState;
   actor: WorkItemActor;
@@ -104,16 +258,19 @@ export function StoryDetailPageContent(props: Readonly<{
   initialLatestEventId: number;
   initialWorkItems: readonly DashboardWorkItemSnapshot[];
   initialProposal: DashboardStoryBreakdownProposalSnapshot | null;
+  initialWorkspace: DashboardStoryWorkspaceSnapshot | null;
 }>) {
-  const { repository, actor, storyId, initialLatestEventId, initialWorkItems, initialProposal } = props;
+  const { repository, actor, storyId, initialLatestEventId, initialWorkItems, initialProposal, initialWorkspace } = props;
 
+  const [repositoryState, setRepositoryState] = useState(repository);
   const [workItemsById, setWorkItemsById] = useState<Readonly<Record<number, DashboardWorkItemSnapshot>>>(() =>
     toWorkItemsById(initialWorkItems),
   );
   const [proposal, setProposal] = useState<DashboardStoryBreakdownProposalSnapshot | null>(initialProposal);
+  const [workspace, setWorkspace] = useState<DashboardStoryWorkspaceSnapshot | null>(initialWorkspace);
   const [connectionState, setConnectionState] = useState<BoardConnectionState>('connecting');
   const [connectionError, setConnectionError] = useState<string | null>(null);
-  const [actionError, setActionError] = useState<string | null>(null);
+  const [actionMessage, setActionMessage] = useState<ActionMessage | null>(null);
   const [busy, setBusy] = useState(false);
 
   const latestEventIdRef = useRef(initialLatestEventId);
@@ -134,6 +291,37 @@ export function StoryDetailPageContent(props: Readonly<{
       .sort((a, b) => a.id - b.id);
   }, [workItemsById, story, storyId]);
 
+  const visibleWorkspaceActions = useMemo(() => resolveVisibleWorkspaceActions(workspace), [workspace]);
+
+  const applySnapshot = (snapshot: StoryDetailSnapshot) => {
+    setRepositoryState(snapshot.repository);
+    setWorkItemsById(snapshot.workItemsById);
+    setProposal(snapshot.proposal);
+    setWorkspace(snapshot.workspace);
+  };
+
+  const loadLatestSnapshot = async (): Promise<StoryDetailSnapshot> => {
+    const [latestRepository, workItems, latestProposal, latestStory, latestWorkspace] = await Promise.all([
+      fetchRepository({ repositoryId: repository.id }),
+      fetchRepositoryWorkItems({ repositoryId: repository.id }),
+      fetchBreakdownProposal({ repositoryId: repository.id, storyId }),
+      fetchWorkItem({ repositoryId: repository.id, workItemId: storyId }),
+      fetchStoryWorkspace({ repositoryId: repository.id, storyId }),
+    ]);
+
+    const nextWorkItemsById: Record<number, DashboardWorkItemSnapshot> = {
+      ...toWorkItemsById(workItems),
+    };
+    nextWorkItemsById[latestStory.id] = latestStory;
+
+    return {
+      repository: latestRepository,
+      workItemsById: nextWorkItemsById,
+      proposal: latestProposal,
+      workspace: latestWorkspace,
+    };
+  };
+
   const connect = (sessionId: number) => {
     if (connectionSessionRef.current !== sessionId) {
       return;
@@ -153,13 +341,12 @@ export function StoryDetailPageContent(props: Readonly<{
     );
     eventSourceRef.current = eventSource;
 
-    eventSource.addEventListener('board_state', (event) => {
+    eventSource.addEventListener('board_state', event => {
       if (connectionSessionRef.current !== sessionId) {
         return;
       }
       const parsed = parseJsonSafely(event.data);
       if (isRecord(parsed) && typeof parsed.latestEventId === 'number') {
-        // board_state indicates a high watermark, but we still resume from last delivered event id.
         setConnectionState('live');
       }
     });
@@ -171,7 +358,7 @@ export function StoryDetailPageContent(props: Readonly<{
       setConnectionState('live');
     });
 
-    eventSource.addEventListener('board_error', (event) => {
+    eventSource.addEventListener('board_error', event => {
       if (connectionSessionRef.current !== sessionId) {
         return;
       }
@@ -183,7 +370,7 @@ export function StoryDetailPageContent(props: Readonly<{
       }
     });
 
-    eventSource.addEventListener('board_event', (event) => {
+    eventSource.addEventListener('board_event', event => {
       if (connectionSessionRef.current !== sessionId) {
         return;
       }
@@ -261,20 +448,17 @@ export function StoryDetailPageContent(props: Readonly<{
     };
   }, [repository.id, storyId]);
 
-  const refreshAll = async (options?: { bannerMessage?: string | null }) => {
+  const refreshAll = async (options?: { bannerMessage?: ActionMessage | null }) => {
     setBusy(true);
-    setActionError(options?.bannerMessage ?? null);
+    setActionMessage(options?.bannerMessage ?? null);
     try {
-      const [workItems, latestProposal, latestStory] = await Promise.all([
-        fetchRepositoryWorkItems({ repositoryId: repository.id }),
-        fetchBreakdownProposal({ repositoryId: repository.id, storyId }),
-        fetchWorkItem({ repositoryId: repository.id, workItemId: storyId }),
-      ]);
-      setWorkItemsById(toWorkItemsById(workItems));
-      setProposal(latestProposal);
-      setWorkItemsById(previous => ({ ...previous, [latestStory.id]: latestStory }));
+      const latest = await loadLatestSnapshot();
+      applySnapshot(latest);
     } catch (error) {
-      setActionError(error instanceof Error ? error.message : String(error));
+      setActionMessage({
+        tone: 'error',
+        message: toErrorMessage(error, 'Unable to refresh story detail.'),
+      });
     } finally {
       setBusy(false);
     }
@@ -283,7 +467,7 @@ export function StoryDetailPageContent(props: Readonly<{
   const handleRequestBreakdown = async () => {
     if (!story) return;
     setBusy(true);
-    setActionError(null);
+    setActionMessage(null);
     const workflowResult = await runStoryWorkflow({
       repositoryId: repository.id,
       storyId: story.id,
@@ -295,9 +479,9 @@ export function StoryDetailPageContent(props: Readonly<{
     if (workflowResult.ok) {
       setWorkItemsById(previous => mergeStoryWorkflowWorkItems(previous, workflowResult.result));
     } else if (workflowResult.status === 409) {
-      await refreshAll({ bannerMessage: `Revision conflict: ${workflowResult.message}` });
+      await refreshAll({ bannerMessage: { tone: 'error', message: `Revision conflict: ${workflowResult.message}` } });
     } else {
-      setActionError(workflowResult.message);
+      setActionMessage({ tone: 'error', message: workflowResult.message });
     }
     setBusy(false);
   };
@@ -305,7 +489,7 @@ export function StoryDetailPageContent(props: Readonly<{
   const handleRequestChanges = async () => {
     if (!story) return;
     setBusy(true);
-    setActionError(null);
+    setActionMessage(null);
     const moveResult = await moveWorkItemStatus({
       repositoryId: repository.id,
       workItemId: story.id,
@@ -318,9 +502,9 @@ export function StoryDetailPageContent(props: Readonly<{
       setProposal(null);
       setWorkItemsById(previous => ({ ...previous, [moveResult.workItem.id]: moveResult.workItem }));
     } else if (moveResult.status === 409) {
-      await refreshAll({ bannerMessage: `Revision conflict: ${moveResult.message}` });
+      await refreshAll({ bannerMessage: { tone: 'error', message: `Revision conflict: ${moveResult.message}` } });
     } else {
-      setActionError(moveResult.message);
+      setActionMessage({ tone: 'error', message: moveResult.message });
     }
     setBusy(false);
   };
@@ -328,7 +512,7 @@ export function StoryDetailPageContent(props: Readonly<{
   const handleApproveBreakdown = async () => {
     if (!story) return;
     setBusy(true);
-    setActionError(null);
+    setActionMessage(null);
     const workflowResult = await runStoryWorkflow({
       repositoryId: repository.id,
       storyId,
@@ -342,12 +526,52 @@ export function StoryDetailPageContent(props: Readonly<{
       setProposal(null);
       setWorkItemsById(previous => mergeStoryWorkflowWorkItems(previous, workflowResult.result));
     } else if (workflowResult.status === 409) {
-      await refreshAll({ bannerMessage: `Revision conflict: ${workflowResult.message}` });
+      await refreshAll({ bannerMessage: { tone: 'error', message: `Revision conflict: ${workflowResult.message}` } });
     } else {
-      setActionError(workflowResult.message);
+      setActionMessage({ tone: 'error', message: workflowResult.message });
     }
 
     setBusy(false);
+  };
+
+  const handleWorkspaceAction = async (action: WorkspaceAction) => {
+    if (!story) {
+      return;
+    }
+
+    setBusy(true);
+    setActionMessage(null);
+
+    try {
+      const nextWorkspace = await runWorkspaceAction({
+        repositoryId: repository.id,
+        storyId: story.id,
+        action,
+      });
+      setWorkspace(nextWorkspace);
+
+      const successMessage = workspaceActionSuccessMessage[action];
+      try {
+        const latest = await loadLatestSnapshot();
+        applySnapshot(latest);
+        setActionMessage({ tone: 'success', message: successMessage });
+      } catch (refreshError) {
+        setActionMessage({
+          tone: 'success',
+          message: `${successMessage} Unable to refresh story detail: ${toErrorMessage(
+            refreshError,
+            'Unable to refresh story detail.',
+          )}`,
+        });
+      }
+    } catch (error) {
+      setActionMessage({
+        tone: 'error',
+        message: toErrorMessage(error, 'Unable to update story workspace.'),
+      });
+    } finally {
+      setBusy(false);
+    }
   };
 
   if (story?.type !== 'story') {
@@ -360,14 +584,14 @@ export function StoryDetailPageContent(props: Readonly<{
     );
   }
 
-  const launchRunHref = `/runs?repository=${encodeURIComponent(repository.name)}&launchWorkItemId=${story.id}`;
+  const launchRunHref = `/runs?repository=${encodeURIComponent(repositoryState.name)}&launchWorkItemId=${story.id}`;
 
   return (
     <div className="page-stack">
       <header className="board-page-header">
         <div>
           <h2 className="board-page-title">
-            <Link href={`/repositories/${repository.id}/board`}>{repository.name}</Link> / Story #{story.id}
+            <Link href={`/repositories/${repository.id}/board`}>{repositoryState.name}</Link> / Story #{story.id}
           </h2>
           <p className="meta-text">{story.title}</p>
         </div>
@@ -390,10 +614,16 @@ export function StoryDetailPageContent(props: Readonly<{
         </p>
       ) : null}
 
-      {actionError ? (
-        <p className="repo-banner repo-banner--error" role="alert">
-          {actionError}
-        </p>
+      {actionMessage ? (
+        actionMessage.tone === 'error' ? (
+          <p className="repo-banner repo-banner--error" role="alert">
+            {actionMessage.message}
+          </p>
+        ) : (
+          <output className="repo-banner repo-banner--success" aria-live="polite">
+            {actionMessage.message}
+          </output>
+        )
       ) : null}
 
       <section className="surface surface-card surface--default">
@@ -421,6 +651,33 @@ export function StoryDetailPageContent(props: Readonly<{
         </div>
 
         <div className="board-detail__section board-detail__section--divider">
+          <h5>Workspace</h5>
+          {workspace ? (
+            <>
+              <ul className="board-detail__list">
+                <li>Status: {formatWorkspaceStatusLabel(workspace.status)}</li>
+                <li>Status reason: {formatWorkspaceStatusReasonLabel(workspace.statusReason)}</li>
+                <li>Path: {workspace.path}</li>
+                <li>Branch: {workspace.branch}</li>
+                <li>Base branch: {workspace.baseBranch}</li>
+                <li>Base commit: {workspace.baseCommitHash ?? 'None'}</li>
+                <li>Created: {formatTimestamp(workspace.createdAt)}</li>
+                <li>Updated: {formatTimestamp(workspace.updatedAt)}</li>
+                <li>Last reconciled: {formatTimestamp(workspace.lastReconciledAt)}</li>
+                <li>Removed: {formatTimestamp(workspace.removedAt)}</li>
+              </ul>
+            </>
+          ) : (
+            <p className="meta-text">No story workspace exists yet.</p>
+          )}
+          <h6 className="meta-text">Repository</h6>
+          <ul className="board-detail__list">
+            <li>Clone status: {repositoryState.cloneStatus}</li>
+            <li>Local path: {repositoryState.localPath ?? 'None'}</li>
+          </ul>
+        </div>
+
+        <div className="board-detail__section board-detail__section--divider">
           <h5>Actions</h5>
           <div className="board-action-row">
             {story.status === 'Draft' ? (
@@ -439,6 +696,23 @@ export function StoryDetailPageContent(props: Readonly<{
                 </ActionButton>
               </>
             ) : null}
+
+            {visibleWorkspaceActions.map(action => (
+              <ActionButton
+                key={action}
+                tone={action === 'create' || action === 'recreate' ? 'primary' : 'secondary'}
+                onClick={() => void handleWorkspaceAction(action)}
+                disabled={busy}
+              >
+                {action === 'create'
+                  ? 'Create workspace'
+                  : action === 'reconcile'
+                    ? 'Reconcile workspace'
+                    : action === 'cleanup'
+                      ? 'Cleanup workspace'
+                      : 'Recreate workspace'}
+              </ActionButton>
+            ))}
 
             <ActionButton tone="secondary" onClick={() => void refreshAll()} disabled={busy}>
               Refresh

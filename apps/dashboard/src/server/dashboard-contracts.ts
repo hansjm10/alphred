@@ -169,6 +169,10 @@ export type DashboardRepositoryState = {
   archivedAt: string | null;
 };
 
+export type DashboardGetRepositoryResult = {
+  repository: DashboardRepositoryState;
+};
+
 export type DashboardRunSummary = {
   id: number;
   tree: {

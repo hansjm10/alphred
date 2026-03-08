@@ -1,5 +1,6 @@
 import {
   archiveRepository as archiveRepositoryConfig,
+  getRepositoryById,
   getRepositoryByName,
   insertRepository,
   listRepositories as listRepositoryConfigs,
@@ -19,6 +20,7 @@ import type {
   DashboardArchiveRepositoryResult,
   DashboardCreateRepositoryRequest,
   DashboardCreateRepositoryResult,
+  DashboardGetRepositoryResult,
   DashboardGitHubAuthStatus,
   DashboardRepositoryState,
   DashboardRestoreRepositoryResult,
@@ -46,6 +48,7 @@ export type RepositoryOperationsDependencies = {
 
 export type RepositoryOperations = {
   listRepositories: (options?: { includeArchived?: boolean }) => Promise<DashboardRepositoryState[]>;
+  getRepository: (repositoryId: number) => Promise<DashboardGetRepositoryResult>;
   createRepository: (request: DashboardCreateRepositoryRequest) => Promise<DashboardCreateRepositoryResult>;
   checkGitHubAuth: () => Promise<DashboardGitHubAuthStatus>;
   syncRepository: (repositoryName: string, request?: DashboardRepositorySyncRequest) => Promise<DashboardRepositorySyncResult>;
@@ -106,6 +109,27 @@ export function createRepositoryOperations(params: {
       return withDatabase(async db =>
         listRepositoryConfigs(db, { includeArchived: options?.includeArchived ?? false }).map(toRepositoryState),
       );
+    },
+
+    getRepository(repositoryId: number): Promise<DashboardGetRepositoryResult> {
+      if (!Number.isInteger(repositoryId) || repositoryId < 1) {
+        throw new DashboardIntegrationError('invalid_request', 'Repository id must be a positive integer.', {
+          status: 400,
+        });
+      }
+
+      return withDatabase(async db => {
+        const repository = getRepositoryById(db, repositoryId, { includeArchived: false });
+        if (!repository) {
+          throw new DashboardIntegrationError('not_found', `Repository id=${repositoryId} was not found.`, {
+            status: 404,
+          });
+        }
+
+        return {
+          repository: toRepositoryState(repository),
+        };
+      });
     },
 
     async createRepository(request: DashboardCreateRepositoryRequest): Promise<DashboardCreateRepositoryResult> {
