@@ -251,6 +251,41 @@ function resolveVisibleWorkspaceActions(workspace: DashboardStoryWorkspaceSnapsh
   return ['reconcile', 'cleanup'];
 }
 
+function renderActionMessageBanner(actionMessage: ActionMessage | null): ReactNode {
+  if (actionMessage === null) {
+    return null;
+  }
+
+  if (actionMessage.tone === 'error') {
+    return (
+      <p className="repo-banner repo-banner--error" role="alert">
+        {actionMessage.message}
+      </p>
+    );
+  }
+
+  return (
+    <output className="repo-banner repo-banner--success" aria-live="polite">
+      {actionMessage.message}
+    </output>
+  );
+}
+
+function getWorkspaceActionLabel(action: WorkspaceAction): string {
+  switch (action) {
+    case 'create':
+      return 'Create workspace';
+    case 'reconcile':
+      return 'Reconcile workspace';
+    case 'cleanup':
+      return 'Cleanup workspace';
+    case 'recreate':
+      return 'Recreate workspace';
+    default:
+      return action;
+  }
+}
+
 export function StoryDetailPageContent(props: Readonly<{
   repository: DashboardRepositoryState;
   actor: WorkItemActor;
@@ -614,17 +649,7 @@ export function StoryDetailPageContent(props: Readonly<{
         </p>
       ) : null}
 
-      {actionMessage ? (
-        actionMessage.tone === 'error' ? (
-          <p className="repo-banner repo-banner--error" role="alert">
-            {actionMessage.message}
-          </p>
-        ) : (
-          <output className="repo-banner repo-banner--success" aria-live="polite">
-            {actionMessage.message}
-          </output>
-        )
-      ) : null}
+      {renderActionMessageBanner(actionMessage)}
 
       <section className="surface surface-card surface--default">
         <header className="surface-header">
@@ -653,20 +678,18 @@ export function StoryDetailPageContent(props: Readonly<{
         <div className="board-detail__section board-detail__section--divider">
           <h5>Workspace</h5>
           {workspace ? (
-            <>
-              <ul className="board-detail__list">
-                <li>Status: {formatWorkspaceStatusLabel(workspace.status)}</li>
-                <li>Status reason: {formatWorkspaceStatusReasonLabel(workspace.statusReason)}</li>
-                <li>Path: {workspace.path}</li>
-                <li>Branch: {workspace.branch}</li>
-                <li>Base branch: {workspace.baseBranch}</li>
-                <li>Base commit: {workspace.baseCommitHash ?? 'None'}</li>
-                <li>Created: {formatTimestamp(workspace.createdAt)}</li>
-                <li>Updated: {formatTimestamp(workspace.updatedAt)}</li>
-                <li>Last reconciled: {formatTimestamp(workspace.lastReconciledAt)}</li>
-                <li>Removed: {formatTimestamp(workspace.removedAt)}</li>
-              </ul>
-            </>
+            <ul className="board-detail__list">
+              <li>Status: {formatWorkspaceStatusLabel(workspace.status)}</li>
+              <li>Status reason: {formatWorkspaceStatusReasonLabel(workspace.statusReason)}</li>
+              <li>Path: {workspace.path}</li>
+              <li>Branch: {workspace.branch}</li>
+              <li>Base branch: {workspace.baseBranch}</li>
+              <li>Base commit: {workspace.baseCommitHash ?? 'None'}</li>
+              <li>Created: {formatTimestamp(workspace.createdAt)}</li>
+              <li>Updated: {formatTimestamp(workspace.updatedAt)}</li>
+              <li>Last reconciled: {formatTimestamp(workspace.lastReconciledAt)}</li>
+              <li>Removed: {formatTimestamp(workspace.removedAt)}</li>
+            </ul>
           ) : (
             <p className="meta-text">No story workspace exists yet.</p>
           )}
@@ -704,13 +727,7 @@ export function StoryDetailPageContent(props: Readonly<{
                 onClick={() => void handleWorkspaceAction(action)}
                 disabled={busy}
               >
-                {action === 'create'
-                  ? 'Create workspace'
-                  : action === 'reconcile'
-                    ? 'Reconcile workspace'
-                    : action === 'cleanup'
-                      ? 'Cleanup workspace'
-                      : 'Recreate workspace'}
+                {getWorkspaceActionLabel(action)}
               </ActionButton>
             ))}
 
