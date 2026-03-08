@@ -133,6 +133,27 @@ describe('StoryDetailPage', () => {
     expect(payload.initialWorkspace.path).toBe(workspace.path);
   });
 
+  it('falls back to the dashboard actor label when github auth is unavailable', async () => {
+    const repository = createRepository({ id: 1, name: 'demo-repo' });
+    const story = createWorkItem({ id: 3, type: 'story' });
+
+    createDashboardServiceMock.mockReturnValue({
+      getRepository: vi.fn(async () => ({ repository })),
+      getRepositoryBoardBootstrap: vi.fn(async () => ({ latestEventId: 7, workItems: [story] })),
+      getStoryBreakdownProposal: vi.fn(async () => ({ proposal: null })),
+      getStoryWorkspace: vi.fn(async () => ({ workspace: null })),
+    });
+    loadGitHubAuthGateMock.mockResolvedValue({ state: 'unauthenticated', user: null });
+    storyDetailPageContentMock.mockImplementation((props: unknown) => (
+      <div data-testid="payload">{JSON.stringify(props)}</div>
+    ));
+
+    await renderStoryPage({ repositoryId: '1', storyId: '3' });
+
+    const payload = JSON.parse(screen.getByTestId('payload').textContent ?? '{}');
+    expect(payload.actor).toEqual({ actorType: 'human', actorLabel: 'dashboard' });
+  });
+
   it('calls notFound when ids are invalid', async () => {
     createDashboardServiceMock.mockReturnValue({});
     loadGitHubAuthGateMock.mockResolvedValue({ state: 'authenticated', user: 'octocat' });
@@ -152,6 +173,21 @@ describe('StoryDetailPage', () => {
     loadGitHubAuthGateMock.mockResolvedValue({ state: 'authenticated', user: 'octocat' });
 
     await expect(renderStoryPage({ repositoryId: '1', storyId: '3' })).rejects.toBe(NOT_FOUND_ERROR);
+  });
+
+  it('rethrows repository lookup errors that are not 404s', async () => {
+    const serviceError = new DashboardIntegrationError('internal_error', 'GitHub API is unavailable.', {
+      status: 502,
+    });
+
+    createDashboardServiceMock.mockReturnValue({
+      getRepository: vi.fn(() => {
+        throw serviceError;
+      }),
+    });
+    loadGitHubAuthGateMock.mockResolvedValue({ state: 'authenticated', user: 'octocat' });
+
+    await expect(renderStoryPage({ repositoryId: '1', storyId: '3' })).rejects.toBe(serviceError);
   });
 
   it('calls notFound when the story is not present in bootstrap work items', async () => {
