@@ -3749,6 +3749,10 @@ describe('createDashboardService', () => {
     expect(archived.repository.name).toBe('demo-repo');
     expect(archived.repository.archivedAt).toBeTruthy();
 
+    const directArchivedLookup = await service.getRepository(1);
+    expect(directArchivedLookup.repository.name).toBe('demo-repo');
+    expect(directArchivedLookup.repository.archivedAt).toBeTruthy();
+
     const defaultList = await service.listRepositories();
     expect(defaultList).toEqual([]);
 
