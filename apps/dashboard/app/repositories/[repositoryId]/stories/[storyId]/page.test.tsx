@@ -3,7 +3,12 @@
 import { act, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { DashboardRepositoryState, DashboardStoryBreakdownProposalSnapshot, DashboardWorkItemSnapshot } from '@dashboard/server/dashboard-contracts';
+import type {
+  DashboardRepositoryState,
+  DashboardStoryBreakdownProposalSnapshot,
+  DashboardStoryWorkspaceSnapshot,
+  DashboardWorkItemSnapshot,
+} from '@dashboard/server/dashboard-contracts';
 import { StoryDetailPageContent } from './story-detail-client';
 
 type EventHandler = (event: Event) => void;
@@ -103,6 +108,28 @@ function createProposal(overrides: Partial<DashboardStoryBreakdownProposalSnapsh
   };
 }
 
+function createWorkspace(overrides: Partial<DashboardStoryWorkspaceSnapshot> = {}): DashboardStoryWorkspaceSnapshot {
+  return {
+    id: overrides.id ?? 8,
+    repositoryId: overrides.repositoryId ?? 1,
+    storyId: overrides.storyId ?? 3,
+    path: overrides.path ?? '/tmp/repos/demo-repo/.worktrees/story-3',
+    branch: overrides.branch ?? 'alphred/story/3-demo',
+    baseBranch: overrides.baseBranch ?? 'main',
+    baseCommitHash:
+      'baseCommitHash' in overrides ? (overrides.baseCommitHash ?? null) : 'abc123',
+    status: overrides.status ?? 'active',
+    statusReason: overrides.statusReason ?? null,
+    lastReconciledAt:
+      'lastReconciledAt' in overrides
+        ? (overrides.lastReconciledAt ?? null)
+        : new Date('2026-03-03T00:00:00.000Z').toISOString(),
+    removedAt: 'removedAt' in overrides ? (overrides.removedAt ?? null) : null,
+    createdAt: overrides.createdAt ?? new Date('2026-03-02T00:00:00.000Z').toISOString(),
+    updatedAt: overrides.updatedAt ?? new Date('2026-03-03T00:00:00.000Z').toISOString(),
+  };
+}
+
 function createJsonResponse(payload: unknown, init?: ResponseInit): Response {
   return new Response(JSON.stringify(payload), init);
 }
@@ -118,7 +145,7 @@ describe('StoryDetailPageContent', () => {
     vi.unstubAllGlobals();
   });
 
-  it('renders story title, status, parent chain, and child tasks', () => {
+  it('renders story title, workspace metadata, parent chain, and child tasks', () => {
     render(
       <StoryDetailPageContent
         repository={createRepository({ id: 1, name: 'demo-repo' })}
@@ -126,6 +153,7 @@ describe('StoryDetailPageContent', () => {
         storyId={3}
         initialLatestEventId={0}
         initialProposal={null}
+        initialWorkspace={createWorkspace({ storyId: 3, statusReason: 'branch_mismatch' })}
         initialWorkItems={[
           createWorkItem({ id: 1, type: 'epic', title: 'Epic' }),
           createWorkItem({ id: 2, type: 'feature', title: 'Feature', parentId: 1 }),
@@ -147,6 +175,10 @@ describe('StoryDetailPageContent', () => {
     expect(screen.getByText('Parent chain')).toBeInTheDocument();
     expect(screen.getByText('Epic')).toBeInTheDocument();
     expect(screen.getByText('Feature')).toBeInTheDocument();
+    expect(screen.getByText('Workspace')).toBeInTheDocument();
+    expect(screen.getByText('Status: Active')).toBeInTheDocument();
+    expect(screen.getByText('Status reason: Branch mismatch')).toBeInTheDocument();
+    expect(screen.getByText('Clone status: cloned')).toBeInTheDocument();
     expect(screen.getByText('Child tasks')).toBeInTheDocument();
     const childTasksSection = screen.getByText('Child tasks').closest('div') as HTMLElement;
     expect(within(childTasksSection).getByText('Task A')).toBeInTheDocument();
@@ -181,6 +213,7 @@ describe('StoryDetailPageContent', () => {
         storyId={3}
         initialLatestEventId={0}
         initialProposal={null}
+        initialWorkspace={null}
         initialWorkItems={[createWorkItem({ id: 3, type: 'story', title: 'Story title', status: 'Draft', revision: 0 })]}
       />,
     );
@@ -228,6 +261,7 @@ describe('StoryDetailPageContent', () => {
         storyId={3}
         initialLatestEventId={0}
         initialProposal={createProposal()}
+        initialWorkspace={createWorkspace({ storyId: 3 })}
         initialWorkItems={[
           createWorkItem({ id: 3, type: 'story', title: 'Story title', status: 'BreakdownProposed', revision: 1 }),
           createWorkItem({ id: 20, type: 'task', title: 'Task A', parentId: 3, status: 'Draft', revision: 0 }),
@@ -262,6 +296,54 @@ describe('StoryDetailPageContent', () => {
     expect(within(childTasksSection).getAllByText('Ready')).toHaveLength(2);
   });
 
+  it('renders removed workspaces and proposal fallbacks for missing planned files', () => {
+    render(
+      <StoryDetailPageContent
+        repository={createRepository({ id: 1, name: 'demo-repo' })}
+        actor={{ actorType: 'human', actorLabel: 'octocat' }}
+        storyId={3}
+        initialLatestEventId={0}
+        initialProposal={createProposal({
+          proposed: {
+            tags: null,
+            plannedFiles: null,
+            links: null,
+            tasks: [{ title: 'Task without files', plannedFiles: null }],
+          },
+        })}
+        initialWorkspace={createWorkspace({
+          storyId: 3,
+          status: 'removed',
+          statusReason: 'removed_state_drift',
+          baseCommitHash: null,
+          lastReconciledAt: null,
+          removedAt: new Date('2026-03-04T00:00:00.000Z').toISOString(),
+        })}
+        initialWorkItems={[
+          createWorkItem({ id: 3, type: 'story', title: 'Story title', status: 'BreakdownProposed', revision: 1 }),
+          createWorkItem({ id: 20, type: 'task', title: 'Task A', parentId: 3, status: 'InProgress', revision: 0 }),
+          createWorkItem({ id: 21, type: 'task', title: 'Task B', parentId: 3, status: 'InReview', revision: 0 }),
+        ]}
+      />,
+    );
+
+    expect(screen.getByText('Status: Removed')).toBeInTheDocument();
+    expect(screen.getByText('Status reason: Removed state drift')).toBeInTheDocument();
+    expect(screen.getByText('Base commit: None')).toBeInTheDocument();
+    expect(screen.getByText('Last reconciled: None')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Recreate workspace' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Reconcile workspace' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Cleanup workspace' })).not.toBeInTheDocument();
+
+    const proposedPlanSection = screen.getByText('Proposed plan').closest('div') as HTMLElement;
+    expect(within(proposedPlanSection).getByText('None')).toBeInTheDocument();
+    expect(within(proposedPlanSection).queryByText(/Files:/)).not.toBeInTheDocument();
+
+    const childTasksSection = screen.getByText('Child tasks').closest('div') as HTMLElement;
+    expect(within(childTasksSection).getByText('In progress')).toBeInTheDocument();
+    expect(within(childTasksSection).getByText('In review')).toBeInTheDocument();
+  });
+
   it('supports request-changes by moving the story back to NeedsBreakdown', async () => {
     const user = userEvent.setup();
     const fetchMock = vi.mocked(global.fetch);
@@ -279,6 +361,7 @@ describe('StoryDetailPageContent', () => {
         storyId={3}
         initialLatestEventId={0}
         initialProposal={createProposal()}
+        initialWorkspace={createWorkspace({ storyId: 3 })}
         initialWorkItems={[
           createWorkItem({ id: 3, type: 'story', title: 'Story title', status: 'BreakdownProposed', revision: 1 }),
           createWorkItem({ id: 20, type: 'task', title: 'Task A', parentId: 3, status: 'Draft', revision: 0 }),
@@ -310,6 +393,7 @@ describe('StoryDetailPageContent', () => {
         storyId={3}
         initialLatestEventId={0}
         initialProposal={null}
+        initialWorkspace={null}
         initialWorkItems={[createWorkItem({ id: 3, type: 'story', title: 'Story title', status: 'NeedsBreakdown', revision: 0 })]}
       />,
     );
@@ -333,6 +417,49 @@ describe('StoryDetailPageContent', () => {
     expect(await screen.findByText('Proposed plan')).toBeInTheDocument();
   });
 
+  it('updates the board stream state, handles malformed board errors, and clears proposals on approval events', async () => {
+    render(
+      <StoryDetailPageContent
+        repository={createRepository({ id: 1, name: 'demo-repo' })}
+        actor={{ actorType: 'human', actorLabel: 'octocat' }}
+        storyId={3}
+        initialLatestEventId={0}
+        initialProposal={createProposal()}
+        initialWorkspace={createWorkspace({ storyId: 3 })}
+        initialWorkItems={[createWorkItem({ id: 3, type: 'story', title: 'Story title', status: 'BreakdownProposed', revision: 1 })]}
+      />,
+    );
+
+    act(() => {
+      MockEventSource.instances[0]?.emitOpen();
+    });
+
+    expect(screen.getByText('Board stream: live')).toBeInTheDocument();
+
+    act(() => {
+      MockEventSource.instances[0]?.emit('board_error', { code: 'bad-payload' });
+    });
+
+    expect(screen.getByRole('alert')).toHaveTextContent('Board stream error.');
+
+    act(() => {
+      MockEventSource.instances[0]?.emit('board_event', {
+        id: 11,
+        repositoryId: 1,
+        workItemId: 3,
+        eventType: 'breakdown_approved',
+        payload: {
+          toStatus: 'Approved',
+          revision: 2,
+        },
+        createdAt: new Date('2026-03-02T00:05:00.000Z').toISOString(),
+      });
+    });
+
+    expect(screen.queryByText('Proposed plan')).not.toBeInTheDocument();
+    expect(screen.getByText('Approved')).toBeInTheDocument();
+  });
+
   it('shows a not-found state when the story is missing', () => {
     render(
       <StoryDetailPageContent
@@ -341,6 +468,7 @@ describe('StoryDetailPageContent', () => {
         storyId={3}
         initialLatestEventId={0}
         initialProposal={null}
+        initialWorkspace={null}
         initialWorkItems={[]}
       />,
     );
@@ -358,6 +486,7 @@ describe('StoryDetailPageContent', () => {
           storyId={3}
           initialLatestEventId={0}
           initialProposal={null}
+          initialWorkspace={null}
           initialWorkItems={[createWorkItem({ id: 3, type: 'story', title: 'Story title', status: 'NeedsBreakdown', revision: 0 })]}
         />,
       );
@@ -384,15 +513,100 @@ describe('StoryDetailPageContent', () => {
     }
   });
 
-  it('refreshes story state when move requests hit a revision conflict', async () => {
+  it('shows workflow errors when approving a breakdown fails', async () => {
+    const user = userEvent.setup();
+    const fetchMock = vi.mocked(global.fetch);
+
+    fetchMock.mockResolvedValueOnce(
+      createJsonResponse(
+        {
+          error: {
+            message: 'Breakdown approval is blocked until repository sync completes.',
+          },
+        },
+        { status: 410 },
+      ),
+    );
+
+    render(
+      <StoryDetailPageContent
+        repository={createRepository({ id: 1, name: 'demo-repo' })}
+        actor={{ actorType: 'human', actorLabel: 'octocat' }}
+        storyId={3}
+        initialLatestEventId={0}
+        initialProposal={createProposal()}
+        initialWorkspace={createWorkspace({ storyId: 3 })}
+        initialWorkItems={[createWorkItem({ id: 3, type: 'story', title: 'Story title', status: 'BreakdownProposed', revision: 1 })]}
+      />,
+    );
+
+    await user.click(screen.getByRole('button', { name: 'Approve breakdown' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'Breakdown approval is blocked until repository sync completes.',
+    );
+  });
+
+  it('creates a workspace, refreshes story detail, and shows a success notice', async () => {
     const user = userEvent.setup();
     const fetchMock = vi.mocked(global.fetch);
 
     fetchMock
-      .mockResolvedValueOnce(createJsonResponse({ error: { message: 'Revision conflict' } }, { status: 409 }))
+      .mockResolvedValueOnce(createJsonResponse({ workspace: createWorkspace({ storyId: 3 }) }))
+      .mockResolvedValueOnce(
+        createJsonResponse({
+          repository: createRepository({ id: 1, cloneStatus: 'cloned', localPath: '/tmp/repos/demo-repo' }),
+        }),
+      )
       .mockResolvedValueOnce(createJsonResponse({ workItems: [createWorkItem({ id: 3, status: 'Draft', revision: 2 })] }))
       .mockResolvedValueOnce(createJsonResponse({ proposal: null }))
-      .mockResolvedValueOnce(createJsonResponse({ workItem: createWorkItem({ id: 3, status: 'Draft', revision: 2 }) }));
+      .mockResolvedValueOnce(createJsonResponse({ workItem: createWorkItem({ id: 3, status: 'Draft', revision: 2 }) }))
+      .mockResolvedValueOnce(createJsonResponse({ workspace: createWorkspace({ storyId: 3, status: 'active' }) }));
+
+    render(
+      <StoryDetailPageContent
+        repository={createRepository({ id: 1, cloneStatus: 'pending', localPath: null })}
+        actor={{ actorType: 'human', actorLabel: 'octocat' }}
+        storyId={3}
+        initialLatestEventId={0}
+        initialProposal={null}
+        initialWorkspace={null}
+        initialWorkItems={[createWorkItem({ id: 3, type: 'story', title: 'Story title', status: 'Draft', revision: 1 })]}
+      />,
+    );
+
+    await user.click(screen.getByRole('button', { name: 'Create workspace' }));
+
+    expect(fetchMock).toHaveBeenNthCalledWith(1, '/api/dashboard/work-items/3/actions/create-workspace', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        repositoryId: 1,
+      }),
+    });
+    expect(fetchMock).toHaveBeenCalledWith('/api/dashboard/repositories/1', { method: 'GET' });
+    expect(fetchMock).toHaveBeenCalledWith('/api/dashboard/work-items/3/workspace?repositoryId=1', { method: 'GET' });
+    expect(await screen.findByText('Workspace created.')).toBeInTheDocument();
+    expect(screen.getByText('Clone status: cloned')).toBeInTheDocument();
+    expect(screen.getByText('Local path: /tmp/repos/demo-repo')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Reconcile workspace' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Cleanup workspace' })).toBeInTheDocument();
+  });
+
+  it('surfaces workspace action failures', async () => {
+    const user = userEvent.setup();
+    const fetchMock = vi.mocked(global.fetch);
+
+    fetchMock.mockResolvedValueOnce(
+      createJsonResponse(
+        {
+          error: {
+            message: 'Repository "demo-repo" is archived. Restore it before creating a story workspace.',
+          },
+        },
+        { status: 409 },
+      ),
+    );
 
     render(
       <StoryDetailPageContent
@@ -401,6 +615,161 @@ describe('StoryDetailPageContent', () => {
         storyId={3}
         initialLatestEventId={0}
         initialProposal={null}
+        initialWorkspace={null}
+        initialWorkItems={[createWorkItem({ id: 3, type: 'story', title: 'Story title', status: 'Draft', revision: 1 })]}
+      />,
+    );
+
+    await user.click(screen.getByRole('button', { name: 'Create workspace' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'Repository "demo-repo" is archived. Restore it before creating a story workspace.',
+    );
+  });
+
+  it('shows a partial success message when workspace recreation succeeds but refresh fails', async () => {
+    const user = userEvent.setup();
+    const fetchMock = vi.mocked(global.fetch);
+
+    fetchMock
+      .mockResolvedValueOnce(
+        createJsonResponse({
+          workspace: createWorkspace({
+            storyId: 3,
+            status: 'stale',
+            statusReason: 'reconcile_failed',
+          }),
+        }),
+      )
+      .mockResolvedValueOnce(createJsonResponse({}))
+      .mockResolvedValueOnce(createJsonResponse({ workItems: [createWorkItem({ id: 3, status: 'Draft', revision: 2 })] }))
+      .mockResolvedValueOnce(createJsonResponse({ proposal: null }))
+      .mockResolvedValueOnce(createJsonResponse({ workItem: createWorkItem({ id: 3, status: 'Draft', revision: 2 }) }))
+      .mockResolvedValueOnce(
+        createJsonResponse({
+          workspace: createWorkspace({ storyId: 3, status: 'stale', statusReason: 'reconcile_failed' }),
+        }),
+      );
+
+    render(
+      <StoryDetailPageContent
+        repository={createRepository({ id: 1, name: 'demo-repo' })}
+        actor={{ actorType: 'human', actorLabel: 'octocat' }}
+        storyId={3}
+        initialLatestEventId={0}
+        initialProposal={null}
+        initialWorkspace={createWorkspace({ storyId: 3, status: 'removed', statusReason: 'missing_path' })}
+        initialWorkItems={[createWorkItem({ id: 3, type: 'story', title: 'Story title', status: 'Draft', revision: 1 })]}
+      />,
+    );
+
+    await user.click(screen.getByRole('button', { name: 'Recreate workspace' }));
+
+    expect(fetchMock).toHaveBeenNthCalledWith(1, '/api/dashboard/work-items/3/actions/recreate-workspace', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        repositoryId: 1,
+      }),
+    });
+    expect(await screen.findByText(
+      'Workspace recreated. Unable to refresh story detail: Unable to refresh repository (malformed response).',
+    )).toBeInTheDocument();
+    expect(screen.getByText('Status reason: Reconcile failed')).toBeInTheDocument();
+  });
+
+  it('refreshes repository and workspace state when refresh is requested', async () => {
+    const user = userEvent.setup();
+    const fetchMock = vi.mocked(global.fetch);
+
+    fetchMock
+      .mockResolvedValueOnce(
+        createJsonResponse({
+          repository: createRepository({ id: 1, cloneStatus: 'cloned', localPath: '/tmp/repos/demo-repo' }),
+        }),
+      )
+      .mockResolvedValueOnce(createJsonResponse({ workItems: [createWorkItem({ id: 3, status: 'NeedsBreakdown', revision: 2 })] }))
+      .mockResolvedValueOnce(createJsonResponse({ proposal: null }))
+      .mockResolvedValueOnce(createJsonResponse({ workItem: createWorkItem({ id: 3, status: 'NeedsBreakdown', revision: 2 }) }))
+      .mockResolvedValueOnce(
+        createJsonResponse({
+          workspace: createWorkspace({ storyId: 3, status: 'stale', statusReason: 'repository_clone_missing' }),
+        }),
+      );
+
+    render(
+      <StoryDetailPageContent
+        repository={createRepository({ id: 1, cloneStatus: 'pending', localPath: null })}
+        actor={{ actorType: 'human', actorLabel: 'octocat' }}
+        storyId={3}
+        initialLatestEventId={0}
+        initialProposal={null}
+        initialWorkspace={createWorkspace({ storyId: 3, status: 'active' })}
+        initialWorkItems={[createWorkItem({ id: 3, type: 'story', title: 'Story title', status: 'NeedsBreakdown', revision: 1 })]}
+      />,
+    );
+
+    await user.click(screen.getByRole('button', { name: 'Refresh' }));
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/dashboard/repositories/1', { method: 'GET' });
+    expect(fetchMock).toHaveBeenCalledWith('/api/dashboard/work-items/3/workspace?repositoryId=1', { method: 'GET' });
+    expect(await screen.findByText('Status: Stale')).toBeInTheDocument();
+    expect(screen.getByText('Status reason: Repository clone missing')).toBeInTheDocument();
+    expect(screen.getByText('Local path: /tmp/repos/demo-repo')).toBeInTheDocument();
+  });
+
+  it('shows refresh errors when the latest snapshot response is malformed', async () => {
+    const user = userEvent.setup();
+    const fetchMock = vi.mocked(global.fetch);
+
+    fetchMock
+      .mockResolvedValueOnce(createJsonResponse({ repository: createRepository({ id: 1 }) }))
+      .mockResolvedValueOnce(createJsonResponse({}))
+      .mockResolvedValueOnce(createJsonResponse({ proposal: null }))
+      .mockResolvedValueOnce(createJsonResponse({ workItem: createWorkItem({ id: 3, status: 'NeedsBreakdown', revision: 2 }) }))
+      .mockResolvedValueOnce(
+        createJsonResponse({
+          workspace: createWorkspace({ storyId: 3, status: 'stale', statusReason: 'worktree_not_registered' }),
+        }),
+      );
+
+    render(
+      <StoryDetailPageContent
+        repository={createRepository({ id: 1, name: 'demo-repo' })}
+        actor={{ actorType: 'human', actorLabel: 'octocat' }}
+        storyId={3}
+        initialLatestEventId={0}
+        initialProposal={null}
+        initialWorkspace={createWorkspace({ storyId: 3, status: 'active' })}
+        initialWorkItems={[createWorkItem({ id: 3, type: 'story', title: 'Story title', status: 'NeedsBreakdown', revision: 1 })]}
+      />,
+    );
+
+    await user.click(screen.getByRole('button', { name: 'Refresh' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Unable to refresh work items (malformed response).');
+  });
+
+  it('refreshes story state when move requests hit a revision conflict', async () => {
+    const user = userEvent.setup();
+    const fetchMock = vi.mocked(global.fetch);
+
+    fetchMock
+      .mockResolvedValueOnce(createJsonResponse({ error: { message: 'Revision conflict' } }, { status: 409 }))
+      .mockResolvedValueOnce(createJsonResponse({ repository: createRepository({ id: 1 }) }))
+      .mockResolvedValueOnce(createJsonResponse({ workItems: [createWorkItem({ id: 3, status: 'Draft', revision: 2 })] }))
+      .mockResolvedValueOnce(createJsonResponse({ proposal: null }))
+      .mockResolvedValueOnce(createJsonResponse({ workItem: createWorkItem({ id: 3, status: 'Draft', revision: 2 }) }))
+      .mockResolvedValueOnce(createJsonResponse({ workspace: null }));
+
+    render(
+      <StoryDetailPageContent
+        repository={createRepository({ id: 1, name: 'demo-repo' })}
+        actor={{ actorType: 'human', actorLabel: 'octocat' }}
+        storyId={3}
+        initialLatestEventId={0}
+        initialProposal={null}
+        initialWorkspace={null}
         initialWorkItems={[createWorkItem({ id: 3, type: 'story', title: 'Story title', status: 'Draft', revision: 1 })]}
       />,
     );
@@ -408,6 +777,46 @@ describe('StoryDetailPageContent', () => {
     await user.click(screen.getByRole('button', { name: 'Request breakdown' }));
 
     expect(await screen.findByRole('alert')).toHaveTextContent('Revision conflict: Revision conflict');
+    expect(fetchMock).toHaveBeenCalledWith('/api/dashboard/repositories/1', { method: 'GET' });
     expect(fetchMock).toHaveBeenCalledWith('/api/dashboard/repositories/1/work-items', { method: 'GET' });
+    expect(fetchMock).toHaveBeenCalledWith('/api/dashboard/work-items/3/workspace?repositoryId=1', { method: 'GET' });
+  });
+
+  it('refreshes story state when request-change moves hit a revision conflict', async () => {
+    const user = userEvent.setup();
+    const fetchMock = vi.mocked(global.fetch);
+
+    fetchMock
+      .mockResolvedValueOnce(createJsonResponse({ error: { message: 'Revision conflict' } }, { status: 409 }))
+      .mockResolvedValueOnce(createJsonResponse({ repository: createRepository({ id: 1 }) }))
+      .mockResolvedValueOnce(
+        createJsonResponse({ workItems: [createWorkItem({ id: 3, status: 'BreakdownProposed', revision: 2 })] }),
+      )
+      .mockResolvedValueOnce(createJsonResponse({ proposal: createProposal() }))
+      .mockResolvedValueOnce(
+        createJsonResponse({ workItem: createWorkItem({ id: 3, status: 'BreakdownProposed', revision: 2 }) }),
+      )
+      .mockResolvedValueOnce(
+        createJsonResponse({
+          workspace: createWorkspace({ storyId: 3, status: 'stale', statusReason: 'cleanup_requested' }),
+        }),
+      );
+
+    render(
+      <StoryDetailPageContent
+        repository={createRepository({ id: 1, name: 'demo-repo' })}
+        actor={{ actorType: 'human', actorLabel: 'octocat' }}
+        storyId={3}
+        initialLatestEventId={0}
+        initialProposal={createProposal()}
+        initialWorkspace={createWorkspace({ storyId: 3, status: 'active' })}
+        initialWorkItems={[createWorkItem({ id: 3, type: 'story', title: 'Story title', status: 'BreakdownProposed', revision: 1 })]}
+      />,
+    );
+
+    await user.click(screen.getByRole('button', { name: 'Request changes' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Revision conflict: Revision conflict');
+    expect(screen.getByText('Status reason: Cleanup requested')).toBeInTheDocument();
   });
 });
