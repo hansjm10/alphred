@@ -154,6 +154,32 @@ describe('StoryDetailPage', () => {
     expect(payload.actor).toEqual({ actorType: 'human', actorLabel: 'dashboard' });
   });
 
+  it('allows direct story detail navigation for archived repositories', async () => {
+    const repository = createRepository({
+      id: 1,
+      name: 'demo-repo',
+      archivedAt: new Date('2026-03-06T12:00:00.000Z').toISOString(),
+    });
+    const story = createWorkItem({ id: 3, type: 'story' });
+
+    createDashboardServiceMock.mockReturnValue({
+      getRepository: vi.fn(async () => ({ repository })),
+      getRepositoryBoardBootstrap: vi.fn(async () => ({ latestEventId: 7, workItems: [story] })),
+      getStoryBreakdownProposal: vi.fn(async () => ({ proposal: null })),
+      getStoryWorkspace: vi.fn(async () => ({ workspace: null })),
+    });
+    loadGitHubAuthGateMock.mockResolvedValue({ state: 'authenticated', user: 'octocat' });
+    storyDetailPageContentMock.mockImplementation((props: unknown) => (
+      <div data-testid="payload">{JSON.stringify(props)}</div>
+    ));
+
+    await renderStoryPage({ repositoryId: '1', storyId: '3' });
+
+    const payload = JSON.parse(screen.getByTestId('payload').textContent ?? '{}');
+    expect(payload.repository.archivedAt).toBe(repository.archivedAt);
+    expect(payload.storyId).toBe(3);
+  });
+
   it('calls notFound when ids are invalid', async () => {
     createDashboardServiceMock.mockReturnValue({});
     loadGitHubAuthGateMock.mockResolvedValue({ state: 'authenticated', user: 'octocat' });

@@ -239,6 +239,10 @@ function toErrorMessage(error: unknown, fallback: string): string {
   return error instanceof Error ? error.message : fallback;
 }
 
+function isRepositoryArchived(repository: DashboardRepositoryState): boolean {
+  return repository.archivedAt !== null;
+}
+
 function resolveVisibleWorkspaceActions(workspace: DashboardStoryWorkspaceSnapshot | null): readonly WorkspaceAction[] {
   if (workspace === null) {
     return ['create'];
@@ -326,6 +330,7 @@ export function StoryDetailPageContent(props: Readonly<{
       .sort((a, b) => a.id - b.id);
   }, [workItemsById, story, storyId]);
 
+  const repositoryArchived = isRepositoryArchived(repositoryState);
   const visibleWorkspaceActions = useMemo(() => resolveVisibleWorkspaceActions(workspace), [workspace]);
 
   const applySnapshot = (snapshot: StoryDetailSnapshot) => {
@@ -635,9 +640,19 @@ export function StoryDetailPageContent(props: Readonly<{
             <ButtonLink href={`/repositories/${repository.id}/stories`} tone="secondary">
               Stories
             </ButtonLink>
-            <ButtonLink href={launchRunHref} tone="secondary">
-              Launch run for this story
-            </ButtonLink>
+            {repositoryArchived ? (
+              <ActionButton
+                tone="secondary"
+                disabled
+                title="Restore the repository before launching a run from story detail."
+              >
+                Launch run for this story
+              </ActionButton>
+            ) : (
+              <ButtonLink href={launchRunHref} tone="secondary">
+                Launch run for this story
+              </ButtonLink>
+            )}
             <span className="meta-text">Board stream: {connectionState}</span>
           </div>
         </div>
@@ -646,6 +661,13 @@ export function StoryDetailPageContent(props: Readonly<{
       {connectionError ? (
         <p className="repo-banner repo-banner--error" role="alert">
           {connectionError}
+        </p>
+      ) : null}
+
+      {repositoryArchived ? (
+        <p className="repo-banner">
+          Repository archived {formatTimestamp(repositoryState.archivedAt)}. Restore it to launch runs or create or recreate
+          story workspaces. Refresh, reconcile, and cleanup remain available.
         </p>
       ) : null}
 
@@ -697,6 +719,7 @@ export function StoryDetailPageContent(props: Readonly<{
           <ul className="board-detail__list">
             <li>Clone status: {repositoryState.cloneStatus}</li>
             <li>Local path: {repositoryState.localPath ?? 'None'}</li>
+            <li>Archived: {formatTimestamp(repositoryState.archivedAt)}</li>
           </ul>
         </div>
 
@@ -725,7 +748,12 @@ export function StoryDetailPageContent(props: Readonly<{
                 key={action}
                 tone={action === 'create' || action === 'recreate' ? 'primary' : 'secondary'}
                 onClick={() => void handleWorkspaceAction(action)}
-                disabled={busy}
+                disabled={busy || (repositoryArchived && (action === 'create' || action === 'recreate'))}
+                title={
+                  repositoryArchived && (action === 'create' || action === 'recreate')
+                    ? 'Restore the repository before creating or recreating a story workspace.'
+                    : undefined
+                }
               >
                 {getWorkspaceActionLabel(action)}
               </ActionButton>

@@ -675,6 +675,34 @@ Lifecycle semantics:
 Validation note:
 - The planner result contract is intentionally shaped for downstream breakdown proposal consumption and replaces heuristic free-form parsing on the consumer side.
 
+### Story Workspace Lifecycle
+
+Story-detail pages surface a story-scoped workspace snapshot with lifecycle state, lifecycle reason, and timestamps. Archived repositories are still directly viewable in story detail, but launch/create/recreate affordances stay blocked until the repository is restored.
+
+States:
+- `active`: the recorded worktree path and branch still match the current repository state.
+- `stale`: the workspace row exists, but reconciliation detected drift or missing local state.
+- `removed`: cleanup completed or the workspace was intentionally retired and should not be used again without recreation.
+
+Reasons:
+- `null`: no exceptional lifecycle reason applies.
+- `missing_path`: the expected worktree path no longer exists on disk.
+- `worktree_not_registered`: the path exists, but git no longer reports it as a registered worktree.
+- `branch_mismatch`: the registered worktree path points at a different branch than the persisted workspace row.
+- `repository_clone_missing`: the repository clone backing the workspace is missing locally.
+- `reconcile_failed`: reconciliation could not inspect local state cleanly.
+- `removed_state_drift`: a workspace marked removed still had local state that required repair.
+- `cleanup_requested`: cleanup started and the workspace is transitioning toward the removed lifecycle state.
+
+Relevant endpoints:
+- `GET /repositories/[repositoryId]`: returns a single repository snapshot by id, including archived repositories for direct detail views and refresh flows.
+- `GET /repositories/[repositoryId]/work-items`: returns the repository work-item snapshot used to rebuild story detail after refresh.
+- `GET /work-items/[workItemId]/workspace?repositoryId=<id>`: returns the current story-workspace snapshot after running reconciliation.
+- `POST /work-items/[workItemId]/actions/create-workspace`: creates the initial story workspace when the repository is active and the story is eligible.
+- `POST /work-items/[workItemId]/actions/reconcile-workspace`: re-runs reconciliation and keeps the latest workspace snapshot visible, including for archived repositories.
+- `POST /work-items/[workItemId]/actions/cleanup-workspace`: removes local workspace state and transitions the snapshot toward `removed`.
+- `POST /work-items/[workItemId]/actions/recreate-workspace`: recreates a removed workspace when the repository is active again.
+
 ### `POST /work-items/[workItemId]/actions/start-task-workflow`
 
 Launches the configured async task workflow for a Ready task and transitions the task to `InProgress`.

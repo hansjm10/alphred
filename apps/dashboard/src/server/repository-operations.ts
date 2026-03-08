@@ -119,7 +119,7 @@ export function createRepositoryOperations(params: {
       }
 
       return withDatabase(async db => {
-        const repository = getRepositoryById(db, repositoryId, { includeArchived: false });
+        const repository = getRepositoryById(db, repositoryId, { includeArchived: true });
         if (!repository) {
           throw new DashboardIntegrationError('not_found', `Repository id=${repositoryId} was not found.`, {
             status: 404,
