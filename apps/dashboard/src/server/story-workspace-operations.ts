@@ -1,12 +1,14 @@
 import { constants } from 'node:fs';
-import { access } from 'node:fs/promises';
-import { join, resolve } from 'node:path';
+import { access, rm } from 'node:fs/promises';
+import { isAbsolute, join, relative, resolve } from 'node:path';
 import {
   and,
   eq,
   getRepositoryById,
+  getStoryWorkspaceById,
   getStoryWorkspaceByStoryWorkItemId,
   insertStoryWorkspace,
+  reactivateRemovedStoryWorkspace,
   updateStoryWorkspace,
   workItems,
   type AlphredDatabase,
@@ -20,14 +22,19 @@ import {
   listWorktrees,
   removeWorktree,
   resolveSandboxDir,
+  type WorktreeInfo,
 } from '@alphred/git';
 import type {
+  DashboardCleanupStoryWorkspaceRequest,
+  DashboardCleanupStoryWorkspaceResult,
   DashboardCreateStoryWorkspaceRequest,
   DashboardCreateStoryWorkspaceResult,
   DashboardGetStoryWorkspaceRequest,
   DashboardGetStoryWorkspaceResult,
   DashboardReconcileStoryWorkspaceRequest,
   DashboardReconcileStoryWorkspaceResult,
+  DashboardRecreateStoryWorkspaceRequest,
+  DashboardRecreateStoryWorkspaceResult,
 } from './dashboard-contracts';
 import { DashboardIntegrationError } from './dashboard-errors';
 
@@ -46,15 +53,22 @@ export type StoryWorkspaceOperationsDependencies = {
   deleteBranch?: typeof deleteBranch;
   listWorktrees?: typeof listWorktrees;
   pathExists?: (path: string) => Promise<boolean>;
+  removePath?: (path: string) => Promise<void>;
   now?: () => string;
 };
 
 export type StoryWorkspaceOperations = {
   getStoryWorkspace: (request: DashboardGetStoryWorkspaceRequest) => Promise<DashboardGetStoryWorkspaceResult>;
   createStoryWorkspace: (request: DashboardCreateStoryWorkspaceRequest) => Promise<DashboardCreateStoryWorkspaceResult>;
+  cleanupStoryWorkspace: (
+    request: DashboardCleanupStoryWorkspaceRequest,
+  ) => Promise<DashboardCleanupStoryWorkspaceResult>;
   reconcileStoryWorkspace: (
     request: DashboardReconcileStoryWorkspaceRequest,
   ) => Promise<DashboardReconcileStoryWorkspaceResult>;
+  recreateStoryWorkspace: (
+    request: DashboardRecreateStoryWorkspaceRequest,
+  ) => Promise<DashboardRecreateStoryWorkspaceResult>;
 };
 
 const STORY_WORKSPACE_TREE_KEY = 'story-workspace';
@@ -73,6 +87,11 @@ function requirePositiveInteger(value: number, label: string): number {
 
 function normalizeFsPath(path: string): string {
   return resolve(path);
+}
+
+function isDescendantPath(rootPath: string, candidatePath: string): boolean {
+  const relativePath = relative(normalizeFsPath(rootPath), normalizeFsPath(candidatePath));
+  return relativePath.length > 0 && !relativePath.startsWith('..') && !isAbsolute(relativePath);
 }
 
 function readErrorMessage(error: unknown): string {
@@ -195,6 +214,41 @@ function assertStoryWorkspaceCreatable(params: {
   }
 }
 
+function assertStoryWorkspaceRecreatable(params: {
+  repositoryName: string;
+  repositoryArchivedAt: string | null;
+  storyId: number;
+  storyStatus: string;
+}): void {
+  if (params.repositoryArchivedAt !== null) {
+    throw new DashboardIntegrationError(
+      'conflict',
+      `Repository "${params.repositoryName}" is archived. Restore it before recreating a story workspace.`,
+      {
+        status: 409,
+        details: {
+          storyId: params.storyId,
+          archivedAt: params.repositoryArchivedAt,
+        },
+      },
+    );
+  }
+
+  if (TERMINAL_STORY_STATUSES.has(params.storyStatus)) {
+    throw new DashboardIntegrationError(
+      'conflict',
+      `Story id=${params.storyId} is already ${params.storyStatus}. Story workspaces cannot be recreated for done stories.`,
+      {
+        status: 409,
+        details: {
+          storyId: params.storyId,
+          storyStatus: params.storyStatus,
+        },
+      },
+    );
+  }
+}
+
 function assertStoryWorkspaceDoesNotExistForCreate(params: {
   storyId: number;
   workspace: StoryWorkspaceRecord;
@@ -232,6 +286,18 @@ function assertStoryWorkspaceDoesNotExistForCreate(params: {
 
 function isStoryWorkspaceUniqueConstraintError(error: unknown): boolean {
   return readErrorMessage(error).toLowerCase().includes('unique constraint failed: story_workspaces.story_work_item_id');
+}
+
+function isStoryWorkspaceReactivationPreconditionError(error: unknown): boolean {
+  return readErrorMessage(error)
+    .toLowerCase()
+    .includes('story workspace reactivation precondition failed');
+}
+
+function isStoryWorkspaceUpdatePreconditionError(error: unknown): boolean {
+  return readErrorMessage(error)
+    .toLowerCase()
+    .includes('story workspace update precondition failed');
 }
 
 async function rollbackCreatedStoryWorkspace(params: {
@@ -284,19 +350,125 @@ async function defaultPathExists(path: string): Promise<boolean> {
   }
 }
 
+async function defaultRemovePath(path: string): Promise<void> {
+  await rm(path, { recursive: true, force: true });
+}
+
+type RegisteredWorktreeInspection =
+  | {
+      state: 'registered';
+      worktree: WorktreeInfo;
+    }
+  | {
+      state: 'unregistered' | 'unknown';
+      worktree: null;
+    };
+
+function toCleanupConflict(params: {
+  storyWorkspaceId: number;
+  storyId: number;
+  worktreePath: string;
+  details?: Record<string, unknown>;
+  cause?: unknown;
+}): DashboardIntegrationError {
+  return new DashboardIntegrationError('conflict', `Unable to clean up story workspace for story id=${params.storyId}.`, {
+    status: 409,
+    details: {
+      storyWorkspaceId: params.storyWorkspaceId,
+      storyId: params.storyId,
+      worktreePath: params.worktreePath,
+      ...(params.details ?? {}),
+    },
+    cause: params.cause,
+  });
+}
+
+function toUnmanagedWorkspacePathConflict(params: {
+  storyWorkspaceId: number;
+  storyId: number;
+  worktreePath: string;
+  managedWorktreeRoot: string;
+}): DashboardIntegrationError {
+  return new DashboardIntegrationError(
+    'conflict',
+    `Story workspace for story id=${params.storyId} points outside the managed worktree root and cannot be modified safely.`,
+    {
+      status: 409,
+      details: {
+        storyWorkspaceId: params.storyWorkspaceId,
+        storyId: params.storyId,
+        worktreePath: params.worktreePath,
+        managedWorktreeRoot: params.managedWorktreeRoot,
+        reason: 'unmanaged_worktree_path',
+      },
+    },
+  );
+}
+
+function toRecreateConflict(workspace: StoryWorkspaceRecord): DashboardIntegrationError {
+  return new DashboardIntegrationError(
+    'conflict',
+    `Story workspace for story id=${workspace.storyWorkItemId} must be removed before it can be recreated.`,
+    {
+      status: 409,
+      details: {
+        storyWorkspaceId: workspace.id,
+        storyId: workspace.storyWorkItemId,
+        currentStatus: workspace.status,
+        allowedStatuses: ['removed'],
+      },
+    },
+  );
+}
+
+function assertManagedWorktreePath(params: {
+  storyWorkspaceId: number;
+  storyId: number;
+  worktreePath: string;
+  managedWorktreeRoot: string;
+}): void {
+  if (isDescendantPath(params.managedWorktreeRoot, params.worktreePath)) {
+    return;
+  }
+
+  throw toUnmanagedWorkspacePathConflict(params);
+}
+
+function isUnmanagedWorkspacePathConflict(error: unknown): boolean {
+  return (
+    error instanceof DashboardIntegrationError &&
+    typeof error.details?.reason === 'string' &&
+    error.details.reason === 'unmanaged_worktree_path'
+  );
+}
+
 function markWorkspaceRemovedStateDrift(
   db: AlphredDatabase,
   workspace: StoryWorkspaceRecord,
   occurredAt: string,
 ): StoryWorkspaceRecord {
-  return updateStoryWorkspace(db, {
-    storyWorkspaceId: workspace.id,
-    status: 'stale',
-    statusReason: 'removed_state_drift',
-    lastReconciledAt: occurredAt,
-    removedAt: null,
-    occurredAt,
-  });
+  try {
+    return updateStoryWorkspace(db, {
+      storyWorkspaceId: workspace.id,
+      expectedStatus: 'removed',
+      status: 'stale',
+      statusReason: 'removed_state_drift',
+      lastReconciledAt: occurredAt,
+      removedAt: null,
+      occurredAt,
+    });
+  } catch (error) {
+    if (!isStoryWorkspaceUpdatePreconditionError(error)) {
+      throw error;
+    }
+
+    const currentWorkspace = getStoryWorkspaceById(db, workspace.id);
+    if (currentWorkspace) {
+      return currentWorkspace;
+    }
+
+    throw error;
+  }
 }
 
 async function createFreshStoryWorkspace(params: {
@@ -314,6 +486,7 @@ async function createFreshStoryWorkspace(params: {
   createStoryWorktree: NonNullable<StoryWorkspaceOperationsDependencies['createWorktree']>;
   removeStoryWorktree: NonNullable<StoryWorkspaceOperationsDependencies['removeWorktree']>;
   deleteStoryWorktreeBranch: NonNullable<StoryWorkspaceOperationsDependencies['deleteBranch']>;
+  existingWorkspace?: StoryWorkspaceRecord | null;
   occurredAt: string;
 }): Promise<StoryWorkspaceRecord> {
   const ensured = await params.ensureRepositoryClone({
@@ -371,6 +544,18 @@ async function createFreshStoryWorkspace(params: {
   }
 
   try {
+    if (params.existingWorkspace) {
+      return reactivateRemovedStoryWorkspace(params.db, {
+        storyWorkspaceId: params.existingWorkspace.id,
+        worktreePath: createdWorktree.path,
+        branch: createdWorktree.branch,
+        baseBranch,
+        baseCommitHash: createdWorktree.commit,
+        lastReconciledAt: params.occurredAt,
+        occurredAt: params.occurredAt,
+      });
+    }
+
     return insertStoryWorkspace(params.db, {
       repositoryId: params.repositoryId,
       storyWorkItemId: params.storyId,
@@ -391,7 +576,7 @@ async function createFreshStoryWorkspace(params: {
       originalError: error,
     });
 
-    if (isStoryWorkspaceUniqueConstraintError(error)) {
+    if (!params.existingWorkspace && isStoryWorkspaceUniqueConstraintError(error)) {
       const existingWorkspace = getStoryWorkspaceByStoryWorkItemId(params.db, params.storyId);
       if (existingWorkspace) {
         assertStoryWorkspaceDoesNotExistForCreate({
@@ -399,6 +584,13 @@ async function createFreshStoryWorkspace(params: {
           workspace: existingWorkspace,
           cause: error,
         });
+      }
+    }
+
+    if (params.existingWorkspace && isStoryWorkspaceReactivationPreconditionError(error)) {
+      const existingWorkspace = getStoryWorkspaceByStoryWorkItemId(params.db, params.storyId);
+      if (existingWorkspace) {
+        throw toRecreateConflict(existingWorkspace);
       }
     }
 
@@ -416,6 +608,217 @@ async function createFreshStoryWorkspace(params: {
         cause: error,
       },
     );
+  }
+}
+
+async function inspectRegisteredWorktreeState(params: {
+  repositoryLocalPath: string | null;
+  workspacePath: string;
+  listRepositoryWorktrees: NonNullable<StoryWorkspaceOperationsDependencies['listWorktrees']>;
+  pathExists: NonNullable<StoryWorkspaceOperationsDependencies['pathExists']>;
+}): Promise<RegisteredWorktreeInspection> {
+  if (params.repositoryLocalPath === null) {
+    return {
+      state: 'unregistered',
+      worktree: null,
+    };
+  }
+
+  if (!(await params.pathExists(params.repositoryLocalPath))) {
+    return {
+      state: 'unregistered',
+      worktree: null,
+    };
+  }
+
+  try {
+    const worktrees = await params.listRepositoryWorktrees(params.repositoryLocalPath);
+    const matchingWorktree =
+      worktrees.find(entry => normalizeFsPath(entry.path) === normalizeFsPath(params.workspacePath)) ?? null;
+
+    if (matchingWorktree) {
+      return {
+        state: 'registered',
+        worktree: matchingWorktree,
+      };
+    }
+
+    return {
+      state: 'unregistered',
+      worktree: null,
+    };
+  } catch {
+    return {
+      state: 'unknown',
+      worktree: null,
+    };
+  }
+}
+
+async function cleanupWorkspaceRecord(
+  db: AlphredDatabase,
+  params: {
+    repositoryLocalPath: string | null;
+    workspace: StoryWorkspaceRecord;
+    managedWorktreeRoot: string;
+    listRepositoryWorktrees: NonNullable<StoryWorkspaceOperationsDependencies['listWorktrees']>;
+    removeStoryWorktree: NonNullable<StoryWorkspaceOperationsDependencies['removeWorktree']>;
+    deleteStoryWorktreeBranch: NonNullable<StoryWorkspaceOperationsDependencies['deleteBranch']>;
+    pathExists: NonNullable<StoryWorkspaceOperationsDependencies['pathExists']>;
+    removePath: NonNullable<StoryWorkspaceOperationsDependencies['removePath']>;
+    occurredAt: string;
+    removedAtOnSuccess?: string | null;
+  },
+): Promise<StoryWorkspaceRecord> {
+  assertManagedWorktreePath({
+    storyWorkspaceId: params.workspace.id,
+    storyId: params.workspace.storyWorkItemId,
+    worktreePath: params.workspace.worktreePath,
+    managedWorktreeRoot: params.managedWorktreeRoot,
+  });
+
+  const registeredInspectionBeforeRemoval = await inspectRegisteredWorktreeState({
+    repositoryLocalPath: params.repositoryLocalPath,
+    workspacePath: params.workspace.worktreePath,
+    listRepositoryWorktrees: params.listRepositoryWorktrees,
+    pathExists: params.pathExists,
+  });
+  const registeredStateBeforeRemoval = registeredInspectionBeforeRemoval.state;
+  const workspacePathExistsBeforeRemoval = await params.pathExists(params.workspace.worktreePath);
+
+  if (
+    registeredInspectionBeforeRemoval.state === 'registered' &&
+    registeredInspectionBeforeRemoval.worktree.branch !== params.workspace.branch
+  ) {
+    if (params.workspace.status !== 'removed') {
+      updateStoryWorkspace(db, {
+        storyWorkspaceId: params.workspace.id,
+        status: 'stale',
+        statusReason: 'branch_mismatch',
+        lastReconciledAt: params.occurredAt,
+        removedAt: null,
+        occurredAt: params.occurredAt,
+      });
+    }
+
+    throw toCleanupConflict({
+      storyWorkspaceId: params.workspace.id,
+      storyId: params.workspace.storyWorkItemId,
+      worktreePath: params.workspace.worktreePath,
+      details: {
+        reason: 'branch_mismatch',
+        expectedBranch: params.workspace.branch,
+        registeredBranch: registeredInspectionBeforeRemoval.worktree.branch,
+      },
+    });
+  }
+
+  let cleanupError: unknown = null;
+
+  if (params.repositoryLocalPath !== null && registeredStateBeforeRemoval !== 'unregistered') {
+    try {
+      await params.removeStoryWorktree(params.repositoryLocalPath, params.workspace.worktreePath);
+    } catch (error) {
+      cleanupError = error;
+    }
+  }
+
+  if (workspacePathExistsBeforeRemoval) {
+    try {
+      await params.removePath(params.workspace.worktreePath);
+    } catch (error) {
+      if (cleanupError === null) {
+        cleanupError = error;
+      }
+    }
+  }
+
+  const registeredInspectionAfterRemoval =
+    registeredStateBeforeRemoval === 'unregistered'
+      ? {
+          state: 'unregistered' as const,
+          worktree: null,
+        }
+      : await inspectRegisteredWorktreeState({
+          repositoryLocalPath: params.repositoryLocalPath,
+          workspacePath: params.workspace.worktreePath,
+          listRepositoryWorktrees: params.listRepositoryWorktrees,
+          pathExists: params.pathExists,
+        });
+  const workspacePathExistsAfterRemoval = await params.pathExists(params.workspace.worktreePath);
+
+  if (
+    workspacePathExistsAfterRemoval ||
+    registeredInspectionAfterRemoval.state === 'registered' ||
+    registeredInspectionAfterRemoval.state === 'unknown'
+  ) {
+    throw toCleanupConflict({
+      storyWorkspaceId: params.workspace.id,
+      storyId: params.workspace.storyWorkItemId,
+      worktreePath: params.workspace.worktreePath,
+      cause: cleanupError,
+    });
+  }
+
+  if (params.repositoryLocalPath !== null) {
+    try {
+      await params.deleteStoryWorktreeBranch(params.repositoryLocalPath, params.workspace.branch);
+    } catch {
+      // Branch deletion is best-effort once the workspace itself is gone.
+    }
+  }
+
+  try {
+    return updateStoryWorkspace(db, {
+      storyWorkspaceId: params.workspace.id,
+      expectedStatus: params.workspace.status === 'removed' ? 'removed' : undefined,
+      status: 'removed',
+      statusReason: 'cleanup_requested',
+      lastReconciledAt: params.occurredAt,
+      removedAt: params.removedAtOnSuccess ?? params.occurredAt,
+      occurredAt: params.occurredAt,
+    });
+  } catch (error) {
+    if (!isStoryWorkspaceUpdatePreconditionError(error)) {
+      throw error;
+    }
+
+    const currentWorkspace = getStoryWorkspaceById(db, params.workspace.id);
+    if (currentWorkspace) {
+      return currentWorkspace;
+    }
+
+    throw error;
+  }
+}
+
+async function repairRemovedWorkspaceRecord(
+  db: AlphredDatabase,
+  params: {
+    repositoryLocalPath: string | null;
+    workspace: StoryWorkspaceRecord;
+    managedWorktreeRoot: string;
+    listRepositoryWorktrees: NonNullable<StoryWorkspaceOperationsDependencies['listWorktrees']>;
+    removeStoryWorktree: NonNullable<StoryWorkspaceOperationsDependencies['removeWorktree']>;
+    deleteStoryWorktreeBranch: NonNullable<StoryWorkspaceOperationsDependencies['deleteBranch']>;
+    pathExists: NonNullable<StoryWorkspaceOperationsDependencies['pathExists']>;
+    removePath: NonNullable<StoryWorkspaceOperationsDependencies['removePath']>;
+    occurredAt: string;
+  },
+): Promise<StoryWorkspaceRecord> {
+  try {
+    return await cleanupWorkspaceRecord(db, {
+      ...params,
+      removedAtOnSuccess: params.workspace.removedAt ?? params.occurredAt,
+    });
+  } catch (error) {
+    if (!(error instanceof DashboardIntegrationError)) {
+      throw error;
+    }
+    if (isUnmanagedWorkspacePathConflict(error)) {
+      throw error;
+    }
+    return markWorkspaceRemovedStateDrift(db, params.workspace, params.occurredAt);
   }
 }
 
@@ -556,6 +959,7 @@ export function createStoryWorkspaceOperations(params: {
   const deleteStoryWorktreeBranch = dependencies.deleteBranch ?? deleteBranch;
   const listRepositoryWorktrees = dependencies.listWorktrees ?? listWorktrees;
   const pathExists = dependencies.pathExists ?? defaultPathExists;
+  const removePath = dependencies.removePath ?? defaultRemovePath;
   const now = dependencies.now ?? (() => new Date().toISOString());
   const worktreeBase = join(resolveSandboxDir(environment), 'worktrees');
 
@@ -634,6 +1038,46 @@ export function createStoryWorkspaceOperations(params: {
       });
     },
 
+    cleanupStoryWorkspace(requestRaw): Promise<DashboardCleanupStoryWorkspaceResult> {
+      const repositoryId = requirePositiveInteger(requestRaw.repositoryId, 'repositoryId');
+      const storyId = requirePositiveInteger(requestRaw.storyId, 'storyId');
+
+      return withDatabase(async db => {
+        requireStoryWorkItem(db, { repositoryId, storyId });
+        const repository = requireRepository(db, repositoryId);
+        const workspace = requireStoryWorkspace(db, storyId);
+        const occurredAt = now();
+        const cleaned = await cleanupWorkspaceRecord(db, {
+          repositoryLocalPath: repository.localPath,
+          workspace,
+          managedWorktreeRoot: worktreeBase,
+          listRepositoryWorktrees,
+          removeStoryWorktree,
+          deleteStoryWorktreeBranch,
+          pathExists,
+          removePath,
+          occurredAt,
+          removedAtOnSuccess: workspace.removedAt ?? occurredAt,
+        });
+        if (cleaned.status !== 'removed') {
+          throw toCleanupConflict({
+            storyWorkspaceId: cleaned.id,
+            storyId: cleaned.storyWorkItemId,
+            worktreePath: cleaned.worktreePath,
+            details: {
+              currentStatus: cleaned.status,
+              expectedStatus: workspace.status,
+              reason: 'workspace_state_changed',
+            },
+          });
+        }
+
+        return {
+          workspace: toStoryWorkspaceSnapshot(cleaned),
+        };
+      });
+    },
+
     reconcileStoryWorkspace(requestRaw): Promise<DashboardReconcileStoryWorkspaceResult> {
       const repositoryId = requirePositiveInteger(requestRaw.repositoryId, 'repositoryId');
       const storyId = requirePositiveInteger(requestRaw.storyId, 'storyId');
@@ -652,6 +1096,72 @@ export function createStoryWorkspaceOperations(params: {
 
         return {
           workspace: toStoryWorkspaceSnapshot(reconciled),
+        };
+      });
+    },
+
+    recreateStoryWorkspace(requestRaw): Promise<DashboardRecreateStoryWorkspaceResult> {
+      const repositoryId = requirePositiveInteger(requestRaw.repositoryId, 'repositoryId');
+      const storyId = requirePositiveInteger(requestRaw.storyId, 'storyId');
+
+      return withDatabase(async db => {
+        const story = requireStoryWorkItem(db, { repositoryId, storyId });
+        const repository = requireRepository(db, repositoryId);
+        assertStoryWorkspaceRecreatable({
+          repositoryName: repository.name,
+          repositoryArchivedAt: repository.archivedAt,
+          storyId: story.id,
+          storyStatus: story.status,
+        });
+
+        const existingWorkspace = requireStoryWorkspace(db, story.id);
+        const occurredAt = now();
+        const recreatableWorkspace =
+          existingWorkspace.status === 'removed'
+            ? await repairRemovedWorkspaceRecord(db, {
+                repositoryLocalPath: repository.localPath,
+                workspace: existingWorkspace,
+                managedWorktreeRoot: worktreeBase,
+                listRepositoryWorktrees,
+                removeStoryWorktree,
+                deleteStoryWorktreeBranch,
+                pathExists,
+                removePath,
+                occurredAt,
+              })
+            : await reconcileWorkspaceRecord(db, {
+                repositoryLocalPath: repository.localPath,
+                workspace: existingWorkspace,
+                listRepositoryWorktrees,
+                pathExists,
+                occurredAt,
+              });
+
+        if (recreatableWorkspace.status !== 'removed') {
+          throw toRecreateConflict(recreatableWorkspace);
+        }
+
+        const recreated = await createFreshStoryWorkspace({
+          db,
+          repositoryId,
+          repositoryName: repository.name,
+          repositoryProvider: repository.provider,
+          repositoryRemoteUrl: repository.remoteUrl,
+          repositoryRemoteRef: repository.remoteRef,
+          repositoryDefaultBranch: repository.defaultBranch,
+          storyId: story.id,
+          environment,
+          worktreeBase,
+          ensureRepositoryClone: dependencies.ensureRepositoryClone,
+          createStoryWorktree,
+          removeStoryWorktree,
+          deleteStoryWorktreeBranch,
+          existingWorkspace: recreatableWorkspace,
+          occurredAt,
+        });
+
+        return {
+          workspace: toStoryWorkspaceSnapshot(recreated),
         };
       });
     },

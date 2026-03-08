@@ -15,6 +15,7 @@ describe('db index exports', () => {
     expect(typeof db.materializeWorkflowRunFromTree).toBe('function');
     expect(typeof db.insertStoryWorkspace).toBe('function');
     expect(typeof db.getStoryWorkspaceByStoryWorkItemId).toBe('function');
+    expect(typeof db.reactivateRemovedStoryWorkspace).toBe('function');
     expect(typeof db.updateStoryWorkspace).toBe('function');
     expect(db.repositories).toBeDefined();
     expect(db.workflowTrees).toBeDefined();

@@ -520,7 +520,9 @@ describe('createDashboardService', () => {
 
     expect(typeof service.getStoryWorkspace).toBe('function');
     expect(typeof service.createStoryWorkspace).toBe('function');
+    expect(typeof service.cleanupStoryWorkspace).toBe('function');
     expect(typeof service.reconcileStoryWorkspace).toBe('function');
+    expect(typeof service.recreateStoryWorkspace).toBe('function');
   });
 
   it('closes database handles after each operation', async () => {

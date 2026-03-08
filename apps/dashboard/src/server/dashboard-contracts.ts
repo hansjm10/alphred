@@ -621,9 +621,21 @@ export type DashboardCreateStoryWorkspaceResult = {
   workspace: DashboardStoryWorkspaceSnapshot;
 };
 
+export type DashboardCleanupStoryWorkspaceRequest = DashboardGetStoryWorkspaceRequest;
+
+export type DashboardCleanupStoryWorkspaceResult = {
+  workspace: DashboardStoryWorkspaceSnapshot;
+};
+
 export type DashboardReconcileStoryWorkspaceRequest = DashboardGetStoryWorkspaceRequest;
 
 export type DashboardReconcileStoryWorkspaceResult = {
+  workspace: DashboardStoryWorkspaceSnapshot;
+};
+
+export type DashboardRecreateStoryWorkspaceRequest = DashboardGetStoryWorkspaceRequest;
+
+export type DashboardRecreateStoryWorkspaceResult = {
   workspace: DashboardStoryWorkspaceSnapshot;
 };
 
